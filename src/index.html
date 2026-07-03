@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pointer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@vscode/codicons@0.0.36/dist/codicon.css" />
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="../node_modules/monaco-editor/min/vs/editor/editor.main.css" />
+  <link rel="stylesheet" href="../node_modules/highlight.js/styles/github-dark.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app-shell">
+  <div id="layout">
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <span id="explorer-title" class="panel-title" title="">Explorer</span>
+        <div class="sidebar-actions">
+          <button id="btn-new-file" class="icon-btn" title="New File" disabled>
+            <span class="codicon codicon-new-file"></span>
+          </button>
+          <button id="btn-new-folder" class="icon-btn" title="New Folder" disabled>
+            <span class="codicon codicon-new-folder"></span>
+          </button>
+          <button id="btn-open-folder" class="icon-btn" title="Open Folder">
+            <span class="codicon codicon-folder-opened"></span>
+          </button>
+        </div>
+      </div>
+      <div id="file-tree"></div>
+    </aside>
+
+    <div id="sidebar-resize" class="sash-v"></div>
+
+    <div id="center-panel">
+      <main id="editor-pane">
+        <div id="editor-tab-bar"></div>
+        <div id="editor-body">
+          <div id="editor-empty">
+            <span class="codicon codicon-files"></span>
+            <p>Select a file from the explorer to open it.</p>
+          </div>
+          <div id="editor-view" hidden>
+            <div id="monaco-container"></div>
+            <div id="editor-error" hidden></div>
+          </div>
+        </div>
+      </main>
+
+      <div id="terminal-resize" class="sash-h"></div>
+
+      <section id="terminal-pane">
+        <div id="terminal-header">
+          <span class="panel-title">Terminal</span>
+          <div class="terminal-actions">
+            <button id="btn-terminal-new" class="icon-btn terminal-action" title="New Terminal">
+              <span class="codicon codicon-add"></span>
+            </button>
+            <button id="btn-terminal-kill" class="icon-btn terminal-action" title="Kill Terminal" disabled>
+              <span class="codicon codicon-trash"></span>
+            </button>
+          </div>
+        </div>
+        <div id="terminal-body">
+          <div id="terminal-tabs-list" hidden></div>
+          <div id="terminal-viewport">
+            <div id="terminal-empty">
+              <button type="button" id="btn-terminal-create" class="terminal-create-btn">
+                <span class="codicon codicon-terminal"></span>
+                Create Terminal
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="chat-resize" class="sash-v"></div>
+
+    <aside id="chat-pane">
+      <div id="chat-header">
+        <span class="panel-title">Chat</span>
+      </div>
+
+      <div id="messages"></div>
+
+      <div id="input-bar">
+        <div class="composer">
+          <textarea id="chat-input" placeholder="Ask anything…" rows="1"></textarea>
+          <div class="composer-toolbar">
+            <button type="button" id="model-picker" class="model-pill" title="Select model">
+              <span id="model-label">Select model</span>
+              <span class="codicon codicon-chevron-down model-chevron"></span>
+            </button>
+            <div class="composer-actions">
+              <button type="button" id="context-usage-btn" class="context-ring-btn" title="Context usage" aria-expanded="false">
+                <svg class="context-ring" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle class="context-ring-bg" cx="10" cy="10" r="8"></circle>
+                  <circle id="context-ring-fill" class="context-ring-fill" cx="10" cy="10" r="8"></circle>
+                </svg>
+              </button>
+              <button id="send-btn" class="send-btn" title="Send message" disabled>
+                <span class="codicon codicon-arrow-up"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <footer id="statusbar">
+    <div class="statusbar-left"></div>
+    <div class="statusbar-right">
+      <span id="status-ln-col" class="statusbar-item">Ln 1, Col 1</span>
+      <span id="status-ollama-port" class="statusbar-item">Ollama :11434</span>
+    </div>
+  </footer>
+  </div>
+
+  <div id="context-usage-popover" class="context-usage-popover" hidden>
+    <div class="context-usage-title">Context window</div>
+    <div class="context-usage-track">
+      <div id="context-usage-fill" class="context-usage-fill"></div>
+    </div>
+    <div class="context-usage-meta">
+      <span id="context-usage-used">0 used</span>
+      <span id="context-usage-free">32K free</span>
+    </div>
+    <div id="context-usage-pct" class="context-usage-pct">0% used · 32K max</div>
+  </div>
+
+  <div id="model-menu" class="model-menu" hidden>
+    <input id="model-search" type="text" placeholder="Search models" spellcheck="false" />
+    <div id="model-list" class="model-list"></div>
+    <div class="model-menu-divider"></div>
+    <button type="button" id="model-add-btn" class="model-add-btn">
+      <span class="codicon codicon-add"></span>
+      Add Models
+    </button>
+    <div id="model-add-form" class="model-add-form" hidden>
+      <input id="model-custom" type="text" placeholder="model-name:tag" spellcheck="false" />
+      <button type="button" id="model-custom-add" class="model-custom-add">Add</button>
+    </div>
+  </div>
+
+  <div id="model-edit-menu" class="model-edit-menu" hidden>
+    <div class="model-edit-section">
+      <div class="model-edit-label">Options</div>
+      <div class="model-edit-row">
+        <span class="model-edit-row-name">Thinking</span>
+        <button type="button" id="thinking-toggle" class="toggle-switch" aria-pressed="false" title="Enable thinking">
+          <span class="toggle-thumb"></span>
+        </button>
+      </div>
+    </div>
+    <div class="model-edit-divider"></div>
+    <div class="model-edit-section">
+      <div class="model-edit-label">Context</div>
+      <div id="context-options" class="context-options"></div>
+    </div>
+  </div>
+
+  <script src="../node_modules/marked/lib/marked.umd.js"></script>
+  <script src="../node_modules/dompurify/dist/purify.min.js"></script>
+  <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="editor.js"></script>
+  <script src="terminal.js"></script>
+  <script src="markdown.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
