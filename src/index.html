@@ -12,6 +12,24 @@
 </head>
 <body>
   <div id="app-shell">
+  <div id="app-topbar">
+    <div class="app-topbar-spacer"></div>
+    <button type="button" id="btn-top-terminal" class="topbar-icon active" title="Toggle terminal">
+      <span class="codicon codicon-terminal"></span>
+    </button>
+    <button type="button" id="btn-top-chat" class="topbar-icon active" title="Toggle AI chat">
+      <span class="codicon codicon-comment-discussion"></span>
+    </button>
+    <button type="button" id="btn-window-minimize" class="window-control" title="Minimize">
+      <span class="codicon codicon-chrome-minimize"></span>
+    </button>
+    <button type="button" id="btn-window-maximize" class="window-control" title="Maximize">
+      <span class="codicon codicon-chrome-maximize"></span>
+    </button>
+    <button type="button" id="btn-window-close" class="window-control close" title="Close">
+      <span class="codicon codicon-chrome-close"></span>
+    </button>
+  </div>
   <div id="layout">
     <aside id="sidebar">
       <div id="sidebar-header">
@@ -57,6 +75,9 @@
             <button id="btn-terminal-new" class="icon-btn terminal-action" title="New Terminal">
               <span class="codicon codicon-add"></span>
             </button>
+            <button id="btn-terminal-clear" class="icon-btn terminal-action" title="Clear Terminal" disabled>
+              <span class="codicon codicon-clear-all"></span>
+            </button>
             <button id="btn-terminal-kill" class="icon-btn terminal-action" title="Kill Terminal" disabled>
               <span class="codicon codicon-trash"></span>
             </button>
@@ -80,14 +101,29 @@
 
     <aside id="chat-pane">
       <div id="chat-header">
-        <span class="panel-title">Chat</span>
+        <div id="chat-session-select" class="chat-session-tabs" title="Chat sessions"></div>
+        <div class="chat-session-controls">
+          <button type="button" id="btn-chat-new" class="icon-btn chat-session-action" title="New chat">
+            <span class="codicon codicon-add"></span>
+          </button>
+          <button type="button" id="btn-chat-history" class="icon-btn chat-session-action" title="Chat history">
+            <span class="codicon codicon-history"></span>
+          </button>
+          <button type="button" id="btn-chat-more" class="icon-btn chat-session-action" title="Chat options">
+            <span class="codicon codicon-ellipsis"></span>
+          </button>
+          <button type="button" id="btn-chat-collapse" class="icon-btn chat-session-action" title="Collapse chat">
+            <span class="codicon codicon-layout-sidebar-right"></span>
+          </button>
+        </div>
       </div>
 
       <div id="messages"></div>
 
       <div id="input-bar">
         <div class="composer">
-          <textarea id="chat-input" placeholder="Ask anything…" rows="1"></textarea>
+          <textarea id="chat-input" placeholder="Plan, Build, / for skills, @ for context" rows="1"></textarea>
+          <div id="chat-input-measure" aria-hidden="true"></div>
           <div class="composer-toolbar">
             <button type="button" id="model-picker" class="model-pill" title="Select model">
               <span id="model-label">Select model</span>
@@ -164,11 +200,13 @@
 
   <script src="../node_modules/marked/lib/marked.umd.js"></script>
   <script src="../node_modules/dompurify/dist/purify.min.js"></script>
-  <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
   <script src="editor.js"></script>
   <script src="terminal.js"></script>
+  <script src="tools/tool-map.js"></script>
+  <script src="tools/tools.js"></script>
   <script src="markdown.js"></script>
   <script src="renderer.js"></script>
 </body>

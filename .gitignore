@@ -1,0 +1,7 @@
+out/
+node_modules/
+*.vsix
+graphify-out/
+__pycache__/
+.cursor
+CLAUDE.md

@@ -7,10 +7,10 @@ const TerminalManager = (() => {
   const viewport      = $("terminal-viewport");
   const terminalEmpty = $("terminal-empty");
   const btnNew        = $("btn-terminal-new");
+  const btnClear      = $("btn-terminal-clear");
   const btnKill       = $("btn-terminal-kill");
-  const btnCreate     = $("btn-terminal-create");
 
-  /** @type {Map<string, { id: string, name: string, container: HTMLElement, term: Terminal, fitAddon: FitAddon.FitAddon }>} */
+  /** @type {Map<string, { id: string, name: string, container: HTMLElement, term: Terminal, fitAddon: FitAddon.FitAddon, exited: boolean }>} */
   const sessions = new Map();
   let activeId = null;
   let counter = 0;
@@ -40,8 +40,7 @@ const TerminalManager = (() => {
     brightWhite: "#e5e5e5",
   };
 
-  function nextName() {
-    const base = "powershell";
+  function nextName(base = "terminal") {
     const existing = [...sessions.values()].map((s) => s.name);
     if (!existing.includes(base)) return base;
     let i = 2;
@@ -54,6 +53,7 @@ const TerminalManager = (() => {
     terminalEmpty.hidden = has;
     tabsList.hidden = sessions.size <= 1;
     tabsList.classList.toggle("visible", sessions.size > 1);
+    btnClear.disabled = !has;
     btnKill.disabled = !has;
   }
 
@@ -62,12 +62,22 @@ const TerminalManager = (() => {
     for (const session of sessions.values()) {
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "terminal-tab-item" + (session.id === activeId ? " active" : "");
-      btn.title = session.name;
+      btn.className = [
+        "terminal-tab-item",
+        session.id === activeId ? "active" : "",
+        session.exited ? "exited" : "",
+      ].filter(Boolean).join(" ");
+      btn.title = session.exited ? `${session.name} (exited)` : session.name;
       btn.innerHTML = `
         <span class="codicon codicon-terminal"></span>
-        <span class="terminal-tab-name">${escapeHtml(session.name)}</span>`;
+        <span class="terminal-tab-name">${escapeHtml(session.name)}</span>
+        <span class="terminal-tab-status">${session.exited ? "exited" : ""}</span>
+        <span class="codicon codicon-close terminal-tab-close" title="Close"></span>`;
       btn.addEventListener("click", () => switchTerminal(session.id));
+      btn.querySelector(".terminal-tab-close")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeTerminal(session.id);
+      });
       tabsList.appendChild(btn);
     }
   }
@@ -79,17 +89,20 @@ const TerminalManager = (() => {
       session.container.hidden = session.id !== id;
     }
     renderTabsList();
-    const session = sessions.get(id);
-    requestAnimationFrame(() => fitSession(session));
-    session.term.focus();
+    requestAnimationFrame(() => {
+      fitSession(sessions.get(id));
+      sessions.get(id)?.term.focus();
+    });
   }
 
   function fitSession(session) {
-    if (!session) return;
+    if (!session || session.container.hidden) return;
     try {
       session.fitAddon.fit();
       const { cols, rows } = session.term;
-      window.api.terminalResize(session.id, cols, rows);
+      if (cols > 0 && rows > 0) {
+        window.api.terminalResize(session.id, cols, rows);
+      }
     } catch {
       // viewport not ready
     }
@@ -99,53 +112,188 @@ const TerminalManager = (() => {
     if (activeId) fitSession(sessions.get(activeId));
   }
 
+  function focusActive() {
+    if (!activeId) return;
+    globalThis.expandTerminalPanel?.();
+    requestAnimationFrame(() => {
+      fitActive();
+      sessions.get(activeId)?.term.focus();
+    });
+  }
+
+  function switchAdjacentTerminal(delta) {
+    if (!activeId || sessions.size < 2) return;
+    const ids = [...sessions.keys()];
+    const current = ids.indexOf(activeId);
+    const next = ids[(current + delta + ids.length) % ids.length];
+    switchTerminal(next);
+  }
+
   async function createTerminal() {
-    const id = `term-${++counter}`;
-    const name = nextName();
-
-    const container = document.createElement("div");
-    container.className = "terminal-instance";
-    container.hidden = true;
-    viewport.appendChild(container);
-
-    const term = new Terminal({
-      theme: xtermTheme,
-      fontFamily: "Consolas, 'Courier New', monospace",
-      fontSize: 14,
-      lineHeight: 1.2,
-      cursorBlink: true,
-      scrollback: 5000,
-      allowProposedApi: true,
-    });
-
-    const fitAddon = new FitAddon.FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(container);
-
-    term.onData((data) => window.api.terminalWrite(id, data));
-
-    const session = { id, name, container, term, fitAddon };
-    sessions.set(id, session);
-
-    const result = await window.api.terminalCreate({
-      id,
-      cwd: cwd || undefined,
-    });
-
-    if (result.error) {
-      term.writeln(`\x1b[31m${result.error}\x1b[0m`);
+    if (!window.api?.terminalCreate) {
+      showTerminalError("Terminal API unavailable — restart the app.");
+      return null;
+    }
+    if (typeof globalThis.Terminal !== "function") {
+      showTerminalError("xterm failed to load. Check the console for script errors.");
+      return null;
     }
 
-    updateEmptyState();
-    switchTerminal(id);
-    return id;
+    try {
+      const id = `term-${++counter}`;
+      const name = nextName();
+
+      const container = document.createElement("div");
+      container.className = "terminal-instance";
+      container.hidden = true;
+      viewport.appendChild(container);
+
+      const FitCtor = globalThis.FitAddon?.FitAddon ?? globalThis.FitAddon;
+      if (typeof FitCtor !== "function") {
+        showTerminalError("xterm fit addon failed to load.");
+        container.remove();
+        return null;
+      }
+
+      const term = new globalThis.Terminal({
+        theme: xtermTheme,
+        fontFamily: "Consolas, 'Courier New', monospace",
+        fontSize: 14,
+        lineHeight: 1.2,
+        cursorBlink: true,
+        scrollback: 5000,
+        convertEol: true,
+        allowProposedApi: false,
+      });
+
+      const fitAddon = new FitCtor();
+      term.loadAddon(fitAddon);
+      term.open(container);
+
+      term.onData((data) => {
+        window.api.terminalWrite(id, data);
+      });
+
+      term.attachCustomKeyEventHandler((event) => {
+        const key = event.key.toLowerCase();
+        const mod = event.ctrlKey || event.metaKey;
+
+        if (event.type === "keydown" && mod && key === "`") {
+          if (event.shiftKey) {
+            createTerminalAndShow();
+          } else {
+            const opened = globalThis.toggleTerminalPanel?.() ?? true;
+            if (opened) focusActive();
+          }
+          return false;
+        }
+
+        if (event.type === "keydown" && event.altKey && (key === "arrowleft" || key === "arrowright")) {
+          switchAdjacentTerminal(key === "arrowright" ? 1 : -1);
+          return false;
+        }
+
+        if (event.type === "keydown" && mod && key === "c" && term.hasSelection()) {
+          navigator.clipboard?.writeText(term.getSelection());
+          return false;
+        }
+
+        if (event.type === "keydown" && mod && key === "v") {
+          navigator.clipboard?.readText()
+            .then((text) => {
+              if (text) window.api.terminalWrite(id, text);
+            })
+            .catch(() => {});
+          return false;
+        }
+
+        return true;
+      });
+
+      const session = { id, name, container, term, fitAddon, exited: false };
+      sessions.set(id, session);
+
+      const result = await window.api.terminalCreate({
+        id,
+        cwd: cwd || undefined,
+      });
+
+      if (result?.error) {
+        term.writeln(`\x1b[31m${result.error}\x1b[0m`);
+      } else if (result?.shell) {
+        session.name = nextName(result.shell);
+      }
+
+      clearTerminalError();
+      updateEmptyState();
+      switchTerminal(id);
+
+      requestAnimationFrame(() => {
+        fitSession(session);
+        session.term.focus();
+      });
+
+      return id;
+    } catch (err) {
+      console.error("createTerminal failed:", err);
+      showTerminalError(err.message || "Failed to create terminal");
+      return null;
+    }
+  }
+
+  function showTerminalError(message) {
+    if (!terminalEmpty) return;
+    terminalEmpty.hidden = false;
+    terminalEmpty.innerHTML = `
+      <div class="terminal-error">
+        <span class="codicon codicon-error"></span>
+        <span>${escapeHtml(message)}</span>
+        <button type="button" id="btn-terminal-create" class="terminal-create-btn">
+          <span class="codicon codicon-terminal"></span>
+          Retry
+        </button>
+      </div>`;
+    terminalEmpty.querySelector("#btn-terminal-create")
+      ?.addEventListener("click", () => createTerminalAndShow());
+  }
+
+  function clearTerminalError() {
+    if (!terminalEmpty || sessions.size > 0) return;
+    terminalEmpty.innerHTML = `
+      <button type="button" id="btn-terminal-create" class="terminal-create-btn">
+        <span class="codicon codicon-terminal"></span>
+        Create Terminal
+      </button>`;
+    terminalEmpty.querySelector("#btn-terminal-create")
+      ?.addEventListener("click", () => createTerminalAndShow());
+  }
+
+  async function createTerminalAndShow() {
+    globalThis.expandTerminalPanel?.();
+    return createTerminal();
   }
 
   async function killTerminal(id) {
     const target = id ?? activeId;
     if (!target || !sessions.has(target)) return;
+    const session = sessions.get(target);
+    if (session?.exited) {
+      removeSession(target);
+      return;
+    }
     await window.api.terminalKill(target);
     removeSession(target);
+  }
+
+  function clearActive() {
+    const session = activeId ? sessions.get(activeId) : null;
+    if (!session) return;
+    session.term.clear();
+    session.term.focus();
+  }
+
+  function closeTerminal(id) {
+    killTerminal(id);
   }
 
   function removeSession(id) {
@@ -170,7 +318,13 @@ const TerminalManager = (() => {
   }
 
   function onExit({ id }) {
-    removeSession(id);
+    const session = sessions.get(id);
+    if (!session) return;
+    session.exited = true;
+    session.term.writeln("");
+    session.term.writeln("\x1b[33mTerminal process exited. Press the trash icon to close this session.\x1b[0m");
+    renderTabsList();
+    updateEmptyState();
   }
 
   function setCwd(path) {
@@ -194,15 +348,50 @@ const TerminalManager = (() => {
     window.api.onTerminalExit(onExit);
   }
 
-  btnNew.addEventListener("click", () => createTerminal());
-  btnKill.addEventListener("click", () => killTerminal());
-  btnCreate.addEventListener("click", () => createTerminal());
+  btnNew?.addEventListener("click", () => {
+    globalThis.expandTerminalPanel?.();
+    createTerminal();
+  });
+  btnClear?.addEventListener("click", () => {
+    clearActive();
+  });
+  btnKill?.addEventListener("click", () => killTerminal());
+  viewport?.addEventListener("mousedown", () => focusActive());
+  viewport?.addEventListener("wheel", () => focusActive(), { passive: true });
+  terminalEmpty?.querySelector("#btn-terminal-create")
+    ?.addEventListener("click", () => createTerminalAndShow());
 
   window.addEventListener("resize", () => fitActive());
 
+  window.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && key === "`") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        createTerminalAndShow();
+      } else {
+        const opened = globalThis.toggleTerminalPanel?.() ?? true;
+        if (opened) focusActive();
+      }
+      return;
+    }
+
+    if (e.altKey && (key === "arrowleft" || key === "arrowright")) {
+      switchAdjacentTerminal(key === "arrowright" ? 1 : -1);
+    }
+  });
+
+  if (viewport && globalThis.ResizeObserver) {
+    const observer = new ResizeObserver(() => fitActive());
+    observer.observe(viewport);
+  }
+
   return {
     createTerminal,
+    createTerminalAndShow,
     killTerminal,
+    clearActive,
+    focusActive,
     fitActive,
     openWithProject,
     setCwd,

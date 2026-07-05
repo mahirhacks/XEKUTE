@@ -31,6 +31,7 @@ const EditorManager = (() => {
 
   /** @type {Map<string, monaco.editor.ITextModel>} */
   const models = new Map();
+  const changeDecorations = new Map();
 
   function languageForFile(name) {
     const ext = name.split(".").pop().toLowerCase();
@@ -123,6 +124,7 @@ const EditorManager = (() => {
         fontFamily: "Consolas, 'Courier New', monospace",
         lineHeight: 19,
         minimap: { enabled: true, scale: 1 },
+        glyphMargin: true,
         scrollBeyondLastLine: false,
         renderLineHighlight: "line",
         padding: { top: 8 },
@@ -202,6 +204,77 @@ const EditorManager = (() => {
     return model ? model.getValue() : "";
   }
 
+  function changedRanges(before, after) {
+    const oldLines = String(before ?? "").split(/\r?\n/);
+    const newLines = String(after ?? "").split(/\r?\n/);
+    let start = 0;
+    while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) {
+      start += 1;
+    }
+
+    let oldEnd = oldLines.length - 1;
+    let newEnd = newLines.length - 1;
+    while (oldEnd >= start && newEnd >= start && oldLines[oldEnd] === newLines[newEnd]) {
+      oldEnd -= 1;
+      newEnd -= 1;
+    }
+
+    if (start > oldEnd && start > newEnd) return [];
+
+    const addedStart = Math.min(newLines.length, start + 1);
+    const addedEnd = Math.max(addedStart, newEnd + 1);
+    const removedCount = Math.max(0, oldEnd - start + 1);
+    const addedCount = Math.max(0, newEnd - start + 1);
+    return [{ addedStart, addedEnd, addedCount, removedCount }];
+  }
+
+  function clearChangeDecorations(filePath = activePath) {
+    const path = filePath ?? activePath;
+    if (!path || !models.has(path)) return;
+    const model = models.get(path);
+    const previous = changeDecorations.get(path) || [];
+    const next = model.deltaDecorations(previous, []);
+    changeDecorations.set(path, next);
+  }
+
+  function showChangeDecorations(filePath, before, after) {
+    const model = models.get(filePath);
+    if (!model || before == null || before === after) {
+      clearChangeDecorations(filePath);
+      return;
+    }
+
+    const decorations = [];
+    for (const range of changedRanges(before, after)) {
+      if (range.addedCount > 0) {
+        decorations.push({
+          range: new monaco.Range(range.addedStart, 1, range.addedEnd, 1),
+          options: {
+            isWholeLine: true,
+            className: "pointer-line-added",
+            glyphMarginClassName: "pointer-glyph-added",
+            overviewRuler: { color: "#2ea043", position: monaco.editor.OverviewRulerLane.Left },
+          },
+        });
+      }
+      if (range.removedCount > 0) {
+        const line = Math.min(Math.max(1, range.addedStart), Math.max(1, model.getLineCount()));
+        decorations.push({
+          range: new monaco.Range(line, 1, line, 1),
+          options: {
+            isWholeLine: true,
+            className: range.addedCount ? "pointer-line-changed" : "pointer-line-removed",
+            glyphMarginClassName: "pointer-glyph-removed",
+            overviewRuler: { color: "#f85149", position: monaco.editor.OverviewRulerLane.Left },
+          },
+        });
+      }
+    }
+
+    const previous = changeDecorations.get(filePath) || [];
+    changeDecorations.set(filePath, model.deltaDecorations(previous, decorations));
+  }
+
   function setOnChange(cb) {
     onChangeCb = cb;
   }
@@ -228,6 +301,7 @@ const EditorManager = (() => {
       models.delete(filePath);
     }
     if (activePath === filePath) activePath = null;
+    changeDecorations.delete(filePath);
   }
 
   function clear() {
@@ -247,6 +321,8 @@ const EditorManager = (() => {
     setOnCursorChange,
     disposeModel,
     clear,
+    clearChangeDecorations,
+    showChangeDecorations,
     layout,
   };
 })();

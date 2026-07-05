@@ -82,7 +82,7 @@
   }
 
   function rerenderAll() {
-    document.querySelectorAll(".assistant-reply[data-raw-md]").forEach((el) => {
+    document.querySelectorAll(".assistant-reply[data-raw-md], .thinking-body[data-raw-md]").forEach((el) => {
       renderToElement(el, el.dataset.rawMd);
     });
   }
