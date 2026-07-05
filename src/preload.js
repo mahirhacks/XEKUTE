@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld("api", {
 
   // Ollama
   listModels: () => ipcRenderer.invoke("ollama:list"),
+  countTokens: (payload) => ipcRenderer.invoke("ollama:countTokens", payload),
   chat: (payload) => ipcRenderer.invoke("ollama:chat", payload),
   abortChat: () => ipcRenderer.invoke("ollama:abort"),
   onToken: (cb) => ipcRenderer.on("ollama:token", (_e, token) => cb(token)),

@@ -13,6 +13,55 @@
 <body>
   <div id="app-shell">
   <div id="app-topbar">
+    <nav id="app-menu" aria-label="Application menu">
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="file">File</button>
+        <div class="app-menu-dropdown" data-menu-panel="file" hidden>
+          <button type="button" data-action="new-file">New File</button>
+          <button type="button" data-action="new-folder">New Folder</button>
+          <button type="button" data-action="open-file">Open File...</button>
+          <button type="button" data-action="open-folder">Open Folder...</button>
+        </div>
+      </div>
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="edit">Edit</button>
+        <div class="app-menu-dropdown" data-menu-panel="edit" hidden>
+          <button type="button" data-action="undo">Undo</button>
+          <button type="button" data-action="redo">Redo</button>
+          <button type="button" data-action="cut">Cut</button>
+          <button type="button" data-action="copy">Copy</button>
+          <button type="button" data-action="paste">Paste</button>
+        </div>
+      </div>
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="view">View</button>
+        <div class="app-menu-dropdown" data-menu-panel="view" hidden>
+          <button type="button" data-action="toggle-terminal">Toggle Terminal</button>
+          <button type="button" data-action="toggle-chat">Toggle Chat</button>
+        </div>
+      </div>
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="terminal">Terminal</button>
+        <div class="app-menu-dropdown" data-menu-panel="terminal" hidden>
+          <button type="button" data-action="new-terminal">New Terminal</button>
+          <button type="button" data-action="clear-terminal">Clear Terminal</button>
+          <button type="button" data-action="kill-terminal">Kill Terminal</button>
+        </div>
+      </div>
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="help">Help</button>
+        <div class="app-menu-dropdown" data-menu-panel="help" hidden>
+          <button type="button" data-action="about">About Pointer</button>
+        </div>
+      </div>
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="run">Run</button>
+        <div class="app-menu-dropdown" data-menu-panel="run" hidden>
+          <button type="button" id="menu-run-code" data-action="run-code" disabled>Run Code</button>
+          <button type="button" id="menu-configure-run" data-action="configure-run">Configure Run Command...</button>
+        </div>
+      </div>
+    </nav>
     <div class="app-topbar-spacer"></div>
     <button type="button" id="btn-top-terminal" class="topbar-icon active" title="Toggle terminal">
       <span class="codicon codicon-terminal"></span>
@@ -33,7 +82,10 @@
   <div id="layout">
     <aside id="sidebar">
       <div id="sidebar-header">
-        <span id="explorer-title" class="panel-title" title="">Explorer</span>
+        <button type="button" id="explorer-root-toggle" class="explorer-root-toggle" title="Toggle project tree">
+          <span id="explorer-root-chevron" class="codicon codicon-chevron-down"></span>
+          <span id="explorer-title" class="panel-title" title="">Explorer</span>
+        </button>
         <div class="sidebar-actions">
           <button id="btn-new-file" class="icon-btn" title="New File" disabled>
             <span class="codicon codicon-new-file"></span>
@@ -200,6 +252,7 @@
 
   <script src="../node_modules/marked/lib/marked.umd.js"></script>
   <script src="../node_modules/dompurify/dist/purify.min.js"></script>
+  <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>

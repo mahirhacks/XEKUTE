@@ -273,6 +273,20 @@ const TerminalManager = (() => {
     return createTerminal();
   }
 
+  async function runCommand(command) {
+    const text = String(command || "").trim();
+    if (!text) return false;
+    globalThis.expandTerminalPanel?.();
+    if (!activeId || !sessions.has(activeId) || sessions.get(activeId)?.exited) {
+      await createTerminal();
+    }
+    const session = activeId ? sessions.get(activeId) : null;
+    if (!session || session.exited) return false;
+    session.term.focus();
+    window.api.terminalWrite(session.id, `${text}\r`);
+    return true;
+  }
+
   async function killTerminal(id) {
     const target = id ?? activeId;
     if (!target || !sessions.has(target)) return;
@@ -393,6 +407,7 @@ const TerminalManager = (() => {
     clearActive,
     focusActive,
     fitActive,
+    runCommand,
     openWithProject,
     setCwd,
   };

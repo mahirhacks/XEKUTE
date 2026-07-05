@@ -11,6 +11,8 @@
 
   const renderScheduled = new WeakMap();
   let hljsRef = null;
+  let mermaidReady = false;
+  let mermaidSeq = 0;
 
   function escapeHtml(str) {
     return String(str)
@@ -33,9 +35,98 @@
     }
   }
 
+  function isMermaid(lang) {
+    return String(lang || "").trim().toLowerCase().split(/\s+/)[0] === "mermaid";
+  }
+
+  function initMermaid() {
+    const mermaid = globalThis.mermaid;
+    if (!mermaid) return null;
+    if (!mermaidReady) {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "dark",
+        fontFamily: "Consolas, 'Cascadia Code', monospace",
+      });
+      mermaidReady = true;
+    }
+    return mermaid;
+  }
+
+  function normalizeMermaidSource(source) {
+    let text = String(source || "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .trim();
+
+    text = text
+      .replace(/^\s*```(?:\s*mermaid)?\s*/i, "")
+      .replace(/\s*```\s*$/i, "")
+      .replace(/^\s*graph\s+([A-Z]{2})\b/i, "flowchart $1")
+      .replace(/;\s*/g, "\n");
+
+    // Small models often concatenate two Mermaid statements on one line.
+    for (let i = 0; i < 3; i += 1) {
+      text = text.replace(
+        /(\]|\}|\))\s{2,}([A-Za-z][\w-]*\s*(?:--|==|-.|\[|\{|\())/g,
+        "$1\n  $2",
+      );
+    }
+
+    // Mermaid is picky about quotes inside bracket labels: A[Print "Hi"].
+    // Convert plain labels to quoted labels and replace inner double quotes.
+    text = text.replace(/(\b[A-Za-z][\w-]*)\[([^\]\n]+)\]/g, (_match, id, label) => {
+      const clean = String(label).trim().replace(/^"|"$/g, "").replace(/"/g, "'");
+      return `${id}["${clean}"]`;
+    });
+
+    return text;
+  }
+
+  async function renderMermaidBlocks(root) {
+    const mermaid = initMermaid();
+    const blocks = [...root.querySelectorAll(".md-mermaid[data-mermaid-source]")];
+    for (const block of blocks) {
+      const source = decodeURIComponent(block.dataset.mermaidSource || "");
+      if (!source.trim()) continue;
+      if (!mermaid) {
+        block.classList.add("fallback");
+        block.textContent = source;
+        continue;
+      }
+      try {
+        const id = `pointer-mermaid-${Date.now()}-${mermaidSeq += 1}`;
+        let rendered;
+        try {
+          rendered = await mermaid.render(id, source);
+        } catch {
+          rendered = await mermaid.render(`${id}-fixed`, normalizeMermaidSource(source));
+        }
+        block.innerHTML = DOMPurify.sanitize(rendered.svg || "", {
+          USE_PROFILES: { svg: true, svgFilters: true },
+        });
+      } catch (err) {
+        block.classList.add("error");
+        block.textContent = `Mermaid render error: ${err?.message || "invalid diagram"}`;
+      }
+    }
+  }
+
   marked.use({
     renderer: {
       code({ text, lang }) {
+        if (isMermaid(lang)) {
+          const encoded = encodeURIComponent(text);
+          return `<div class="md-mermaid-block" data-code="${encoded}">
+            <div class="md-code-header">
+              <span class="md-code-lang">mermaid</span>
+              <button type="button" class="md-code-copy" title="Copy diagram">Copy</button>
+            </div>
+            <div class="md-mermaid" data-mermaid-source="${encoded}">${escapeHtml(text)}</div>
+          </div>`;
+        }
         const label = escapeHtml(lang || "text");
         const encoded = encodeURIComponent(text);
         const inner = highlightCode(text, lang);
@@ -56,7 +147,7 @@
     const html = marked.parse(md ?? "");
     return DOMPurify.sanitize(html, {
       ADD_TAGS: ["button"],
-      ADD_ATTR: ["class", "data-code", "title", "type"],
+      ADD_ATTR: ["class", "data-code", "data-mermaid-source", "title", "type"],
     });
   }
 
@@ -69,6 +160,8 @@
       cursor.className = "stream-cursor";
       cursor.setAttribute("aria-hidden", "true");
       el.appendChild(cursor);
+    } else {
+      renderMermaidBlocks(el);
     }
   }
 

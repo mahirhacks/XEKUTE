@@ -6,6 +6,8 @@ const $ = (id) => document.getElementById(id);
 const btnNewFile       = $("btn-new-file");
 const btnNewFolder     = $("btn-new-folder");
 const explorerTitle    = $("explorer-title");
+const explorerRootToggle = $("explorer-root-toggle");
+const explorerRootChevron = $("explorer-root-chevron");
 const btnOpenFolder    = $("btn-open-folder");
 const fileTree         = $("file-tree");
 const editorTabBar     = $("editor-tab-bar");
@@ -16,6 +18,8 @@ const messages         = $("messages");
 const chatInput        = $("chat-input");
 const chatInputMeasure = $("chat-input-measure");
 const sendBtn          = $("send-btn");
+const appMenu          = $("app-menu");
+const menuRunCode      = $("menu-run-code");
 const chatHeader       = $("chat-header");
 const btnTopTerminal  = $("btn-top-terminal");
 const btnTopChat      = $("btn-top-chat");
@@ -62,6 +66,7 @@ const EDITOR_MIN_HEIGHT = 120;
 let terminalSavedHeight = 220;
 let terminalCollapsed = false;
 let chatCollapsed = false;
+let explorerRootExpanded = true;
 const statusLnCol      = $("status-ln-col");
 const statusOllamaPort = $("status-ollama-port");
 
@@ -79,9 +84,13 @@ let contextFilesCache = [];
 let chatSessionCounter = 0;
 let activeChatSessionId = "";
 const chatSessions = [];
+let contextCompacting = false;
 
 const CONTEXT_RING_R = 8;
 const CONTEXT_RING_C = 2 * Math.PI * CONTEXT_RING_R;
+const CONTEXT_SUMMARY_THRESHOLD = 0.75;
+const CONTEXT_COMPACT_KEEP_MESSAGES = 10;
+const CONTEXT_COMPACT_MIN_MESSAGES = 16;
 
 /** @type {Map<string, { path: string, diskPath: string, name: string, content: string | null, savedContent: string, dirty: boolean, error: string | null }>} */
 const openTabs      = new Map();
@@ -97,6 +106,7 @@ let modelLoadInFlight = null;
 const CONTEXT_OPTIONS = ["4K", "8K", "16K", "32K", "64K", "128K", "256K"];
 const MODEL_SETTINGS_KEY = "pointer:modelSettings";
 const WORKSPACE_KEY = "pointer:workspace";
+const RUN_COMMAND_KEY = "pointer:runCommands";
 
 function createChatSession(title = "New Agent") {
   const id = `chat-${Date.now()}-${++chatSessionCounter}`;
@@ -105,6 +115,7 @@ function createChatSession(title = "New Agent") {
     title,
     history: [],
     contextFilesCache: [],
+    contextSummary: "",
     messagesHtml: "",
     activeStreamContent: "",
   };
@@ -296,6 +307,8 @@ function loadModelSettings() {
 }
 
 let modelSettings = loadModelSettings();
+let contextUsageSeq = 0;
+let contextUsageTimer = null;
 
 function getModelSettings(name) {
   if (!modelSettings[name]) {
@@ -324,7 +337,12 @@ function contextToTokens(label) {
 
 function estimateTokens(text) {
   if (!text) return 0;
-  return Math.ceil(text.length / 4);
+  const value = String(text);
+  const cjk = (value.match(/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
+  const pieces = value.match(/[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|[^\sA-Za-z0-9_]/g) || [];
+  const symbolWeight = (value.match(/[{}()[\].,;:+\-*/=<>"'`|&!?]/g) || []).length * 0.15;
+  const structuralOverhead = (value.match(/\n/g) || []).length * 0.35;
+  return Math.max(1, Math.ceil(cjk + (pieces.length - cjk) * 1.05 + symbolWeight + structuralOverhead));
 }
 
 function estimateMessagesTokens(msgs) {
@@ -348,14 +366,88 @@ function formatTokenCount(n) {
   return String(n);
 }
 
-function getContextUsage() {
+function summarizeMessageForMemory(msg) {
+  const role = msg?.role || "message";
+  if (role === "tool") {
+    const toolName = msg.tool_name || "tool";
+    const content = String(msg.content || "").replace(/\s+/g, " ").trim();
+    return `Tool ${toolName}: ${content.slice(0, 220)}`;
+  }
+
+  const content = String(msg?.content || "").replace(/\s+/g, " ").trim();
+  if (!content && msg?.tool_calls?.length) {
+    const names = msg.tool_calls
+      .map((call) => call?.function?.name)
+      .filter(Boolean)
+      .join(", ");
+    return `Assistant called tools: ${names}`;
+  }
+  if (!content) return "";
+  const label = role === "user" ? "User" : role === "assistant" ? "Assistant" : role;
+  return `${label}: ${content.slice(0, 420)}`;
+}
+
+function mergeContextSummary(previousSummary, messages) {
+  const lines = messages
+    .map(summarizeMessageForMemory)
+    .filter(Boolean);
+  const previous = String(previousSummary || "").trim();
+  const merged = [
+    previous ? `Previous memory:\n${previous}` : "",
+    lines.length ? `Older conversation:\n${lines.map((line) => `- ${line}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
+
+  const maxChars = 7000;
+  return merged.length > maxChars
+    ? `...${merged.slice(merged.length - maxChars)}`
+    : merged;
+}
+
+function sanitizeRecentContextMessages(messages) {
+  return messages
+    .filter((msg) => msg?.role === "user" || msg?.role === "assistant")
+    .map((msg) => ({
+      role: msg.role,
+      content: String(msg.content || "").trim(),
+    }))
+    .filter((msg) => msg.content);
+}
+
+function maybeCompactContext(usage = getContextUsage()) {
+  if (streaming || contextCompacting || !activeChatSession()) return false;
+  if (!usage || usage.pct < CONTEXT_SUMMARY_THRESHOLD) return false;
+  if (chatHistory.length < CONTEXT_COMPACT_MIN_MESSAGES) return false;
+
+  const keepCount = Math.min(CONTEXT_COMPACT_KEEP_MESSAGES, Math.max(4, Math.floor(chatHistory.length / 3)));
+  const oldMessages = chatHistory.slice(0, -keepCount);
+  const recentMessages = sanitizeRecentContextMessages(chatHistory.slice(-keepCount));
+  if (!oldMessages.length || !recentMessages.length) return false;
+
+  contextCompacting = true;
+  const session = activeChatSession();
+  session.contextSummary = mergeContextSummary(session.contextSummary, oldMessages);
+  chatHistory = recentMessages;
+  session.history = chatHistory;
+  session.contextFilesCache = contextFilesCache;
+  activeStreamContent = "";
+  session.activeStreamContent = "";
+  syncActiveChatSession();
+  contextCompacting = false;
+  updateContextUsage();
+  return true;
+}
+
+function getContextUsage(usedOverride = null) {
   const settings = selectedModel ? getModelSettings(selectedModel) : { context: "32K" };
   const total = contextToTokens(settings.context);
   const draft = chatInput.value.trim();
-  let used = estimateMessagesTokens(buildMessagesForApi());
-  used += estimateTokens(JSON.stringify(ToolParser.OLLAMA_TOOLS));
-  if (draft) used += estimateTokens(draft) + 4;
-  if (activeStreamContent) used += estimateTokens(activeStreamContent) + 4;
+  let used = usedOverride;
+  if (used == null) {
+    used = estimateMessagesTokens(buildMessagesForApi());
+    used += estimateTokens(JSON.stringify(ToolMap.TOOLS));
+    if (draft) used += estimateTokens(draft) + 4;
+    if (activeStreamContent) used += estimateTokens(activeStreamContent) + 4;
+  }
   const pct = total > 0 ? Math.min(used / total, 1) : 0;
   return {
     total,
@@ -366,7 +458,7 @@ function getContextUsage() {
   };
 }
 
-function updateContextUsage() {
+function updateContextUsageLegacy() {
   if (!contextRingFill) return;
   const { total, used, free, pct } = getContextUsage();
   const filled = pct * CONTEXT_RING_C;
@@ -385,6 +477,65 @@ function updateContextUsage() {
   if (contextUsagePct) {
     contextUsagePct.textContent = `${Math.round(pct * 100)}% used · ${formatTokenCount(total)} max`;
   }
+}
+
+function getContextUsageMessages() {
+  const msgs = buildMessagesForApi().map((msg) => ({ ...msg }));
+  const draft = chatInput.value.trim();
+  if (draft) msgs.push({ role: "user", content: draft });
+  if (activeStreamContent) msgs.push({ role: "assistant", content: activeStreamContent });
+  return msgs;
+}
+
+function renderContextUsage({ total, used, free, pct, source }) {
+  if (!contextRingFill) return;
+  const filled = pct * CONTEXT_RING_C;
+
+  contextRingFill.style.strokeDasharray = `${filled} ${CONTEXT_RING_C}`;
+  contextUsageBtn.classList.toggle("warn", pct >= 0.75 && pct < 0.9);
+  contextUsageBtn.classList.toggle("full", pct >= 0.9);
+
+  if (contextUsageFill) {
+    contextUsageFill.style.width = `${pct * 100}%`;
+    contextUsageFill.classList.toggle("warn", pct >= 0.75 && pct < 0.9);
+    contextUsageFill.classList.toggle("full", pct >= 0.9);
+  }
+  if (contextUsageUsed) contextUsageUsed.textContent = `${formatTokenCount(used)} used`;
+  if (contextUsageFree) contextUsageFree.textContent = `${formatTokenCount(free)} free`;
+  if (contextUsagePct) {
+    const suffix = source ? ` (${source})` : "";
+    contextUsagePct.textContent = `${Math.round(pct * 100)}% used - ${formatTokenCount(total)} max${suffix}`;
+  }
+}
+
+function updateContextUsage() {
+  const fallbackUsage = getContextUsage();
+  renderContextUsage({ ...fallbackUsage, source: "estimate" });
+  if (!window.api?.countTokens || !selectedModel) {
+    maybeCompactContext(fallbackUsage);
+    return;
+  }
+
+  if (contextUsageTimer) clearTimeout(contextUsageTimer);
+  const seq = ++contextUsageSeq;
+  contextUsageTimer = setTimeout(async () => {
+    try {
+      const result = await window.api.countTokens({
+        model: selectedModel,
+        messages: getContextUsageMessages(),
+        tools: ToolMap.TOOLS,
+      });
+      if (seq !== contextUsageSeq || !result?.ok || !Number.isFinite(result.count)) return;
+      const preciseUsage = getContextUsage(result.count);
+      renderContextUsage({
+        ...preciseUsage,
+        source: result.source === "ollama" ? "model count" : "estimate",
+      });
+      maybeCompactContext(preciseUsage);
+    } catch {
+      /* keep fallback estimate */
+    }
+  }, 250);
 }
 
 function positionContextPopover() {
@@ -580,14 +731,62 @@ function projectName(folder) {
   return folder.replace(/[/\\]$/, "").split(/[/\\]/).pop() || folder;
 }
 
+function setExplorerRootExpanded(expanded) {
+  explorerRootExpanded = Boolean(expanded);
+  fileTree.hidden = !explorerRootExpanded || !rootPath;
+  explorerRootToggle?.classList.toggle("collapsed", !explorerRootExpanded);
+  explorerRootChevron?.classList.toggle("codicon-chevron-down", explorerRootExpanded);
+  explorerRootChevron?.classList.toggle("codicon-chevron-right", !explorerRootExpanded);
+}
+
 function setProjectFolder(folder) {
   if (folder) {
     explorerTitle.textContent = projectName(folder).toUpperCase();
     explorerTitle.title = folder;
+    explorerRootToggle.disabled = false;
   } else {
     explorerTitle.textContent = "EXPLORER";
     explorerTitle.title = "";
+    explorerRootToggle.disabled = true;
   }
+  setExplorerRootExpanded(Boolean(folder));
+  updateRunMenuState();
+}
+
+function loadRunCommands() {
+  try {
+    const raw = localStorage.getItem(RUN_COMMAND_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    localStorage.removeItem(RUN_COMMAND_KEY);
+    return {};
+  }
+}
+
+function runCommandKey() {
+  return rootPath || "__global__";
+}
+
+function getRunCommand() {
+  return loadRunCommands()[runCommandKey()] || "";
+}
+
+function setRunCommand(command) {
+  const commands = loadRunCommands();
+  const key = runCommandKey();
+  const value = String(command || "").trim();
+  if (value) commands[key] = value;
+  else delete commands[key];
+  localStorage.setItem(RUN_COMMAND_KEY, JSON.stringify(commands));
+  updateRunMenuState();
+}
+
+function updateRunMenuState() {
+  if (!menuRunCode) return;
+  const command = getRunCommand();
+  menuRunCode.disabled = !command;
+  menuRunCode.title = command ? `Run: ${command}` : "Configure a run command first";
 }
 
 function squashAgentTurn(startIdx) {
@@ -633,6 +832,10 @@ async function restoreLastWorkspace() {
 // ── File Explorer ─────────────────────────────────────────────────────────────
 
 btnOpenFolder.addEventListener("click", openFolder);
+explorerRootToggle?.addEventListener("click", () => {
+  if (!rootPath) return;
+  setExplorerRootExpanded(!explorerRootExpanded);
+});
 
 async function openFolder() {
   const folder = await window.api.openFolder();
@@ -647,7 +850,44 @@ async function openFileDialog() {
   await openFile(filePath, fileName);
 }
 
-window.api.onMenuAction((action) => {
+function closeAppMenus() {
+  appMenu?.querySelectorAll(".app-menu-dropdown").forEach((panel) => {
+    panel.hidden = true;
+  });
+  appMenu?.querySelectorAll(".app-menu-button.active").forEach((button) => {
+    button.classList.remove("active");
+  });
+}
+
+function toggleAppMenu(name) {
+  if (!appMenu) return;
+  const panel = appMenu.querySelector(`[data-menu-panel="${CSS.escape(name)}"]`);
+  const button = appMenu.querySelector(`[data-menu="${CSS.escape(name)}"]`);
+  if (!panel || !button) return;
+  const opening = panel.hidden;
+  closeAppMenus();
+  panel.hidden = !opening;
+  button.classList.toggle("active", opening);
+  if (name === "run") updateRunMenuState();
+}
+
+function configureRunCommand() {
+  const current = getRunCommand();
+  const hint = activeTabPath && openTabs.has(activeTabPath)
+    ? `Example: python ${openTabs.get(activeTabPath).name}`
+    : "Example: python main.py";
+  const value = prompt(`Command to run from the project folder:\n${hint}`, current);
+  if (value === null) return;
+  setRunCommand(value);
+}
+
+async function runConfiguredCommand() {
+  const command = getRunCommand();
+  if (!command) return;
+  await TerminalManager.runCommand(command);
+}
+
+function runMenuAction(action) {
   switch (action) {
     case "new-file":
       if (!rootPath) {
@@ -678,9 +918,57 @@ window.api.onMenuAction((action) => {
     case "kill-terminal":
       TerminalManager.killTerminal();
       break;
+    case "undo":
+    case "redo":
+    case "cut":
+    case "copy":
+    case "paste":
+      document.execCommand(action);
+      break;
+    case "toggle-terminal":
+      setTerminalCollapsed(!terminalCollapsed);
+      break;
+    case "toggle-chat":
+      if (chatCollapsed) openChatPane({ createIfEmpty: true });
+      else setChatCollapsed(true);
+      break;
+    case "about":
+      alert("Pointer - local-first AI IDE");
+      break;
+    case "configure-run":
+      configureRunCommand();
+      break;
+    case "run-code":
+      runConfiguredCommand();
+      break;
     default:
       break;
   }
+}
+
+appMenu?.addEventListener("click", (e) => {
+  const menuButton = e.target.closest("[data-menu]");
+  if (menuButton) {
+    e.stopPropagation();
+    toggleAppMenu(menuButton.dataset.menu);
+    return;
+  }
+
+  const actionButton = e.target.closest("[data-action]");
+  if (!actionButton || actionButton.disabled) return;
+  e.stopPropagation();
+  const action = actionButton.dataset.action;
+  closeAppMenus();
+  runMenuAction(action);
+});
+
+document.addEventListener("click", (e) => {
+  if (appMenu?.contains(e.target)) return;
+  closeAppMenus();
+});
+
+window.api.onMenuAction((action) => {
+  runMenuAction(action);
 });
 
 async function renderTree(dirPath, container, depth) {
@@ -705,7 +993,12 @@ async function renderTree(dirPath, container, depth) {
       : "tree-chevron codicon hidden";
 
     const icon = document.createElement("span");
-    icon.className = `tree-icon codicon ${entry.isDir ? "codicon-folder" : fileCodicon(entry.name)}`;
+    if (entry.isDir) {
+      icon.className = "tree-icon codicon codicon-folder";
+    } else {
+      const info = fileIconInfo(entry.name);
+      icon.className = `tree-file-icon codicon ${info.icon} ${info.className}`;
+    }
 
     const name = document.createElement("span");
     name.className = "tree-name";
@@ -876,7 +1169,8 @@ function renderTabs() {
     el.addEventListener("click", () => switchToTab(path));
 
     const icon = document.createElement("span");
-    icon.className = `tab-icon codicon ${fileCodicon(tab.name)}`;
+    const info = fileIconInfo(tab.name);
+    icon.className = `tab-icon codicon ${info.icon} ${info.className}`;
 
     const label = document.createElement("span");
     label.className = "tab-label" + (tab.dirty ? " tab-dirty" : "");
@@ -962,19 +1256,28 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;");
 }
 
-function fileCodicon(name) {
+function fileIconInfo(name) {
   const ext = name.split(".").pop().toLowerCase();
   const map = {
-    js: "codicon-file-code", ts: "codicon-file-code", jsx: "codicon-file-code", tsx: "codicon-file-code",
-    json: "codicon-json", md: "codicon-markdown", css: "codicon-file-code", html: "codicon-file-code",
-    py: "codicon-file-code", rs: "codicon-file-code", go: "codicon-file-code", rb: "codicon-file-code",
-    sh: "codicon-terminal", yml: "codicon-file-code", yaml: "codicon-file-code",
-    toml: "codicon-file-code", lock: "codicon-lock", gitignore: "codicon-exclude",
-    png: "codicon-file-media", jpg: "codicon-file-media", jpeg: "codicon-file-media", svg: "codicon-file-media",
-    gif: "codicon-file-media", ico: "codicon-file-media",
-    pdf: "codicon-file-pdf",
+    py: ["codicon-symbol-method", "file-icon-py"], pyw: ["codicon-symbol-method", "file-icon-py"],
+    c: ["codicon-file-code", "file-icon-c"], h: ["codicon-file-code", "file-icon-c"],
+    cpp: ["codicon-file-code", "file-icon-cpp"], cxx: ["codicon-file-code", "file-icon-cpp"], cc: ["codicon-file-code", "file-icon-cpp"], hpp: ["codicon-file-code", "file-icon-cpp"],
+    js: ["codicon-file-code", "file-icon-js"], mjs: ["codicon-file-code", "file-icon-js"], cjs: ["codicon-file-code", "file-icon-js"],
+    jsx: ["codicon-file-code", "file-icon-js"], ts: ["codicon-symbol-interface", "file-icon-ts"], tsx: ["codicon-symbol-interface", "file-icon-ts"],
+    json: ["codicon-json", "file-icon-json"], jsonc: ["codicon-json", "file-icon-json"],
+    html: ["codicon-code", "file-icon-html"], htm: ["codicon-code", "file-icon-html"],
+    css: ["codicon-symbol-color", "file-icon-css"], scss: ["codicon-symbol-color", "file-icon-css"],
+    md: ["codicon-markdown", "file-icon-md"], yml: ["codicon-settings", "file-icon-yaml"], yaml: ["codicon-settings", "file-icon-yaml"],
+    rs: ["codicon-file-code", "file-icon-rust"], go: ["codicon-file-code", "file-icon-go"], rb: ["codicon-file-code", "file-icon-ruby"],
+    sh: ["codicon-terminal", "file-icon-shell"], ps1: ["codicon-terminal", "file-icon-shell"], bat: ["codicon-terminal", "file-icon-shell"],
+    toml: ["codicon-settings", "file-icon-config"], env: ["codicon-key", "file-icon-config"], ini: ["codicon-settings", "file-icon-config"],
+    lock: ["codicon-lock", "file-icon-lock"], gitignore: ["codicon-git-branch", "file-icon-git"],
+    png: ["codicon-file-media", "file-icon-media"], jpg: ["codicon-file-media", "file-icon-media"], jpeg: ["codicon-file-media", "file-icon-media"],
+    svg: ["codicon-file-media", "file-icon-media"], gif: ["codicon-file-media", "file-icon-media"], ico: ["codicon-file-media", "file-icon-media"],
+    pdf: ["codicon-file-pdf", "file-icon-pdf"],
   };
-  return map[ext] ?? "codicon-file";
+  const [icon, className] = map[ext] || ["codicon-file", "file-icon-text"];
+  return { icon, className };
 }
 
 // ── Model picker ──────────────────────────────────────────────────────────────
@@ -1465,7 +1768,19 @@ function buildMessagesForApi() {
     activeFile: getActiveFileContext(),
     extraFiles: contextFilesCache,
   });
-  return [{ role: "system", content: system }, ...chatHistory];
+  const msgs = [{ role: "system", content: system }];
+  const summary = activeChatSession()?.contextSummary;
+  if (summary) {
+    msgs.push({
+      role: "system",
+      content: [
+        "Compressed conversation memory from earlier turns:",
+        summary,
+        "Use this as prior context, but prefer current files and recent messages if they conflict.",
+      ].join("\n"),
+    });
+  }
+  return [...msgs, ...chatHistory];
 }
 
 function renderMarkdown(el, md, { streaming = false } = {}) {
@@ -1940,6 +2255,17 @@ function createAssistantTurn(enableThinking) {
         this.contentEl.hidden = true;
       }
       this.clearStatus();
+      this.contentEl.classList.remove("streaming");
+      this.pruneIfEmpty();
+    },
+    pruneIfEmpty() {
+      const hasContent = !this.contentEl.hidden && this.contentEl.textContent.trim();
+      const statusActive = this.statusEl?.classList.contains("is-active");
+      const hasThinking = this.thinkingBlock && !this.thinkingBlock.hidden && this.rawThinking.trim();
+      const hasTools = this.turn.querySelector(".tool-card");
+      if (!hasContent && !statusActive && !hasThinking && !hasTools) {
+        this.turn.remove();
+      }
     },
     startThinkingTimer() {
       if (!thinkingMeta || thinkingTimer) return;
@@ -2049,7 +2375,9 @@ async function sendMessage() {
       }
 
       const rawRound = payload.roundContent || "";
-      const roundText = ToolParser.cleanReplyForDisplay(rawRound);
+      const roundText = ToolParser.cleanReplyForDisplay(rawRound, {
+        stripCodeBlocks: editContext.isEditRequest,
+      });
       const tools = ToolParser.collectToolsFromResponse(rawRound, payload.toolCalls, editContext);
       const visibleRoundText = tools.length && editContext.isEditRequest ? "" : roundText;
 
@@ -2157,9 +2485,13 @@ async function sendMessage() {
 
         chatHistory.push({
           role: "assistant",
-          content: roundText || ToolParser.cleanReplyForDisplay(rawRound),
+          content: roundText || ToolParser.cleanReplyForDisplay(rawRound, {
+            stripCodeBlocks: editContext.isEditRequest,
+          }),
         });
-        const newText = roundText || ToolParser.cleanReplyForDisplay(rawRound) || rawRound;
+        const newText = roundText || ToolParser.cleanReplyForDisplay(rawRound, {
+          stripCodeBlocks: editContext.isEditRequest,
+        }) || rawRound;
         if (newText && !assistant.rawContent.trim()) {
           assistant.rawContent = newText;
         }
@@ -2178,7 +2510,9 @@ async function sendMessage() {
       chatHistory.push(assistantMessage);
 
       if (visibleRoundText) {
-        const prev = ToolParser.cleanReplyForDisplay(assistant.rawContent);
+        const prev = ToolParser.cleanReplyForDisplay(assistant.rawContent, {
+          stripCodeBlocks: editContext.isEditRequest,
+        });
         assistant.rawContent = prev && !prev.includes(visibleRoundText)
           ? `${prev}\n\n${visibleRoundText}`
           : visibleRoundText;
@@ -2238,6 +2572,7 @@ async function sendMessage() {
       assistant.finalizeContent();
     }
 
+    assistant.pruneIfEmpty();
     squashAgentTurn(historyStart);
     syncActiveChatSession();
   } finally {
@@ -2247,6 +2582,7 @@ async function sendMessage() {
     updateSendBtn();
     renderChatSessionSelect();
     updateContextUsage();
+    assistant.pruneIfEmpty();
     syncActiveChatSession();
     chatInput.focus();
   }
@@ -2506,6 +2842,7 @@ terminalResize.addEventListener("dblclick", () => {
 });
 
 updateSendBtn();
+updateRunMenuState();
 renderChatSessionSelect();
 setChatCollapsed(false);
 setTerminalCollapsed(false);

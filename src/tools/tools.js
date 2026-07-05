@@ -188,10 +188,10 @@ const ToolParser = (() => {
     },
   ];
 
-  const SYSTEM_PROMPT = `You are Pointer's local coding agent. You solve coding tasks by using tools. You never paste file contents, patches, commands, or tool syntax in chat unless the user explicitly asks to see them.
+  const SYSTEM_PROMPT = `You are Pointer's local coding agent. Use tools only when they are needed for local workspace facts, file changes, commands, or processes. For greetings, explanations, teaching, diagrams, and other read-only questions where enough context is already visible, answer normally without tools. You never paste file contents, patches, commands, or tool syntax in chat unless the user explicitly asks to see them.
 
-## Work loop for every user request
-Follow this order silently:
+## Work loop
+Follow this order silently when a request needs project work:
 1. Inventory: read the Project files list. These are the only files that currently exist.
 2. Locate: if the target is unclear, call index_workspace or search_code. Use search_code for symbols, error text, features, and "where is..." questions.
 3. Inspect: read_file every existing file you will edit unless its contents are already shown under "Currently open" or "File contents".
@@ -220,13 +220,23 @@ Follow this order silently:
 - stop_process: stop a process you started when it is no longer needed.
 
 ## File decision rules
-1. Greeting/question/no file change needed: answer plainly. No tools.
+1. Greeting/question/explanation/read-only code understanding/no file change needed: answer plainly. No tools.
 2. User asks to create a file that is not in Project files: call create_file with complete content.
 3. User asks to edit a file that is in Project files and contents are shown: call patch_file with exact search/replace.
 4. User asks to edit a file that is in Project files and contents are not shown: call read_file first, then patch_file.
 5. User mentions several files: inspect each existing file you need, then edit/create only the files required by the goal.
 6. User asks to delete/remove a file: call delete_file only for exact requested paths.
 7. If the user asks you to change code, a normal text reply is failure. You must call a file tool before saying it is done.
+
+## Diagrams
+- When the user asks for a flow chart, dependency diagram, architecture diagram, or sequence diagram, use a fenced mermaid block.
+- Use valid Mermaid syntax. Put every edge on its own line. Use simple node ids without spaces. Use quoted labels like A["Read input"] and avoid raw double quotes inside labels.
+- Example:
+\`\`\`mermaid
+flowchart TD
+  A["Start"] --> B["Next step"]
+\`\`\`
+- Do not call file tools for a diagram unless the user asks you to save it or you need to inspect project files first.
 
 ## patch_file rules
 - Copy search text verbatim from the visible or read file contents: same indentation, quotes, spacing, and blank lines.
@@ -312,7 +322,10 @@ replacement lines
     /^\s*copy\s*$/gim,
   ];
 
-  const EDIT_REQUEST_RE = /\b(create|add|update|edit|modify|change|fix|write|implement|build|make|remove|delete|refactor|append|insert)\b/i;
+  const READ_ONLY_REQUEST_RE = /\b(explain|describe|summari[sz]e|walk\s+me\s+through|teach|understand|what\s+does|how\s+does|why\s+does|review|read|analy[sz]e)\b/i;
+  const EDIT_REQUEST_RE = /\b(create|add|update|edit|modify|change|fix|write|implement|build|make|remove|delete|refactor|append|insert|rename|move)\b/i;
+  const CHAT_MARKDOWN_REQUEST_RE = /\b(flow\s*chart|flowchart|diagram|mermaid|markdown|\.md|draw|show\s+me|explain|understand|walk\s+me\s+through)\b/i;
+  const EXPLICIT_FILE_MUTATION_RE = /\b(create|add|update|edit|modify|change|fix|implement|build|remove|delete|refactor|append|insert|rename|move|save)\b/i;
 
   function parseJsonArgs(raw) {
     if (!raw) return null;
@@ -326,7 +339,9 @@ replacement lines
 
   function isEditRequest(text) {
     if (!text) return false;
-    return EDIT_REQUEST_RE.test(text) || /\.\w{1,6}\b/.test(text);
+    if (CHAT_MARKDOWN_REQUEST_RE.test(text) && !EXPLICIT_FILE_MUTATION_RE.test(text)) return false;
+    if (READ_ONLY_REQUEST_RE.test(text) && !EDIT_REQUEST_RE.test(text)) return false;
+    return EDIT_REQUEST_RE.test(text);
   }
 
   function parseProjectFiles(dirMap) {
@@ -657,15 +672,19 @@ replacement lines
   }
 
   function stripGenericCodeBlocks(text) {
-    return text.replace(/```[\s\S]*?```/g, "").trim();
+    return text.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (block, info = "") => {
+      return String(info).trim().toLowerCase() === "mermaid" ? block : "";
+    }).trim();
   }
 
-  function stripFenceEdits(text, { streaming = false } = {}) {
+  function stripFenceEdits(text, { streaming = false, stripCodeBlocks = true } = {}) {
     if (!text) return "";
 
     let result = stripAllFileBlocks(text);
     result = stripBoilerplate(result);
-    result = stripGenericCodeBlocks(result);
+    if (stripCodeBlocks) {
+      result = stripGenericCodeBlocks(result);
+    }
     result = result.trim();
 
     if (streaming) {
@@ -684,9 +703,9 @@ replacement lines
     return result;
   }
 
-  function cleanReplyForDisplay(text, { streaming = false } = {}) {
+  function cleanReplyForDisplay(text, { streaming = false, stripCodeBlocks = false } = {}) {
     if (!text) return "";
-    return stripFenceEdits(text, { streaming });
+    return stripFenceEdits(text, { streaming, stripCodeBlocks });
   }
 
   function isRepetitiveLoop(text) {

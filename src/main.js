@@ -963,6 +963,24 @@ async function fetchOllamaTags(baseUrl) {
   }
 }
 
+function estimateTokenCount(text) {
+  if (!text) return 0;
+  const value = String(text);
+  const cjk = (value.match(/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
+  const pieces = value.match(/[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|[^\sA-Za-z0-9_]/g) || [];
+  const symbolWeight = (value.match(/[{}()[\].,;:+\-*/=<>"'`|&!?]/g) || []).length * 0.15;
+  const structuralOverhead = (value.match(/\n/g) || []).length * 0.35;
+  return Math.max(1, Math.ceil(cjk + (pieces.length - cjk) * 1.05 + symbolWeight + structuralOverhead));
+}
+
+function serializeTokenPayload(messages = [], tools = []) {
+  const safeMessages = sanitizeOllamaMessages(messages);
+  return JSON.stringify({
+    messages: safeMessages,
+    tools: tools || [],
+  });
+}
+
 /** List locally available Ollama models */
 ipcMain.handle("ollama:list", async () => {
   const baseUrl = getOllamaBaseUrl();
@@ -999,6 +1017,38 @@ ipcMain.handle("ollama:list", async () => {
   } catch (err) {
     return { error: apiError || err?.message || "Cannot reach Ollama. Is it running?" };
   }
+});
+
+ipcMain.handle("ollama:countTokens", async (_event, { model, messages = [], tools = [] } = {}) => {
+  const prompt = serializeTokenPayload(messages, tools);
+  const fallback = estimateTokenCount(prompt) + (Array.isArray(messages) ? messages.length * 4 : 0);
+
+  if (!model) return { ok: true, count: fallback, source: "estimate" };
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${getOllamaBaseUrl()}/api/tokenize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      const count = Array.isArray(data?.tokens)
+        ? data.tokens.length
+        : Number(data?.count ?? data?.token_count);
+      if (Number.isFinite(count) && count > 0) {
+        return { ok: true, count, source: "ollama" };
+      }
+    }
+  } catch {
+    /* older Ollama builds may not expose tokenization */
+  }
+
+  return { ok: true, count: fallback, source: "estimate" };
 });
 
 ipcMain.handle("ollama:abort", async (event) => {
