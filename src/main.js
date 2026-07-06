@@ -4,6 +4,8 @@ const fs = require("fs");
 const pty = require("node-pty");
 const { spawn } = require("child_process");
 const { createToolHandlers } = require("./tools/tool-handlers");
+const { createWorkspaceSearch } = require("./tools/workspace-search");
+const { runAgentTurn } = require("./agent/agent-controller");
 
 const APP_ROOT = path.join(__dirname, "..");
 
@@ -14,6 +16,7 @@ const toolProcesses = new Map();
 const ollamaControllers = new Map();
 let toolProcessCounter = 0;
 let workspaceIndexCache = null;
+const workspaceSearch = createWorkspaceSearch({ fs, path });
 
 function getDefaultShell() {
   if (process.env.POINTER_SHELL) return process.env.POINTER_SHELL;
@@ -299,14 +302,7 @@ function patchFileInWorkspace(workspace, file, patches) {
 }
 
 function resolveWorkspaceTarget(workspace, relPath = "") {
-  if (!workspace) return { error: "No workspace open" };
-  const root = path.resolve(workspace);
-  const target = path.resolve(root, relPath || ".");
-  const relative = path.relative(root, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return { error: "Path escapes workspace" };
-  }
-  return { root, target, relative: relative || "" };
+  return workspaceSearch.resolveWorkspaceTarget(workspace, relPath);
 }
 
 const INDEX_SKIP_DIRS = new Set([
@@ -397,47 +393,8 @@ function extractGraphFacts(rel, content) {
 }
 
 function buildWorkspaceIndex(workspace) {
-  const resolved = resolveWorkspaceTarget(workspace);
-  if (resolved.error) return resolved;
-
-  const root = resolved.root;
-  const files = collectWorkspaceFiles(root);
-  const docs = [];
-  const graph = [];
-  const df = new Map();
-
-  for (const file of files) {
-    let content = "";
-    try {
-      content = fs.readFileSync(file.full, "utf8");
-    } catch {
-      continue;
-    }
-
-    const tokens = tokenize(`${file.rel}\n${content}`);
-    const counts = new Map();
-    for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
-    for (const token of counts.keys()) df.set(token, (df.get(token) || 0) + 1);
-
-    docs.push({
-      path: file.rel,
-      size: file.size,
-      mtimeMs: file.mtimeMs,
-      content,
-      counts,
-      tokenCount: tokens.length || 1,
-    });
-    graph.push(extractGraphFacts(file.rel, content));
-  }
-
-  const index = {
-    workspace: root,
-    builtAt: Date.now(),
-    docs,
-    df,
-    graph,
-  };
-  workspaceIndexCache = index;
+  const index = workspaceSearch.buildWorkspaceIndex(workspace);
+  workspaceIndexCache = index?.error ? null : index;
   return index;
 }
 
@@ -448,56 +405,11 @@ function getWorkspaceIndex(workspace) {
 }
 
 function searchWorkspaceIndex(workspace, query, { limit = 8 } = {}) {
-  if (!query?.trim()) return { error: "Empty search query" };
-  const index = getWorkspaceIndex(workspace);
-  if (index.error) return index;
+  return workspaceSearch.searchWorkspaceIndex(workspace, query, { limit });
+}
 
-  const qTokens = tokenize(query);
-  const qSet = new Set(qTokens);
-  const totalDocs = Math.max(index.docs.length, 1);
-
-  const scored = index.docs.map((doc) => {
-    let score = 0;
-    for (const token of qSet) {
-      const tf = doc.counts.get(token) || 0;
-      if (!tf) continue;
-      const idf = Math.log(1 + totalDocs / (1 + (index.df.get(token) || 0)));
-      score += (tf / doc.tokenCount) * idf * 1000;
-      if (doc.path.toLowerCase().includes(token)) score += 2;
-    }
-
-    const lower = doc.content.toLowerCase();
-    const phrase = query.toLowerCase();
-    if (lower.includes(phrase)) score += 8;
-
-    return { doc, score };
-  }).filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Math.max(1, Math.min(limit, 20)));
-
-  const results = scored.map(({ doc, score }) => {
-    const lower = doc.content.toLowerCase();
-    let pos = lower.indexOf(query.toLowerCase());
-    if (pos < 0) {
-      const token = qTokens.find((t) => lower.includes(t));
-      pos = token ? lower.indexOf(token) : 0;
-    }
-    const start = Math.max(0, pos - 300);
-    const end = Math.min(doc.content.length, pos + 700);
-    return {
-      path: doc.path,
-      score: Number(score.toFixed(3)),
-      snippet: takeLimited(doc.content.slice(start, end), 1000),
-    };
-  });
-
-  return {
-    ok: true,
-    mode: "search",
-    query,
-    count: results.length,
-    results,
-  };
+function findWorkspaceFiles(workspace, query, { limit = 8 } = {}) {
+  return workspaceSearch.findWorkspaceFiles(workspace, query, { limit });
 }
 
 function runWorkspaceCommand(workspace, command, { timeoutMs = 20000 } = {}) {
@@ -611,41 +523,13 @@ function processSnapshot(record) {
 }
 
 function listProjectFiles(workspace) {
-  const resolved = resolveWorkspaceTarget(workspace);
-  if (resolved.error) return resolved;
-  const files = [];
-
-  function walk(dir) {
-    let entries = [];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((a, b) => {
-      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    for (const entry of entries) {
-      if ([".git", "node_modules", "__pycache__"].includes(entry.name)) continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-      } else if (entry.isFile()) {
-        files.push(path.relative(resolved.root, full).replace(/\\/g, "/"));
-      }
-    }
-  }
-
-  walk(resolved.root);
-  return { ok: true, files };
+  return workspaceSearch.listProjectFiles(workspace);
 }
 
 async function editWorkspaceFile(workspace, file, { code, patches } = {}) {
   if (!workspace) return { error: "No workspace open" };
   workspaceIndexCache = null;
+  workspaceSearch.invalidate(workspace);
 
   const root = path.resolve(workspace);
   const target = path.resolve(root, file);
@@ -676,6 +560,7 @@ function deleteWorkspaceFile(workspace, file) {
     if (!stat.isFile()) return { error: `Not a file: ${file}` };
     fs.unlinkSync(resolved.target);
     workspaceIndexCache = null;
+    workspaceSearch.invalidate(workspace);
     return { ok: true, mode: "delete", file };
   } catch (err) {
     return { error: err.message };
@@ -706,6 +591,7 @@ const toolExecutor = createToolHandlers({
   deleteWorkspaceFile,
   buildWorkspaceIndex,
   searchWorkspaceIndex,
+  findWorkspaceFiles,
   runWorkspaceCommand,
   startWorkspaceProcess,
   readToolProcess,
@@ -771,6 +657,10 @@ ipcMain.handle("tools:indexWorkspace", async (_event, { workspace }) => {
 
 ipcMain.handle("tools:searchWorkspace", async (_event, { workspace, query, limit }) => {
   return searchWorkspaceIndex(workspace, query, { limit });
+});
+
+ipcMain.handle("tools:findFiles", async (_event, { workspace, query, limit }) => {
+  return findWorkspaceFiles(workspace, query, { limit });
 });
 
 ipcMain.handle("tools:runCommand", async (_event, { workspace, command, timeoutMs }) => {
@@ -860,6 +750,10 @@ function parseToolArguments(raw) {
   } catch {
     return null;
   }
+}
+
+function includeThinkOption(thinking) {
+  return typeof thinking === "boolean" || typeof thinking === "string";
 }
 
 /** Ollama expects tool_calls[].function.arguments as objects, not JSON strings. */
@@ -1076,7 +970,7 @@ ipcMain.handle("ollama:chat", async (event, { messages, model, numCtx, thinking,
     messages: sanitizeOllamaMessages(messages),
     stream: true,
     ...(Object.keys(options).length ? { options } : {}),
-    ...(thinking ? { think: true } : {}),
+    ...(includeThinkOption(thinking) ? { think: thinking } : {}),
     ...(tools?.length ? { tools } : {}),
   };
 
@@ -1232,4 +1126,184 @@ ipcMain.handle("ollama:chat", async (event, { messages, model, numCtx, thinking,
       ollamaControllers.delete(senderId);
     }
   }
+});
+
+function mergeAgentToolCalls(existing, incoming) {
+  if (!incoming?.length) return existing;
+  const merged = existing.slice();
+
+  for (const call of incoming) {
+    const fn = call.function || {};
+    const args = fn.arguments ?? {};
+    const index = Number.isInteger(call.index)
+      ? call.index
+      : Number.isInteger(fn.index) ? fn.index : null;
+    let targetIndex = index;
+
+    if (targetIndex == null) {
+      targetIndex = merged.findIndex((item) => {
+        if (call.id && item.id === call.id) return true;
+        return item.function?.name && fn.name && item.function.name === fn.name
+          && JSON.stringify(item.function.arguments ?? {}) === JSON.stringify(args ?? {});
+      });
+      if (targetIndex < 0) targetIndex = merged.length;
+    }
+
+    const normalizedArgs = typeof args === "string" ? args : { ...(args || {}) };
+
+    while (merged.length <= targetIndex) {
+      merged.push({
+        type: "function",
+        function: { name: "", arguments: {} },
+      });
+    }
+
+    const target = merged[targetIndex];
+    if (call.id) target.id = call.id;
+    if (call.type) target.type = call.type;
+    if (fn.name) target.function.name = fn.name;
+    if (index != null) target.function.index = index;
+
+    if (typeof normalizedArgs === "string") {
+      const prev = typeof target.function.arguments === "string" ? target.function.arguments : "";
+      target.function.arguments = `${prev}${normalizedArgs}`;
+    } else {
+      const prev = typeof target.function.arguments === "object" && target.function.arguments
+        ? target.function.arguments
+        : {};
+      target.function.arguments = { ...prev, ...normalizedArgs };
+    }
+  }
+
+  return merged.filter((call) => call.function?.name);
+}
+
+async function runOllamaAgentRound(senderId, { messages, model, numCtx, thinking, tools }, hooks = {}) {
+  const url = `${getOllamaBaseUrl()}/api/chat`;
+  const mdl = model ?? "qwen2.5-coder:7b";
+  const previous = ollamaControllers.get(senderId);
+  if (previous) previous.abort();
+
+  const controller = new AbortController();
+  ollamaControllers.set(senderId, controller);
+
+  const options = {};
+  if (numCtx) options.num_ctx = numCtx;
+
+  const body = {
+    model: mdl,
+    messages: sanitizeOllamaMessages(messages),
+    stream: true,
+    ...(Object.keys(options).length ? { options } : {}),
+    ...(includeThinkOption(thinking) ? { think: thinking } : {}),
+    ...(tools?.length ? { tools } : {}),
+  };
+
+  let res;
+  let buffer = "";
+  let fullText = "";
+  let fullThinking = "";
+  let toolCalls = [];
+
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError" || controller.signal.aborted) {
+      return { ok: false, aborted: true, fullText, toolCalls, thinking: fullThinking };
+    }
+    return { error: `Cannot reach Ollama at ${url}. Is it running?\n${err.message}` };
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    if (ollamaControllers.get(senderId) === controller) ollamaControllers.delete(senderId);
+    return { error: `Ollama error: ${res.status} ${res.statusText}${detail ? `\n${detail}` : ""}` };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let idx;
+      while ((idx = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const parsed = JSON.parse(line);
+          const msg = parsed.message ?? {};
+
+          const thinkingToken = msg.thinking ?? "";
+          if (thinkingToken) {
+            fullThinking += thinkingToken;
+            hooks.onThinking?.(thinkingToken);
+          }
+
+          const token = msg.content ?? "";
+          if (token) {
+            fullText += token;
+            hooks.onToken?.(token);
+          }
+
+          if (msg.tool_calls?.length) {
+            toolCalls = mergeAgentToolCalls(toolCalls, msg.tool_calls);
+            hooks.onToolCalls?.(toolCalls);
+          }
+
+          if (parsed.done) {
+            return { ok: true, fullText, toolCalls, thinking: fullThinking };
+          }
+        } catch {
+          // partial line, wait for next chunk
+        }
+      }
+    }
+
+    return { ok: true, fullText, toolCalls, thinking: fullThinking };
+  } catch (err) {
+    if (err?.name === "AbortError" || controller.signal.aborted) {
+      return { ok: false, aborted: true, fullText, toolCalls, thinking: fullThinking };
+    }
+    return { error: err?.message || "Ollama stream failed." };
+  } finally {
+    if (ollamaControllers.get(senderId) === controller) {
+      ollamaControllers.delete(senderId);
+    }
+  }
+}
+
+ipcMain.handle("agent:run", async (event, payload) => {
+  const sender = event.sender;
+  const sendAgentEvent = (data) => {
+    if (!sender.isDestroyed()) sender.send("agent:event", data);
+  };
+
+  return runAgentTurn({
+    workspace: payload.workspace,
+    model: payload.model,
+    numCtx: payload.numCtx,
+    thinking: payload.thinking,
+    tools: payload.tools || [],
+    chatHistory: payload.chatHistory || [],
+    contextSummary: payload.contextSummary || "",
+    dirMap: payload.dirMap || "",
+    activeFile: payload.activeFile || null,
+    extraFiles: payload.extraFiles || [],
+    userMessage: payload.userMessage || "",
+    sendEvent: sendAgentEvent,
+    runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, roundPayload),
+    executeToolCall: ({ workspace, toolCall }) => toolExecutor.executeToolCall({ workspace, toolCall }),
+    findWorkspaceFiles,
+    searchWorkspaceIndex,
+  });
 });

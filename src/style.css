@@ -1684,29 +1684,85 @@ html, body {
 .context-usage-popover {
   position: fixed;
   z-index: 10000;
-  width: 240px;
-  padding: 12px;
-  background: var(--bg-2);
+  width: 336px;
+  max-width: calc(100vw - 28px);
+  padding: 10px 10px 9px;
+  background: #1b1b1d;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  border-radius: 12px;
+  box-shadow: none;
 }
 
 .context-usage-popover[hidden] { display: none !important; }
 
-.context-usage-title {
+.context-usage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.context-usage-heading {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 1.2;
+}
+
+.context-usage-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.context-usage-source {
   font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--fg-dim);
-  margin-bottom: 10px;
+}
+
+.context-usage-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.context-usage-close:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+
+.context-usage-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.context-usage-summary-left {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.context-usage-summary-right {
+  font-size: 11px;
+  color: var(--fg-dim);
 }
 
 .context-usage-track {
-  height: 6px;
+  position: relative;
+  height: 7px;
   background: var(--bg-4);
-  border-radius: 3px;
+  border-radius: 999px;
   overflow: hidden;
 }
 
@@ -1714,26 +1770,66 @@ html, body {
   height: 100%;
   width: 0%;
   background: var(--focus);
-  border-radius: 3px;
+  border-radius: 999px;
   transition: width 0.2s, background 0.2s;
+}
+
+.context-usage-segments {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: stretch;
+  pointer-events: none;
+}
+
+.context-usage-segment {
+  height: 100%;
+  min-width: 2px;
 }
 
 .context-usage-fill.warn { background: #d19a66; }
 .context-usage-fill.full { background: var(--error-fg); }
 
-.context-usage-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 8px;
+.context-usage-pct {
+  margin-top: 6px;
   font-size: 11px;
   color: var(--fg-dim);
 }
 
-.context-usage-pct {
-  margin-top: 4px;
+.context-usage-list {
+  margin-top: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.context-usage-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
   font-size: 11px;
-  color: var(--fg-muted);
+}
+
+.context-usage-row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+  min-width: 0;
+}
+
+.context-usage-row-value {
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.context-usage-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
 }
 
 .model-pill {

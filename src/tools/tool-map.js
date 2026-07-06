@@ -3,6 +3,19 @@
 const ToolMap = (() => {
   const TOOL_DEFS = [
     {
+      name: "find_files",
+      description: "Find files in the workspace by path, basename, extension, or partial name before reading them.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Filename, partial path, extension, or folder hint" },
+          limit: { type: "number", description: "Maximum results, usually 5-10" },
+        },
+        required: ["query"],
+      },
+      meta: { label: "Finding", badge: "files", target: "query", mutates: false },
+    },
+    {
       name: "list_files",
       description: "List current project files. Use this as the first inventory step when unsure what exists.",
       parameters: { type: "object", properties: {} },
@@ -211,6 +224,29 @@ const ToolMap = (() => {
   const TOOL_META = Object.fromEntries(TOOL_DEFS.map((tool) => [tool.name, tool.meta]));
   const TOOL_NAMES = TOOL_DEFS.map((tool) => tool.name);
 
+  function sanitizePath(raw) {
+    return String(raw == null ? "" : raw)
+      .replace(/\\/g, "/")
+      .trim()
+      .replace(/^\/+/, "");
+  }
+
+  function sanitizeText(raw) {
+    return String(raw == null ? "" : raw).trim();
+  }
+
+  function clampLimit(raw, fallback = 8) {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(1, Math.min(Math.round(value), 20));
+  }
+
+  function clampTimeout(raw, fallback = 20000) {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(1000, Math.min(Math.round(value), 120000));
+  }
+
   function parseArguments(raw) {
     if (!raw) return {};
     if (typeof raw === "object") return raw;
@@ -227,10 +263,10 @@ const ToolMap = (() => {
     if (!TOOL_META[name]) return null;
 
     const args = parseArguments(fn.arguments);
-    const path = args.path == null ? undefined : String(args.path).trim();
-    const command = args.command == null ? undefined : String(args.command).trim();
-    const query = args.query == null ? undefined : String(args.query).trim();
-    const id = args.id == null ? undefined : String(args.id).trim();
+    const path = args.path == null ? undefined : sanitizePath(args.path);
+    const command = args.command == null ? undefined : sanitizeText(args.command);
+    const query = args.query == null ? undefined : sanitizeText(args.query);
+    const id = args.id == null ? undefined : sanitizeText(args.id);
 
     const tool = {
       action: name,
@@ -243,11 +279,11 @@ const ToolMap = (() => {
     if (path) tool.file = path;
     if (query) {
       tool.query = query;
-      tool.limit = Number(args.limit) || 8;
+      tool.limit = clampLimit(args.limit, 8);
     }
     if (command) {
       tool.command = command;
-      tool.timeoutMs = Number(args.timeout_ms) || Number(args.timeoutMs) || 20000;
+      tool.timeoutMs = clampTimeout(args.timeout_ms ?? args.timeoutMs, 20000);
     }
     if (id) tool.processId = id;
     if (["write_file", "create_file", "append_file"].includes(name)) tool.code = String(args.content ?? args.code ?? "");
@@ -290,6 +326,89 @@ const ToolMap = (() => {
     return Boolean(TOOL_META[name]?.mutates);
   }
 
+  function validationError(error, code, retryable = true) {
+    return { ok: false, error, code, retryable };
+  }
+
+  function validateToolCall(toolName, rawArgs = {}) {
+    if (!TOOL_META[toolName]) {
+      return validationError(`Unknown tool: ${toolName || "missing name"}`, "UNKNOWN_TOOL", false);
+    }
+
+    const args = { ...rawArgs };
+
+    if (args.path != null) args.path = sanitizePath(args.path);
+    if (args.query != null) args.query = sanitizeText(args.query);
+    if (args.command != null) args.command = sanitizeText(args.command);
+    if (args.id != null) args.id = sanitizeText(args.id);
+    if (args.anchor != null) args.anchor = String(args.anchor);
+    if (args.content != null) args.content = String(args.content);
+    if (args.code != null) args.code = String(args.code);
+    if (args.search != null) args.search = String(args.search);
+    if (args.replace != null) args.replace = String(args.replace);
+    if (args.old_text != null) args.old_text = String(args.old_text);
+    if (args.new_text != null) args.new_text = String(args.new_text);
+    if (args.limit != null) args.limit = clampLimit(args.limit, 8);
+    if (args.timeout_ms != null || args.timeoutMs != null) {
+      args.timeout_ms = clampTimeout(args.timeout_ms ?? args.timeoutMs, 20000);
+    }
+
+    if (["read_file", "write_file", "create_file", "patch_file", "replace_in_file", "insert_in_file", "append_file", "delete_file"].includes(toolName)) {
+      if (!args.path) return validationError("Missing required path", "MISSING_PATH");
+    }
+
+    if (["find_files", "search_code"].includes(toolName)) {
+      if (!args.query) return validationError("Missing required query", "MISSING_QUERY");
+      args.limit = clampLimit(args.limit, 8);
+    }
+
+    if (["run_command", "start_process"].includes(toolName)) {
+      if (!args.command) return validationError("Missing required command", "MISSING_COMMAND");
+    }
+
+    if (["read_process", "stop_process"].includes(toolName)) {
+      if (!args.id) return validationError("Missing required id", "MISSING_ID");
+    }
+
+    if (["write_file", "create_file", "append_file"].includes(toolName)) {
+      const content = args.content ?? args.code;
+      if (content == null) return validationError("Missing required content", "MISSING_CONTENT");
+      args.content = String(content);
+    }
+
+    if (toolName === "patch_file") {
+      if (Array.isArray(args.patches) && args.patches.length) {
+        args.patches = args.patches.map((patch) => ({
+          search: String(patch?.search ?? ""),
+          replace: String(patch?.replace ?? ""),
+        }));
+      } else {
+        args.patches = [{ search: String(args.search ?? ""), replace: String(args.replace ?? "") }];
+      }
+
+      if (!args.patches.length || args.patches.some((patch) => !patch.search)) {
+        return validationError("Missing required search text", "MISSING_SEARCH");
+      }
+    }
+
+    if (toolName === "replace_in_file") {
+      const oldText = String(args.old_text ?? args.search ?? "");
+      if (!oldText) return validationError("Missing required old_text", "MISSING_SEARCH");
+      args.old_text = oldText;
+      args.new_text = String(args.new_text ?? args.replace ?? "");
+    }
+
+    if (toolName === "insert_in_file") {
+      if (!String(args.anchor ?? "")) return validationError("Missing required anchor", "MISSING_ANCHOR");
+      const content = String(args.content ?? args.text ?? "");
+      if (!content) return validationError("Missing required content", "MISSING_CONTENT");
+      args.content = content;
+      args.position = String(args.position || "after").toLowerCase() === "before" ? "before" : "after";
+    }
+
+    return { ok: true, args };
+  }
+
   return {
     TOOLS,
     TOOL_META,
@@ -298,6 +417,8 @@ const ToolMap = (() => {
     parseArguments,
     targetForTool,
     isMutating,
+    sanitizePath,
+    validateToolCall,
   };
 })();
 

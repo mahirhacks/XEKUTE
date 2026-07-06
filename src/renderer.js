@@ -35,10 +35,16 @@ const btnChatCollapse = $("btn-chat-collapse");
 const contextUsageBtn  = $("context-usage-btn");
 const contextRingFill  = $("context-ring-fill");
 const contextUsagePopover = $("context-usage-popover");
+const inputBar         = $("input-bar");
+const composerEl       = inputBar?.querySelector(".composer") || null;
 const contextUsageFill = $("context-usage-fill");
 const contextUsageUsed = $("context-usage-used");
 const contextUsageFree = $("context-usage-free");
 const contextUsagePct  = $("context-usage-pct");
+const contextUsageBreakdown = $("context-usage-breakdown");
+const contextUsageSource = $("context-usage-source");
+const contextUsageClose = $("context-usage-close");
+const contextUsageSegments = $("context-usage-segments");
 const modelPicker      = $("model-picker");
 const modelLabel       = $("model-label");
 const modelMenu        = $("model-menu");
@@ -121,6 +127,58 @@ function createChatSession(title = "New Agent") {
   };
 }
 
+function buildSummaryContextMessage(summary) {
+  const clean = String(summary || "").trim();
+  if (!clean) return "";
+  return [
+    "Compressed conversation memory from earlier turns:",
+    clean,
+    "Use this as prior context, but prefer current files and recent messages if they conflict.",
+  ].join("\n");
+}
+
+function buildProjectContextMessage({ dirMap = "", activeFile = null, extraFiles = [] } = {}) {
+  const parts = [];
+
+  if (dirMap) {
+    const files = ToolParser.parseProjectFiles(dirMap);
+    if (files.length) {
+      parts.push(`Project files:\n${files.map((file) => `- ${file}`).join("\n")}`);
+    }
+  }
+
+  const shown = new Set();
+  if (activeFile?.path && activeFile.content != null) {
+    const snippet = activeFile.content.length > 6000
+      ? `${activeFile.content.slice(0, 6000)}\n...(truncated)`
+      : activeFile.content;
+    parts.push(`Currently open - ${activeFile.path}:\n\`\`\`\n${snippet}\n\`\`\``);
+    shown.add(activeFile.path.replace(/\\/g, "/"));
+  }
+
+  for (const file of extraFiles) {
+    if (!file?.path || file.content == null) continue;
+    const norm = file.path.replace(/\\/g, "/");
+    if (shown.has(norm)) continue;
+    shown.add(norm);
+    const snippet = file.content.length > 6000
+      ? `${file.content.slice(0, 6000)}\n...(truncated)`
+      : file.content;
+    parts.push(`File contents - ${file.path}:\n\`\`\`\n${snippet}\n\`\`\``);
+  }
+
+  return parts.join("\n\n");
+}
+
+function clearChatSessionState(session) {
+  if (!session) return;
+  session.history = [];
+  session.contextFilesCache = [];
+  session.contextSummary = "";
+  session.messagesHtml = "";
+  session.activeStreamContent = "";
+}
+
 function activeChatSession() {
   return chatSessions.find((session) => session.id === activeChatSessionId) || null;
 }
@@ -142,6 +200,7 @@ function setChatCollapsed(collapsed) {
 function ensureChatSession() {
   if (activeChatSession()) return activeChatSession();
   const session = createChatSession("New Agent");
+  clearChatSessionState(session);
   chatSessions.push(session);
   activeChatSessionId = session.id;
   chatHistory = session.history;
@@ -223,6 +282,7 @@ function newChatSession() {
   if (streaming) return;
   syncActiveChatSession();
   const session = createChatSession("New Agent");
+  clearChatSessionState(session);
   chatSessions.push(session);
   activeChatSessionId = session.id;
   chatHistory = session.history;
@@ -238,7 +298,10 @@ function newChatSession() {
 function deleteChatSession(id = activeChatSessionId) {
   if (streaming) return;
   const idx = chatSessions.findIndex((session) => session.id === id);
-  if (idx >= 0) chatSessions.splice(idx, 1);
+  if (idx >= 0) {
+    clearChatSessionState(chatSessions[idx]);
+    chatSessions.splice(idx, 1);
+  }
   if (!chatSessions.length) {
     activeChatSessionId = "";
     chatHistory = [];
@@ -289,7 +352,9 @@ function maybeNameActiveChat(text) {
   renderChatSessionSelect();
 }
 
-chatSessions.push(createChatSession("New Agent"));
+const initialChatSession = createChatSession("New Agent");
+clearChatSessionState(initialChatSession);
+chatSessions.push(initialChatSession);
 activeChatSessionId = chatSessions[0].id;
 chatHistory = chatSessions[0].history;
 contextFilesCache = chatSessions[0].contextFilesCache;
@@ -312,7 +377,7 @@ let contextUsageTimer = null;
 
 function getModelSettings(name) {
   if (!modelSettings[name]) {
-    modelSettings[name] = { thinking: false, context: "32K" };
+    modelSettings[name] = { thinking: false, context: "8K" };
   }
   return modelSettings[name];
 }
@@ -332,7 +397,7 @@ function contextToTokens(label) {
     "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768,
     "64K": 65536, "128K": 131072, "256K": 262144,
   };
-  return map[label] ?? 32768;
+  return map[label] ?? 8192;
 }
 
 function estimateTokens(text) {
@@ -413,6 +478,74 @@ function sanitizeRecentContextMessages(messages) {
     .filter((msg) => msg.content);
 }
 
+function getContextBreakdown() {
+  const activeFile = getActiveFileContext();
+  const systemPrompt = String(ToolParser.SYSTEM_PROMPT || "").trim();
+  const projectContext = buildProjectContextMessage({
+    dirMap: dirMapCache,
+    activeFile,
+    extraFiles: contextFilesCache,
+  });
+  const summaryMessage = buildSummaryContextMessage(activeChatSession()?.contextSummary);
+  const draft = chatInput.value.trim();
+  const streamTokens = activeStreamContent ? estimateTokens(activeStreamContent) + 4 : 0;
+  const sections = [
+    {
+      key: "system",
+      label: "System prompt",
+      color: "#a7a7ab",
+      tokens: systemPrompt ? estimateMessagesTokens([{ role: "system", content: systemPrompt }]) : 0,
+    },
+    {
+      key: "project",
+      label: "Project context",
+      color: "#4cb27a",
+      tokens: projectContext ? estimateMessagesTokens([{ role: "system", content: projectContext }]) : 0,
+    },
+    {
+      key: "tools",
+      label: "Tool definitions",
+      color: "#a879d6",
+      tokens: estimateTokens(JSON.stringify(ToolMap.TOOLS)),
+    },
+    {
+      key: "memory",
+      label: "Saved memory",
+      color: "#d58dbc",
+      tokens: summaryMessage ? estimateMessagesTokens([{ role: "system", content: summaryMessage }]) : 0,
+    },
+    {
+      key: "conversation",
+      label: "Conversation",
+      color: "#7ea9d8",
+      tokens: estimateMessagesTokens(chatHistory),
+    },
+    {
+      key: "draft",
+      label: "Draft",
+      color: "#f0bb64",
+      tokens: (draft ? estimateTokens(draft) + 4 : 0) + streamTokens,
+    },
+  ];
+  const summaryTokens = sections.find((section) => section.key === "memory")?.tokens || 0;
+  const liveChatTokens = sections.find((section) => section.key === "conversation")?.tokens || 0;
+  const toolTokens = sections.find((section) => section.key === "tools")?.tokens || 0;
+  const draftTokens = sections.find((section) => section.key === "draft")?.tokens || 0;
+  const visibleComposerTokens = draftTokens;
+  const estimatedTotal = sections.reduce((sum, section) => sum + section.tokens, 0);
+
+  return {
+    sections,
+    summaryTokens,
+    liveChatTokens,
+    draftTokens,
+    streamTokens,
+    visibleComposerTokens,
+    toolTokens,
+    estimatedTotal,
+  };
+}
+
 function maybeCompactContext(usage = getContextUsage()) {
   if (streaming || contextCompacting || !activeChatSession()) return false;
   if (!usage || usage.pct < CONTEXT_SUMMARY_THRESHOLD) return false;
@@ -438,15 +571,14 @@ function maybeCompactContext(usage = getContextUsage()) {
 }
 
 function getContextUsage(usedOverride = null) {
-  const settings = selectedModel ? getModelSettings(selectedModel) : { context: "32K" };
+  const settings = selectedModel ? getModelSettings(selectedModel) : { context: "8K" };
   const total = contextToTokens(settings.context);
-  const draft = chatInput.value.trim();
+  const breakdown = getContextBreakdown();
   let used = usedOverride;
   if (used == null) {
     used = estimateMessagesTokens(buildMessagesForApi());
-    used += estimateTokens(JSON.stringify(ToolMap.TOOLS));
-    if (draft) used += estimateTokens(draft) + 4;
-    if (activeStreamContent) used += estimateTokens(activeStreamContent) + 4;
+    used += breakdown.toolTokens;
+    used += breakdown.visibleComposerTokens;
   }
   const pct = total > 0 ? Math.min(used / total, 1) : 0;
   return {
@@ -455,6 +587,7 @@ function getContextUsage(usedOverride = null) {
     free: Math.max(total - used, 0),
     pct,
     contextLabel: settings.context,
+    breakdown,
   };
 }
 
@@ -490,6 +623,9 @@ function getContextUsageMessages() {
 function renderContextUsage({ total, used, free, pct, source }) {
   if (!contextRingFill) return;
   const filled = pct * CONTEXT_RING_C;
+  const breakdown = getContextBreakdown();
+  const estimatedTotal = Math.max(breakdown.estimatedTotal, 1);
+  const scale = used > 0 ? used / estimatedTotal : 1;
 
   contextRingFill.style.strokeDasharray = `${filled} ${CONTEXT_RING_C}`;
   contextUsageBtn.classList.toggle("warn", pct >= 0.75 && pct < 0.9);
@@ -500,11 +636,40 @@ function renderContextUsage({ total, used, free, pct, source }) {
     contextUsageFill.classList.toggle("warn", pct >= 0.75 && pct < 0.9);
     contextUsageFill.classList.toggle("full", pct >= 0.9);
   }
-  if (contextUsageUsed) contextUsageUsed.textContent = `${formatTokenCount(used)} used`;
-  if (contextUsageFree) contextUsageFree.textContent = `${formatTokenCount(free)} free`;
+  if (contextUsageUsed) contextUsageUsed.textContent = `${Math.round(pct * 100)}% Full`;
+  if (contextUsageFree) contextUsageFree.textContent = `~${formatTokenCount(used)} / ${formatTokenCount(total)} Tokens`;
   if (contextUsagePct) {
-    const suffix = source ? ` (${source})` : "";
-    contextUsagePct.textContent = `${Math.round(pct * 100)}% used - ${formatTokenCount(total)} max${suffix}`;
+    contextUsagePct.textContent = `${formatTokenCount(used)} used · ${formatTokenCount(free)} free`;
+  }
+  if (contextUsageSource) {
+    contextUsageSource.textContent = source === "model count" ? "Model Count" : "Estimate";
+  }
+  if (contextUsageSegments) {
+    const segments = breakdown.sections
+      .filter((section) => section.tokens > 0)
+      .map((section) => {
+        const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
+        const widthPct = Math.max((scaledTokens / Math.max(total, 1)) * 100, 1);
+        return `<span class="context-usage-segment" style="width:${widthPct}%;background:${section.color}" title="${escapeHtml(section.label)}: ~${escapeHtml(formatTokenCount(scaledTokens))}"></span>`;
+      });
+    contextUsageSegments.innerHTML = segments.join("");
+  }
+  if (contextUsageBreakdown) {
+    const rows = breakdown.sections
+      .filter((section) => section.tokens > 0)
+      .map((section) => {
+        const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
+        return `
+          <div class="context-usage-row">
+            <div class="context-usage-row-label">
+              <span class="context-usage-swatch" style="background:${section.color}"></span>
+              <span>${escapeHtml(section.label)}</span>
+            </div>
+            <div class="context-usage-row-value">${escapeHtml(formatTokenCount(scaledTokens))}</div>
+          </div>
+        `;
+      });
+    contextUsageBreakdown.innerHTML = rows.join("");
   }
 }
 
@@ -539,17 +704,36 @@ function updateContextUsage() {
 }
 
 function positionContextPopover() {
-  if (!contextUsagePopover || !contextUsageBtn) return;
-  const rect = contextUsageBtn.getBoundingClientRect();
+  if (!contextUsagePopover || !contextUsageBtn || !chatPane) return;
+  const buttonRect = contextUsageBtn.getBoundingClientRect();
+  const paneRect = chatPane.getBoundingClientRect();
+  const anchorRect = inputBar?.getBoundingClientRect() || buttonRect;
+  const composerRect = composerEl?.getBoundingClientRect() || anchorRect;
   const popH = contextUsagePopover.offsetHeight || 100;
-  const popW = contextUsagePopover.offsetWidth || 240;
-  let top = rect.top - popH - 8;
-  let left = rect.right - popW;
+  const panePadding = 14;
+  let top = anchorRect.top - popH - 14;
+  let left = composerRect.left;
+  let width = composerRect.width;
 
-  if (top < 8) top = rect.bottom + 8;
-  if (left < 8) left = 8;
-  if (left + popW > window.innerWidth - 8) {
-    left = window.innerWidth - popW - 8;
+  if (width > 0) {
+    const maxWidth = paneRect.width - panePadding * 2;
+    width = Math.min(width, maxWidth);
+    contextUsagePopover.style.width = `${Math.max(width, 260)}px`;
+  }
+
+  const popW = contextUsagePopover.offsetWidth || 240;
+
+  if (top < paneRect.top + panePadding) {
+    top = Math.min(
+      anchorRect.bottom + 10,
+      paneRect.bottom - popH - panePadding,
+    );
+  }
+  if (left < paneRect.left + panePadding) {
+    left = paneRect.left + panePadding;
+  }
+  if (left + popW > paneRect.right - panePadding) {
+    left = paneRect.right - popW - panePadding;
   }
 
   contextUsagePopover.style.top = `${top}px`;
@@ -1770,16 +1954,8 @@ function buildMessagesForApi() {
   });
   const msgs = [{ role: "system", content: system }];
   const summary = activeChatSession()?.contextSummary;
-  if (summary) {
-    msgs.push({
-      role: "system",
-      content: [
-        "Compressed conversation memory from earlier turns:",
-        summary,
-        "Use this as prior context, but prefer current files and recent messages if they conflict.",
-      ].join("\n"),
-    });
-  }
+  const summaryMessage = buildSummaryContextMessage(summary);
+  if (summaryMessage) msgs.push({ role: "system", content: summaryMessage });
   return [...msgs, ...chatHistory];
 }
 
@@ -1818,6 +1994,22 @@ function setToolCardStatus(card, type, message) {
   if (!status) return;
   status.className = `tool-card-status ${type}`;
   status.textContent = message;
+}
+
+function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
+  const fileKey = ToolMap.targetForTool(tool);
+  let card = turn.querySelector(`.tool-card[data-file="${CSS.escape(fileKey)}"]`);
+  if (!card) {
+    card = createToolCard(tool, { pending });
+    turn.insertBefore(card, contentEl);
+  } else if (pending) {
+    card.classList.add("pending");
+    setToolCardStatus(card, "running", "Queued...");
+  } else {
+    card.classList.remove("pending");
+    setToolCardStatus(card, "running", "Working...");
+  }
+  return card;
 }
 
 function joinWorkspacePath(relPath) {
@@ -2002,6 +2194,54 @@ async function executeTool(tool, turn, contentEl, editContext = {}) {
   syncActiveChatSession();
   scrollMessages();
   return { ...result, file: result.file || execTool.file };
+}
+
+async function applyToolResultToUi(tool, result, turn, contentEl) {
+  const card = ensureToolCard(turn, contentEl, tool);
+
+  if (result?.error) {
+    setToolCardStatus(card, "error", result.error);
+    scrollMessages();
+    return;
+  }
+
+  const badge = card.querySelector(".tool-card-badge");
+  if (badge) {
+    badge.textContent = ToolParser.toolCardDetail(tool);
+  }
+
+  setToolCardStatus(card, "success", ToolParser.formatToolSuccess(result));
+
+  if (result.mode === "read" && result.file && result.content != null) {
+    contextFilesCache = contextFilesCache.filter((file) => file.path !== result.file);
+    contextFilesCache.push({ path: result.file, content: result.content });
+  }
+
+  if (result.mode === "delete" && result.file) {
+    await refreshDirMap();
+    await renderTree(rootPath, fileTree, 0);
+    const tabPath = normPath(joinWorkspacePath(result.file));
+    if (openTabs.has(tabPath)) closeTab(tabPath);
+    contextFilesCache = contextFilesCache.filter((file) => file.path !== result.file);
+  } else if (result.mutated || ["full", "create", "patch", "replace", "insert", "append", "noop"].includes(result.mode)) {
+    await refreshDirMap();
+    await renderTree(rootPath, fileTree, 0);
+    if (result.file && result.content != null) {
+      const tabPath = normPath(joinWorkspacePath(result.file));
+      const previousContent = openTabs.get(tabPath)?.savedContent
+        ?? contextFilesCache.find((file) => file.path === result.file)?.content
+        ?? "";
+      await applyEditToEditor({ ...tool, file: result.file }, result.content, previousContent);
+    }
+  }
+
+  if (result.file && result.content != null && ["full", "create", "patch", "replace", "insert", "append", "noop"].includes(result.mode)) {
+    contextFilesCache = contextFilesCache.filter((file) => file.path !== result.file);
+    contextFilesCache.push({ path: result.file, content: result.content });
+  }
+
+  syncActiveChatSession();
+  scrollMessages();
 }
 
 function waitForOllamaRound(assistant, editContext) {
@@ -2588,6 +2828,166 @@ async function sendMessage() {
   }
 }
 
+async function sendMessageWithAgentRuntime() {
+  const text = chatInput.value.trim();
+  if (!text || streaming) return;
+
+  if (!selectedModel) {
+    addErrorMessage("Select a model before sending a message.");
+    return;
+  }
+
+  chatInput.value = "";
+  resetChatInput();
+  addUserMessage(text);
+  chatHistory.push({ role: "user", content: text });
+  maybeNameActiveChat(text);
+  syncActiveChatSession();
+
+  const historyStart = chatHistory.length - 1;
+
+  streaming = true;
+  stopRequested = false;
+  updateSendBtn();
+  renderChatSessionSelect();
+  activeStreamContent = "";
+  await refreshDirMap();
+  contextFilesCache = await collectMentionedFiles(text);
+  syncActiveChatSession();
+  updateContextUsage();
+
+  const settings = getModelSettings(selectedModel);
+  const assistant = createAssistantTurn(settings.thinking);
+  assistant.contentEl.classList.add("streaming");
+
+  const activeFile = getActiveFileContext();
+  let contentStarted = false;
+  let lastAgentText = "";
+
+  const handleAgentEvent = async (payload) => {
+    if (!payload) return;
+
+    if (payload.type === "status") {
+      assistant.setStatus(payload.text || "Working...");
+      return;
+    }
+
+    if (payload.type === "thinking") {
+      if (!contentStarted) assistant.setStatus("Thinking...");
+      assistant.appendThinking(payload.delta || "");
+      return;
+    }
+
+    if (payload.type === "content") {
+      if (!contentStarted) {
+        contentStarted = true;
+        assistant.finalizeThinking();
+        assistant.clearStatus();
+      }
+      assistant.appendContent(payload.delta || "");
+      activeStreamContent = assistant.rawContent;
+      lastAgentText = assistant.rawContent;
+      updateContextUsage();
+      return;
+    }
+
+    if (payload.type === "tool_call") {
+      const tools = Array.isArray(payload.tools) ? payload.tools : [];
+      for (const tool of tools) {
+        ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
+      }
+      if (tools.length === 1) {
+        assistant.setStatus(ToolParser.toolStatusLabel(tools[0]));
+      } else if (tools.length > 1) {
+        assistant.setStatus(`Using ${tools.length} tools...`);
+      }
+      scrollMessages();
+      return;
+    }
+
+    if (payload.type === "tool_start" && payload.tool) {
+      ensureToolCard(assistant.turn, assistant.contentEl, payload.tool);
+      assistant.setStatus(ToolParser.toolStatusLabel(payload.tool));
+      scrollMessages();
+      return;
+    }
+
+    if (payload.type === "tool_result" && payload.tool && payload.result) {
+      await applyToolResultToUi(payload.tool, payload.result, assistant.turn, assistant.contentEl);
+      updateContextUsage();
+    }
+  };
+
+  try {
+    window.api.removeAllListeners("agent:event");
+    window.api.onAgentEvent((payload) => {
+      Promise.resolve(handleAgentEvent(payload)).catch(() => {});
+    });
+
+    const result = await window.api.agentRun({
+      workspace: rootPath,
+      model: selectedModel,
+      numCtx: contextToTokens(settings.context),
+      thinking: settings.thinking,
+      tools: ToolMap.TOOLS,
+      chatHistory,
+      contextSummary: activeChatSession()?.contextSummary || "",
+      dirMap: dirMapCache,
+      activeFile,
+      extraFiles: contextFilesCache,
+      userMessage: text,
+    });
+
+    assistant.contentEl.classList.remove("streaming");
+    assistant.finalizeThinking();
+
+    if (assistant.thinkingBlock && !assistant.rawThinking) {
+      assistant.thinkingBlock.hidden = true;
+    }
+
+    if (result?.error) {
+      assistant.turn.remove();
+      addErrorMessage(result.error);
+      chatHistory.splice(historyStart);
+      syncActiveChatSession();
+      return;
+    }
+
+    if (stopRequested) {
+      assistant.rawContent = assistant.displayContent().trim() || lastAgentText.trim() || "Stopped.";
+      assistant.finalizeContent();
+      updateContextUsage();
+      return;
+    }
+
+    if (Array.isArray(result?.appendedMessages) && result.appendedMessages.length) {
+      chatHistory.push(...result.appendedMessages);
+    }
+
+    const finalText = String(result?.finalText || "").trim();
+    if (finalText) {
+      assistant.rawContent = finalText;
+    } else if (!assistant.displayContent().trim() && lastAgentText.trim()) {
+      assistant.rawContent = lastAgentText;
+    }
+
+    assistant.finalizeContent();
+    assistant.pruneIfEmpty();
+    syncActiveChatSession();
+  } finally {
+    window.api.removeAllListeners("agent:event");
+    activeStreamContent = "";
+    streaming = false;
+    stopRequested = false;
+    updateSendBtn();
+    renderChatSessionSelect();
+    updateContextUsage();
+    assistant.pruneIfEmpty();
+    syncActiveChatSession();
+    chatInput.focus();
+  }
+}
+
 function stopGeneration() {
   if (!streaming) return;
   stopRequested = true;
@@ -2599,7 +2999,7 @@ function stopGeneration() {
 
 sendBtn.addEventListener("click", () => {
   if (streaming) stopGeneration();
-  else sendMessage();
+  else sendMessageWithAgentRuntime();
 });
 
 btnTopTerminal?.addEventListener("click", () => {
@@ -2671,7 +3071,7 @@ chatHeader?.addEventListener("click", (e) => {
 chatInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    sendMessage();
+    sendMessageWithAgentRuntime();
   }
 });
 
@@ -2700,6 +3100,11 @@ if (chatPane && typeof ResizeObserver !== "undefined") {
 contextUsageBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   toggleContextPopover();
+});
+
+contextUsageClose?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeContextPopover();
 });
 
 document.addEventListener("click", (e) => {

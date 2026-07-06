@@ -208,15 +208,25 @@
   </div>
 
   <div id="context-usage-popover" class="context-usage-popover" hidden>
-    <div class="context-usage-title">Context window</div>
+    <div class="context-usage-header">
+      <div class="context-usage-heading">Context Usage</div>
+      <div class="context-usage-actions">
+        <span id="context-usage-source" class="context-usage-source">Estimate</span>
+        <button type="button" id="context-usage-close" class="context-usage-close" title="Close context usage">
+          <span class="codicon codicon-close"></span>
+        </button>
+      </div>
+    </div>
+    <div class="context-usage-summary">
+      <span id="context-usage-used" class="context-usage-summary-left">0% Full</span>
+      <span id="context-usage-free" class="context-usage-summary-right">~0 / 32K Tokens</span>
+    </div>
     <div class="context-usage-track">
       <div id="context-usage-fill" class="context-usage-fill"></div>
-    </div>
-    <div class="context-usage-meta">
-      <span id="context-usage-used">0 used</span>
-      <span id="context-usage-free">32K free</span>
+      <div id="context-usage-segments" class="context-usage-segments"></div>
     </div>
     <div id="context-usage-pct" class="context-usage-pct">0% used · 32K max</div>
+    <div id="context-usage-breakdown" class="context-usage-list"></div>
   </div>
 
   <div id="model-menu" class="model-menu" hidden>

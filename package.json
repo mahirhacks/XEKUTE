@@ -4,7 +4,8 @@
   "description": "Pointer AI – standalone Cursor-like desktop app",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node --test"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.1.0",
