@@ -9,6 +9,8 @@ const TerminalManager = (() => {
   const btnNew        = $("btn-terminal-new");
   const btnClear      = $("btn-terminal-clear");
   const btnKill       = $("btn-terminal-kill");
+  const activeSessionButton = $("terminal-active-session");
+  const activeSessionName = $("terminal-active-name");
 
   /** @type {Map<string, { id: string, name: string, container: HTMLElement, term: Terminal, fitAddon: FitAddon.FitAddon, exited: boolean }>} */
   const sessions = new Map();
@@ -55,6 +57,20 @@ const TerminalManager = (() => {
     tabsList.classList.toggle("visible", sessions.size > 1);
     btnClear.disabled = !has;
     btnKill.disabled = !has;
+    updateActiveSessionUi();
+  }
+
+  function updateActiveSessionUi() {
+    const session = activeId ? sessions.get(activeId) : null;
+    if (activeSessionButton) {
+      activeSessionButton.disabled = !session;
+      activeSessionButton.title = session
+        ? `${session.name}${session.exited ? " (exited)" : ""} - click to switch terminal`
+        : "No active terminal";
+    }
+    if (activeSessionName) {
+      activeSessionName.textContent = session?.name || "Terminal";
+    }
   }
 
   function renderTabsList() {
@@ -80,6 +96,7 @@ const TerminalManager = (() => {
       });
       tabsList.appendChild(btn);
     }
+    updateActiveSessionUi();
   }
 
   function switchTerminal(id) {
@@ -157,12 +174,15 @@ const TerminalManager = (() => {
 
       const term = new globalThis.Terminal({
         theme: xtermTheme,
-        fontFamily: "Consolas, 'Courier New', monospace",
+        fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace",
         fontSize: 14,
-        lineHeight: 1.2,
+        lineHeight: 1.15,
+        letterSpacing: 0,
         cursorBlink: true,
+        cursorStyle: "block",
         scrollback: 5000,
         convertEol: true,
+        minimumContrastRatio: 1,
         allowProposedApi: false,
       });
 
@@ -370,6 +390,10 @@ const TerminalManager = (() => {
     clearActive();
   });
   btnKill?.addEventListener("click", () => killTerminal());
+  activeSessionButton?.addEventListener("click", () => {
+    if (sessions.size > 1) switchAdjacentTerminal(1);
+    else focusActive();
+  });
   viewport?.addEventListener("mousedown", () => focusActive());
   viewport?.addEventListener("wheel", () => focusActive(), { passive: true });
   terminalEmpty?.querySelector("#btn-terminal-create")

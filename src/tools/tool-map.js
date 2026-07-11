@@ -22,6 +22,13 @@ const ToolMap = (() => {
       meta: { label: "Listing", badge: "files", target: "workspace", mutates: false },
     },
     {
+      name: "inspect_workspace",
+      description:
+        "Return a compact project overview: file count, top folders, important config files, detected package scripts, and likely verification commands. Use this before broad refactors, revamps, debugging, or unfamiliar projects.",
+      parameters: { type: "object", properties: {} },
+      meta: { label: "Inspecting", badge: "overview", target: "workspace", mutates: false },
+    },
+    {
       name: "read_file",
       description:
         "Read the current contents of a project file. Use this before editing any existing file whose contents are not shown.",
@@ -35,9 +42,26 @@ const ToolMap = (() => {
       meta: { label: "Reading", badge: "read", target: "path", mutates: false },
     },
     {
+      name: "read_files",
+      description:
+        "Read several project files in one call. Use when a change spans multiple known files, when comparing related files, or after find_files/search_code identifies multiple targets.",
+      parameters: {
+        type: "object",
+        properties: {
+          paths: {
+            type: "array",
+            description: "Relative paths from project root. Keep this focused, usually 2-6 files.",
+            items: { type: "string" },
+          },
+        },
+        required: ["paths"],
+      },
+      meta: { label: "Reading", badge: "batch", target: "paths", mutates: false },
+    },
+    {
       name: "write_file",
       description:
-        "Create a new file, or replace a whole file only when explicitly requested. Never paste file contents in chat.",
+        "Create a new file, or replace a whole file only when explicitly requested. This call writes exactly one file. Never paste file contents in chat.",
       parameters: {
         type: "object",
         properties: {
@@ -51,7 +75,7 @@ const ToolMap = (() => {
     {
       name: "create_file",
       description:
-        "Create a new project file that does not already exist. Use this for new files instead of patch_file.",
+        "Create a new project file that does not already exist. Use this for new files instead of patch_file. This call creates exactly one file.",
       parameters: {
         type: "object",
         properties: {
@@ -65,27 +89,15 @@ const ToolMap = (() => {
     {
       name: "patch_file",
       description:
-        "Edit an existing file with exact search/replace hunks. Copy search text exactly from the file.",
+        "Edit one existing file by replacing one exact block. Read the current file first, copy search text exactly, and call patch_file again for another separate block.",
       parameters: {
         type: "object",
         properties: {
           path: { type: "string", description: "Relative path from project root" },
-          search: { type: "string", description: "Exact text in the file for single-patch mode" },
-          replace: { type: "string", description: "Replacement text for single-patch mode" },
-          patches: {
-            type: "array",
-            description: "Multiple search/replace hunks",
-            items: {
-              type: "object",
-              properties: {
-                search: { type: "string" },
-                replace: { type: "string" },
-              },
-              required: ["search", "replace"],
-            },
-          },
+          search: { type: "string", description: "Exact current text that should match once" },
+          replace: { type: "string", description: "Complete replacement for the matched text" },
         },
-        required: ["path"],
+        required: ["path", "search", "replace"],
       },
       meta: { label: "Patching", badge: "patch", target: "path", mutates: true },
     },
@@ -164,6 +176,47 @@ const ToolMap = (() => {
         required: ["query"],
       },
       meta: { label: "Searching", badge: "search", target: "query", mutates: false },
+    },
+    {
+      name: "search_web",
+      description:
+        "Search the public web for current facts, official documentation, APIs, releases, or external references. Search first, then read only the most relevant result pages with fetch_url.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Focused search query, including product/version when relevant" },
+          limit: { type: "number", description: "Maximum results, usually 3-6" },
+        },
+        required: ["query"],
+      },
+      meta: { label: "Searching", badge: "web", target: "query", mutates: false },
+    },
+    {
+      name: "fetch_url",
+      description:
+        "Read one public HTTP/HTTPS page selected from web search. Returns compact readable text and the final source URL. Private networks, binary content, large responses, and unsafe redirects are blocked.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Exact public page URL from a search result" },
+          max_chars: { type: "number", description: "Maximum readable characters, usually 8000-18000" },
+        },
+        required: ["url"],
+      },
+      meta: { label: "Reading", badge: "web page", target: "url", mutates: false },
+    },
+    {
+      name: "get_file_outline",
+      description:
+        "Return imports and symbol/function/class outline for one file without reading the full contents. Use this to navigate large files before choosing exact sections to read or patch.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Relative path from project root" },
+        },
+        required: ["path"],
+      },
+      meta: { label: "Outlining", badge: "outline", target: "path", mutates: false },
     },
     {
       name: "run_command",
@@ -264,8 +317,12 @@ const ToolMap = (() => {
 
     const args = parseArguments(fn.arguments);
     const path = args.path == null ? undefined : sanitizePath(args.path);
+    const paths = Array.isArray(args.paths)
+      ? args.paths.map(sanitizePath).filter(Boolean)
+      : undefined;
     const command = args.command == null ? undefined : sanitizeText(args.command);
     const query = args.query == null ? undefined : sanitizeText(args.query);
+    const url = args.url == null ? undefined : sanitizeText(args.url);
     const id = args.id == null ? undefined : sanitizeText(args.id);
 
     const tool = {
@@ -277,10 +334,12 @@ const ToolMap = (() => {
     };
 
     if (path) tool.file = path;
+    if (paths?.length) tool.files = paths;
     if (query) {
       tool.query = query;
       tool.limit = clampLimit(args.limit, 8);
     }
+    if (url) tool.url = url;
     if (command) {
       tool.command = command;
       tool.timeoutMs = clampTimeout(args.timeout_ms ?? args.timeoutMs, 20000);
@@ -318,7 +377,9 @@ const ToolMap = (() => {
   }
 
   function targetForTool(tool) {
-    return tool.file || tool.query || tool.command || tool.processId || "workspace";
+    if (tool.file) return tool.file;
+    if (tool.files?.length) return `${tool.files.length} files`;
+    return tool.query || tool.url || tool.command || tool.processId || "workspace";
   }
 
   function isMutating(actionOrTool) {
@@ -339,6 +400,7 @@ const ToolMap = (() => {
 
     if (args.path != null) args.path = sanitizePath(args.path);
     if (args.query != null) args.query = sanitizeText(args.query);
+    if (args.url != null) args.url = sanitizeText(args.url);
     if (args.command != null) args.command = sanitizeText(args.command);
     if (args.id != null) args.id = sanitizeText(args.id);
     if (args.anchor != null) args.anchor = String(args.anchor);
@@ -349,17 +411,38 @@ const ToolMap = (() => {
     if (args.old_text != null) args.old_text = String(args.old_text);
     if (args.new_text != null) args.new_text = String(args.new_text);
     if (args.limit != null) args.limit = clampLimit(args.limit, 8);
+    if (args.max_chars != null) {
+      const maxChars = Number(args.max_chars);
+      args.max_chars = Number.isFinite(maxChars) ? Math.max(1000, Math.min(Math.round(maxChars), 30000)) : 18000;
+    }
     if (args.timeout_ms != null || args.timeoutMs != null) {
       args.timeout_ms = clampTimeout(args.timeout_ms ?? args.timeoutMs, 20000);
     }
 
-    if (["read_file", "write_file", "create_file", "patch_file", "replace_in_file", "insert_in_file", "append_file", "delete_file"].includes(toolName)) {
+    if (["read_file", "write_file", "create_file", "patch_file", "replace_in_file", "insert_in_file", "append_file", "delete_file", "get_file_outline"].includes(toolName)) {
       if (!args.path) return validationError("Missing required path", "MISSING_PATH");
     }
 
-    if (["find_files", "search_code"].includes(toolName)) {
+    if (toolName === "read_files") {
+      const paths = Array.isArray(args.paths)
+        ? args.paths.map(sanitizePath).filter(Boolean)
+        : [];
+      if (!paths.length) return validationError("Missing required paths", "MISSING_PATHS");
+      args.paths = paths.slice(0, 12);
+    }
+
+    if (["find_files", "search_code", "search_web"].includes(toolName)) {
       if (!args.query) return validationError("Missing required query", "MISSING_QUERY");
-      args.limit = clampLimit(args.limit, 8);
+      args.limit = clampLimit(args.limit, toolName === "search_web" ? 6 : 8);
+      if (toolName === "search_web") args.query = args.query.slice(0, 300);
+    }
+
+    if (toolName === "fetch_url") {
+      if (!args.url) return validationError("Missing required URL", "MISSING_URL");
+      if (args.url.length > 2048) return validationError("URL is too long", "INVALID_URL", false);
+      args.max_chars = Number.isFinite(Number(args.max_chars))
+        ? Math.max(1000, Math.min(Math.round(Number(args.max_chars)), 30000))
+        : 18000;
     }
 
     if (["run_command", "start_process"].includes(toolName)) {

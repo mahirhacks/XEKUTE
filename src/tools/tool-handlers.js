@@ -15,6 +15,8 @@ function createToolHandlers(deps) {
     readToolProcess,
     stopToolProcess,
     listProjectFiles,
+    searchWeb,
+    fetchWebPage,
   } = deps;
 
   function ok(toolName, mode, fields = {}) {
@@ -67,6 +69,45 @@ function createToolHandlers(deps) {
       return ok("list_files", "list", { files: result.files, content: `Project files:\n${result.files.map((f) => `- ${f}`).join("\n")}` });
     },
 
+    async inspect_workspace({ workspace }) {
+      const missing = requireWorkspace(workspace, "inspect_workspace");
+      if (missing) return missing;
+      const listed = listProjectFiles(workspace);
+      if (listed.error) return fail("inspect_workspace", listed.error, {}, "INSPECT_FAILED", false);
+      const inspection = inspectWorkspace({ workspace, files: listed.files, fs, path, readFile });
+      return ok("inspect_workspace", "inspect", {
+        ...inspection,
+        content: formatInspectionContent(inspection),
+      });
+    },
+
+    async search_web({ args }) {
+      if (typeof searchWeb !== "function") return fail("search_web", "Web search is unavailable", {}, "WEB_UNAVAILABLE", false);
+      const result = await searchWeb(args.query, { limit: args.limit });
+      if (result.error) return fail("search_web", result.error, { query: args.query }, "WEB_SEARCH_FAILED", true);
+      return ok("search_web", "web_search", {
+        query: result.query,
+        count: result.count,
+        results: result.results,
+        provider: result.provider,
+        content: formatWebSearchContent(result),
+      });
+    },
+
+    async fetch_url({ args }) {
+      if (typeof fetchWebPage !== "function") return fail("fetch_url", "Web page reading is unavailable", {}, "WEB_UNAVAILABLE", false);
+      const result = await fetchWebPage(args.url, { maxChars: args.max_chars });
+      if (result.error) return fail("fetch_url", result.error, { url: args.url }, "WEB_FETCH_FAILED", true);
+      return ok("fetch_url", "web_page", {
+        url: result.url,
+        finalUrl: result.finalUrl,
+        title: result.title,
+        contentType: result.contentType,
+        truncated: result.truncated,
+        content: formatWebPageContent(result),
+      });
+    },
+
     async read_file({ workspace, args }) {
       const missing = requireWorkspace(workspace, "read_file");
       if (missing) return missing;
@@ -81,6 +122,39 @@ function createToolHandlers(deps) {
         file,
         content: result.content,
         summary: `Read ${file} (${result.content.split(/\r?\n/).length} lines)`,
+      });
+    },
+
+    async read_files({ workspace, args }) {
+      const missing = requireWorkspace(workspace, "read_files");
+      if (missing) return missing;
+      const paths = Array.isArray(args.paths) ? args.paths.map((p) => String(p || "").trim()).filter(Boolean) : [];
+      if (!paths.length) return fail("read_files", "Missing required paths", {}, "MISSING_PATHS", true);
+
+      const files = [];
+      const errors = [];
+      for (const file of paths.slice(0, 12)) {
+        const result = readFile(workspace, file);
+        if (result.error) {
+          errors.push({ file, error: result.error });
+        } else {
+          files.push({
+            file,
+            content: result.content,
+            lineCount: result.content.split(/\r?\n/).length,
+          });
+        }
+      }
+
+      if (!files.length && errors.length) {
+        return fail("read_files", errors.map((row) => `${row.file}: ${row.error}`).join("; "), { errors }, "READ_FAILED", true);
+      }
+
+      return ok("read_files", "read_many", {
+        files,
+        errors,
+        content: formatReadFilesContent(files, errors),
+        summary: `Read ${files.length} file${files.length === 1 ? "" : "s"}${errors.length ? ` (${errors.length} failed)` : ""}`,
       });
     },
 
@@ -267,6 +341,25 @@ function createToolHandlers(deps) {
       });
     },
 
+    async get_file_outline({ workspace, args }) {
+      const missing = requireWorkspace(workspace, "get_file_outline");
+      if (missing) return missing;
+      const file = String(args.path || "").trim();
+      if (!file) return fail("get_file_outline", "Missing required path", {}, "MISSING_PATH", true);
+      const result = readFile(workspace, file);
+      if (result.error) {
+        const code = /not found/i.test(result.error) ? "FILE_NOT_FOUND" : "READ_FAILED";
+        return fail("get_file_outline", result.error, { file }, code, code === "FILE_NOT_FOUND");
+      }
+      const outline = extractFileOutline(file, result.content);
+      return ok("get_file_outline", "outline", {
+        file,
+        ...outline,
+        content: formatOutlineContent(file, outline),
+        summary: `Outlined ${file} (${outline.symbols.length} symbols)`,
+      });
+    },
+
     async run_command({ workspace, args }) {
       const missing = requireWorkspace(workspace, "run_command");
       if (missing) return missing;
@@ -355,13 +448,15 @@ function normalizeResult(result) {
     toolName,
     mode: result.mode || toolName,
     summary: result.summary || summarizeResult(result),
-    mutated: Boolean(result.mutated || ToolMap.isMutating(toolName)),
+    mutated: result.mutated === undefined ? ToolMap.isMutating(toolName) : Boolean(result.mutated),
   };
 
   for (const key of [
     "file", "path", "content", "error", "files", "graph", "query", "count", "results", "command",
     "exitCode", "signal", "timedOut", "stdout", "stderr", "id", "running", "seconds",
     "lines_added", "lines_removed", "patches_applied", "fallback", "errorCode", "retryable",
+    "errors", "scripts", "importantFiles", "topFolders", "verificationCommands", "symbols", "imports",
+    "provider", "url", "finalUrl", "title", "contentType", "truncated",
   ]) {
     if (result[key] !== undefined) out[key] = result[key];
   }
@@ -381,10 +476,15 @@ function normalizeResult(result) {
 function summarizeResult(result) {
   if (result.error) return result.error;
   if (result.mode === "list") return `${result.files?.length || 0} files`;
+  if (result.mode === "inspect") return `Inspected ${result.files?.length || 0} files`;
   if (result.mode === "find") return `${result.count || 0} file match${result.count === 1 ? "" : "es"}`;
   if (result.mode === "read") return `Read ${result.file}`;
+  if (result.mode === "read_many") return `Read ${result.files?.length || 0} files`;
   if (result.mode === "index") return `Indexed ${result.files || 0} files`;
   if (result.mode === "search") return `${result.count || 0} result${result.count === 1 ? "" : "s"}`;
+  if (result.mode === "web_search") return `${result.count || 0} web result${result.count === 1 ? "" : "s"}`;
+  if (result.mode === "web_page") return `Read ${result.title || result.finalUrl || "web page"}`;
+  if (result.mode === "outline") return `Outlined ${result.file}`;
   if (result.mode === "command") {
     if (result.timedOut) return "Timed out";
     return result.exitCode === 0 ? "Passed" : `Exited ${result.exitCode}`;
@@ -404,9 +504,14 @@ function summarizeResult(result) {
 
 function resultContent(result) {
   if (result.mode === "list") return `Project files:\n${(result.files || []).map((file) => `- ${file}`).join("\n")}`;
+  if (result.mode === "inspect") return formatInspectionContent(result);
   if (result.mode === "find") return formatFindContent(result);
+  if (result.mode === "read_many") return formatReadFilesContent(result.files || [], result.errors || []);
   if (result.mode === "index") return `Indexed ${result.files || 0} files.`;
   if (result.mode === "search") return formatSearchContent(result);
+  if (result.mode === "web_search") return formatWebSearchContent(result);
+  if (result.mode === "web_page") return formatWebPageContent(result);
+  if (result.mode === "outline") return formatOutlineContent(result.file, result);
   if (result.mode === "command") {
     return [
       `Command: ${result.command}`,
@@ -436,11 +541,178 @@ function formatSearchContent(result) {
   return rows || `No results for ${result.query}`;
 }
 
+function formatWebSearchContent(result) {
+  const rows = (result.results || []).map((row, index) => [
+    `${index + 1}. ${row.title}`,
+    `URL: ${row.url}`,
+    row.snippet ? `Snippet: ${row.snippet}` : "",
+  ].filter(Boolean).join("\n"));
+  return rows.length
+    ? `Web search results for "${result.query}":\n\n${rows.join("\n\n")}`
+    : `No web results for ${result.query}`;
+}
+
+function formatWebPageContent(result) {
+  return [
+    `Page: ${result.title || "Untitled"}`,
+    `URL: ${result.finalUrl || result.url}`,
+    result.truncated ? "Note: page text was truncated to fit context." : "",
+    "",
+    result.content || "",
+  ].filter((part, index) => part || index === 3).join("\n");
+}
+
 function formatFindContent(result) {
   const rows = (result.results || [])
     .map((row) => `File: ${row.path}\nScore: ${row.score}`)
     .join("\n\n");
   return rows || `No files found for ${result.query}`;
+}
+
+function takeLimited(text, max = 12000) {
+  const value = String(text || "");
+  return value.length > max ? `${value.slice(0, max)}\n...(truncated)` : value;
+}
+
+function formatReadFilesContent(files = [], errors = []) {
+  const parts = [];
+  for (const file of files) {
+    parts.push(`File: ${file.file}`);
+    parts.push("```");
+    parts.push(takeLimited(file.content, 14000));
+    parts.push("```");
+  }
+  for (const error of errors) {
+    parts.push(`Error reading ${error.file}: ${error.error}`);
+  }
+  return parts.join("\n");
+}
+
+function topFoldersFor(files = []) {
+  const counts = new Map();
+  for (const file of files) {
+    const first = String(file).split("/")[0] || ".";
+    counts.set(first, (counts.get(first) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 12)
+    .map(([folder, count]) => ({ folder, count }));
+}
+
+function importantFilesFor(files = []) {
+  const important = [
+    "package.json", "vite.config.js", "vite.config.ts", "next.config.js", "next.config.mjs",
+    "tsconfig.json", "jsconfig.json", "README.md", "CLAUDE.md", "Dockerfile",
+    "pyproject.toml", "requirements.txt", "Cargo.toml", "go.mod",
+  ];
+  const set = new Set(files);
+  return important.filter((file) => set.has(file));
+}
+
+function readPackageScripts({ workspace, fs, path }) {
+  const packagePath = path.join(workspace, "package.json");
+  if (!fs.existsSync(packagePath)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    return parsed?.scripts && typeof parsed.scripts === "object" ? parsed.scripts : {};
+  } catch {
+    return {};
+  }
+}
+
+function inferVerificationCommands({ files = [], scripts = {} }) {
+  const commands = [];
+  if (scripts.test) commands.push("npm test");
+  if (scripts.lint) commands.push("npm run lint");
+  if (scripts.build) commands.push("npm run build");
+  if (!commands.length && files.some((file) => file.endsWith(".py"))) commands.push("python -m pytest");
+  if (!commands.length && files.some((file) => file.endsWith(".js"))) commands.push("node --check <file>");
+  return commands.slice(0, 4);
+}
+
+function inspectWorkspace({ workspace, files, fs, path }) {
+  const scripts = readPackageScripts({ workspace, fs, path });
+  return {
+    files,
+    fileCount: files.length,
+    topFolders: topFoldersFor(files),
+    importantFiles: importantFilesFor(files),
+    scripts,
+    verificationCommands: inferVerificationCommands({ files, scripts }),
+  };
+}
+
+function formatInspectionContent(inspection) {
+  const scripts = Object.entries(inspection.scripts || {});
+  return [
+    `Workspace overview: ${inspection.fileCount ?? inspection.files?.length ?? 0} files`,
+    "",
+    "Top folders:",
+    ...(inspection.topFolders?.length
+      ? inspection.topFolders.map((row) => `- ${row.folder} (${row.count})`)
+      : ["- ."]),
+    "",
+    "Important files:",
+    ...(inspection.importantFiles?.length
+      ? inspection.importantFiles.map((file) => `- ${file}`)
+      : ["- none detected"]),
+    "",
+    "Package scripts:",
+    ...(scripts.length
+      ? scripts.map(([name, command]) => `- ${name}: ${command}`)
+      : ["- none detected"]),
+    "",
+    "Likely verification commands:",
+    ...(inspection.verificationCommands?.length
+      ? inspection.verificationCommands.map((command) => `- ${command}`)
+      : ["- none obvious"]),
+  ].join("\n");
+}
+
+function extractFileOutline(file, content) {
+  const imports = [];
+  const symbols = [];
+  const lines = String(content || "").split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const importMatch = line.match(/^\s*(?:import\s+.*?\s+from\s+["']([^"']+)["']|import\s+["']([^"']+)["']|from\s+([\w.]+)\s+import\s+|require\(["']([^"']+)["']\))/);
+    const importTarget = importMatch?.[1] || importMatch?.[2] || importMatch?.[3] || importMatch?.[4];
+    if (importTarget) imports.push({ line: i + 1, target: importTarget });
+
+    const symbolMatch = line.match(/^\s*(?:export\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)|^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)\s*=>|function)|^\s*def\s+([A-Za-z_][\w]*)|^\s*class\s+([A-Za-z_][\w]*)/);
+    const name = symbolMatch?.[1] || symbolMatch?.[2] || symbolMatch?.[3] || symbolMatch?.[4];
+    if (name) {
+      const kind = /\bclass\b/.test(line) ? "class" : /\bdef\b|\bfunction\b|=>/.test(line) ? "function" : "symbol";
+      symbols.push({ line: i + 1, kind, name });
+    }
+  }
+
+  return {
+    lineCount: lines.length,
+    imports: imports.slice(0, 40),
+    symbols: symbols.slice(0, 80),
+    truncated: imports.length > 40 || symbols.length > 80,
+    file,
+  };
+}
+
+function formatOutlineContent(file, outline) {
+  return [
+    `Outline for ${file} (${outline.lineCount || 0} lines)`,
+    "",
+    "Imports:",
+    ...(outline.imports?.length
+      ? outline.imports.map((row) => `- L${row.line}: ${row.target}`)
+      : ["- none detected"]),
+    "",
+    "Symbols:",
+    ...(outline.symbols?.length
+      ? outline.symbols.map((row) => `- L${row.line}: ${row.kind} ${row.name}`)
+      : ["- none detected"]),
+    outline.truncated ? "\n...(outline truncated)" : "",
+  ].filter(Boolean).join("\n");
 }
 
 module.exports = {

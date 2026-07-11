@@ -1,11 +1,16 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const pty = require("node-pty");
 const { spawn } = require("child_process");
 const { createToolHandlers } = require("./tools/tool-handlers");
 const { createWorkspaceSearch } = require("./tools/workspace-search");
+const { createWebResearch } = require("./tools/web-research");
+const { createAssessmentWorkspace } = require("./bugbounty/assessment-workspace");
+const { buildIntruderRequests, createSecurityHttpWorkbench } = require("./bugbounty/security-http-workbench");
+const { createProxyListenerService } = require("./bugbounty/proxy-listener");
 const { runAgentTurn } = require("./agent/agent-controller");
+const ContextMemory = require("./agent/context-memory");
 
 const APP_ROOT = path.join(__dirname, "..");
 
@@ -17,6 +22,19 @@ const ollamaControllers = new Map();
 let toolProcessCounter = 0;
 let workspaceIndexCache = null;
 const workspaceSearch = createWorkspaceSearch({ fs, path });
+const webResearch = createWebResearch();
+const assessmentWorkspace = createAssessmentWorkspace({ fs, path });
+const securityHttpWorkbench = createSecurityHttpWorkbench({ fs, path, assessmentWorkspace });
+const proxyListener = createProxyListenerService({
+  fs,
+  path,
+  assessmentWorkspace,
+  sendEvent(channel, payload) {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  },
+});
+const workspaceWatchers = new Map();
+const workspaceWatchTimers = new Map();
 
 function getDefaultShell() {
   if (process.env.POINTER_SHELL) return process.env.POINTER_SHELL;
@@ -65,40 +83,21 @@ function sendMenuAction(action) {
 function createApplicationMenu() {
   const template = [
     {
-      label: "File",
+      label: "Target",
       submenu: [
-        { label: "New File", accelerator: "CmdOrCtrl+N", click: () => sendMenuAction("new-file") },
-        { label: "New Folder", click: () => sendMenuAction("new-folder") },
+        { label: "Create New Project...", click: () => sendMenuAction("create-project") },
         { type: "separator" },
-        { label: "Open File...", accelerator: "CmdOrCtrl+O", click: () => sendMenuAction("open-file") },
-        { label: "Open Folder...", accelerator: "CmdOrCtrl+Shift+O", click: () => sendMenuAction("open-folder") },
+        { label: "Create Assessment...", click: () => sendMenuAction("create-assessment") },
+        { label: "Open Assessment...", click: () => sendMenuAction("open-assessment") },
         { type: "separator" },
         { role: "quit" },
       ],
     },
     {
-      label: "Edit",
+      label: "Search",
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        { role: "reload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
-        { type: "separator" },
-        { role: "togglefullscreen" },
+        { label: "Open Workspace File...", accelerator: "CmdOrCtrl+P", click: () => sendMenuAction("quick-open") },
+        { label: "Search Target Workspace...", accelerator: "CmdOrCtrl+Shift+F", click: () => sendMenuAction("workspace-search") },
       ],
     },
     {
@@ -107,6 +106,13 @@ function createApplicationMenu() {
         { label: "New Terminal", accelerator: "Ctrl+Shift+`", click: () => sendMenuAction("new-terminal") },
         { label: "Clear Terminal", accelerator: "CmdOrCtrl+K", click: () => sendMenuAction("clear-terminal") },
         { label: "Kill Terminal", click: () => sendMenuAction("kill-terminal") },
+      ],
+    },
+    {
+      label: "Chat",
+      submenu: [
+        { label: "New Chat", click: () => sendMenuAction("new-chat") },
+        { label: "Toggle Chat", click: () => sendMenuAction("toggle-chat") },
       ],
     },
   ];
@@ -132,6 +138,54 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, "index.html"));
+  const senderId = mainWindow.webContents.id;
+  mainWindow.webContents.on("destroyed", () => {
+    stopWorkspaceWatch(senderId);
+  });
+}
+
+function stopWorkspaceWatch(senderId) {
+  const timer = workspaceWatchTimers.get(senderId);
+  if (timer) {
+    clearTimeout(timer);
+    workspaceWatchTimers.delete(senderId);
+  }
+  const watcher = workspaceWatchers.get(senderId);
+  if (watcher) {
+    try { watcher.close(); } catch { /* ignore */ }
+    workspaceWatchers.delete(senderId);
+  }
+}
+
+function startWorkspaceWatch(sender, workspace) {
+  const senderId = sender.id;
+  stopWorkspaceWatch(senderId);
+  if (!workspace) return { ok: true };
+
+  const root = path.resolve(workspace);
+  try {
+    const watcher = fs.watch(root, { recursive: process.platform === "win32" }, (_eventType, filename) => {
+      if (sender.isDestroyed()) {
+        stopWorkspaceWatch(senderId);
+        return;
+      }
+      const relPath = filename ? String(filename).replace(/\\/g, "/") : "";
+      const pending = workspaceWatchTimers.get(senderId);
+      if (pending) clearTimeout(pending);
+      const timer = setTimeout(() => {
+        workspaceWatchTimers.delete(senderId);
+        if (!sender.isDestroyed()) {
+          sender.send("workspace:changed", { workspace: root, path: relPath });
+        }
+      }, 120);
+      workspaceWatchTimers.set(senderId, timer);
+    });
+    watcher.on("error", () => stopWorkspaceWatch(senderId));
+    workspaceWatchers.set(senderId, watcher);
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
 }
 
 app.whenReady().then(() => {
@@ -140,6 +194,7 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
+  proxyListener.stop();
   for (const term of terminals.values()) {
     try { term.kill(); } catch { /* ignore */ }
   }
@@ -163,6 +218,33 @@ ipcMain.handle("fs:openFolder", async () => {
     properties: ["openDirectory"],
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("project:create", async (_event, { defaultParent } = {}) => {
+  const parent = defaultParent && path.isAbsolute(defaultParent) && fs.existsSync(defaultParent)
+    ? path.dirname(defaultParent)
+    : app.getPath("documents");
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "Create New Project",
+    buttonLabel: "Create Project",
+    defaultPath: path.join(parent, "new-project"),
+    properties: ["createDirectory", "showOverwriteConfirmation", "dontAddToRecent"],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+
+  const projectPath = path.resolve(result.filePath);
+  try {
+    if (fs.existsSync(projectPath)) {
+      const stat = fs.statSync(projectPath);
+      if (!stat.isDirectory()) return { error: "A file already exists at that location." };
+      if (fs.readdirSync(projectPath).length) return { error: "Choose a new or empty folder for the project." };
+    } else {
+      fs.mkdirSync(projectPath, { recursive: true });
+    }
+    return { ok: true, path: projectPath };
+  } catch (error) {
+    return { error: error?.message || "Could not create the project folder." };
+  }
 });
 
 /** Open a file picker, return the chosen path */
@@ -223,6 +305,95 @@ ipcMain.handle("fs:mkdir", async (_event, dirPath) => {
   } catch (err) {
     return { error: err.message };
   }
+});
+
+ipcMain.handle("fs:deletePath", async (_event, { workspace, path: relPath }) => {
+  return deleteWorkspaceFile(workspace, relPath);
+});
+
+ipcMain.handle("assessment:create", async (_event, { defaultParent } = {}) => {
+  const parent = defaultParent && path.isAbsolute(defaultParent) && fs.existsSync(defaultParent)
+    ? defaultParent
+    : app.getPath("documents");
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "Create Assessment Folder",
+    buttonLabel: "Create Assessment",
+    defaultPath: path.join(parent, "bug-bounty-assessment"),
+    properties: ["createDirectory", "showOverwriteConfirmation", "dontAddToRecent"],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  const repaired = assessmentWorkspace.repair(result.filePath, { createRoot: true });
+  return repaired.error ? repaired : { ...repaired, path: repaired.root };
+});
+
+ipcMain.handle("assessment:open", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Open Assessment Folder",
+    buttonLabel: "Open Assessment",
+    properties: ["openDirectory", "createDirectory", "dontAddToRecent"],
+  });
+  return result.canceled ? { canceled: true } : { ok: true, path: result.filePaths[0] };
+});
+
+ipcMain.handle("assessment:verify", async (_event, { path: assessmentPath } = {}) => {
+  return assessmentWorkspace.verify(assessmentPath);
+});
+
+ipcMain.handle("assessment:repair", async (_event, { path: assessmentPath } = {}) => {
+  return assessmentWorkspace.repair(assessmentPath);
+});
+
+ipcMain.handle("assessment:trafficLog", async (_event, { path: assessmentPath, record, filtered = false } = {}) => {
+  return assessmentWorkspace.appendTrafficRecord(assessmentPath, record || {}, { filtered: Boolean(filtered) });
+});
+
+ipcMain.handle("assessment:trafficHistory", async (_event, { path: assessmentPath, limit = 500 } = {}) => {
+  return assessmentWorkspace.readTrafficHistory(assessmentPath, { limit });
+});
+
+ipcMain.handle("assessment:settings", async (_event, { path: assessmentPath } = {}) => {
+  return assessmentWorkspace.readSettings(assessmentPath);
+});
+
+ipcMain.handle("assessment:writeSettings", async (_event, { path: assessmentPath, settings } = {}) => {
+  return assessmentWorkspace.writeSettings(assessmentPath, settings);
+});
+
+ipcMain.handle("security:httpRequest", async (_event, payload = {}) => {
+  return securityHttpWorkbench.run(payload);
+});
+
+ipcMain.handle("security:buildIntruder", async (_event, payload = {}) => {
+  const maxRequests = Math.max(1, Math.min(Number(payload.maxRequests) || 25, 25));
+  return buildIntruderRequests(payload.rawRequest, payload.payloadSets, payload.attackType, maxRequests);
+});
+
+ipcMain.handle("proxy:configure", async (_event, { assessmentPath } = {}) => {
+  return proxyListener.configure(assessmentPath);
+});
+
+ipcMain.handle("proxy:status", async () => proxyListener.getStatus());
+
+ipcMain.handle("proxy:forward", async (_event, { id, request } = {}) => {
+  return proxyListener.forward(id, request);
+});
+
+ipcMain.handle("proxy:drop", async (_event, { id } = {}) => proxyListener.drop(id));
+
+ipcMain.handle("proxy:showCa", async () => {
+  const caCertPath = proxyListener.getStatus().caCertPath;
+  if (!caCertPath || !fs.existsSync(caCertPath)) return { error: "Proxy CA certificate has not been generated yet" };
+  shell.showItemInFolder(caCertPath);
+  return { ok: true, path: caCertPath };
+});
+
+ipcMain.handle("workspace:watch", async (event, workspace) => {
+  return startWorkspaceWatch(event.sender, workspace);
+});
+
+ipcMain.handle("workspace:unwatch", async (event) => {
+  stopWorkspaceWatch(event.sender.id);
+  return { ok: true };
 });
 
 // ── Tools IPC ─────────────────────────────────────────────────────────────────
@@ -557,11 +728,15 @@ function deleteWorkspaceFile(workspace, file) {
   try {
     if (!fs.existsSync(resolved.target)) return { error: `File not found: ${file}` };
     const stat = fs.statSync(resolved.target);
-    if (!stat.isFile()) return { error: `Not a file: ${file}` };
-    fs.unlinkSync(resolved.target);
+    const targetType = stat.isDirectory() ? "directory" : "file";
+    if (stat.isDirectory()) {
+      fs.rmSync(resolved.target, { recursive: true, force: true });
+    } else {
+      fs.unlinkSync(resolved.target);
+    }
     workspaceIndexCache = null;
     workspaceSearch.invalidate(workspace);
-    return { ok: true, mode: "delete", file };
+    return { ok: true, mode: "delete", file, targetType };
   } catch (err) {
     return { error: err.message };
   }
@@ -597,6 +772,8 @@ const toolExecutor = createToolHandlers({
   readToolProcess,
   stopToolProcess,
   listProjectFiles,
+  searchWeb: webResearch.searchWeb,
+  fetchWebPage: webResearch.fetchWebPage,
 });
 
 function buildDirMap(workspace) {
@@ -857,6 +1034,24 @@ async function fetchOllamaTags(baseUrl) {
   }
 }
 
+async function fetchOllamaPs(baseUrl) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const res = await fetch(`${baseUrl}/api/ps`, { signal: controller.signal });
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    return { res, data, text };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function estimateTokenCount(text) {
   if (!text) return 0;
   const value = String(text);
@@ -913,6 +1108,41 @@ ipcMain.handle("ollama:list", async () => {
   }
 });
 
+ipcMain.handle("ollama:runtime", async (_event, { model } = {}) => {
+  if (!model) return { ok: false, error: "Missing model name." };
+
+  try {
+    const { res, data } = await fetchOllamaPs(getOllamaBaseUrl());
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `Ollama API error (${res.status})` };
+    }
+
+    const models = Array.isArray(data?.models) ? data.models : [];
+    const entry = models.find((item) => item?.model === model || item?.name === model);
+    if (!entry) return { ok: true, loaded: false };
+
+    const size = Number(entry.size);
+    const sizeVram = Number(entry.size_vram);
+    const gpuRatio = size > 0 && Number.isFinite(sizeVram)
+      ? Math.max(0, Math.min(sizeVram / size, 1))
+      : null;
+
+    return {
+      ok: true,
+      loaded: true,
+      model: entry.model || entry.name || model,
+      contextLength: Number(entry.context_length) || null,
+      size,
+      sizeVram,
+      gpuRatio,
+      fullyGpu: Number.isFinite(gpuRatio) ? gpuRatio >= 0.98 : null,
+      details: entry.details || {},
+    };
+  } catch (err) {
+    return { ok: false, error: err?.message || "Cannot reach Ollama runtime." };
+  }
+});
+
 ipcMain.handle("ollama:countTokens", async (_event, { model, messages = [], tools = [] } = {}) => {
   const prompt = serializeTokenPayload(messages, tools);
   const fallback = estimateTokenCount(prompt) + (Array.isArray(messages) ? messages.length * 4 : 0);
@@ -943,6 +1173,69 @@ ipcMain.handle("ollama:countTokens", async (_event, { model, messages = [], tool
   }
 
   return { ok: true, count: fallback, source: "estimate" };
+});
+
+ipcMain.handle("ollama:summarizeContext", async (_event, payload = {}) => {
+  const model = String(payload.model || "").trim();
+  if (!model) return { ok: false, error: "Select a model before summarizing context." };
+
+  const contextTokens = Math.max(2048, Math.min(Number(payload.contextBudget) || 4096, 16384));
+  const maxChars = ContextMemory.summaryCharLimit(contextTokens);
+  const transcript = ContextMemory.buildMemoryTranscript(
+    payload.previousSummary || "",
+    payload.messages || [],
+    { contextTokens },
+  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45000);
+
+  try {
+    const res = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        think: false,
+        messages: [
+          { role: "system", content: ContextMemory.SUMMARY_SYSTEM_PROMPT },
+          { role: "user", content: transcript },
+        ],
+        options: {
+          num_ctx: contextTokens,
+          num_predict: Math.max(420, Math.min(1200, Math.ceil(maxChars / 3))),
+          temperature: 0,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return { ok: false, error: `Context summarization failed (${res.status})${detail ? `: ${detail}` : ""}` };
+    }
+
+    const data = await res.json();
+    const rawSummary = data?.message?.content || data?.response || "";
+    const summary = ContextMemory.normalizeSummary(rawSummary, maxChars);
+    if (summary.length < 40) {
+      return { ok: false, error: "The model returned an empty or unusable context summary." };
+    }
+
+    return {
+      ok: true,
+      summary,
+      source: "model",
+      summarizedMessages: Array.isArray(payload.messages) ? payload.messages.length : 0,
+    };
+  } catch (err) {
+    const message = err?.name === "AbortError"
+      ? "Context summarization timed out."
+      : err?.message || "Context summarization failed.";
+    return { ok: false, error: message };
+  } finally {
+    clearTimeout(timer);
+  }
 });
 
 ipcMain.handle("ollama:abort", async (event) => {
@@ -1292,8 +1585,10 @@ ipcMain.handle("agent:run", async (event, payload) => {
     workspace: payload.workspace,
     model: payload.model,
     numCtx: payload.numCtx,
+    contextBudget: payload.contextBudget,
     thinking: payload.thinking,
     tools: payload.tools || [],
+    mode: payload.mode || "agent",
     chatHistory: payload.chatHistory || [],
     contextSummary: payload.contextSummary || "",
     dirMap: payload.dirMap || "",
