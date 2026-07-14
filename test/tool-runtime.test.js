@@ -31,6 +31,16 @@ test("ToolMap.validateToolCall normalizes batch read paths", () => {
   assert.deepEqual(result.args.paths, ["src/app.js", "README.md"]);
 });
 
+test("Map query tools are bounded and annotation tools are validated", () => {
+  assert.ok(ToolMap.TOOL_NAMES.includes("get_map_overview"));
+  assert.ok(ToolMap.TOOL_NAMES.includes("find_map_paths"));
+  assert.ok(ToolMap.TOOL_NAMES.includes("annotate_map_finding"));
+  assert.equal(ToolMap.validateToolCall("get_map_node", { id: "route:abc" }).ok, true);
+  assert.equal(ToolMap.validateToolCall("find_map_paths", { from: "host:a", to: "route:b", max_hops: 20 }).args.max_hops, 8);
+  assert.equal(ToolMap.validateToolCall("get_map_evidence", { evidence_ids: ["one", "two"] }).ok, true);
+  assert.equal(ToolMap.validateToolCall("annotate_map_finding", {}).code, "MISSING_HYPOTHESIS");
+});
+
 test("workspace search finds files by basename and content", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-search-"));
   fs.mkdirSync(path.join(root, "src"), { recursive: true });

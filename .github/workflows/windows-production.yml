@@ -1,0 +1,35 @@
+name: Windows production gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run audit:runtime
+      - run: npm run verify:native
+      - run: npm run verify:production
+      - run: npm test
+      - run: npm run package
+      - name: Build signed installer when signing credentials are configured
+        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\pointer-signing.pfx", [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}"))
+          $env:WINDOWS_CERTIFICATE_FILE = "$env:RUNNER_TEMP\pointer-signing.pfx"
+          npm run make
+          npm run release:metadata
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pointer-windows-package
+          path: out/Pointer-win32-x64

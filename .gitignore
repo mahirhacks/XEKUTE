@@ -1,7 +1,84 @@
-out/
-node_modules/
+# Dependencies
+/node_modules/
+
+# Electron Forge and release artifacts
+/out/
+/dist/
+/release/
+/.vite/
+/.webpack/
+/.electron-gyp/
+/build/
+*.asar
+*.blockmap
+*.nupkg
 *.vsix
-graphify-out/
+RELEASES
+PointerSetup*.exe
+
+# Test, analysis, and generated assessment data
+/test_local/
+/graphify-out/
+/coverage/
+/.nyc_output/
+/.webclone-*/
+/.pointer-*/
+
+# Local application and certificate material
+/.pointer-ca/
+/.pointer-assessment.json
+/certificates/
+*.pfx
+*.p12
+*.pem
+*.key
+*.jks
+
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+.npmrc
+
+# Runtime data and logs
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.pid
+*.pid.lock
+*.tmp
+*.temp
+*.bak
+
+# Python caches and virtual environments
 __pycache__/
-.cursor
+*.py[cod]
+*$py.class
+/.venv/
+/venv/
+/env/
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+
+# Editor and local AI-assistant metadata
+/.cursor/
+/.agents/
+/.codex/
+/.vscode/
+/.idea/
 CLAUDE.md
+*.swp
+*.swo
+*~
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

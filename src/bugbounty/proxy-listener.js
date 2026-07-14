@@ -1,5 +1,11 @@
 const { Proxy } = require("http-mitm-proxy");
 const { parseRawHttpRequest, urlMatchesTarget } = require("./security-http-workbench");
+const {
+  decodeHttpBody,
+  decodeHttpRequestBody,
+  getContentEncoding,
+  headersWithDecodedBodyLength,
+} = require("./http-body-decoder");
 
 const MAX_CAPTURE_BYTES = 1_000_000;
 const INTERCEPT_TIMEOUT_MS = 60000;
@@ -20,23 +26,30 @@ function rawRequest(ctx, body = "") {
   const target = /^https?:\/\//i.test(request.url || "")
     ? requestUrl(ctx).pathname + requestUrl(ctx).search
     : request.url || "/";
-  return [`${request.method || "GET"} ${target} HTTP/${request.httpVersion || "1.1"}`, ...headerLines(request.headers), "", body].join("\r\n");
+  return rawRequestFromParts({ method: request.method, target, httpVersion: request.httpVersion, headers: request.headers }, body);
+}
+
+function rawRequestFromParts({ method = "GET", target = "/", httpVersion = "1.1", headers = {} } = {}, body = "") {
+  const displayHeaders = headersWithDecodedBodyLength(headers, body);
+  return [`${method} ${target} HTTP/${httpVersion}`, ...headerLines(displayHeaders), "", body].join("\r\n");
 }
 
 function rawResponse(ctx, body = "") {
   const response = ctx.serverToProxyResponse;
   if (!response) return "";
-  return [`HTTP/${response.httpVersion || "1.1"} ${response.statusCode || 0} ${response.statusMessage || ""}`.trimEnd(), ...headerLines(response.headers), "", body].join("\r\n");
+  const displayHeaders = headersWithDecodedBodyLength(response.headers, body);
+  return [`HTTP/${response.httpVersion || "1.1"} ${response.statusCode || 0} ${response.statusMessage || ""}`.trimEnd(), ...headerLines(displayHeaders), "", body].join("\r\n");
 }
 
 function appendBounded(chunks, chunk, state, key) {
   const value = Buffer.from(chunk);
-  const nextSize = state[key] + value.length;
-  if (nextSize <= MAX_CAPTURE_BYTES) chunks.push(value);
-  state[key] = nextSize;
+  const previousSize = state[key];
+  const remaining = Math.max(0, MAX_CAPTURE_BYTES - Math.min(previousSize, MAX_CAPTURE_BYTES));
+  if (remaining > 0) chunks.push(value.subarray(0, remaining));
+  state[key] = previousSize + value.length;
 }
 
-function createProxyListenerService({ fs, path, assessmentWorkspace, sendEvent = () => {} } = {}) {
+function createProxyListenerService({ fs, path, assessmentWorkspace, getCaDirectory, sendEvent = () => {} } = {}) {
   let proxy = null;
   let root = "";
   let settings = null;
@@ -110,6 +123,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, sendEvent =
         startedAt: Date.now(),
         replacementBody: null,
         replacementSent: false,
+        effectiveRequest: null,
       };
       records.set(ctx.uuid, record);
       const paused = Boolean(settings?.interception?.enabled && settings?.interception?.interceptRequests);
@@ -129,26 +143,43 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, sendEvent =
     instance.onRequestData((ctx, chunk, callback) => {
       const record = records.get(ctx.uuid);
       if (!record) { callback(null, chunk); return; }
-      appendBounded(record.requestChunks, chunk, record, "requestBytes");
       if (record.replacementBody != null) {
         if (record.replacementSent) { callback(null, Buffer.alloc(0)); return; }
         record.replacementSent = true;
+        record.requestBytes = record.replacementBody.length;
+        record.requestChunks = [record.replacementBody.subarray(0, MAX_CAPTURE_BYTES)];
         callback(null, record.replacementBody);
         return;
       }
+      appendBounded(record.requestChunks, chunk, record, "requestBytes");
       callback(null, chunk);
     });
 
     instance.onRequestEnd((ctx, callback) => {
       const record = records.get(ctx.uuid);
-      if (record) {
-        const body = record.replacementBody != null
-          ? record.replacementBody.toString("utf8")
-          : Buffer.concat(record.requestChunks).toString("utf8");
-        record.request = rawRequest(ctx, body);
-        emitCapture({ id: ctx.uuid, phase: "request-complete", request: record.request, url: record.url, paused: false });
+      if (!record) { callback(); return; }
+
+      if (record.replacementBody != null && !record.replacementSent) {
+        record.replacementSent = true;
+        record.requestBytes = record.replacementBody.length;
+        record.requestChunks = [record.replacementBody.subarray(0, MAX_CAPTURE_BYTES)];
+        if (record.replacementBody.length) ctx.proxyToServerRequest.write(record.replacementBody);
       }
-      callback();
+
+      const rawBuffer = record.replacementBody != null
+        ? record.replacementBody
+        : record.requestChunks.length > 0
+          ? Buffer.concat(record.requestChunks)
+          : Buffer.alloc(0);
+      const captureHeaders = record.effectiveRequest?.headers || ctx.clientToProxyRequest.headers;
+
+      decodeHttpRequestBody(rawBuffer, captureHeaders).then((bodyText) => {
+        record.request = record.effectiveRequest
+          ? rawRequestFromParts(record.effectiveRequest, bodyText)
+          : rawRequest(ctx, bodyText);
+        emitCapture({ id: ctx.uuid, phase: "request-complete", request: record.request, url: record.url, paused: false });
+        callback();
+      });
     });
 
     instance.onResponse((ctx, callback) => {
@@ -165,9 +196,17 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, sendEvent =
 
     instance.onResponseEnd((ctx, callback) => {
       const record = records.get(ctx.uuid);
-      if (record) {
-        record.response = rawResponse(ctx, Buffer.concat(record.responseChunks).toString("utf8"));
-        const logged = assessmentWorkspace.appendTrafficRecord(root, {
+      if (!record) { callback(); return; }
+
+      const rawBuffer = record.responseChunks.length > 0
+        ? Buffer.concat(record.responseChunks)
+        : Buffer.alloc(0);
+      const encoding = getContentEncoding(ctx.serverToProxyResponse?.headers || {});
+
+      decodeHttpBody(rawBuffer, encoding).then((bodyText) => {
+        record.response = rawResponse(ctx, bodyText);
+        const trafficAllowed = settings.authority?.superMode === "full" || settings.authority?.permissions?.trafficCapture !== false;
+        const logged = trafficAllowed ? assessmentWorkspace.appendTrafficRecord(root, {
           tool: "interceptor",
           requestId: record.id,
           url: record.url,
@@ -176,12 +215,16 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, sendEvent =
           durationMs: Date.now() - record.startedAt,
           request: record.request,
           response: record.response,
+          requestContentType: String(Object.entries(record.effectiveRequest?.headers || ctx.clientToProxyRequest.headers || {}).find(([name]) => name.toLowerCase() === "content-type")?.[1] || ""),
+          requestBodyBytes: record.requestBytes,
+          requestBodyCapturedBytes: Math.min(record.requestBytes, MAX_CAPTURE_BYTES),
+          requestBodyTruncated: record.requestBytes > MAX_CAPTURE_BYTES,
           truncated: record.requestBytes > MAX_CAPTURE_BYTES || record.responseBytes > MAX_CAPTURE_BYTES,
-        });
+        }) : { ok: true, disabled: true };
         emitCapture({ id: record.id, phase: "response", request: record.request, response: record.response, url: record.url, logged });
         records.delete(ctx.uuid);
-      }
-      callback();
+        callback();
+      });
     });
   }
 
@@ -193,7 +236,14 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, sendEvent =
     const host = String(listener.bindAddress || "127.0.0.1");
     const port = Number(listener.port);
     if (!Number.isInteger(port) || port < 0 || port > 65535) return { error: "Proxy listener port must be between 1 and 65535", code: "INVALID_PORT" };
-    const sslCaDir = path.join(root, ".pointer-ca");
+    const legacyCaDir = path.join(root, ".pointer-ca");
+    const sslCaDir = typeof getCaDirectory === "function" ? getCaDirectory(root) : legacyCaDir;
+    if (sslCaDir !== legacyCaDir && fs.existsSync(legacyCaDir) && !fs.existsSync(sslCaDir)) {
+      fs.mkdirSync(path.dirname(sslCaDir), { recursive: true });
+      fs.cpSync(legacyCaDir, sslCaDir, { recursive: true, errorOnExist: false });
+    }
+    fs.mkdirSync(sslCaDir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(sslCaDir, 0o700); } catch { /* Windows ACLs are inherited from protected user data. */ }
     const instance = new Proxy();
     attachHandlers(instance);
 
@@ -208,24 +258,30 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, sendEvent =
         proxy = instance;
         const actualPort = instance.httpPort;
         const caCertPath = path.join(sslCaDir, "certs", "ca.pem");
+        if (sslCaDir !== legacyCaDir && fs.existsSync(caCertPath) && fs.existsSync(legacyCaDir)) {
+          try { fs.rmSync(legacyCaDir, { recursive: true, force: true }); } catch { /* Keep the verified legacy copy for manual recovery. */ }
+        }
         const targetCount = scopeTargets().length;
         const onlyInScope = Boolean(settings.interception?.onlyInScope);
         const warning = onlyInScope && targetCount === 0 ? "Only in-scope capture is enabled, but In-Scope has no targets" : "";
-        emitStatus({ running: true, host, port: actualPort, caCertPath, targetCount, onlyInScope, warning, error: "" });
-        resolve({ ok: true, running: true, host, port: actualPort, caCertPath, targetCount, onlyInScope, warning });
+        emitStatus({ running: true, host, port: actualPort, caDirectory: sslCaDir, caCertPath, targetCount, onlyInScope, warning, error: "" });
+        resolve({ ok: true, running: true, host, port: actualPort, caDirectory: sslCaDir, caCertPath, targetCount, onlyInScope, warning });
       });
     });
   }
 
   async function configure(assessmentPath) {
+    if (!assessmentPath) { await stop(); return { ok: true, running: false }; }
     const read = assessmentWorkspace.readSettings(assessmentPath);
     if (read.error) { await stop(); return read; }
     root = read.root;
     settings = read.settings;
+    if (settings.authority?.superMode !== "full" && settings.authority?.permissions?.proxyInterception === false) { await stop(); return { ok: true, running: false, authorityDisabled: true }; }
     if (!settings.listener?.enabled) { await stop(); return { ok: true, running: false }; }
     const host = String(settings.listener.bindAddress || "127.0.0.1");
     const port = Number(settings.listener.port);
-    if (proxy && status.running && status.host === host && status.port === port) {
+    const caDirectory = typeof getCaDirectory === "function" ? getCaDirectory(root) : path.join(root, ".pointer-ca");
+    if (proxy && status.running && status.host === host && status.port === port && status.caDirectory === caDirectory) {
       emitStatus({ settingsUpdated: true });
       return { ok: true, ...status };
     }
@@ -244,17 +300,34 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, sendEvent =
     const originalUrl = requestUrl(entry.ctx);
     if (parsed.url.origin !== originalUrl.origin) return { error: "Interceptor edits cannot change the destination origin", code: "ORIGIN_CHANGE_BLOCKED" };
 
-    const headers = { ...parsed.headers };
-    for (const name of Object.keys(headers)) {
-      if (["host", "proxy-connection", "connection", "transfer-encoding", "x-pointer-scheme"].includes(name.toLowerCase())) delete headers[name];
+    const captureHeaders = { ...parsed.headers };
+    for (const name of Object.keys(captureHeaders)) {
+      if (name.toLowerCase() === "x-pointer-scheme") delete captureHeaders[name];
     }
+    const headers = { ...captureHeaders };
+    for (const name of Object.keys(headers)) {
+      if (["host", "proxy-connection", "connection", "transfer-encoding"].includes(name.toLowerCase())) delete headers[name];
+    }
+    const incomingHeaders = entry.ctx.clientToProxyRequest.headers || {};
+    const originalLength = Number(Object.entries(incomingHeaders).find(([name]) => name.toLowerCase() === "content-length")?.[1]) || 0;
+    const originalChunked = /chunked/i.test(String(Object.entries(incomingHeaders).find(([name]) => name.toLowerCase() === "transfer-encoding")?.[1] || ""));
+    const preserveIncomingBody = !parsed.body && (originalLength > 0 || originalChunked);
     const body = Buffer.from(parsed.body || "", "utf8");
-    if (body.length) headers["content-length"] = String(body.length);
-    else delete headers["content-length"];
+    if (!preserveIncomingBody) {
+      if (body.length) headers["content-length"] = String(body.length);
+      else delete headers["content-length"];
+    }
     entry.ctx.proxyToServerRequestOptions.method = parsed.method;
     entry.ctx.proxyToServerRequestOptions.path = `${parsed.url.pathname}${parsed.url.search}`;
     entry.ctx.proxyToServerRequestOptions.headers = headers;
-    entry.record.replacementBody = body;
+    entry.record.replacementBody = preserveIncomingBody ? null : body;
+    entry.record.effectiveRequest = {
+      method: parsed.method,
+      target: `${parsed.url.pathname}${parsed.url.search}`,
+      httpVersion: entry.ctx.clientToProxyRequest.httpVersion || "1.1",
+      headers: captureHeaders,
+    };
+    entry.record.url = parsed.url.toString();
     entry.record.request = String(editedRequest);
     clearTimeout(entry.timer);
     pending.delete(String(id));

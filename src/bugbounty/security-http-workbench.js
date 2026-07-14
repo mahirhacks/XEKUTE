@@ -1,5 +1,6 @@
 const MAX_RESPONSE_BYTES = 1_000_000;
 const ALLOWED_MODES = new Set(["interceptor", "repeater", "intruder"]);
+const { decodeHttpBody, headersWithDecodedBodyLength } = require("./http-body-decoder");
 
 function parseRawHttpRequest(rawRequest) {
   const raw = String(rawRequest || "").replace(/\r\n/g, "\n");
@@ -141,7 +142,6 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
     if (!ALLOWED_MODES.has(mode)) return { error: "Unknown security workbench mode", code: "INVALID_MODE" };
     const verification = assessmentWorkspace.verify(assessmentPath);
     if (verification.error) return verification;
-    if (!verification.valid) return { error: "Repair or update the assessment before sending traffic", code: "ASSESSMENT_INCOMPLETE" };
 
     let inScope;
     let configuration;
@@ -152,6 +152,12 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
       settings = readJson(verification.root, "settings.config");
     } catch (error) {
       return { error: `Could not read scope policy: ${error.message}`, code: "SCOPE_READ_FAILED" };
+    }
+
+    const authority = settings.authority || {};
+    const permissions = authority.permissions || {};
+    if (authority.superMode !== "full" && permissions.outboundHttp === false) {
+      return { error: "Outbound HTTP requests are disabled in Pointer Authority settings", code: "AUTHORITY_PERMISSION_DISABLED" };
     }
 
     const gate = configuration.authorizationGate || {};
@@ -202,8 +208,12 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
       }
       const bytes = Buffer.from(await response.arrayBuffer());
       if (bytes.length > responseLimit) return { error: `Response exceeds the ${responseLimit}-byte workbench limit`, code: "RESPONSE_TOO_LARGE" };
-      const body = bytes.toString("utf8");
-      const responseRaw = rawResponseText(response.status, response.statusText, responseHeaders, body);
+
+      const contentEncoding = response.headers.get("content-encoding") || "";
+      const body = await decodeHttpBody(bytes, contentEncoding);
+      const displayHeaders = headersWithDecodedBodyLength(responseHeaders, body);
+
+      const responseRaw = rawResponseText(response.status, response.statusText, displayHeaders, body);
       const durationMs = Date.now() - started;
       const trafficRecord = {
         tool: mode,
@@ -216,7 +226,8 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
         request: parsed.raw,
         response: responseRaw,
       };
-      const logged = settings.logging?.logRawTraffic === false
+      const trafficAllowed = authority.superMode === "full" || permissions.trafficCapture !== false;
+      const logged = settings.logging?.logRawTraffic === false || !trafficAllowed
         ? { ok: true, disabled: true }
         : assessmentWorkspace.appendTrafficRecord(verification.root, trafficRecord);
       if (logged.error) return logged;

@@ -125,7 +125,7 @@ test("runAgentTurn keeps calling tools until multi-file web requests are complet
   assert.ok(reminderMessage, "expected an incomplete multi-file reminder");
 
   const verificationMessage = result.appendedMessages.find(
-    (msg) => msg.role === "user" && /Before summarizing, verify the code changes/i.test(msg.content),
+    (msg) => msg.role === "user" && /Before summarizing, verify the assessment or workspace changes/i.test(msg.content),
   );
   assert.ok(verificationMessage, "expected a verification reminder after code edits");
 });
@@ -137,6 +137,13 @@ test("mode prompts and tool lists are distinct and read-only modes are enforced"
   assert.match(agentPrompt, /AGENT MODE/);
   assert.match(planPrompt, /PLAN MODE/);
   assert.match(askPrompt, /ASK MODE/);
+  assert.match(agentPrompt, /authorized pentest operator/i);
+  assert.match(agentPrompt, /scanner output as leads/i);
+  assert.match(agentPrompt, /stop on unexpected impact/i);
+  assert.match(planPrompt, /hypothesis-driven test plan/i);
+  assert.match(planPrompt, /stop condition/i);
+  assert.match(askPrompt, /confirmed vulnerability/i);
+  assert.match(askPrompt, /remains unverified/i);
 
   const planTools = filterToolsForMode(ToolMap.TOOLS, "plan");
   assert.ok(planTools.length > 0);

@@ -1,40 +1,201 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
+const http = require("http");
+const { pathToFileURL } = require("url");
 const pty = require("node-pty");
 const { spawn } = require("child_process");
 const { createToolHandlers } = require("./tools/tool-handlers");
 const { createWorkspaceSearch } = require("./tools/workspace-search");
 const { createWebResearch } = require("./tools/web-research");
-const { createAssessmentWorkspace } = require("./bugbounty/assessment-workspace");
+const { createWebCloneService } = require("./tools/webclone");
+const { createAssessmentWorkspace, validateCustomEntryPath } = require("./bugbounty/assessment-workspace");
+const { createAssessmentMap } = require("./bugbounty/assessment-map");
 const { buildIntruderRequests, createSecurityHttpWorkbench } = require("./bugbounty/security-http-workbench");
 const { createProxyListenerService } = require("./bugbounty/proxy-listener");
 const { runAgentTurn } = require("./agent/agent-controller");
+const { normalizeProfile } = require("./agent/operating-modes");
+const { loadPolicy } = require("./agent/policy-engine");
 const ContextMemory = require("./agent/context-memory");
+const { createChatSessionStore } = require("./chat-session-store");
+const { validateIpcRequest } = require("./shared/ipc-contracts");
 
 const APP_ROOT = path.join(__dirname, "..");
+const IS_DEV = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
+const APP_INDEX_PATH = path.join(__dirname, "index.html");
+const APP_INDEX_URL = pathToFileURL(APP_INDEX_PATH).href;
 
 let mainWindow;
-/** @type {Map<string, import('node-pty').IPty>} */
+/** @type {Map<string, {pty: import('node-pty').IPty, ownerId: number}>} */
 const terminals = new Map();
 const toolProcesses = new Map();
 const ollamaControllers = new Map();
+const webClonePreviewDocuments = new Map();
+let webClonePreviewServer = null;
+let webClonePreviewServerPromise = null;
+let webClonePreviewPort = 0;
+let webClonePreviewView = null;
+let webClonePreviewUrl = "";
 let toolProcessCounter = 0;
 let workspaceIndexCache = null;
 const workspaceSearch = createWorkspaceSearch({ fs, path });
 const webResearch = createWebResearch();
+const webClone = createWebCloneService({ fs, path, webResearch });
 const assessmentWorkspace = createAssessmentWorkspace({ fs, path });
+const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace });
 const securityHttpWorkbench = createSecurityHttpWorkbench({ fs, path, assessmentWorkspace });
 const proxyListener = createProxyListenerService({
   fs,
   path,
   assessmentWorkspace,
+  getCaDirectory(assessmentRoot) {
+    return resolveCentralCaDirectory(assessmentRoot);
+  },
   sendEvent(channel, payload) {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
   },
 });
 const workspaceWatchers = new Map();
 const workspaceWatchTimers = new Map();
+
+function applicationPreferencesPath() {
+  return path.join(app.getPath("userData"), "pointer-preferences.json");
+}
+
+function readApplicationPreferences() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(applicationPreferencesPath(), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeApplicationPreferences(preferences) {
+  const target = applicationPreferencesPath();
+  const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(temporary, `${JSON.stringify(preferences, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  try { fs.copyFileSync(target, `${target}.bak`); } catch { /* First application settings write. */ }
+  try { fs.renameSync(temporary, target); }
+  catch {
+    fs.copyFileSync(temporary, target);
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+function defaultCentralCaDirectory() {
+  return path.join(app.getPath("userData"), "certificates", "proxy-ca");
+}
+
+function configuredCentralCaDirectory() {
+  const configured = String(readApplicationPreferences()?.certificates?.caDirectory || "").trim();
+  return configured && path.isAbsolute(configured) ? path.resolve(configured) : defaultCentralCaDirectory();
+}
+
+function legacyProtectedCaDirectory(assessmentRoot) {
+  if (!assessmentRoot) return "";
+  const identity = crypto.createHash("sha256").update(path.resolve(assessmentRoot).toLowerCase()).digest("hex").slice(0, 24);
+  return path.join(app.getPath("userData"), "proxy-ca", identity);
+}
+
+function resolveCentralCaDirectory(assessmentRoot = "") {
+  const target = configuredCentralCaDirectory();
+  const targetCert = path.join(target, "certs", "ca.pem");
+  const previous = legacyProtectedCaDirectory(assessmentRoot);
+  const previousCert = previous ? path.join(previous, "certs", "ca.pem") : "";
+  if (!fs.existsSync(targetCert) && previousCert && fs.existsSync(previousCert)) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.cpSync(previous, target, { recursive: true, errorOnExist: false });
+    if (fs.existsSync(targetCert)) {
+      try { fs.rmSync(previous, { recursive: true, force: true }); } catch { /* Verified copy remains authoritative. */ }
+    }
+  }
+  fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(target, 0o700); } catch { /* Windows user-data ACLs protect the default store. */ }
+  return target;
+}
+
+function certificateSettingsSnapshot() {
+  const preferences = readApplicationPreferences();
+  const configured = String(preferences?.certificates?.caDirectory || "").trim();
+  const directory = configuredCentralCaDirectory();
+  const certificatePath = path.join(directory, "certs", "ca.pem");
+  return {
+    ok: true,
+    configuredDirectory: configured,
+    directory,
+    certificatePath,
+    certificateExists: fs.existsSync(certificatePath),
+    usingDefault: !configured,
+  };
+}
+
+function terminateProcessTree(child) {
+  if (!child?.pid) return;
+  if (process.platform === "win32") {
+    try {
+      const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      killer.unref();
+      return;
+    } catch { /* Fall back to the direct child below. */ }
+  }
+  try { child.kill("SIGTERM"); } catch { /* Process already exited. */ }
+}
+
+function isTrustedRendererEvent(event) {
+  if (!event?.sender || event.sender.isDestroyed()) return false;
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
+  const frameUrl = event.senderFrame?.url || event.sender.getURL?.() || "";
+  return frameUrl === APP_INDEX_URL;
+}
+
+function rejectedIpcResult() {
+  return { error: "Untrusted renderer request", code: "UNTRUSTED_RENDERER" };
+}
+
+const ipcMain = Object.freeze({
+  handle(channel, listener) {
+    return electronIpcMain.handle(channel, (event, ...args) => {
+      if (!isTrustedRendererEvent(event)) return rejectedIpcResult();
+      const validation = validateIpcRequest(channel, args);
+      if (validation) return { error: validation.message, code: validation.code };
+      return listener(event, ...args);
+    });
+  },
+  on(channel, listener) {
+    return electronIpcMain.on(channel, (event, ...args) => {
+      if (!isTrustedRendererEvent(event)) {
+        event.returnValue = rejectedIpcResult();
+        return;
+      }
+      const validation = validateIpcRequest(channel, args);
+      if (validation) {
+        event.returnValue = { error: validation.message, code: validation.code };
+        return;
+      }
+      return listener(event, ...args);
+    });
+  },
+  removeHandler(channel) {
+    return electronIpcMain.removeHandler(channel);
+  },
+});
+
+function chatSessionStore() {
+  return createChatSessionStore({
+    fs,
+    path,
+    crypto,
+    baseDir: app.getPath("userData"),
+    protector: {
+      available: () => safeStorage.isEncryptionAvailable(),
+      encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
+      decrypt: (payload) => safeStorage.decryptString(Buffer.from(payload, "base64")),
+    },
+  });
+}
 
 function getDefaultShell() {
   if (process.env.POINTER_SHELL) return process.env.POINTER_SHELL;
@@ -130,14 +291,36 @@ function createWindow() {
     title: "Pointer",
     frame: false,
     autoHideMenuBar: true,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webviewTag: false,
+      safeDialogs: true,
+      navigateOnDragDrop: false,
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "index.html"));
+  mainWindow.setAppDetails?.({ appId: "com.pointer.securityworkspace", appIconPath: process.execPath });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
+    if (targetUrl !== APP_INDEX_URL) event.preventDefault();
+  });
+  mainWindow.webContents.on("will-attach-webview", (event) => event.preventDefault());
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error("Pointer renderer exited unexpectedly:", details?.reason || "unknown");
+  });
+  mainWindow.once("ready-to-show", () => {
+    if (!mainWindow?.isDestroyed()) mainWindow.show();
+  });
+  mainWindow.loadFile(APP_INDEX_PATH);
+  if (IS_DEV) {
+    mainWindow.webContents.once("did-finish-load", () => {
+      if (!mainWindow?.isDestroyed()) mainWindow.webContents.openDevTools({ mode: "detach" });
+    });
+  }
   const senderId = mainWindow.webContents.id;
   mainWindow.webContents.on("destroyed", () => {
     stopWorkspaceWatch(senderId);
@@ -188,26 +371,141 @@ function startWorkspaceWatch(sender, workspace) {
   }
 }
 
-app.whenReady().then(() => {
-  createApplicationMenu();
-  createWindow();
-});
+function ensureWebClonePreviewServer() {
+  if (webClonePreviewServer && webClonePreviewPort) return Promise.resolve(webClonePreviewPort);
+  if (webClonePreviewServerPromise) return webClonePreviewServerPromise;
+  webClonePreviewServerPromise = new Promise((resolve, reject) => {
+    const server = http.createServer((request, response) => {
+      try {
+        if (request.method !== "GET") {
+          response.writeHead(405, { Allow: "GET", "Content-Type": "text/plain; charset=utf-8" });
+          response.end("Method not allowed.");
+          return;
+        }
+        const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+        const parts = requestUrl.pathname.split("/").filter(Boolean);
+        const token = parts[0] === "preview" ? parts[1] || "" : "";
+        const record = webClonePreviewDocuments.get(token);
+        if (!record || Date.now() - record.createdAt > 10 * 60 * 1000) {
+          response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+          response.end("WebClone preview expired.");
+          return;
+        }
+        response.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer",
+          "Content-Security-Policy": "default-src data: blob:; img-src data: blob:; style-src data: blob: 'unsafe-inline'; script-src data: blob: 'unsafe-inline'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';",
+        });
+        response.end(record.html);
+      } catch {
+        response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+        response.end("Invalid WebClone preview.");
+      }
+    });
+    server.once("error", (error) => {
+      webClonePreviewServerPromise = null;
+      reject(error);
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      webClonePreviewServer = server;
+      webClonePreviewPort = typeof address === "object" && address ? address.port : 0;
+      webClonePreviewServerPromise = null;
+      server.unref();
+      resolve(webClonePreviewPort);
+    });
+  });
+  return webClonePreviewServerPromise;
+}
+
+function normalizeWebClonePreviewBounds(bounds = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  const content = mainWindow.getContentBounds();
+  const x = Math.max(0, Math.round(Number(bounds.x) || 0));
+  const y = Math.max(0, Math.round(Number(bounds.y) || 0));
+  const width = Math.max(1, Math.min(Math.round(Number(bounds.width) || 1), Math.max(1, content.width - x)));
+  const height = Math.max(1, Math.min(Math.round(Number(bounds.height) || 1), Math.max(1, content.height - y)));
+  return { x, y, width, height };
+}
+
+function ensureWebClonePreviewView() {
+  if (webClonePreviewView && !webClonePreviewView.webContents.isDestroyed()) return webClonePreviewView;
+  const view = new WebContentsView({
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: false,
+      devTools: false,
+    },
+  });
+  view.setBackgroundColor("#ffffff");
+  view.webContents.setAudioMuted(true);
+  view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  view.webContents.on("will-navigate", (event, targetUrl) => {
+    if (targetUrl !== webClonePreviewUrl) event.preventDefault();
+  });
+  mainWindow.contentView.addChildView(view);
+  webClonePreviewView = view;
+  return view;
+}
+
+function hideWebClonePreviewView() {
+  if (!webClonePreviewView) return;
+  webClonePreviewView.setVisible(false);
+}
+
+function destroyWebClonePreviewView() {
+  if (!webClonePreviewView) return;
+  try { mainWindow?.contentView?.removeChildView(webClonePreviewView); } catch { /* Window may already be closing. */ }
+  try { webClonePreviewView.webContents.close(); } catch { /* View may already be closed. */ }
+  webClonePreviewView = null;
+  webClonePreviewUrl = "";
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
+  app.whenReady().then(() => {
+    app.setAppUserModelId("com.pointer.securityworkspace");
+    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    session.defaultSession.setPermissionCheckHandler(() => false);
+    createApplicationMenu();
+    createWindow();
+  });
+}
 
 app.on("window-all-closed", () => {
   proxyListener.stop();
-  for (const term of terminals.values()) {
-    try { term.kill(); } catch { /* ignore */ }
+  for (const record of terminals.values()) {
+    try { record.pty.kill(); } catch { /* ignore */ }
   }
   terminals.clear();
   for (const record of toolProcesses.values()) {
-    try { record.child.kill(); } catch { /* ignore */ }
+    terminateProcessTree(record.child);
   }
   toolProcesses.clear();
+  destroyWebClonePreviewView();
+  webClonePreviewServer?.close();
+  webClonePreviewServer = null;
+  webClonePreviewPort = 0;
+  webClonePreviewDocuments.clear();
   if (process.platform !== "darwin") app.quit();
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (hasSingleInstanceLock && BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
 // ── File System IPC ────────────────────────────────────────────────────────────
@@ -215,6 +513,8 @@ app.on("activate", () => {
 /** Open a folder picker, return the chosen path */
 ipcMain.handle("fs:openFolder", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Open Project",
+    buttonLabel: "Open Project",
     properties: ["openDirectory"],
   });
   return result.canceled ? null : result.filePaths[0];
@@ -351,12 +651,197 @@ ipcMain.handle("assessment:trafficHistory", async (_event, { path: assessmentPat
   return assessmentWorkspace.readTrafficHistory(assessmentPath, { limit });
 });
 
+ipcMain.handle("chat-sessions:load", async (_event, { scope } = {}) => {
+  return chatSessionStore().load(scope);
+});
+
+ipcMain.handle("chat-sessions:save", async (_event, { scope, state } = {}) => {
+  return chatSessionStore().save(scope, state);
+});
+
+ipcMain.on("chat-sessions:save-before-close", (event, { scope, state } = {}) => {
+  try {
+    event.returnValue = chatSessionStore().save(scope, state);
+  } catch (error) {
+    event.returnValue = { error: error.message };
+  }
+});
+
+ipcMain.handle("assessment:evidence", async (_event, { path: assessmentPath, limit = 500 } = {}) => {
+  return assessmentWorkspace.readJsonl(assessmentPath, "evidence/index.jsonl", { limit });
+});
+ipcMain.handle("assessment:appendEvidence", async (_event, { path: assessmentPath, record } = {}) => {
+  return assessmentWorkspace.appendEvidenceRecord(assessmentPath, record || {});
+});
+ipcMain.handle("assessment:appendFinding", async (_event, { path: assessmentPath, finding } = {}) => {
+  return assessmentWorkspace.appendFinding(assessmentPath, finding || {});
+});
+ipcMain.handle("assessment:createRun", async (_event, { path: assessmentPath, run } = {}) => {
+  const profile = normalizeProfile(run?.profile || "testing:analyze");
+  if (profile.family === "testing" && ["agent", "execution", "exploit"].includes(profile.key)) {
+    const policy = loadPolicy(assessmentPath);
+    if (!policy.authorizationConfirmed) return { error: "Authorization must be confirmed before starting an active run.", code: "AUTHORIZATION_REQUIRED" };
+    if (!policy.scopeReviewed) return { error: "Scope must be reviewed before starting an active run.", code: "SCOPE_REVIEW_REQUIRED" };
+    if (!policy.rulesAccepted) return { error: "Rules of Engagement must be accepted before starting an active run.", code: "ROE_ACCEPTANCE_REQUIRED" };
+    if (!policy.allowActiveTesting) return { error: "Active testing is disabled in the assessment policy.", code: "POLICY_ACTIVE_DISABLED" };
+    if (profile.key === "exploit" && !policy.allowExploitValidation) return { error: "Exploit validation is disabled in the assessment policy.", code: "POLICY_EXPLOIT_DISABLED" };
+  }
+  return assessmentWorkspace.createRun(assessmentPath, run || {});
+});
+ipcMain.handle("assessment:updateRun", async (_event, { path: assessmentPath, id, patch } = {}) => {
+  return assessmentWorkspace.updateRun(assessmentPath, id, patch || {});
+});
+ipcMain.handle("assessment:generateReport", async (_event, { path: assessmentPath } = {}) => {
+  return assessmentWorkspace.generateReport(assessmentPath);
+});
+ipcMain.handle("assessment:runHistory", async (_event, { path: assessmentPath, limit = 500 } = {}) => {
+  const result = assessmentWorkspace.readJsonl(assessmentPath, "logs/agent-runs.jsonl", { limit });
+  return result;
+});
+
+ipcMain.handle("assessment:deleteTrafficRecords", async (_event, { path: assessmentPath, requestIds = [] } = {}) => {
+  return assessmentWorkspace.deleteTrafficRecords(assessmentPath, { requestIds });
+});
+
+ipcMain.handle("assessment:map", async (_event, { path: assessmentPath } = {}) => {
+  return assessmentMap.read(assessmentPath);
+});
+
+ipcMain.handle("assessment:buildMap", async (_event, { path: assessmentPath } = {}) => {
+  return assessmentMap.build(assessmentPath);
+});
+ipcMain.handle("assessment:mapOverview", async (_event, { path: assessmentPath } = {}) => assessmentMap.getOverview(assessmentPath));
+ipcMain.handle("assessment:mapNode", async (_event, { path: assessmentPath, id } = {}) => assessmentMap.getNode(assessmentPath, id));
+ipcMain.handle("assessment:mapNeighbors", async (_event, { path: assessmentPath, id, edgeTypes, minConfidence } = {}) => assessmentMap.getNeighbors(assessmentPath, id, { edgeTypes, minConfidence }));
+ipcMain.handle("assessment:mapPaths", async (_event, { path: assessmentPath, from, to, maxHops, minConfidence } = {}) => assessmentMap.findPaths(assessmentPath, from, to, { maxHops, minConfidence }));
+ipcMain.handle("assessment:mapRoutes", async (_event, { path: assessmentPath, pattern, tags } = {}) => assessmentMap.searchRoutes(assessmentPath, pattern, { tags }));
+ipcMain.handle("assessment:mapSharedObjects", async (_event, { path: assessmentPath, id } = {}) => assessmentMap.getSharedObjects(assessmentPath, id));
+ipcMain.handle("assessment:mapEvidence", async (_event, { path: assessmentPath, evidenceIds } = {}) => assessmentMap.getEvidence(assessmentPath, evidenceIds));
+ipcMain.handle("assessment:mapHypotheses", async (_event, { path: assessmentPath, status } = {}) => assessmentMap.getHypotheses(assessmentPath, { status }));
+ipcMain.handle("assessment:mapAnnotateFinding", async (_event, { path: assessmentPath, ...input } = {}) => assessmentMap.annotateFinding(assessmentPath, input));
+ipcMain.handle("webclone:build", async (_event, { path: assessmentPath, target, maxAssets } = {}) => {
+  return webClone.build({ root: assessmentPath, target, maxAssets });
+});
+ipcMain.handle("webclone:manifest", async (_event, { path: assessmentPath } = {}) => webClone.readManifest(assessmentPath));
+ipcMain.handle("webclone:readFile", async (_event, { path: assessmentPath, relativePath } = {}) => webClone.readFile(assessmentPath, relativePath));
+ipcMain.handle("webclone:previewDocument", async (_event, { html, bounds } = {}) => {
+  const documentHtml = String(html || "");
+  if (!documentHtml || Buffer.byteLength(documentHtml, "utf8") > 6_000_000) return { error: "WebClone preview document is empty or exceeds the 6 MB limit." };
+  const token = crypto.randomUUID();
+  const now = Date.now();
+  webClonePreviewDocuments.set(token, { html: documentHtml, createdAt: now, ownerId: _event.sender.id });
+  for (const [id, record] of webClonePreviewDocuments) {
+    if (now - record.createdAt > 10 * 60 * 1000 || webClonePreviewDocuments.size > 12) webClonePreviewDocuments.delete(id);
+  }
+  try {
+    const port = await ensureWebClonePreviewServer();
+    if (!port) return { error: "WebClone preview server could not start." };
+    const normalizedBounds = normalizeWebClonePreviewBounds(bounds);
+    if (!normalizedBounds) return { error: "WebClone preview window is unavailable." };
+    webClonePreviewUrl = `http://127.0.0.1:${port}/preview/${token}/index.html`;
+    const view = ensureWebClonePreviewView();
+    view.setVisible(false);
+    view.setBounds(normalizedBounds);
+    await view.webContents.loadURL(webClonePreviewUrl);
+    view.setVisible(true);
+    return { ok: true };
+  } catch (error) {
+    webClonePreviewDocuments.delete(token);
+    return { error: `WebClone preview server could not start: ${error.message}` };
+  }
+});
+ipcMain.handle("webclone:previewBounds", async (_event, { bounds } = {}) => {
+  const normalizedBounds = normalizeWebClonePreviewBounds(bounds);
+  if (!normalizedBounds || !webClonePreviewView) return { ok: false };
+  webClonePreviewView.setBounds(normalizedBounds);
+  return { ok: true };
+});
+ipcMain.handle("webclone:hidePreview", async () => {
+  hideWebClonePreviewView();
+  return { ok: true };
+});
+
 ipcMain.handle("assessment:settings", async (_event, { path: assessmentPath } = {}) => {
   return assessmentWorkspace.readSettings(assessmentPath);
 });
 
 ipcMain.handle("assessment:writeSettings", async (_event, { path: assessmentPath, settings } = {}) => {
   return assessmentWorkspace.writeSettings(assessmentPath, settings);
+});
+
+function safeAssessmentChild(root, relativePath) {
+  const base = path.resolve(root || "");
+  const target = path.resolve(base, String(relativePath || ""));
+  return base && target !== base && target.startsWith(`${base}${path.sep}`) ? target : "";
+}
+
+ipcMain.handle("assessment:customEntries", async (_event, { path: assessmentPath } = {}) => {
+  const verification = assessmentWorkspace.verify(assessmentPath);
+  if (verification.error) return verification;
+  const walk = (folder, prefix = "", source = "custom") => fs.readdirSync(folder, { withFileTypes: true }).flatMap((entry) => {
+    const relativePath = path.posix.join(prefix, entry.name);
+    if (entry.isDirectory()) return [{ name: entry.name, relativePath, type: "directory", source }, ...walk(path.join(folder, entry.name), relativePath, source)];
+    return [{ name: entry.name, relativePath, type: "file", source }];
+  });
+  try {
+    const custom = walk(path.join(verification.root, "custom"));
+    const tools = walk(path.join(verification.root, "tools"), "", "tools");
+    return { ok: true, entries: [...custom, ...tools].slice(0, 500) };
+  } catch (error) { return { error: error.message }; }
+});
+
+ipcMain.handle("assessment:createEntry", async (_event, { path: assessmentPath, relativePath, type = "file", content = "" } = {}) => {
+  const verification = assessmentWorkspace.verify(assessmentPath);
+  if (verification.error) return verification;
+  const validated = validateCustomEntryPath(relativePath);
+  if (validated.error) return validated;
+  if (!['file', 'directory'].includes(type)) return { error: "Unsupported custom entry type", code: "INVALID_ENTRY_TYPE" };
+  const target = safeAssessmentChild(verification.root, validated.normalized);
+  if (!target || !path.relative(verification.root, target).replace(/\\/g, "/").startsWith("custom/")) return { error: "Custom entries must stay inside Custom" };
+  try {
+    if (fs.existsSync(target)) return { error: "That name already exists" };
+    if (type === "directory") fs.mkdirSync(target, { recursive: true });
+    else { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, String(content), "utf8"); }
+    return { ok: true, path: target };
+  } catch (error) { return { error: error.message }; }
+});
+
+ipcMain.handle("assessment:deleteEntries", async (_event, { path: assessmentPath, relativePaths = [] } = {}) => {
+  return assessmentWorkspace.deleteCustomEntries(assessmentPath, relativePaths);
+});
+
+ipcMain.handle("assessment:buildContext", async (_event, { path: assessmentPath } = {}) => {
+  const verification = assessmentWorkspace.verify(assessmentPath);
+  if (verification.error) return verification;
+  const picked = await dialog.showOpenDialog(mainWindow, { title: "Add Context Files", buttonLabel: "Build pen_context.md", properties: ["openFile", "multiSelections"] });
+  if (picked.canceled || !picked.filePaths.length) return { canceled: true };
+  const script = path.join(__dirname, "context", "parse_context.py");
+  const output = path.join(verification.root, "pen_context.md");
+  const sourceRoot = path.join(verification.root, "context", "sources");
+  const imported = picked.filePaths.map((source, index) => {
+    const safeName = path.basename(source).replace(/[^\w.() -]/g, "_");
+    let target = path.join(sourceRoot, safeName);
+    if (fs.existsSync(target)) target = path.join(sourceRoot, `${path.parse(safeName).name}-${Date.now()}-${index}${path.extname(safeName)}`);
+    fs.copyFileSync(source, target);
+    return target;
+  });
+  const candidates = process.platform === "win32" ? [["py", ["-3"]], ["python", []], ["python3", []]] : [["python3", []], ["python", []]];
+  for (const [binary, prefix] of candidates) {
+    const result = await new Promise((resolve) => {
+      const child = spawn(binary, [...prefix, script, "--output", output, ...imported], { windowsHide: true });
+      let stdout = ""; let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      child.on("error", (error) => resolve({ unavailable: error.code === "ENOENT", error: error.message }));
+      child.on("close", (code) => resolve(code === 0 ? { ok: true, stdout } : { error: stderr || `Parser exited with code ${code}` }));
+    });
+    if (result.ok) {
+      let details = {}; try { details = JSON.parse(result.stdout.trim().split(/\r?\n/).pop()); } catch { /* optional */ }
+      return { ok: true, path: output, ...details };
+    }
+    if (!result.unavailable) return result;
+  }
+  return { error: "Python 3 is required to build pen_context.md" };
 });
 
 ipcMain.handle("security:httpRequest", async (_event, payload = {}) => {
@@ -385,6 +870,43 @@ ipcMain.handle("proxy:showCa", async () => {
   if (!caCertPath || !fs.existsSync(caCertPath)) return { error: "Proxy CA certificate has not been generated yet" };
   shell.showItemInFolder(caCertPath);
   return { ok: true, path: caCertPath };
+});
+
+ipcMain.handle("settings:certificatesGet", async () => certificateSettingsSnapshot());
+
+ipcMain.handle("settings:certificatesChoose", async (_event, { assessmentPath = "" } = {}) => {
+  const current = configuredCentralCaDirectory();
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose Pointer CA storage folder",
+    defaultPath: current,
+    properties: ["openDirectory", "createDirectory"],
+    buttonLabel: "Use this folder",
+  });
+  if (result.canceled || !result.filePaths?.[0]) return { canceled: true, ...certificateSettingsSnapshot() };
+  const selected = path.resolve(result.filePaths[0]);
+  fs.mkdirSync(selected, { recursive: true, mode: 0o700 });
+  const preferences = readApplicationPreferences();
+  preferences.certificates = { ...(preferences.certificates || {}), caDirectory: selected };
+  writeApplicationPreferences(preferences);
+  await proxyListener.stop();
+  if (assessmentPath) await proxyListener.configure(assessmentPath);
+  return certificateSettingsSnapshot();
+});
+
+ipcMain.handle("settings:certificatesReset", async (_event, { assessmentPath = "" } = {}) => {
+  const preferences = readApplicationPreferences();
+  preferences.certificates = { ...(preferences.certificates || {}), caDirectory: "" };
+  writeApplicationPreferences(preferences);
+  await proxyListener.stop();
+  if (assessmentPath) await proxyListener.configure(assessmentPath);
+  return certificateSettingsSnapshot();
+});
+
+ipcMain.handle("settings:certificatesShow", async () => {
+  const snapshot = certificateSettingsSnapshot();
+  fs.mkdirSync(snapshot.directory, { recursive: true, mode: 0o700 });
+  const error = await shell.openPath(snapshot.directory);
+  return error ? { error, code: "CA_DIRECTORY_OPEN_FAILED" } : snapshot;
 });
 
 ipcMain.handle("workspace:watch", async (event, workspace) => {
@@ -606,7 +1128,7 @@ function runWorkspaceCommand(workspace, command, { timeoutMs = 20000 } = {}) {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      try { child.kill(); } catch { /* ignore */ }
+      terminateProcessTree(child);
     }, Math.max(1000, Math.min(timeoutMs, 120000)));
 
     child.stdout?.on("data", (chunk) => {
@@ -635,7 +1157,7 @@ function runWorkspaceCommand(workspace, command, { timeoutMs = 20000 } = {}) {
   });
 }
 
-function startWorkspaceProcess(workspace, command) {
+function startWorkspaceProcess(workspace, command, ownerId = "agent") {
   const resolved = resolveWorkspaceTarget(workspace);
   if (resolved.error) return resolved;
   if (!command?.trim()) return { error: "Empty command" };
@@ -658,6 +1180,7 @@ function startWorkspaceProcess(workspace, command) {
     stdout: "",
     stderr: "",
     child,
+    ownerId,
   };
 
   child.stdout?.on("data", (chunk) => {
@@ -674,6 +1197,10 @@ function startWorkspaceProcess(workspace, command) {
     record.running = false;
     record.exitCode = exitCode;
     record.signal = signal;
+    const eviction = setTimeout(() => {
+      if (toolProcesses.get(id) === record && !record.running) toolProcesses.delete(id);
+    }, 10 * 60 * 1000);
+    eviction.unref?.();
   });
 
   toolProcesses.set(id, record);
@@ -742,17 +1269,19 @@ function deleteWorkspaceFile(workspace, file) {
   }
 }
 
-function readToolProcess(id) {
+function readToolProcess(id, ownerId = "agent") {
   const record = toolProcesses.get(id);
   if (!record) return { error: `Unknown process: ${id}` };
+  if (record.ownerId !== ownerId) return { error: "Process is not owned by this caller", code: "PROCESS_NOT_OWNED" };
   return { ok: true, ...processSnapshot(record) };
 }
 
-function stopToolProcess(id) {
+function stopToolProcess(id, ownerId = "agent") {
   const record = toolProcesses.get(id);
   if (!record) return { error: `Unknown process: ${id}` };
+  if (record.ownerId !== ownerId) return { error: "Process is not owned by this caller", code: "PROCESS_NOT_OWNED" };
   if (record.running) {
-    try { record.child.kill(); } catch { /* ignore */ }
+    terminateProcessTree(record.child);
     record.running = false;
   }
   return { ok: true, ...processSnapshot(record) };
@@ -774,7 +1303,34 @@ const toolExecutor = createToolHandlers({
   listProjectFiles,
   searchWeb: webResearch.searchWeb,
   fetchWebPage: webResearch.fetchWebPage,
+  assessmentMap,
 });
+
+function runSlashCommandPython(action, payload = {}) {
+  return new Promise((resolve) => {
+    const script = path.join(__dirname, "commands", "command_parser.py");
+    const executable = process.env.POINTER_PYTHON || (process.platform === "win32" ? "python" : "python3");
+    const child = spawn(executable, [script, "--action", action, "--payload", JSON.stringify(payload)], {
+      cwd: APP_ROOT,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (error) => resolve({ ok: false, error: `Python command runner unavailable: ${error.message}`, code: "PYTHON_UNAVAILABLE" }));
+    child.on("close", (code) => {
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      try {
+        const parsed = JSON.parse(lines.at(-1) || "{}");
+        resolve(code === 0 ? parsed : { ...parsed, ok: false, error: parsed.error || stderr.trim() || `Python command runner exited with code ${code}`, code: parsed.code || "COMMAND_RUNNER_FAILED" });
+      } catch {
+        resolve({ ok: false, error: stderr.trim() || stdout.trim() || "Python command runner returned no JSON result", code: "COMMAND_RUNNER_FAILED" });
+      }
+    });
+  });
+}
 
 function buildDirMap(workspace) {
   const lines = [path.resolve(workspace)];
@@ -845,19 +1401,69 @@ ipcMain.handle("tools:runCommand", async (_event, { workspace, command, timeoutM
 });
 
 ipcMain.handle("tools:startProcess", async (_event, { workspace, command }) => {
-  return startWorkspaceProcess(workspace, command);
+  return startWorkspaceProcess(workspace, command, _event.sender.id);
 });
 
 ipcMain.handle("tools:readProcess", async (_event, { id }) => {
-  return { mode: "process_read", ...readToolProcess(id) };
+  return { mode: "process_read", ...readToolProcess(id, _event.sender.id) };
 });
 
 ipcMain.handle("tools:stopProcess", async (_event, { id }) => {
-  return { mode: "process_stop", ...stopToolProcess(id) };
+  return { mode: "process_stop", ...stopToolProcess(id, _event.sender.id) };
 });
 
 ipcMain.handle("tools:execute", async (_event, { workspace, toolCall }) => {
   return toolExecutor.executeToolCall({ workspace, toolCall });
+});
+
+ipcMain.handle("tools:health", async (_event, { customTools = [] } = {}) => {
+  const executables = ["subfinder", "amass", "theHarvester", "httpx", "nmap", "ffuf", "katana", "gowitness", "gobuster", "nuclei", "nikto", "testssl", "sqlmap"];
+  const check = (executable) => new Promise((resolve) => {
+    const child = spawn(executable, ["--version"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* ignore */ } resolve({ executable, installed: true, version: "version check timed out" }); }, 2500);
+    child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { output += chunk.toString(); });
+    child.on("error", (error) => { clearTimeout(timer); resolve({ executable, installed: false, error: error.code === "ENOENT" ? "Not found on PATH" : error.message }); });
+    child.on("close", () => { clearTimeout(timer); resolve({ executable, installed: true, version: output.trim().split(/\r?\n/)[0].slice(0, 160) || "Installed" }); });
+  });
+  const custom = Array.isArray(customTools) ? customTools.filter((tool) => tool && /^[a-z0-9][a-z0-9_-]{1,40}$/.test(String(tool.id || "")) && String(tool.executable || "").trim()).slice(0, 100) : [];
+  const customResults = await Promise.all(custom.map(async (tool) => ({ ...(await check(String(tool.executable).trim())), id: String(tool.id), custom: true })));
+  return { ok: true, tools: [...await Promise.all(executables.map(check)), ...customResults] };
+});
+
+ipcMain.handle("commands:parse", async (_event, payload = {}) => runSlashCommandPython("parse", payload));
+ipcMain.handle("commands:run", async (_event, payload = {}) => {
+  const modeFamily = String(payload.modeFamily || "assist").toLowerCase();
+  if (modeFamily === "assist") {
+    const parsed = await runSlashCommandPython("parse", payload);
+    const sensitiveTools = new Set(["httpx", "nmap", "ffuf", "gobuster", "dirb", "katana", "nikto", "sqlmap", "testssl", "gowitness", "custom_script"]);
+    const tools = Array.isArray(parsed?.tools) ? parsed.tools.map((tool) => String(tool).toLowerCase()) : [];
+    const command = String(parsed?.command || "").toLowerCase();
+    const sensitive = parsed?.role === "static" && (command !== "/passive" || tools.some((tool) => sensitiveTools.has(tool)));
+    if (sensitive) {
+      return { ok: false, error: "Safe mode blocks sensitive static commands. Switch to Testing mode before running active recon or custom scripts.", code: "SAFE_MODE_ACTIVE_BLOCK", parsed };
+    }
+  }
+  return runSlashCommandPython("run", payload);
+});
+ipcMain.handle("commands:customScripts", async (_event, { path: root } = {}) => {
+  if (!root || !fs.existsSync(root)) return { ok: true, scripts: [] };
+  const base = path.join(root, "custom_scripts");
+  try {
+    fs.mkdirSync(base, { recursive: true });
+    const scripts = [];
+    const walk = (folder, prefix = "") => {
+      for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+        const relativePath = path.posix.join(prefix, entry.name);
+        const full = path.join(folder, entry.name);
+        if (entry.isDirectory()) walk(full, relativePath);
+        else if (/\.(?:py|ps1|sh|js|mjs|cmd|bat)$/i.test(entry.name)) scripts.push({ name: entry.name, relativePath, path: relativePath, extension: path.extname(entry.name).slice(1).toLowerCase() });
+      }
+    };
+    walk(base);
+    return { ok: true, scripts: scripts.sort((a, b) => a.relativePath.localeCompare(b.relativePath)) };
+  } catch (error) { return { ok: false, error: error.message, scripts: [] }; }
 });
 
 // ── Terminal IPC ─────────────────────────────────────────────────────────────
@@ -876,7 +1482,8 @@ ipcMain.handle("terminal:create", (event, { id, cwd }) => {
       useConpty: process.platform === "win32",
     });
 
-    terminals.set(id, term);
+    const ownerId = event.sender.id;
+    terminals.set(id, { pty: term, ownerId });
 
     term.onData((data) => {
       if (!event.sender.isDestroyed()) {
@@ -898,20 +1505,24 @@ ipcMain.handle("terminal:create", (event, { id, cwd }) => {
 });
 
 ipcMain.handle("terminal:write", (_event, { id, data }) => {
-  terminals.get(id)?.write(data);
+  const record = terminals.get(id);
+  if (!record || record.ownerId !== _event.sender.id) return { error: "Terminal is not owned by this window", code: "TERMINAL_NOT_OWNED" };
+  record.pty.write(data);
+  return { ok: true };
 });
 
 ipcMain.handle("terminal:resize", (_event, { id, cols, rows }) => {
-  const term = terminals.get(id);
-  if (term) {
-    try { term.resize(cols, rows); } catch { /* ignore */ }
-  }
+  const record = terminals.get(id);
+  if (!record || record.ownerId !== _event.sender.id) return { error: "Terminal is not owned by this window", code: "TERMINAL_NOT_OWNED" };
+  try { record.pty.resize(cols, rows); } catch { /* ignore */ }
+  return { ok: true };
 });
 
 ipcMain.handle("terminal:kill", (_event, { id }) => {
-  const term = terminals.get(id);
-  if (term) {
-    try { term.kill(); } catch { /* ignore */ }
+  const record = terminals.get(id);
+  if (!record || record.ownerId !== _event.sender.id) return { error: "Terminal is not owned by this window", code: "TERMINAL_NOT_OWNED" };
+  if (record) {
+    try { record.pty.kill(); } catch { /* ignore */ }
     terminals.delete(id);
   }
   return { ok: true };
@@ -1580,8 +2191,17 @@ ipcMain.handle("agent:run", async (event, payload) => {
   const sendAgentEvent = (data) => {
     if (!sender.isDestroyed()) sender.send("agent:event", data);
   };
-
-  return runAgentTurn({
+  let assessmentRun = null;
+  if (payload.workspace) {
+    const agentProfile = normalizeProfile(payload.modeFamily || "assist", payload.mode || "executor");
+    const runResult = assessmentWorkspace.createRun(payload.workspace, {
+      profile: `${agentProfile.family}:${agentProfile.key}`,
+      status: "running",
+      operator: "local-user",
+    });
+    if (runResult?.ok) assessmentRun = runResult.run;
+  }
+  const result = await runAgentTurn({
     workspace: payload.workspace,
     model: payload.model,
     numCtx: payload.numCtx,
@@ -1589,6 +2209,10 @@ ipcMain.handle("agent:run", async (event, payload) => {
     thinking: payload.thinking,
     tools: payload.tools || [],
     mode: payload.mode || "agent",
+    modeFamily: payload.modeFamily || "assist",
+    approvalGranted: Boolean(payload.approvalGranted),
+    authority: payload.authority || null,
+    runId: assessmentRun?.id || "",
     chatHistory: payload.chatHistory || [],
     contextSummary: payload.contextSummary || "",
     dirMap: payload.dirMap || "",
@@ -1601,4 +2225,13 @@ ipcMain.handle("agent:run", async (event, payload) => {
     findWorkspaceFiles,
     searchWorkspaceIndex,
   });
+  if (assessmentRun?.id) {
+    assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, {
+      status: result?.aborted ? "stopped" : result?.ok ? "completed" : "failed",
+      completedAt: new Date().toISOString(),
+      stopReason: result?.aborted ? "Aborted by operator" : result?.error || "",
+      notes: String(result?.finalText || result?.error || "").slice(0, 2000),
+    });
+  }
+  return result;
 });

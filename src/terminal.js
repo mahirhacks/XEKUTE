@@ -12,11 +12,13 @@ const TerminalManager = (() => {
   const activeSessionButton = $("terminal-active-session");
   const activeSessionName = $("terminal-active-name");
 
-  /** @type {Map<string, { id: string, name: string, container: HTMLElement, term: Terminal, fitAddon: FitAddon.FitAddon, exited: boolean }>} */
+  /** @type {Map<string, { id: string, name: string, container: HTMLElement, term: Terminal, fitAddon: FitAddon.FitAddon, exited: boolean, lastCols: number, lastRows: number }>} */
   const sessions = new Map();
   let activeId = null;
   let counter = 0;
   let cwd = null;
+  let fitAnimationFrame = 0;
+  let ensurePromise = null;
 
   const xtermTheme = {
     background: "#1e1e1e",
@@ -58,6 +60,7 @@ const TerminalManager = (() => {
     btnClear.disabled = !has;
     btnKill.disabled = !has;
     updateActiveSessionUi();
+    globalThis.onTerminalSessionStateChange?.({ count: sessions.size, activeId });
   }
 
   function updateActiveSessionUi() {
@@ -117,7 +120,9 @@ const TerminalManager = (() => {
     try {
       session.fitAddon.fit();
       const { cols, rows } = session.term;
-      if (cols > 0 && rows > 0) {
+      if (cols > 0 && rows > 0 && (cols !== session.lastCols || rows !== session.lastRows)) {
+        session.lastCols = cols;
+        session.lastRows = rows;
         window.api.terminalResize(session.id, cols, rows);
       }
     } catch {
@@ -126,7 +131,11 @@ const TerminalManager = (() => {
   }
 
   function fitActive() {
-    if (activeId) fitSession(sessions.get(activeId));
+    if (!activeId || fitAnimationFrame) return;
+    fitAnimationFrame = requestAnimationFrame(() => {
+      fitAnimationFrame = 0;
+      if (activeId) fitSession(sessions.get(activeId));
+    });
   }
 
   function focusActive() {
@@ -230,7 +239,7 @@ const TerminalManager = (() => {
         return true;
       });
 
-      const session = { id, name, container, term, fitAddon, exited: false };
+      const session = { id, name, container, term, fitAddon, exited: false, lastCols: 0, lastRows: 0 };
       sessions.set(id, session);
 
       const result = await window.api.terminalCreate({
@@ -289,14 +298,26 @@ const TerminalManager = (() => {
   }
 
   async function createTerminalAndShow() {
-    globalThis.expandTerminalPanel?.();
+    globalThis.expandTerminalPanel?.({ createIfMissing: false });
     return createTerminal();
+  }
+
+  function hasSessions() {
+    return sessions.size > 0;
+  }
+
+  async function ensureTerminal() {
+    if (sessions.size > 0) return activeId;
+    if (!ensurePromise) {
+      ensurePromise = createTerminal().finally(() => { ensurePromise = null; });
+    }
+    return ensurePromise;
   }
 
   async function runCommand(command) {
     const text = String(command || "").trim();
     if (!text) return false;
-    globalThis.expandTerminalPanel?.();
+    globalThis.expandTerminalPanel?.({ createIfMissing: false });
     if (!activeId || !sessions.has(activeId) || sessions.get(activeId)?.exited) {
       await createTerminal();
     }
@@ -367,7 +388,6 @@ const TerminalManager = (() => {
 
   async function openWithProject(path) {
     cwd = path;
-    if (sessions.size === 0) await createTerminal();
   }
 
   function escapeHtml(str) {
@@ -383,7 +403,7 @@ const TerminalManager = (() => {
   }
 
   btnNew?.addEventListener("click", () => {
-    globalThis.expandTerminalPanel?.();
+    globalThis.expandTerminalPanel?.({ createIfMissing: false });
     createTerminal();
   });
   btnClear?.addEventListener("click", () => {
@@ -432,6 +452,8 @@ const TerminalManager = (() => {
     focusActive,
     fitActive,
     runCommand,
+    hasSessions,
+    ensureTerminal,
     openWithProject,
     setCwd,
   };

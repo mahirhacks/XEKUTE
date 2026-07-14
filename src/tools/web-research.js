@@ -4,6 +4,7 @@ const net = require("node:net");
 const DEFAULT_TIMEOUT_MS = 12000;
 const MAX_SEARCH_BYTES = 750000;
 const MAX_PAGE_BYTES = 1000000;
+const MAX_RAW_ASSET_BYTES = 3000000;
 const MAX_REDIRECTS = 4;
 const USER_AGENT = "Pointer/0.1 local research assistant";
 
@@ -259,7 +260,23 @@ function createWebResearch({ fetchImpl = globalThis.fetch, lookup = dns.promises
     }
   }
 
-  return { searchWeb, fetchWebPage };
+  async function fetchRawUrl(rawUrl, options = {}) {
+    try {
+      const result = await fetchPublicUrl(rawUrl, {
+        fetchImpl,
+        lookup,
+        // Raw WebClone assets (especially bundled JavaScript) can be larger
+        // than readable-page responses, while still remaining bounded.
+        maxBytes: Math.max(1024, Math.min(Number(options.maxBytes) || MAX_PAGE_BYTES, MAX_RAW_ASSET_BYTES)),
+        timeoutMs: options.timeoutMs || DEFAULT_TIMEOUT_MS,
+      });
+      return { ok: true, url: String(rawUrl), finalUrl: result.finalUrl, response: result.response, text: result.text };
+    } catch (error) {
+      return { error: `Page fetch failed: ${error.message}` };
+    }
+  }
+
+  return { searchWeb, fetchWebPage, fetchRawUrl };
 }
 
 module.exports = {

@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const ToolMap = require("../tools/tool-map");
 const {
   buildSystemContext,
@@ -5,9 +6,13 @@ const {
   inferEditTarget,
   isEditRequest,
   normalizeMode,
+  normalizeProfile,
+  profileKey,
   parseProjectFiles,
   resolveTools,
 } = require("./agent-prompt");
+const { evaluateAction, loadPolicy } = require("./policy-engine");
+const { appendAgentAction, appendAgentApproval, appendAgentRun, appendToolOutput } = require("./action-log");
 
 const MAX_AGENT_ROUNDS = 10;
 const MAX_EDIT_RETRIES_WITHOUT_TOOLS = 1;
@@ -46,6 +51,15 @@ const READ_ONLY_TOOL_NAMES = new Set([
   "read_files",
   "search_web",
   "fetch_url",
+  "get_map_overview",
+  "get_map_node",
+  "get_map_neighbors",
+  "find_map_paths",
+  "search_map_routes",
+  "get_map_shared_objects",
+  "get_map_evidence",
+  "get_map_hypotheses",
+  "record_hypothesis",
 ]);
 const AGENT_TOOL_NAMES = new Set([
   ...READ_ONLY_TOOL_NAMES,
@@ -56,14 +70,18 @@ const AGENT_TOOL_NAMES = new Set([
   "start_process",
   "read_process",
   "stop_process",
+  "annotate_map_finding",
 ]);
 
-function allowedToolNamesForMode(mode) {
-  return normalizeMode(mode) === "agent" ? AGENT_TOOL_NAMES : READ_ONLY_TOOL_NAMES;
+function allowedToolNamesForMode(mode, modeFamily = "assist") {
+  const profile = normalizeProfile(modeFamily, mode);
+  return ["agent", "executor"].includes(profile.key) || (profile.family === "testing" && ["execution", "exploit"].includes(profile.key))
+    ? AGENT_TOOL_NAMES
+    : READ_ONLY_TOOL_NAMES;
 }
 
-function filterToolsForMode(tools, mode) {
-  const allowed = allowedToolNamesForMode(mode);
+function filterToolsForMode(tools, mode, modeFamily = "assist") {
+  const allowed = allowedToolNamesForMode(mode, modeFamily);
   return (Array.isArray(tools) ? tools : []).filter((tool) => allowed.has(tool?.function?.name));
 }
 
@@ -174,6 +192,7 @@ function buildRetryMessage({ targetFile, userMessage }) {
   return [
     "Your previous response did not use valid tool calls.",
     "This request requires real workspace actions, not a text-only answer.",
+    "For security work, verify authorization and scope before any active command, use the least invasive suitable action, and preserve reproducible evidence.",
     "Use inspect_workspace for broad work, list_files/find_files/search_code for discovery, read_file or read_files before editing existing files, and patch_file or create_file for changes.",
     "If the user asked for multiple files, call one file tool per file and continue until every requested file has been created or updated.",
     targetFile ? `Primary target file: ${targetFile}.` : "",
@@ -184,14 +203,14 @@ function buildRetryMessage({ targetFile, userMessage }) {
 function buildPostToolSummaryPrompt({ mode, lastVerification } = {}) {
   const selectedMode = normalizeMode(mode);
   if (selectedMode === "plan") {
-    return "Return the grounded implementation plan now. Do not call tools. Include ordered steps, likely files/symbols, risks, assumptions, and future verification.";
+    return "Return the grounded pentest plan now. Do not call tools. Include ordered hypotheses, targets, prerequisites, techniques, conservative configurations, evidence to capture, output paths, success criteria, stop conditions, risks, and assumptions.";
   }
   if (selectedMode === "ask") {
-    return "Answer the user's question now using the gathered evidence. Do not call tools. Cite relevant file paths and distinguish facts from inference. If the user asks you to edit or do anything related to agentic works, tell them directly that you cannot do that in ask mode.";
+    return "Answer as a pentest analyst using the gathered evidence. Do not call tools. Cite relevant assessment paths, separate observation from hypothesis and confirmed finding, state missing evidence, and never imply validation that did not occur.";
   }
   return [
-    "The workspace actions are complete. Do not call tools in this response.",
-    "Reply concisely with the outcome, changed files, and verification actually run.",
+    "The authorized workspace actions are complete. Do not call tools in this response.",
+    "Reply with an operator summary: actions executed, targets touched, evidence/output paths, hypotheses confirmed or rejected, assessment records changed, safety limits honored, verification performed, coverage gaps, and safe next steps.",
     lastVerification && !lastVerification.ok
       ? `The latest verification failed (${lastVerification.command}). State that failure accurately and do not claim full success.`
       : "",
@@ -200,18 +219,18 @@ function buildPostToolSummaryPrompt({ mode, lastVerification } = {}) {
 
 function buildPlanGroundingReminder(userMessage) {
   return [
-    "This is Plan mode and a workspace is open, but the plan is not grounded in repository evidence yet.",
-    "Call inspect_workspace for architecture/test setup, then use a targeted find/search/read tool for the files likely involved.",
-    "Do not edit files or run commands. Return the plan only after inspecting enough evidence to name concrete files or symbols.",
+    "This is Plan mode and an assessment workspace is open, but the plan is not grounded in assessment evidence yet.",
+    "Call inspect_workspace, then read the relevant scope, authorization, settings.config, pen_context.md, traffic, enumeration, or finding files.",
+    "Do not edit files, send traffic, or run commands. Return the plan only after it names concrete targets, hypotheses, evidence requirements, conservative limits, and stop conditions.",
     `Original user request: ${userMessage}`,
   ].join(" ");
 }
 
 function buildVerificationReminder({ userMessage, mutatedFiles }) {
   return [
-    "Before summarizing, verify the code changes with the smallest relevant check.",
+    "Before summarizing, verify the assessment or workspace changes with the smallest relevant check.",
     mutatedFiles.size ? `Files changed this turn: ${[...mutatedFiles].join(", ")}.` : "",
-    "Choose in this order when available: syntax/type check for touched files, focused tests for changed behavior, then a broader test/build only if warranted.",
+    "For assessment data, validate JSON/Markdown integrity and referenced output paths. For code, use syntax/type checks, focused tests, then a broader build only if warranted.",
     "Use inspect_workspace if the repository command is unknown. Do not install packages or invent a command.",
     "If no useful verification command exists, reply without tools and explicitly mention that no verification was run.",
     `Original user request: ${userMessage}`,
@@ -396,6 +415,10 @@ async function runAgentTurn({
   thinking,
   tools,
   mode = "agent",
+  modeFamily = "assist",
+  approvalGranted = false,
+  authority = null,
+  runId: suppliedRunId = "",
   chatHistory,
   contextSummary,
   dirMap,
@@ -408,14 +431,44 @@ async function runAgentTurn({
   findWorkspaceFiles,
   searchWorkspaceIndex,
 }) {
-  const selectedMode = normalizeMode(mode);
+  const profile = normalizeProfile(modeFamily, mode);
+  const selectedMode = profile.legacyMode;
   const effectiveContextBudget = Number(contextBudget) || Number(numCtx) || 8192;
-  const allowedToolNames = allowedToolNamesForMode(selectedMode);
-  const availableTools = filterToolsForMode(tools, selectedMode);
+  const allowedToolNames = allowedToolNamesForMode(profile.key, profile.family);
+  const availableTools = filterToolsForMode(tools, profile.key, profile.family);
+  const policy = loadPolicy(workspace, authority);
+  const runId = String(suppliedRunId || `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  appendAgentAction(workspace, {
+    runId,
+    type: "run_started",
+    timestamp: new Date().toISOString(),
+    profile: profileKey(profile),
+    policy: { allowActiveTesting: policy.allowActiveTesting, allowAutomatedScanning: policy.allowAutomatedScanning, allowExploitValidation: policy.allowExploitValidation, authoritySuperMode: policy.authoritySuperMode, maxRequestsPerSecond: policy.maxRequestsPerSecond, maxConcurrency: policy.maxConcurrency },
+    userMessage: String(userMessage || "").slice(0, 1000),
+  });
+  appendAgentRun(workspace, {
+    runId,
+    type: "run_started",
+    timestamp: new Date().toISOString(),
+    profile: profileKey(profile),
+    status: "running",
+    approvalRequired: Boolean(profile.capability === "active" || profile.capability === "exploit"),
+    policy: {
+      authorizationConfirmed: Boolean(policy.authorizationConfirmed),
+      scopeReviewed: Boolean(policy.scopeReviewed),
+      rulesAccepted: Boolean(policy.rulesAccepted),
+      allowActiveTesting: Boolean(policy.allowActiveTesting),
+      allowAutomatedScanning: Boolean(policy.allowAutomatedScanning),
+      allowExploitValidation: Boolean(policy.allowExploitValidation),
+      maxRequestsPerSecond: policy.maxRequestsPerSecond,
+      maxConcurrency: policy.maxConcurrency,
+    },
+  });
   const editContext = {
     mode: selectedMode,
-    isEditRequest: selectedMode === "agent" && isEditRequest(userMessage),
-    requiresMutation: selectedMode === "agent" && MUTATION_REQUEST_RE.test(String(userMessage || "")),
+    profile: profileKey(profile),
+    isEditRequest: profile.family === "assist" && ["agent", "executor"].includes(profile.key) && isEditRequest(userMessage),
+    requiresMutation: profile.family === "assist" && ["agent", "executor"].includes(profile.key) && MUTATION_REQUEST_RE.test(String(userMessage || "")),
     targetFile: inferEditTarget(userMessage, activeFile, dirMap),
     activeFile,
     userMessage,
@@ -431,6 +484,7 @@ async function runAgentTurn({
 
   const systemContext = buildSystemContext({
     mode: selectedMode,
+    modeFamily: profile.family,
     numCtx: effectiveContextBudget,
     dirMap,
     activeFile,
@@ -440,6 +494,17 @@ async function runAgentTurn({
   });
 
   const baseMessages = [{ role: "system", content: systemContext }];
+  baseMessages.push({
+    role: "system",
+    content: [
+      "POINTER AUTHORITY (enforced by the runtime):",
+      `- Approval mode: ${policy.authoritySuperMode || "ask"}`,
+      `- Enabled permissions: ${Object.entries(policy.authorityPermissions || {}).filter(([, enabled]) => enabled).map(([name]) => name).join(", ") || "none"}`,
+      `- Disabled permissions: ${Object.entries(policy.authorityPermissions || {}).filter(([, enabled]) => !enabled).map(([name]) => name).join(", ") || "none"}`,
+      "Choose actions that fit these permissions. If an action is blocked, explain the exact permission or engagement gate instead of repeatedly retrying it.",
+      "Maintain the workflow: observe evidence → state a testable hypothesis → propose the smallest action → execute only if allowed → verify → record evidence and confidence → report next steps.",
+    ].join("\n"),
+  });
   const boundedMemory = clipMemorySummary(contextSummary, effectiveContextBudget);
   if (boundedMemory) {
     baseMessages.push({
@@ -473,7 +538,7 @@ async function runAgentTurn({
   const readCallsSinceMutation = new Set();
 
   for (let round = 0; round < MAX_AGENT_ROUNDS; round += 1) {
-    const activeStatus = selectedMode === "ask" ? "Researching..." : selectedMode === "plan" ? "Planning..." : "Working...";
+    const activeStatus = profile.capability === "plan" ? "Planning..." : profile.capability === "observe" || profile.capability === "assess" ? "Analyzing..." : profile.capability === "verify" ? "Verifying..." : profile.capability === "report" ? "Reporting..." : "Working...";
     sendEvent({ type: "status", text: summaryMode ? "Summarizing..." : activeStatus });
 
     const messages = [
@@ -540,6 +605,8 @@ async function runAgentTurn({
           appendedMessages: workingHistory.slice(historyStart),
           completedEdit,
           executedTools,
+          runId,
+          profile: profileKey(profile),
         };
       }
 
@@ -594,6 +661,8 @@ async function runAgentTurn({
             appendedMessages: workingHistory.slice(historyStart),
             completedEdit,
             executedTools,
+            runId,
+            profile: profileKey(profile),
           };
         }
         summaryMode = true;
@@ -621,6 +690,8 @@ async function runAgentTurn({
         appendedMessages: workingHistory.slice(historyStart),
         completedEdit,
         executedTools,
+        runId,
+        profile: profileKey(profile),
       };
     }
 
@@ -641,6 +712,33 @@ async function runAgentTurn({
       const commandBlock = ["run_command", "start_process"].includes(toolName)
         ? commandGuardReason(tool.command)
         : "";
+      const policyDecision = evaluateAction({ tool, profile, policy, approvalGranted });
+      sendEvent({ type: "action_policy", runId, tool, decision: policyDecision });
+      if (policyDecision.requiresApproval || approvalGranted) {
+        appendAgentApproval(workspace, {
+          runId,
+          timestamp: new Date().toISOString(),
+          operator: "local-user",
+          profile: profileKey(profile),
+          decision: policyDecision.allowed ? "approved" : "blocked",
+          reason: policyDecision.reason,
+          scope: policy.scopeReviewed ? "reviewed" : "unreviewed",
+          expiresAt: policy.authorizationExpiresAt || "",
+        });
+      }
+      appendAgentAction(workspace, {
+        runId,
+        type: "action_proposed",
+        timestamp: new Date().toISOString(),
+        profile: profileKey(profile),
+        tool: toolName,
+        target: tool.file || tool.query || tool.url || tool.command || tool.processId || "workspace",
+        risk: policyDecision.risk,
+        capability: policyDecision.capability,
+        allowed: policyDecision.allowed,
+        requiresApproval: policyDecision.requiresApproval,
+        reason: policyDecision.reason,
+      });
       let toolResult;
       if (!allowedToolNames.has(toolName)) {
         toolResult = {
@@ -663,6 +761,14 @@ async function runAgentTurn({
           errorCode: "COMMAND_GUARD",
           retryable: false,
         };
+      } else if (!policyDecision.allowed) {
+        toolResult = {
+          ok: false,
+          error: policyDecision.reason,
+          errorCode: policyDecision.code || "POLICY_BLOCK",
+          retryable: false,
+          policy: policyDecision,
+        };
       } else if (READ_ONLY_TOOL_NAMES.has(toolName) && readCallsSinceMutation.has(signature)) {
         toolResult = {
           ok: false,
@@ -684,6 +790,30 @@ async function runAgentTurn({
         });
       }
       toolResults.push(toolResult);
+      appendAgentAction(workspace, {
+        runId,
+        type: "action_result",
+        timestamp: new Date().toISOString(),
+        profile: profileKey(profile),
+        tool: toolName,
+        ok: Boolean(toolResult?.ok && !toolResult?.error),
+        errorCode: toolResult?.errorCode || "",
+        error: toolResult?.error || "",
+        output: toolResult?.file || toolResult?.command || toolResult?.mode || "",
+      });
+      const toolOutput = String(toolResult?.content || toolResult?.stdout || toolResult?.stderr || toolResult?.summary || toolResult?.error || "");
+      appendToolOutput(workspace, {
+        runId,
+        timestamp: new Date().toISOString(),
+        tool: toolName,
+        command: tool.command || "",
+        target: tool.file || tool.url || tool.query || "",
+        exitCode: Number.isFinite(Number(toolResult?.exitCode)) ? Number(toolResult.exitCode) : null,
+        outputPath: toolResult?.file || "",
+        sha256: crypto.createHash("sha256").update(toolOutput, "utf8").digest("hex"),
+        redacted: true,
+        truncated: toolOutput.length > 12000,
+      });
       sendEvent({ type: "tool_result", tool, result: toolResult });
 
       if (toolResult?.ok === false || toolResult?.error) {
@@ -735,12 +865,15 @@ async function runAgentTurn({
 
   finalText = summarizeToolResults(lastToolResults) || "Completed the requested workspace actions.";
   workingHistory.push({ role: "assistant", content: finalText });
+  appendAgentAction(workspace, { runId, type: "run_completed", timestamp: new Date().toISOString(), profile: profileKey(profile), executedTools, completedEdit, finalText: String(finalText).slice(0, 2000) });
   return {
     ok: true,
     finalText,
     appendedMessages: workingHistory.slice(historyStart),
     completedEdit,
     executedTools,
+    runId,
+    profile: profileKey(profile),
   };
 }
 

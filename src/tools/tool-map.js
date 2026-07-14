@@ -219,6 +219,77 @@ const ToolMap = (() => {
       meta: { label: "Outlining", badge: "outline", target: "path", mutates: false },
     },
     {
+      name: "get_map_overview",
+      description: "Return a compact, bounded overview of the current application behavior Map. Use this before querying a specific hypothesis instead of loading the full graph.",
+      parameters: { type: "object", properties: {} },
+      meta: { label: "Mapping", badge: "Map overview", target: "assessment Map", mutates: false },
+    },
+    {
+      name: "get_map_node",
+      description: "Return one Map node with its machine-readable fields, AI summary, variants, risk signals, evidence references, and scope status.",
+      parameters: { type: "object", properties: { id: { type: "string", description: "Stable Map node ID" } }, required: ["id"] },
+      meta: { label: "Inspecting", badge: "Map node", target: "id", mutates: false },
+    },
+    {
+      name: "get_map_neighbors",
+      description: "Return bounded neighboring nodes and relationship edges for a Map node. Out-of-scope relationships are explicitly flagged.",
+      parameters: { type: "object", properties: { id: { type: "string" }, edge_types: { type: "array", items: { type: "string" } }, min_confidence: { type: "number" } }, required: ["id"] },
+      meta: { label: "Tracing", badge: "Map neighbors", target: "id", mutates: false },
+    },
+    {
+      name: "find_map_paths",
+      description: "Find bounded directed paths between two Map nodes server-side. Use this for reachability and anonymous-to-sensitive route analysis instead of simulating paths from raw edges.",
+      parameters: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, max_hops: { type: "number" }, min_confidence: { type: "number" } }, required: ["from", "to"] },
+      meta: { label: "Finding paths", badge: "Map paths", target: "from", mutates: false },
+    },
+    {
+      name: "search_map_routes",
+      description: "Search observed and discovered Map routes by host, method, path, tag, or AI summary.",
+      parameters: { type: "object", properties: { pattern: { type: "string" }, tags: { type: "array", items: { type: "string" } } } },
+      meta: { label: "Searching", badge: "Map routes", target: "pattern", mutates: false },
+    },
+    {
+      name: "get_map_shared_objects",
+      description: "Return HMAC-protected shared-object correlations linking routes, with confidence and evidence IDs but without exposing raw identifier values.",
+      parameters: { type: "object", properties: { id: { type: "string", description: "Optional route node ID" } } },
+      meta: { label: "Correlating", badge: "Shared objects", target: "id", mutates: false },
+    },
+    {
+      name: "get_map_evidence",
+      description: "Fetch redacted request/response evidence by Traffic/Raw request ID. Authorization, cookie, and API-key headers are redacted before returning data to the agent.",
+      parameters: { type: "object", properties: { evidence_ids: { type: "array", items: { type: "string" } } }, required: ["evidence_ids"] },
+      meta: { label: "Reading", badge: "Map evidence", target: "evidence_ids", mutates: false },
+    },
+    {
+      name: "get_map_hypotheses",
+      description: "Return precomputed, explicitly untested candidate hypotheses such as possible IDOR patterns derived from graph structure and asymmetric authentication evidence.",
+      parameters: { type: "object", properties: { status: { type: "string" } } },
+      meta: { label: "Reviewing", badge: "Map hypotheses", target: "status", mutates: false },
+    },
+    {
+      name: "annotate_map_finding",
+      description: "Write an agent-asserted hypothesis/test result back into Map/agent-annotations.json with provenance. Refuses routes that are out of scope.",
+      parameters: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, hypothesis: { type: "string" }, routes: { type: "array", items: { type: "string" } }, basis: { type: "string" }, result: { type: "string" }, status: { type: "string" }, evidence_ids: { type: "array", items: { type: "string" } } }, required: ["hypothesis"] },
+      meta: { label: "Annotating", badge: "Map finding", target: "routes", mutates: true },
+    },
+    {
+      name: "record_hypothesis",
+      description: "Record a bounded, explicitly unconfirmed security hypothesis and the evidence needed to test it.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Stable hypothesis id" },
+          title: { type: "string", description: "Short hypothesis title" },
+          question: { type: "string", description: "Security question to answer" },
+          target: { type: "string", description: "In-scope asset or route under consideration" },
+          expected_signal: { type: "string", description: "What evidence would support or reject the hypothesis" },
+          evidence_ids: { type: "array", items: { type: "string" } },
+        },
+        required: ["question"],
+      },
+      meta: { label: "Recording", badge: "hypothesis", target: "question", mutates: false, capability: "evidence", risk: "evidence" },
+    },
+    {
       name: "run_command",
       description: "Run a workspace command and wait for it to finish. Use for tests, lint, build, or diagnostics.",
       parameters: {
@@ -274,7 +345,13 @@ const ToolMap = (() => {
     function: { name, description, parameters },
   }));
 
-  const TOOL_META = Object.fromEntries(TOOL_DEFS.map((tool) => [tool.name, tool.meta]));
+  const TOOL_META = Object.fromEntries(TOOL_DEFS.map((tool) => {
+    const name = tool.name;
+    const mutation = ["write_file", "create_file", "patch_file", "replace_in_file", "insert_in_file", "append_file", "delete_file"].includes(name);
+    const process = ["run_command", "start_process", "read_process", "stop_process"].includes(name);
+    const evidence = ["record_hypothesis", "annotate_map_finding"].includes(name);
+    return [name, { ...tool.meta, typed: true, capability: tool.meta.capability || (evidence ? "evidence" : mutation ? "workspace" : process ? "execute" : "observe"), risk: tool.meta.risk || (evidence ? "evidence" : mutation ? "workspace" : process ? "contextual" : "read"), requiresApproval: tool.meta.requiresApproval ?? (mutation || process) }];
+  }));
   const TOOL_NAMES = TOOL_DEFS.map((tool) => tool.name);
 
   function sanitizePath(raw) {
@@ -331,6 +408,10 @@ const ToolMap = (() => {
       callId: call.id,
       args,
       raw: call,
+      meta: TOOL_META[name],
+      risk: TOOL_META[name].risk,
+      capability: TOOL_META[name].capability,
+      requiresApproval: Boolean(TOOL_META[name].requiresApproval),
     };
 
     if (path) tool.file = path;
@@ -403,6 +484,17 @@ const ToolMap = (() => {
     if (args.url != null) args.url = sanitizeText(args.url);
     if (args.command != null) args.command = sanitizeText(args.command);
     if (args.id != null) args.id = sanitizeText(args.id);
+    if (args.from != null) args.from = sanitizeText(args.from);
+    if (args.to != null) args.to = sanitizeText(args.to);
+    if (args.pattern != null) args.pattern = sanitizeText(args.pattern);
+    for (const key of ["edge_types", "tags", "evidence_ids"]) {
+      if (args[key] != null) args[key] = Array.isArray(args[key]) ? args[key].map((value) => sanitizeText(value)).filter(Boolean).slice(0, 100) : [];
+    }
+    if (args.hypothesis != null) args.hypothesis = sanitizeText(args.hypothesis);
+    if (args.title != null) args.title = sanitizeText(args.title);
+    if (args.basis != null) args.basis = sanitizeText(args.basis);
+    if (args.result != null) args.result = sanitizeText(args.result);
+    if (args.status != null) args.status = sanitizeText(args.status);
     if (args.anchor != null) args.anchor = String(args.anchor);
     if (args.content != null) args.content = String(args.content);
     if (args.code != null) args.code = String(args.code);
@@ -452,6 +544,13 @@ const ToolMap = (() => {
     if (["read_process", "stop_process"].includes(toolName)) {
       if (!args.id) return validationError("Missing required id", "MISSING_ID");
     }
+
+    if (["get_map_node", "get_map_neighbors"].includes(toolName) && !args.id) return validationError("Missing required Map node id", "MISSING_MAP_NODE_ID");
+    if (toolName === "find_map_paths" && (!args.from || !args.to)) return validationError("Both from and to Map node IDs are required", "MISSING_MAP_PATH_ENDPOINTS");
+    if (toolName === "get_map_evidence" && (!Array.isArray(args.evidence_ids) || !args.evidence_ids.length)) return validationError("Missing required evidence_ids", "MISSING_EVIDENCE_IDS");
+    if (toolName === "annotate_map_finding" && !args.hypothesis) return validationError("Missing required hypothesis", "MISSING_HYPOTHESIS");
+    if (args.min_confidence != null) args.min_confidence = Math.max(0, Math.min(1, Number(args.min_confidence) || 0));
+    if (args.max_hops != null) args.max_hops = Math.max(1, Math.min(8, Math.round(Number(args.max_hops) || 5)));
 
     if (["write_file", "create_file", "append_file"].includes(toolName)) {
       const content = args.content ?? args.code;

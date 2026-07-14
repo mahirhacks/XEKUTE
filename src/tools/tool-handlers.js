@@ -17,6 +17,7 @@ function createToolHandlers(deps) {
     listProjectFiles,
     searchWeb,
     fetchWebPage,
+    assessmentMap,
   } = deps;
 
   function ok(toolName, mode, fields = {}) {
@@ -30,6 +31,15 @@ function createToolHandlers(deps) {
   function requireWorkspace(workspace, toolName) {
     if (!workspace) return fail(toolName, "No workspace open");
     return null;
+  }
+
+  function mapResult(workspace, toolName, mode, operation) {
+    if (!workspace) return requireWorkspace(workspace, toolName);
+    if (!assessmentMap || typeof operation !== "function") return fail(toolName, "Application Map tools are unavailable", {}, "MAP_UNAVAILABLE", false);
+    const result = operation(workspace);
+    if (result?.error) return fail(toolName, result.error, result, result.code || "MAP_QUERY_FAILED", false);
+    const { ok: _ok, ...fields } = result || {};
+    return ok(toolName, mode, { ...fields, content: JSON.stringify(fields, null, 2) });
   }
 
   function readFile(workspace, file) {
@@ -46,6 +56,68 @@ function createToolHandlers(deps) {
   }
 
   const TOOL_HANDLERS = {
+    async record_hypothesis({ workspace, args }) {
+      const missing = requireWorkspace(workspace, "record_hypothesis");
+      if (missing) return missing;
+      const question = String(args.question || "").trim();
+      if (!question) return fail("record_hypothesis", "A hypothesis question is required", {}, "MISSING_HYPOTHESIS", true);
+      const entry = {
+        id: String(args.id || `hyp-${Date.now()}`).slice(0, 120),
+        title: String(args.title || "Untitled security hypothesis").slice(0, 240),
+        question: question.slice(0, 1200),
+        target: String(args.target || "").slice(0, 500),
+        expectedSignal: String(args.expected_signal || "").slice(0, 1200),
+        evidenceIds: Array.isArray(args.evidence_ids) ? args.evidence_ids.map((value) => String(value).slice(0, 120)).slice(0, 50) : [],
+        status: "untested",
+        source: "agent",
+        recordedAt: new Date().toISOString(),
+      };
+      try {
+        const file = path.join(workspace, "logs", "agent-hypotheses.jsonl");
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
+        return ok("record_hypothesis", "hypothesis", { hypothesis: entry, file: "logs/agent-hypotheses.jsonl", content: `Recorded hypothesis ${entry.id}: ${entry.question}` });
+      } catch (error) {
+        return fail("record_hypothesis", error.message, {}, "HYPOTHESIS_LOG_FAILED", false);
+      }
+    },
+
+    async get_map_overview({ workspace }) {
+      return mapResult(workspace, "get_map_overview", "map_overview", (root) => assessmentMap.getOverview(root));
+    },
+
+    async get_map_node({ workspace, args }) {
+      return mapResult(workspace, "get_map_node", "map_node", (root) => assessmentMap.getNode(root, args.id));
+    },
+
+    async get_map_neighbors({ workspace, args }) {
+      return mapResult(workspace, "get_map_neighbors", "map_neighbors", (root) => assessmentMap.getNeighbors(root, args.id, { edgeTypes: args.edge_types, minConfidence: args.min_confidence }));
+    },
+
+    async find_map_paths({ workspace, args }) {
+      return mapResult(workspace, "find_map_paths", "map_paths", (root) => assessmentMap.findPaths(root, args.from, args.to, { maxHops: args.max_hops, minConfidence: args.min_confidence }));
+    },
+
+    async search_map_routes({ workspace, args }) {
+      return mapResult(workspace, "search_map_routes", "map_routes", (root) => assessmentMap.searchRoutes(root, args.pattern, { tags: args.tags }));
+    },
+
+    async get_map_shared_objects({ workspace, args }) {
+      return mapResult(workspace, "get_map_shared_objects", "map_shared_objects", (root) => assessmentMap.getSharedObjects(root, args.id));
+    },
+
+    async get_map_evidence({ workspace, args }) {
+      return mapResult(workspace, "get_map_evidence", "map_evidence", (root) => assessmentMap.getEvidence(root, args.evidence_ids));
+    },
+
+    async get_map_hypotheses({ workspace, args }) {
+      return mapResult(workspace, "get_map_hypotheses", "map_hypotheses", (root) => assessmentMap.getHypotheses(root, { status: args.status }));
+    },
+
+    async annotate_map_finding({ workspace, args }) {
+      return mapResult(workspace, "annotate_map_finding", "map_annotation", (root) => assessmentMap.annotateFinding(root, { ...args, evidenceIds: args.evidence_ids }));
+    },
+
     async find_files({ workspace, args }) {
       const missing = requireWorkspace(workspace, "find_files");
       if (missing) return missing;
@@ -457,6 +529,7 @@ function normalizeResult(result) {
     "lines_added", "lines_removed", "patches_applied", "fallback", "errorCode", "retryable",
     "errors", "scripts", "importantFiles", "topFolders", "verificationCommands", "symbols", "imports",
     "provider", "url", "finalUrl", "title", "contentType", "truncated",
+    "overview", "analysis", "graphMeta", "node", "scope", "edges", "neighbors", "paths", "routes", "objects", "evidence", "hypotheses", "annotation", "warnings", "missing",
   ]) {
     if (result[key] !== undefined) out[key] = result[key];
   }
