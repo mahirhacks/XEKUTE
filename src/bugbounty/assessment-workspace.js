@@ -1,6 +1,8 @@
 const crypto = require("crypto");
+const FindingGate = require("../agent/finding-gate");
+const PromptCompiler = require("../agent/prompt-compiler");
 
-const ASSESSMENT_VERSION = 3;
+const ASSESSMENT_VERSION = 4;
 const SECRET_NAME_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-auth-token|password|passwd|secret|token|access_token|refresh_token|api[_-]?key|client_secret)$/i;
 
 function redactStructuredSecrets(value) {
@@ -90,8 +92,8 @@ const ASSESSMENT_ITEM_FILES = {
   "filtered-traffic": "traffic/filtered.jsonl",
   evidence: "evidence/index.jsonl",
   services: "vulnerability-scans/services.json",
-  info: "vulnerability-scans/info.json",
-  easy: "vulnerability-scans/easy.json",
+  informational: "vulnerability-scans/info.json",
+  low: "vulnerability-scans/easy.json",
   medium: "vulnerability-scans/medium.json",
   high: "vulnerability-scans/high.json",
   critical: "vulnerability-scans/critical.json",
@@ -284,7 +286,7 @@ const RUN_TEMPLATE = {
   id: "",
   type: "assessment",
   status: "planned",
-  profile: "testing:analyze",
+  profile: "assist:planner",
   operator: "",
   createdAt: "",
   startedAt: "",
@@ -328,11 +330,12 @@ function findingTemplate(severity) {
       cweIds: [],
       owaspCategories: [],
       wstgIds: [],
+      asvsIds: [],
       capecIds: [],
       mitreTechniqueIds: [],
     },
     cvss: {
-      version: "3.1",
+      version: "4.0",
       vector: "",
       baseScore: null,
       temporalScore: null,
@@ -372,6 +375,20 @@ function findingTemplate(severity) {
       retestedBy: "",
       notes: "",
     },
+    verification: {
+      verdict: "not-run",
+      reproductionSuccessful: false,
+      verifierModel: "",
+      verifiedAt: "",
+      supportedClaims: [],
+      unsupportedClaims: [],
+      missingEvidence: [],
+      falsePositiveChecks: [],
+      contradictoryEvidence: false,
+      rationale: "",
+    },
+    claims: [],
+    limitations: [],
     disclosure: {
       duplicateOf: "",
       externalTicket: "",
@@ -393,7 +410,7 @@ function findingBucket(severity) {
 }
 
 const checklistCheck = (id, category, title, reference, extra = {}) => ({
-  id, category, title, objective: "", targetIds: [], status: "not-started", tester: "",
+  id, category, title, objective: "", targetIds: [], status: "not-tested", tester: "",
   startedAt: "", completedAt: "", procedure: [], result: "", findingIds: [], evidence: [], notes: "",
   references: reference ? [reference] : [], ...extra,
 });
@@ -507,6 +524,14 @@ const JSON_TEMPLATES = {
       maximumCharactersPerMessage: 14000,
       defaultChatMode: "ask",
     },
+    aiModels: {
+      verifierModel: "",
+      requireQualifiedModelForTestAgent: true,
+      allowUnqualifiedTestAgentDeveloperOverride: false,
+      qualification: {},
+      temperatures: { planner: 0.1, agent: 0.1, ask: 0.2, verifier: 0, reporter: 0 },
+    },
+    aiPrompts: PromptCompiler.defaults(),
     authorization: {
       confirmed: false,
       authorizedBy: "",
@@ -785,8 +810,8 @@ const JSON_TEMPLATES = {
     services: [],
     statistics: { total: 0, current: 0, outdated: 0, endOfLife: 0, unknown: 0 },
   },
-  "vulnerability-scans/info.json": findingBucket("info"),
-  "vulnerability-scans/easy.json": findingBucket("easy"),
+  "vulnerability-scans/info.json": findingBucket("informational"),
+  "vulnerability-scans/easy.json": findingBucket("low"),
   "vulnerability-scans/medium.json": findingBucket("medium"),
   "vulnerability-scans/high.json": findingBucket("high"),
   "vulnerability-scans/critical.json": findingBucket("critical"),
@@ -802,10 +827,10 @@ const JSON_TEMPLATES = {
   "penetration-testing/wstg-checklist.json": {
     schemaVersion: ASSESSMENT_VERSION,
     framework: { name: "OWASP Web Security Testing Guide", shortName: "WSTG", version: "5.0-development", stableVersion: "4.2", sourceUrl: "https://owasp.org/www-project-web-security-testing-guide/latest/", top10Version: "2025", top10SourceUrl: "https://owasp.org/Top10/", checkedAt: "2026-07-11" },
-    assessment: { targetIds: [], startedAt: "", completedAt: "", operator: "", reviewStatus: "not-started" },
-    progress: { total: WSTG_CHECKS.length + OWASP_TOP_10_2025.length, notStarted: WSTG_CHECKS.length + OWASP_TOP_10_2025.length, inProgress: 0, passed: 0, failed: 0, notApplicable: 0, blocked: 0 },
+    assessment: { targetIds: [], startedAt: "", completedAt: "", operator: "", reviewStatus: "not-tested" },
+    progress: { total: WSTG_CHECKS.length + OWASP_TOP_10_2025.length, notTested: WSTG_CHECKS.length + OWASP_TOP_10_2025.length, inProgress: 0, passed: 0, failed: 0, notApplicable: 0, blocked: 0 },
     checkTemplate: {
-      id: "", category: "", title: "", objective: "", targetIds: [], status: "not-started", tester: "",
+      id: "", category: "", title: "", objective: "", targetIds: [], status: "not-tested", tester: "",
       startedAt: "", completedAt: "", procedure: [], result: "", findingIds: [], evidence: [], notes: "", references: [],
     },
     categories: [...new Set(WSTG_CHECKS.map((check) => check.category)), "OWASP Top 10:2025"],
@@ -813,11 +838,11 @@ const JSON_TEMPLATES = {
   },
   "penetration-testing/asvs-checklist.json": {
     schemaVersion: ASSESSMENT_VERSION,
-    framework: { name: "OWASP Application Security Verification Standard", shortName: "ASVS", version: "5.0", sourceUrl: "https://github.com/OWASP/ASVS", checkedAt: "2026-07-12" },
-    assessment: { targetIds: [], startedAt: "", completedAt: "", operator: "", reviewStatus: "not-started" },
-    progress: { total: ASVS_CHECKS.length, notStarted: ASVS_CHECKS.length, inProgress: 0, passed: 0, failed: 0, notApplicable: 0, blocked: 0 },
+    framework: { name: "OWASP Application Security Verification Standard", shortName: "ASVS", version: "5.0.0", sourceUrl: "https://github.com/OWASP/ASVS", checkedAt: "2026-07-12" },
+    assessment: { targetIds: [], startedAt: "", completedAt: "", operator: "", reviewStatus: "not-tested" },
+    progress: { total: ASVS_CHECKS.length, notTested: ASVS_CHECKS.length, inProgress: 0, passed: 0, failed: 0, notApplicable: 0, blocked: 0 },
     checkTemplate: {
-      id: "", category: "", title: "", objective: "", targetIds: [], status: "not-started", tester: "",
+      id: "", category: "", title: "", objective: "", targetIds: [], status: "not-tested", tester: "",
       startedAt: "", completedAt: "", procedure: [], result: "", findingIds: [], evidence: [], notes: "", references: [],
     },
     categories: [...new Set(ASVS_CHECKS.map((check) => check.category))],
@@ -839,12 +864,12 @@ const JSON_TEMPLATES = {
   "penetration-testing/coverage.json": {
     schemaVersion: ASSESSMENT_VERSION,
     frameworks: [
-      { id: "wstg", name: "OWASP WSTG", source: "penetration-testing/wstg-checklist.json", status: "not-started" },
-      { id: "asvs", name: "OWASP ASVS", source: "penetration-testing/asvs-checklist.json", status: "not-started" },
-      { id: "owasp-top-10", name: "OWASP Top 10", source: "penetration-testing/wstg-checklist.json", status: "not-started" },
-      { id: "mitre-attack", name: "MITRE ATT&CK", source: "penetration-testing/mitre-checklist.json", status: "not-started" },
+      { id: "wstg", name: "OWASP WSTG 4.2", version: "4.2", source: "penetration-testing/wstg-checklist.json", status: "not-tested" },
+      { id: "asvs", name: "OWASP ASVS 5.0.0", version: "5.0.0", source: "penetration-testing/asvs-checklist.json", status: "not-tested" },
+      { id: "owasp-top-10", name: "OWASP Top 10", version: "2025", source: "penetration-testing/wstg-checklist.json", status: "not-tested" },
+      { id: "mitre-attack", name: "MITRE ATT&CK (supplemental threat context)", version: "19.1", source: "penetration-testing/mitre-checklist.json", status: "not-tested", supplemental: true },
     ],
-    matrixTemplate: { id: "", framework: "", control: "", title: "", status: "not-started", reason: "", targetIds: [], findingIds: [], evidenceIds: [], lastTestedAt: "", tester: "", notes: "" },
+    matrixTemplate: { id: "", framework: "", frameworkVersion: "", control: "", title: "", status: "not-tested", procedure: [], reason: "", targetIds: [], findingIds: [], evidenceIds: [], lastTestedAt: "", tester: "", notes: "" },
     matrix: [],
     summary: { total: 0, tested: 0, passed: 0, failed: 0, blocked: 0, notApplicable: 0, notTested: 0 },
     gaps: [],
@@ -855,7 +880,7 @@ const JSON_TEMPLATES = {
     runTemplate: RUN_TEMPLATE,
     activeRunId: "",
     runs: [],
-    defaults: { profile: "testing:analyze", requireApproval: true, pauseBetweenActions: false, retainToolOutput: true },
+    defaults: { profile: "assist:planner", requireApproval: true, pauseBetweenActions: false, retainToolOutput: true },
     statistics: { total: 0, planned: 0, running: 0, paused: 0, completed: 0, stopped: 0, failed: 0 },
   },
 };
@@ -863,10 +888,10 @@ const JSON_TEMPLATES = {
 const JSONL_TEMPLATES = {
   "traffic/raw.jsonl": { recordType: "pointer-log-schema", schemaVersion: ASSESSMENT_VERSION, fields: ["timestamp", "requestId", "targetId", "direction", "protocol", "method", "url", "statusCode", "headersRedacted", "bodyFile", "durationMs", "source", "tags"] },
   "traffic/filtered.jsonl": { recordType: "pointer-log-schema", schemaVersion: ASSESSMENT_VERSION, fields: ["timestamp", "requestId", "targetId", "filterReason", "findingIds", "method", "url", "statusCode", "parameterNames", "contentType", "evidenceFiles", "notes", "tags"] },
-  "logs/agent-actions.jsonl": { recordType: "pointer-agent-action-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "tool", "target", "risk", "allowed", "reason", "ok", "errorCode", "output"] },
-  "logs/agent-hypotheses.jsonl": { recordType: "pointer-agent-hypothesis-log", schemaVersion: ASSESSMENT_VERSION, fields: ["id", "title", "question", "target", "expectedSignal", "evidenceIds", "status", "source", "recordedAt"] },
+  "logs/agent-actions.jsonl": { recordType: "pointer-agent-action-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "phase", "tool", "target", "risk", "allowed", "reason", "ok", "errorCode", "output", "claim"] },
+  "logs/agent-hypotheses.jsonl": { recordType: "pointer-agent-hypothesis-log", schemaVersion: ASSESSMENT_VERSION, fields: ["id", "title", "question", "target", "expectedSignal", "rejectingSignal", "proposedTechnique", "evidencePlan", "stopConditions", "evidenceIds", "status", "source", "recordedAt"] },
   "logs/agent-runs.jsonl": { recordType: "pointer-agent-run-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "status", "scopeSnapshotSha256", "configurationSnapshotSha256", "approvedBy", "approvalReference", "stopReason"] },
-  "logs/agent-approvals.jsonl": { recordType: "pointer-agent-approval-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "operator", "profile", "decision", "reason", "scope", "expiresAt"] },
+  "logs/agent-approvals.jsonl": { recordType: "pointer-agent-approval-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "operator", "profile", "actionId", "tool", "target", "capability", "risk", "decision", "reason", "scope", "expiresAt"] },
   "logs/tool-output.jsonl": { recordType: "pointer-tool-output-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "tool", "version", "command", "target", "exitCode", "outputPath", "sha256", "redacted", "truncated"] },
 };
 
@@ -971,6 +996,31 @@ function mergeMissingFields(actual, expected, prefix = "") {
 }
 
 function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
+  function atomicWriteJson(target, value) {
+    const temporary = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+    const backup = `${target}.bak`;
+    const serialized = `${JSON.stringify(value, null, 2)}\n`;
+    const descriptor = fs.openSync(temporary, "w", 0o600);
+    try {
+      fs.writeFileSync(descriptor, serialized, { encoding: "utf8" });
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    JSON.parse(fs.readFileSync(temporary, "utf8"));
+    if (fs.existsSync(target)) fs.copyFileSync(target, backup);
+    try {
+      fs.renameSync(temporary, target);
+    } catch (error) {
+      if (!fs.existsSync(target)) throw error;
+      fs.unlinkSync(target);
+      try { fs.renameSync(temporary, target); }
+      catch (replaceError) {
+        if (fs.existsSync(backup)) fs.copyFileSync(backup, target);
+        throw replaceError;
+      }
+    }
+  }
   function projectRedactionMarker(root) {
     const target = path.join(root, "Map", ".correlation-key");
     let key;
@@ -1166,9 +1216,29 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
           parsed.schemaVersion = ASSESSMENT_VERSION;
           merged.changed = true;
         }
+        if (["findings/findings.json", "vulnerability-scans/info.json", "vulnerability-scans/easy.json", "vulnerability-scans/medium.json", "vulnerability-scans/high.json", "vulnerability-scans/critical.json"].includes(relativePath)) {
+          if (parsed.severity === "info") { parsed.severity = "informational"; merged.changed = true; }
+          if (parsed.severity === "easy") { parsed.severity = "low"; merged.changed = true; }
+          for (const finding of Array.isArray(parsed.findings) ? parsed.findings : []) {
+            const normalizedSeverity = FindingGate.normalizeSeverity(finding.severity);
+            if (normalizedSeverity !== finding.severity) { finding.severity = normalizedSeverity; merged.changed = true; }
+            if (finding.cvss?.version === "3.1") finding.cvss.legacy = true;
+          }
+        }
+        if (["penetration-testing/wstg-checklist.json", "penetration-testing/asvs-checklist.json"].includes(relativePath)) {
+          for (const check of Array.isArray(parsed.checks) ? parsed.checks : []) {
+            if (check.status === "not-started") { check.status = "not-tested"; merged.changed = true; }
+          }
+          if (parsed.assessment?.reviewStatus === "not-started") { parsed.assessment.reviewStatus = "not-tested"; merged.changed = true; }
+        }
+        if (relativePath === "penetration-testing/coverage.json") {
+          for (const item of [...(Array.isArray(parsed.frameworks) ? parsed.frameworks : []), ...(Array.isArray(parsed.matrix) ? parsed.matrix : [])]) {
+            if (item.status === "not-started") { item.status = "not-tested"; merged.changed = true; }
+          }
+        }
         if (merged.blocked.length) blocked.push({ path: relativePath, reason: "schema_type_mismatch", fields: merged.blocked });
         if (merged.changed) {
-          fs.writeFileSync(target, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+          atomicWriteJson(target, parsed);
           updated.push(relativePath);
         }
       }
@@ -1264,16 +1334,30 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
     const target = path.join(verification.root, "findings", "findings.json");
     try {
       const document = JSON.parse(fs.readFileSync(target, "utf8"));
-      const severity = ["info", "easy", "medium", "high", "critical", "unassigned"].includes(String(finding.severity || "").toLowerCase()) ? String(finding.severity).toLowerCase() : "unassigned";
+      const severity = FindingGate.normalizeSeverity(finding.severity);
       const entry = { ...findingTemplate(severity), ...finding, severity };
       entry.id = String(entry.id || `finding-${Date.now().toString(36)}`).slice(0, 160);
       entry.status = String(entry.status || "draft");
       entry.confidence = String(entry.confidence || "unconfirmed");
       entry.discoveredAt = entry.discoveredAt || now().toISOString();
       entry.evidence = Array.isArray(entry.evidence) ? entry.evidence.map(String).slice(0, 100) : [];
-      if (["confirmed", "reported", "remediated", "retest-required"].includes(entry.status) && !entry.evidence.length) {
-        return { error: "Confirmed or reported findings require at least one evidence ID.", code: "EVIDENCE_REQUIRED" };
+      const evidenceResult = readJsonl(verification.root, "evidence/index.jsonl", { limit: 2000 });
+      for (const record of evidenceResult.records || []) {
+        if (!record.filePath) continue;
+        try {
+          const artifact = path.resolve(verification.root, ...String(record.filePath).replace(/\\/g, "/").split("/"));
+          const relative = path.relative(verification.root, artifact);
+          record.hashValid = !relative.startsWith("..") && !path.isAbsolute(relative) && fs.existsSync(artifact) && sha256(fs.readFileSync(artifact)) === record.sha256;
+        } catch { record.hashValid = false; }
       }
+      const scopeDocument = JSON.parse(fs.readFileSync(path.join(verification.root, "scope", "in-scope.json"), "utf8"));
+      const outDocument = JSON.parse(fs.readFileSync(path.join(verification.root, "scope", "out-of-scope.json"), "utf8"));
+      const gate = FindingGate.validateFindingCandidate(entry, {
+        evidenceRecords: evidenceResult.records || [],
+        scope: { targets: scopeDocument.targets || [], wildcardRules: scopeDocument.wildcardRules || [], excludedTargets: outDocument.assets || [] },
+      });
+      if (!gate.ok) return { error: gate.errors.map((item) => item.message).join(" "), code: gate.errors[0]?.code || "FINDING_GATE_FAILED", gate };
+      Object.assign(entry, gate.candidate);
       const duplicate = (document.findings || []).find((current) => current.id === entry.id);
       if (duplicate) return { error: `Finding already exists: ${entry.id}`, code: "FINDING_EXISTS", finding: duplicate };
       const normalized = (value) => String(value || "").trim().toLowerCase();
@@ -1284,7 +1368,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
       if (duplicateByFingerprint) return { ok: true, duplicateOf: duplicateByFingerprint.id, finding: duplicateByFingerprint, path: "findings/findings.json" };
       document.findings = [...(Array.isArray(document.findings) ? document.findings : []), entry];
       document.statistics = { ...(document.statistics || {}), total: document.findings.length };
-      fs.writeFileSync(target, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+      atomicWriteJson(target, document);
       return { ok: true, finding: entry, path: "findings/findings.json" };
     } catch (error) { return { error: error.message, code: "FINDING_WRITE_FAILED" }; }
   }
@@ -1309,7 +1393,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
       document.runs = [...(Array.isArray(document.runs) ? document.runs : []), entry];
       document.activeRunId = entry.status === "running" ? entry.id : document.activeRunId || "";
       document.statistics = { ...(document.statistics || {}), total: document.runs.length };
-      fs.writeFileSync(target, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+      atomicWriteJson(target, document);
       return { ok: true, run: entry, path: "runs/runs.json" };
     } catch (error) { return { error: error.message, code: "RUN_WRITE_FAILED" }; }
   }
@@ -1324,8 +1408,8 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
       if (index < 0) return { error: `Run not found: ${runId}`, code: "RUN_NOT_FOUND" };
       const allowed = ["status", "startedAt", "completedAt", "approvedBy", "approvalReference", "stopReason", "actions", "hypotheses", "findings", "evidenceIds", "coverage", "notes"];
       document.runs[index] = { ...document.runs[index], ...Object.fromEntries(allowed.filter((key) => Object.prototype.hasOwnProperty.call(patch, key)).map((key) => [key, patch[key]])) };
-      if (["completed", "stopped", "failed"].includes(document.runs[index].status) && document.activeRunId === runId) document.activeRunId = "";
-      fs.writeFileSync(target, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+      if (["completed", "inconclusive", "stopped", "failed"].includes(document.runs[index].status) && document.activeRunId === runId) document.activeRunId = "";
+      atomicWriteJson(target, document);
       return { ok: true, run: document.runs[index], path: "runs/runs.json" };
     } catch (error) { return { error: error.message, code: "RUN_UPDATE_FAILED" }; }
   }
@@ -1346,6 +1430,26 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
     const stamp = now().toISOString();
     const safeTitle = String(engagement.engagement?.name || verification.name || "Security Assessment");
     const findingRows = (findings.findings || []).map((finding) => `| ${finding.id || ""} | ${String(finding.title || "").replace(/\|/g, "\\|")} | ${finding.severity || ""} | ${finding.confidence || ""} | ${finding.status || ""} | ${(finding.evidence || []).join(", ")} |`);
+    const coverageItems = Array.isArray(coverage.matrix) ? coverage.matrix : [];
+    const positiveControls = coverageItems.filter((item) => item.status === "passed");
+    const untestedItems = coverageItems.filter((item) => ["not-tested", "in-progress", "blocked"].includes(item.status));
+    const details = (findings.findings || []).flatMap((finding) => [
+      `### ${finding.id || "Unnumbered"}: ${finding.title || "Untitled finding"}`,
+      "",
+      `- Affected asset/component: ${finding.asset?.url || finding.asset?.host || "not recorded"}${finding.asset?.endpoint ? ` ${finding.asset.endpoint}` : ""}`,
+      `- Preconditions/authentication state: ${(Array.isArray(finding.prerequisites) ? finding.prerequisites.join("; ") : finding.preconditions) || finding.authenticationState || "not recorded"}`,
+      `- Expected behavior: ${finding.reproduction?.expectedResult || "not recorded"}`,
+      `- Observed behavior: ${finding.reproduction?.observedResult || "not recorded"}`,
+      `- Evidence IDs: ${(finding.evidence || []).join(", ") || "none"}`,
+      `- Technical impact: ${finding.impact?.technical || finding.technicalImpact || "not recorded"}`,
+      `- Business impact: ${finding.impact?.business || finding.businessImpact || "not recorded"}`,
+      `- Confidence/verifier: ${finding.confidence || "unconfirmed"}; ${finding.verification?.verdict || "not run"}`,
+      `- References: ${[...(finding.classification?.cweIds || []), ...(finding.classification?.wstgIds || []), ...(finding.classification?.asvsIds || []), ...(finding.classification?.capecIds || []), ...(finding.classification?.mitreTechniqueIds || [])].filter(Boolean).join(", ") || "none"}`,
+      `- Remediation: ${finding.remediation?.recommendation || (typeof finding.remediation === "string" ? finding.remediation : "") || "not recorded"}`,
+      `- Retest criteria/status: ${finding.validation?.retestCriteria || finding.retestCriteria || finding.validation?.retestStatus || "not recorded"}`,
+      `- Limitations/disclosure: ${(finding.limitations || []).join("; ") || "none recorded"}; ${finding.disclosure?.vendorStatus || finding.disclosureState || "not recorded"}`,
+      "",
+    ]);
     const report = [
       `# ${safeTitle}`,
       "",
@@ -1369,11 +1473,25 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
       `- Testing windows: ${(engagement.rulesOfEngagement?.testingWindows || []).join(", ") || "not configured"}`,
       `- Rate/concurrency: ${engagement.rulesOfEngagement?.requestsPerSecond || 0} req/s, ${engagement.rulesOfEngagement?.maximumConcurrency || 1} concurrent`,
       "",
+      "## Methodology",
+      "",
+      "- Planning, execution, and post-execution follow the NIST SP 800-115 assessment lifecycle.",
+      "- Web and API coverage is tracked against OWASP WSTG 4.2 and OWASP ASVS 5.0.0.",
+      "- MITRE ATT&CK mappings are supplemental adversary context and do not prove application-testing coverage.",
+      "- Scanner output is treated as a lead until reproduction, evidence, false-positive review, and any required independent verification pass.",
+      "",
       "## Findings",
       "",
       "| ID | Title | Severity | Confidence | Status | Evidence |",
       "| --- | --- | --- | --- | --- | --- |",
       ...(findingRows.length ? findingRows : ["| — | No findings recorded | — | — | — | — |"]),
+      "",
+      "## Detailed Findings",
+      "",
+      ...(details.length ? details : ["No detailed findings were recorded.", ""]),
+      "## Positive Control Observations",
+      "",
+      ...(positiveControls.length ? positiveControls.map((item) => `- ${item.id || item.control || "procedure"}: no issue was observed under the recorded procedure and tested conditions (evidence: ${(item.evidenceIds || []).join(", ") || "not linked"}).`) : ["- No passed control observations are recorded."]),
       "",
       "## Coverage",
       "",
@@ -1384,9 +1502,28 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
       `- Not applicable: ${coverage.summary?.notApplicable || 0}`,
       `- Not tested: ${coverage.summary?.notTested || 0}`,
       "",
+      "### Untested and blocked areas",
+      "",
+      ...(untestedItems.length ? untestedItems.map((item) => `- ${item.id || item.control || "coverage item"}: ${item.status}${item.reason ? ` — ${item.reason}` : ""}`) : ["- No matrix-level gaps are recorded; verify checklist-level coverage separately."]),
+      "",
+      "## Risk Methodology and Remediation Priorities",
+      "",
+      "- New findings use CVSS 4.0 where sufficient metrics exist; legacy CVSS 3.1 records remain identified as legacy.",
+      "- Prioritize verified critical/high findings first, then exposed medium findings and systemic control gaps. Informational and low observations remain context-dependent.",
+      "- Technical severity, business impact, exploit preconditions, confidence, and verifier status are reported separately.",
+      "",
+      "## Retest Status",
+      "",
+      `- Findings requiring retest: ${(findings.findings || []).filter((finding) => ["retest-required", "remediated"].includes(finding.status)).length}`,
+      `- Closed after retest: ${(findings.findings || []).filter((finding) => finding.status === "closed").length}`,
+      "",
       "## Limitations and Retest Notes",
       "",
-      "This export is generated from the current local assessment records. Validate scope, evidence, and retest status before client delivery.",
+      `- Untested coverage items: ${coverage.summary?.notTested || 0}`,
+      `- Blocked coverage items: ${coverage.summary?.blocked || 0}`,
+      `- Inconclusive or stopped runs: ${(runs.runs || []).filter((run) => ["inconclusive", "stopped", "failed"].includes(run.status)).length}`,
+      "- This export is generated from current local records; validate scope, evidence integrity, disclosure state, and retest status before client delivery.",
+      "- A passed procedure or no-issue observation means only that no issue was observed under the documented tested conditions. It does not guarantee the absence of vulnerabilities.",
       "",
     ].join("\n");
     try {

@@ -129,12 +129,19 @@ const legacyApi = {
   summarizeContext: (payload) => ipcRenderer.invoke("ollama:summarizeContext", payload),
   chat: (payload) => ipcRenderer.invoke("ollama:chat", payload),
   agentRun: (payload) => ipcRenderer.invoke("agent:run", payload),
+  agentQualifyModel: (payload) => ipcRenderer.invoke("agent:qualifyModel", payload),
+  agentVerifyFinding: (payload) => ipcRenderer.invoke("agent:verifyFinding", payload),
+  agentResolveApproval: (payload) => ipcRenderer.invoke("agent:resolveApproval", payload),
   abortChat: () => ipcRenderer.invoke("ollama:abort"),
   onToken: (cb) => ipcRenderer.on("ollama:token", (_e, token) => cb(token)),
   onThinking: (cb) => ipcRenderer.on("ollama:thinking", (_e, token) => cb(token)),
   onToolCall: (cb) => ipcRenderer.on("ollama:toolcall", (_e, calls) => cb(calls)),
   onDone: (cb) => ipcRenderer.on("ollama:done", (_e, payload) => cb(payload ?? {})),
-  onAgentEvent: (cb) => ipcRenderer.on("agent:event", (_e, payload) => cb(payload ?? {})),
+  onAgentEvent: (cb) => {
+    const listener = (_event, payload) => cb(payload ?? {});
+    ipcRenderer.on("agent:event", listener);
+    return () => ipcRenderer.removeListener("agent:event", listener);
+  },
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
 };
 
@@ -260,6 +267,9 @@ const pointerApi = Object.freeze({
   }),
   agent: Object.freeze({
     run: resultCall(legacyApi.agentRun),
+    qualifyModel: resultCall(legacyApi.agentQualifyModel),
+    verifyFinding: resultCall(legacyApi.agentVerifyFinding),
+    resolveApproval: resultCall(legacyApi.agentResolveApproval),
     onEvent: (callback) => subscribe("agent:event", callback),
   }),
   settings: Object.freeze({

@@ -158,3 +158,65 @@ test("ToolMap validates and bounds web research arguments", () => {
   assert.equal(page.args.url, "https://example.com");
   assert.equal(page.args.max_chars, 30000);
 });
+
+test("ToolMap accepts only approved schema-managed ingestion resources", () => {
+  const valid = ToolMap.validateToolCall("ingest_assessment_records", {
+    resource: "endpoints",
+    source: "katana",
+    records: [{ method: "GET", url: "https://example.test/" }],
+  });
+  assert.equal(valid.ok, true);
+  assert.equal(ToolMap.TOOL_META.ingest_assessment_records.capability, "evidence");
+
+  const traffic = ToolMap.validateToolCall("ingest_assessment_records", {
+    resource: "traffic",
+    source: "agent",
+    records: [{ url: "https://example.test/" }],
+  });
+  assert.equal(traffic.ok, false);
+  assert.equal(traffic.code, "RESOURCE_NOT_ALLOWED");
+});
+
+test("Toolbox uses a bundled Codicon for Nmap", () => {
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "renderer.js"), "utf8");
+  const codicons = fs.readFileSync(path.join(__dirname, "..", "node_modules", "@vscode", "codicons", "dist", "codicon.css"), "utf8");
+  assert.match(renderer, /nmap:\s*"codicon-server-process"/);
+  assert.match(codicons, /\.codicon-server-process:before/);
+  assert.doesNotMatch(renderer, /nmap:\s*"codicon-network"/);
+});
+
+test("Toolbox exposes the Firewall and WAF Analysis set with bundled icons", () => {
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "renderer.js"), "utf8");
+  const codicons = fs.readFileSync(path.join(__dirname, "..", "node_modules", "@vscode", "codicons", "dist", "codicon.css"), "utf8");
+  assert.match(renderer, /category:\s*"Firewall & WAF Analysis"/);
+  for (const [tool, icon] of [["wafw00f", "shield"], ["nmap-firewall", "server-process"], ["hping3", "pulse"], ["traceroute", "git-merge"]]) {
+    assert.match(renderer, new RegExp(`${tool.replace("-", "\\-")}[^\\n]+codicon-${icon}`));
+    assert.match(codicons, new RegExp(`\\.codicon-${icon}:before`));
+  }
+});
+
+test("tool handlers deny generic mutations of every Core assessment directory", async () => {
+  const handlers = createToolHandlers({
+    fs,
+    path,
+    resolveWorkspaceTarget: () => ({ target: "unused" }),
+    editWorkspaceFile: async () => ({ ok: true }),
+    deleteWorkspaceFile: () => ({ ok: true }),
+    runWorkspaceCommand: async () => ({ ok: true }),
+    startWorkspaceProcess: () => ({ ok: true }),
+  });
+  for (const protectedPath of [
+    "scope/in-scope.json",
+    "recon/passive-recon.json",
+    "enumeration/endpoints.json",
+    "traffic/raw.jsonl",
+    "vulnerability-scans/high.json",
+  ]) {
+    const result = await handlers.executeToolCall({
+      workspace: process.cwd(),
+      toolCall: { function: { name: "write_file", arguments: { path: protectedPath, content: "{}" } } },
+    });
+    assert.equal(result.ok, false, protectedPath);
+    assert.equal(result.errorCode, "TYPED_ASSESSMENT_MUTATION_REQUIRED", protectedPath);
+  }
+});

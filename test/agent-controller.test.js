@@ -83,6 +83,7 @@ test("runAgentTurn keeps calling tools until multi-file web requests are complet
     sendEvent() {},
     async runModelRound(payload) {
       roundPayloads.push(payload);
+      payload.onThinking?.(`reasoning-round-${round + 1}\n`);
       const response = responses[round];
       round += 1;
       return response;
@@ -114,6 +115,8 @@ test("runAgentTurn keeps calling tools until multi-file web requests are complet
     ["index.html", "styles.css", "script.js"],
   );
   assert.match(result.finalText, /styles\.css/);
+  assert.match(result.thinking, /reasoning-round-1/);
+  assert.match(result.thinking, /reasoning-round-5/);
   assert.ok(roundPayloads[0].tools.length > 0);
   assert.ok(roundPayloads[1].tools.length > 0);
   assert.ok(roundPayloads[2].tools.length > 0);
@@ -130,20 +133,53 @@ test("runAgentTurn keeps calling tools until multi-file web requests are complet
   assert.ok(verificationMessage, "expected a verification reminder after code edits");
 });
 
+test("analysis runs request a final synthesis when a model goes silent after a read tool", async () => {
+  const responses = [
+    { fullText: "", toolCalls: [toolCall("read_file", { path: "Map/application-map.json" })] },
+    { fullText: "", toolCalls: [] },
+    { fullText: "Evidence-backed Map analysis.", toolCalls: [] },
+  ];
+  let round = 0;
+  const result = await runAgentTurn({
+    workspace: "G:/Pointer/tmp",
+    model: "reasoning-model",
+    numCtx: 4096,
+    thinking: true,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [],
+    contextSummary: "",
+    dirMap: "Map/application-map.json\n",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "Check the Map and analyze it",
+    sendEvent() {},
+    async runModelRound() { return responses[round++]; },
+    async executeToolCall() {
+      return { ok: true, mode: "read", file: "Map/application-map.json", content: "{}", summary: "Read Map" };
+    },
+    findWorkspaceFiles() { return { ok: true, results: [] }; },
+    searchWorkspaceIndex() { return { ok: true, results: [] }; },
+  });
+  assert.equal(round, 3);
+  assert.match(result.finalText, /Evidence-backed Map analysis/);
+});
+
 test("mode prompts and tool lists are distinct and read-only modes are enforced", async () => {
   const agentPrompt = buildSystemContext({ mode: "agent", numCtx: 4096, userMessage: "Fix it" });
   const planPrompt = buildSystemContext({ mode: "plan", numCtx: 4096, userMessage: "Plan it" });
   const askPrompt = buildSystemContext({ mode: "ask", numCtx: 4096, userMessage: "Explain it" });
-  assert.match(agentPrompt, /AGENT MODE/);
-  assert.match(planPrompt, /PLAN MODE/);
-  assert.match(askPrompt, /ASK MODE/);
-  assert.match(agentPrompt, /authorized pentest operator/i);
-  assert.match(agentPrompt, /scanner output as leads/i);
-  assert.match(agentPrompt, /stop on unexpected impact/i);
-  assert.match(planPrompt, /hypothesis-driven test plan/i);
-  assert.match(planPrompt, /stop condition/i);
-  assert.match(askPrompt, /confirmed vulnerability/i);
-  assert.match(askPrompt, /remains unverified/i);
+  assert.match(agentPrompt, /SAFE AGENT/);
+  assert.match(planPrompt, /SAFE PLANNER/);
+  assert.match(askPrompt, /SAFE ASK/);
+  assert.match(agentPrompt, /authorized web, API, and external-perimeter/i);
+  assert.match(agentPrompt, /scanner signature/i);
+  assert.match(agentPrompt, /unexpected impact/i);
+  assert.match(planPrompt, /hypothesis-driven plan/i);
+  assert.match(planPrompt, /completion gate/i);
+  assert.match(askPrompt, /verified claims/i);
+  assert.match(askPrompt, /missing evidence/i);
 
   const planTools = filterToolsForMode(ToolMap.TOOLS, "plan");
   assert.ok(planTools.length > 0);
@@ -188,7 +224,7 @@ test("mode prompts and tool lists are distinct and read-only modes are enforced"
 
   assert.equal(result.ok, true);
   assert.equal(executed, 0);
-  assert.match(roundPayloads[0].messages[0].content, /ASK MODE/);
+  assert.match(roundPayloads[0].messages[0].content, /SAFE ASK/);
   assert.ok(roundPayloads[0].tools.every((tool) => !ToolMap.isMutating(tool.function.name)));
 });
 

@@ -19,6 +19,7 @@ const ToolParser = (() => {
   });
   const LEGACY_PROFILE_KEYS = { ask: "assist:observer", plan: "assist:planner", agent: "assist:executor" };
   function normalizeProfile(familyOrMode = "assist", mode = "executor") {
+    if (globalThis.PointerPromptCompiler) return globalThis.PointerPromptCompiler.normalizeProfile(familyOrMode, mode);
     const family = String(familyOrMode || "").toLowerCase();
     const selected = String(mode || "").toLowerCase();
     const key = family.includes(":") ? family : selected.includes(":") ? selected : `${family}:${selected}`;
@@ -210,6 +211,10 @@ const ToolParser = (() => {
     },
   ];
 
+  /* Deprecated prompt text retained as a non-executable migration reference until
+     old saved renderer sessions have been upgraded. The compiler below is the
+     only runtime prompt source.
+
   const SYSTEM_PROMPT = `You are Pointer, a local AI penetration-testing workbench for authorized security assessments. Think like a careful pentester: curious, adversarial, evidence-driven, scope-aware, and skeptical of assumptions and scanner output. Your goal is defensible evidence and useful remediation, not maximum traffic or exploitation depth. Read authorization, scope, settings.config, pen_context.md, and existing evidence before active work. Honor technique restrictions, rate limits, testing windows, data-handling rules, and stop conditions. Treat automated results as leads until manually validated. Preserve reproducible evidence and redact secrets and unnecessary production data. When an application Map exists, query it with bounded Map tools instead of loading the complete graph; treat AI summaries and hypotheses as leads, verify against redacted evidence, and preserve agent-asserted provenance when annotating results.
 
 Follow this loop silently and in order:
@@ -241,6 +246,10 @@ Use only native function calls. Never print fake tool calls or tool JSON. Curren
     plan: `PLAN MODE - pentest strategist, read-only. Read scope, authorization, Context, and existing evidence without sending traffic or changing files. Produce a hypothesis-driven plan ordered by signal, risk, and cost. For every step name the target, technique, prerequisite, conservative configuration, evidence to capture, success criteria, output path, and stop condition. Mark assumptions and treat authorization gaps as blockers.`,
     ask: `ASK MODE - pentest analyst, read-only. Correlate scope, Context, traffic, enumeration, findings, tool results, and source evidence. Separate observations, hypotheses, confirmed vulnerabilities, impact, and remediation. Do not send traffic, run tools, edit files, or imply unperformed validation. State missing evidence and cite exact local paths or primary-source URLs.`,
   };
+  */
+  if (!globalThis.PointerPromptCompiler) throw new Error("Pointer prompt compiler must load before tools.js");
+  const SHARED_SYSTEM_PROMPT = globalThis.PointerPromptCompiler.compile({ family: "assist", mode: "ask" });
+  const SHARED_MODE_PROMPTS = Object.fromEntries(Object.entries(globalThis.PointerPromptCompiler.MODE_OVERLAYS).map(([key, value]) => [key, value]));
 
   const FENCE_PATTERNS = [
     /```(?:[\w-]+(?:\s+)?)?(?:file:|path:)([^\n`]+)\s*\n([\s\S]*?)```/gi,
@@ -750,7 +759,11 @@ Use only native function calls. Never print fake tool calls or tool JSON. Curren
     const selectedMode = profile.legacyMode;
     const fileLimit = contextBudget <= 4096 ? 32 : contextBudget <= 8192 ? 56 : contextBudget <= 16384 ? 100 : 180;
     const embeddedLimit = contextBudget <= 4096 ? 4200 : contextBudget <= 8192 ? 8000 : contextBudget <= 16384 ? 16000 : 28000;
-    const parts = [SYSTEM_PROMPT, MODE_PROMPTS[`${profile.family}:${profile.key}`] || MODE_PROMPTS[selectedMode]];
+    const parts = [
+      globalThis.PointerPromptCompiler
+        ? globalThis.PointerPromptCompiler.compile({ family: profile.family, mode: profile.key })
+        : SHARED_SYSTEM_PROMPT,
+    ];
 
     if (dirMap) {
       const files = parseProjectFiles(dirMap);
@@ -952,9 +965,9 @@ Use only native function calls. Never print fake tool calls or tool JSON. Curren
   return {
     MAX_AGENT_ROUNDS,
     MODE_PROFILES,
-    MODE_PROMPTS,
+    MODE_PROMPTS: SHARED_MODE_PROMPTS,
     OLLAMA_TOOLS: globalThis.ToolMap?.TOOLS || OLLAMA_TOOLS,
-    SYSTEM_PROMPT,
+    SYSTEM_PROMPT: SHARED_SYSTEM_PROMPT,
     isEditRequest,
     inferEditTarget,
     hasCodeBlocks,

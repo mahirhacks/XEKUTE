@@ -178,6 +178,23 @@ const customCommandsList = $("custom-commands-list");
 const appSettingsCommandsPanel = $("app-settings-commands-panel");
 const appSettingsAuthorityPanel = $("app-settings-authority-panel");
 const authoritySettingsContent = $("authority-settings-content");
+const appSettingsPromptsPanel = $("app-settings-prompts-panel");
+const promptSettingsModules = $("prompt-settings-modules");
+const promptSettingsTitle = $("prompt-settings-title");
+const promptSettingsEditor = $("prompt-settings-editor");
+const promptSettingsDirty = $("prompt-settings-dirty");
+const promptSettingsRestore = $("prompt-settings-restore");
+const promptSettingsRestoreAll = $("prompt-settings-restore-all");
+const promptSettingsExport = $("prompt-settings-export");
+const promptSettingsImport = $("prompt-settings-import");
+const promptSettingsImportBuffer = $("prompt-settings-import-buffer");
+const promptSettingsValidation = $("prompt-settings-validation");
+const promptSettingsTokenCost = $("prompt-settings-token-cost");
+const promptSettingsDiff = $("prompt-settings-diff");
+const promptSettingsEffective = $("prompt-settings-effective");
+const promptVerifierModel = $("prompt-verifier-model");
+const promptRequireQualified = $("prompt-require-qualified");
+const promptUnqualifiedOverride = $("prompt-unqualified-override");
 const appSettingsCertificatesPanel = $("app-settings-certificates-panel");
 const certificateDirectory = $("certificate-directory");
 const certificateLocationBadge = $("certificate-location-badge");
@@ -501,6 +518,7 @@ const AGENT_TOOL_NAMES = new Set([
   "read_process",
   "stop_process",
   "annotate_map_finding",
+  "ingest_assessment_records",
 ]);
 
 let selectedModel = localStorage.getItem("pointer:model") || "";
@@ -558,6 +576,9 @@ let selectedCommandSettingsName = "/passive";
 let customScriptsCache = [];
 let appSettingsSection = "commands";
 let authoritySettingsData = null;
+let promptSettingsData = null;
+let aiModelSettingsData = null;
+let selectedPromptModule = "role";
 let certificateSettingsData = null;
 let notificationItems = [];
 const UI_ZOOM_KEY = "pointer:uiZoom";
@@ -657,7 +678,8 @@ function sanitizePersistedChatHtml(html) {
   template.innerHTML = clean;
   template.content.querySelectorAll(".stream-cursor").forEach((node) => node.remove());
   template.content.querySelectorAll(".streaming").forEach((node) => node.classList.remove("streaming"));
-  template.content.querySelectorAll(".assistant-status.is-active").forEach((node) => node.classList.remove("is-active"));
+  // Old chat snapshots may contain Pointer's former Planning/Working line.
+  template.content.querySelectorAll(".assistant-status").forEach((node) => node.remove());
   return template.innerHTML;
 }
 
@@ -793,7 +815,7 @@ function applyActiveChatSession(session) {
     messages.querySelectorAll(".assistant-reply[data-raw-md], .thinking-body[data-raw-md]").forEach((element) => {
       globalThis.MarkdownRenderer?.renderToElement(element, element.dataset.rawMd || "");
     });
-    scrollMessages();
+    scrollMessages({ force: true });
   });
 }
 
@@ -931,6 +953,12 @@ const TOOL_CATALOG = [
     ["ffuf", "ffuf", "Content and parameter discovery", "ffuf -u {target}/FUZZ -w {wordlist}"],
     ["gobuster", "Gobuster", "Directory and DNS enumeration", "gobuster dir -u {target} -w {wordlist}"],
   ]},
+  { category: "Firewall & WAF Analysis", tools: [
+    ["wafw00f", "WAFW00F", "Fingerprint an authorized web application firewall", "wafw00f {target}", { fields: ["target", "timeout", "rate", "outputFormat", "outputPath"] }],
+    ["nmap-firewall", "Nmap ACK Analysis", "Classify filtered and unfiltered TCP ports with bounded ACK probes", "nmap -Pn -sA --reason -p {port} --max-rate {rate} {target}", { fields: ["target", "port", "timeout", "rate", "outputFormat", "outputPath"] }],
+    ["hping3", "Hping3", "Send a small bounded TCP probe set for filtering-response analysis", "hping3 -S -c {packetCount} -p {port} -i u500000 {target}", { fields: ["target", "port", "packetCount", "timeout", "rate", "outputFormat", "outputPath"] }],
+    ["traceroute", "Traceroute", "Trace network hops and possible filtering boundaries", "traceroute -n -m {maxHops} {target}", { fields: ["target", "maxHops", "timeout", "outputFormat", "outputPath"] }],
+  ]},
   { category: "Vulnerability & TLS Analysis", tools: [
     ["nuclei", "Nuclei", "Template-based vulnerability checks", "nuclei -u {target} -severity {severity}"],
     ["nikto", "Nikto", "Web server checks", "nikto -h {target}"],
@@ -939,10 +967,52 @@ const TOOL_CATALOG = [
   ]},
 ];
 const TOOL_PRESETS = {
-  easy: { target: "", timeout: 15, threads: 2, rate: 2, ports: "--top-ports 100", depth: 2, severity: "high,critical", risk: 1, level: 1, wordlist: "", outputFormat: "json" },
-  medium: { target: "", timeout: 30, threads: 5, rate: 5, ports: "--top-ports 1000", depth: 3, severity: "medium,high,critical", risk: 2, level: 3, wordlist: "", outputFormat: "json" },
-  high: { target: "", timeout: 60, threads: 10, rate: 10, ports: "-p-", depth: 5, severity: "info,low,medium,high,critical", risk: 3, level: 5, wordlist: "", outputFormat: "json" },
+  easy: { target: "", timeout: 15, threads: 2, rate: 2, ports: "--top-ports 100", port: 443, packetCount: 3, maxHops: 15, depth: 2, severity: "high,critical", risk: 1, level: 1, wordlist: "", outputFormat: "json" },
+  medium: { target: "", timeout: 30, threads: 5, rate: 5, ports: "--top-ports 1000", port: 443, packetCount: 5, maxHops: 20, depth: 3, severity: "medium,high,critical", risk: 2, level: 3, wordlist: "", outputFormat: "json" },
+  high: { target: "", timeout: 60, threads: 10, rate: 10, ports: "-p-", port: 443, packetCount: 10, maxHops: 30, depth: 5, severity: "info,low,medium,high,critical", risk: 3, level: 5, wordlist: "", outputFormat: "json" },
 };
+const TOOL_FIELD_DEFINITIONS = Object.freeze({
+  target: { label: "Target", type: "text" }, timeout: { label: "Timeout (seconds)", type: "number", min: 1, max: 3600 },
+  threads: { label: "Concurrency / threads", type: "number", min: 1, max: 200 }, rate: { label: "Rate / second", type: "number", min: 1, max: 100000 },
+  ports: { label: "Ports", type: "text" }, port: { label: "Destination port", type: "number", min: 1, max: 65535 },
+  packetCount: { label: "Packet count", type: "number", min: 1, max: 100 }, maxHops: { label: "Maximum hops", type: "number", min: 1, max: 64 },
+  depth: { label: "Crawl depth", type: "number", min: 1, max: 10 }, severity: { label: "Severities", type: "text" },
+  risk: { label: "Risk", type: "number", min: 1, max: 3 }, level: { label: "Level", type: "number", min: 1, max: 5 },
+  wordlist: { label: "Wordlist path", type: "text" }, sources: { label: "Data sources", type: "text" }, limit: { label: "Result limit", type: "number", min: 1, max: 10000 },
+  query: { label: "Search operators", type: "text" }, extensions: { label: "Extensions", type: "text" }, matchCodes: { label: "Match status codes", type: "text" },
+  tags: { label: "Template tags", type: "text" }, templates: { label: "Template path", type: "text" }, tuning: { label: "Nikto tuning", type: "text" },
+  parameter: { label: "Test parameter", type: "text" }, techniques: { label: "SQLi techniques", type: "text" }, excludePorts: { label: "Excluded ports", type: "text" },
+  scanType: { label: "Scan type", type: "select", options: [["TCP connect", "-sT"], ["SYN", "-sS"], ["ACK", "-sA"], ["UDP", "-sU"]] },
+  timing: { label: "Timing profile", type: "select", options: [["Polite (T2)", "-T2"], ["Normal (T3)", "-T3"], ["Aggressive (T4)", "-T4"]] },
+  serviceFlags: { label: "Service detection", type: "select", options: [["Version light", "-sV --version-light"], ["Standard version scan", "-sV"], ["Disabled", ""]] },
+  mode: { label: "Discovery mode", type: "select", options: [["Directory", "dir"], ["Virtual host", "vhost"], ["DNS", "dns"]] },
+  redirects: { label: "Redirect behavior", type: "select", options: [["Follow redirects", "-fr"], ["Do not follow", ""]] },
+  scopeMode: { label: "Crawler scope", type: "select", options: [["Exact FQDN", "fqdn"], ["Registered domain", "rdn"], ["No scope restriction", ""]] },
+  protocol: { label: "TLS focus", type: "select", options: [["Complete TLS review", ""], ["Protocols only", "--protocols"], ["TLS 1.3", "--tls13"]] },
+  outputFormat: { label: "Output format", type: "select", options: [["JSON", "json"], ["XML", "xml"], ["Text", "txt"], ["CSV", "csv"], ["HTML", "html"]] },
+  outputPath: { label: "Output path", type: "text" },
+});
+const TOOL_PROFILES = Object.freeze({
+  amass: { fields: ["target", "sources", "timeout", "outputFormat", "outputPath"], command: "amass enum -passive -d {target} -src {sources}", presets: { easy: { sources: "", timeout: 15 }, medium: { sources: "", timeout: 30 }, high: { sources: "", timeout: 60 } } },
+  subfinder: { fields: ["target", "threads", "timeout", "outputFormat", "outputPath"], command: "subfinder -d {target} -silent -t {threads} -timeout {timeout}", presets: { easy: { threads: 5 }, medium: { threads: 10 }, high: { threads: 25 } } },
+  theharvester: { fields: ["target", "sources", "limit", "outputFormat", "outputPath"], command: "theHarvester -d {target} -b {sources} -l {limit}", presets: { easy: { sources: "crtsh,duckduckgo", limit: 200 }, medium: { sources: "crtsh,duckduckgo,otx,urlscan", limit: 500 }, high: { sources: "all", limit: 1000 } } },
+  "google-dorking": { fields: ["target", "query", "outputFormat", "outputPath"], command: "site:{target} {query}", presets: { easy: { query: "inurl:login" }, medium: { query: "(inurl:admin OR inurl:api)" }, high: { query: "(ext:json OR ext:xml OR ext:env OR inurl:debug)" } } },
+  nmap: { fields: ["target", "scanType", "ports", "timing", "serviceFlags", "rate", "timeout", "outputFormat", "outputPath"], command: "nmap {scanType} {timing} {serviceFlags} -p {ports} --max-rate {rate} {target}", presets: { easy: { scanType: "-sT", ports: "80,443,8080,8443", timing: "-T2", serviceFlags: "-sV --version-light", rate: 50 }, medium: { scanType: "-sT", ports: "1-1000", timing: "-T3", serviceFlags: "-sV", rate: 200 }, high: { scanType: "-sS", ports: "1-65535", timing: "-T3", serviceFlags: "-sV", rate: 500 } } },
+  naabu: { fields: ["target", "ports", "rate", "threads", "timeout", "outputFormat", "outputPath"], command: "naabu -host {target} -p {ports} -rate {rate} -c {threads} -json", presets: { easy: { ports: "80,443,8080,8443", rate: 50, threads: 10 }, medium: { ports: "top-1000", rate: 200, threads: 25 }, high: { ports: "-", rate: 500, threads: 50 } } },
+  masscan: { fields: ["target", "ports", "rate", "excludePorts", "outputFormat", "outputPath"], command: "masscan {target} -p {ports} --rate {rate} --exclude-ports {excludePorts}", presets: { easy: { ports: "80,443,8080,8443", rate: 50, excludePorts: "" }, medium: { ports: "1-1000", rate: 200, excludePorts: "" }, high: { ports: "1-65535", rate: 500, excludePorts: "" } } },
+  httpx: { fields: ["target", "threads", "rate", "timeout", "redirects", "outputFormat", "outputPath"], command: "httpx -u {target} -threads {threads} -rl {rate} -timeout {timeout} {redirects} -json", presets: { easy: { threads: 5, rate: 5, redirects: "" }, medium: { threads: 15, rate: 20, redirects: "-fr" }, high: { threads: 30, rate: 50, redirects: "-fr" } } },
+  katana: { fields: ["target", "depth", "threads", "rate", "scopeMode", "timeout", "outputFormat", "outputPath"], command: "katana -u {target} -d {depth} -c {threads} -rl {rate} -fs {scopeMode} -jsonl", presets: { easy: { depth: 2, threads: 2, rate: 2, scopeMode: "fqdn" }, medium: { depth: 3, threads: 5, rate: 5, scopeMode: "fqdn" }, high: { depth: 5, threads: 10, rate: 10, scopeMode: "rdn" } } },
+  ffuf: { fields: ["target", "wordlist", "extensions", "matchCodes", "threads", "rate", "timeout", "outputFormat", "outputPath"], command: "ffuf -u {target}/FUZZ -w {wordlist} -e {extensions} -mc {matchCodes} -t {threads} -rate {rate}", presets: { easy: { extensions: "", matchCodes: "200,204,301,302,307,401,403", threads: 5, rate: 5 }, medium: { extensions: ".html,.js,.json,.php", matchCodes: "all", threads: 15, rate: 20 }, high: { extensions: ".html,.js,.json,.php,.txt,.xml,.bak", matchCodes: "all", threads: 30, rate: 50 } } },
+  gobuster: { fields: ["target", "mode", "wordlist", "extensions", "threads", "timeout", "outputFormat", "outputPath"], command: "gobuster {mode} -u {target} -w {wordlist} -x {extensions} -t {threads}", presets: { easy: { mode: "dir", extensions: "", threads: 5 }, medium: { mode: "dir", extensions: "html,js,json,php", threads: 15 }, high: { mode: "vhost", extensions: "", threads: 30 } } },
+  wafw00f: { fields: ["target", "timeout", "outputFormat", "outputPath"], presets: { easy: { timeout: 15 }, medium: { timeout: 30 }, high: { timeout: 60 } } },
+  "nmap-firewall": { fields: ["target", "port", "rate", "timing", "timeout", "outputFormat", "outputPath"], presets: { easy: { port: 443, rate: 2, timing: "-T2" }, medium: { port: 443, rate: 5, timing: "-T3" }, high: { port: 443, rate: 10, timing: "-T3" } } },
+  hping3: { fields: ["target", "port", "packetCount", "rate", "timeout", "outputFormat", "outputPath"], presets: { easy: { packetCount: 3, rate: 2 }, medium: { packetCount: 5, rate: 5 }, high: { packetCount: 10, rate: 10 } } },
+  traceroute: { fields: ["target", "maxHops", "timeout", "outputFormat", "outputPath"], presets: { easy: { maxHops: 15 }, medium: { maxHops: 20 }, high: { maxHops: 30 } } },
+  nuclei: { fields: ["target", "severity", "tags", "templates", "threads", "rate", "timeout", "outputFormat", "outputPath"], command: "nuclei -u {target} -severity {severity} -tags {tags} -t {templates} -c {threads} -rl {rate} -jsonl", presets: { easy: { severity: "high,critical", tags: "", templates: "", threads: 2, rate: 2 }, medium: { severity: "medium,high,critical", tags: "", templates: "", threads: 5, rate: 5 }, high: { severity: "info,low,medium,high,critical", tags: "", templates: "", threads: 10, rate: 10 } } },
+  nikto: { fields: ["target", "tuning", "timeout", "outputFormat", "outputPath"], command: "nikto -host {target} -Tuning {tuning} -maxtime {timeout}s -nointeractive", presets: { easy: { tuning: "2,3", timeout: 60 }, medium: { tuning: "1,2,3,6", timeout: 180 }, high: { tuning: "x", timeout: 600 } } },
+  testssl: { fields: ["target", "protocol", "timeout", "outputFormat", "outputPath"], command: "testssl {protocol} --warnings batch {target}", presets: { easy: { protocol: "--protocols", timeout: 60 }, medium: { protocol: "", timeout: 180 }, high: { protocol: "", timeout: 600 } } },
+  sqlmap: { fields: ["target", "parameter", "techniques", "risk", "level", "threads", "timeout", "outputFormat", "outputPath"], command: "sqlmap -u {target} -p {parameter} --technique={techniques} --risk={risk} --level={level} --threads={threads} --batch", presets: { easy: { parameter: "", techniques: "BE", risk: 1, level: 1, threads: 1 }, medium: { parameter: "", techniques: "BEUSTQ", risk: 2, level: 3, threads: 3 }, high: { parameter: "", techniques: "BEUSTQ", risk: 3, level: 5, threads: 5 } } },
+});
 let selectedCatalogTool = null;
 let selectedToolPreset = "easy";
 let selectedToolView = "ui";
@@ -952,8 +1022,9 @@ let customToolManifests = [];
 
 const TOOL_ICONS = {
   amass: "codicon-globe", subfinder: "codicon-search", theharvester: "codicon-list-tree", "google-dorking": "codicon-search-fuzzy",
-  nmap: "codicon-network", naabu: "codicon-radio-tower", masscan: "codicon-broadcast",
+  nmap: "codicon-server-process", naabu: "codicon-radio-tower", masscan: "codicon-broadcast",
   httpx: "codicon-globe", katana: "codicon-git-branch", ffuf: "codicon-symbol-key", gobuster: "codicon-folder",
+  wafw00f: "codicon-shield", "nmap-firewall": "codicon-server-process", hping3: "codicon-pulse", traceroute: "codicon-git-merge",
   nuclei: "codicon-bug", nikto: "codicon-shield", testssl: "codicon-lock", sqlmap: "codicon-database",
 };
 
@@ -976,7 +1047,7 @@ function renderToolCatalog() {
     group.tools.forEach(([id, name, description, command, manifest]) => {
       const button = document.createElement("button"); button.type = "button"; button.className = "tool-card";
       button.innerHTML = `<span class="codicon ${TOOL_ICONS[id] || "codicon-tools"} tool-card-icon"></span><span><strong>${name}</strong><small>${description}</small></span><span class="codicon codicon-chevron-right"></span>`;
-      button.addEventListener("click", () => openToolConfig({ id, name, description, command, ...(manifest || {}) })); grid.appendChild(button);
+      button.addEventListener("click", () => openToolConfig({ id, name, description, command, ...(TOOL_PROFILES[id] || {}), ...(manifest || {}) })); grid.appendChild(button);
     }); section.appendChild(grid); toolCatalog.appendChild(section);
   });
 }
@@ -1046,18 +1117,31 @@ function syncToolCommand() {
 }
 function renderToolFields() {
   toolConfigUi.innerHTML = "";
-  const fields = [["target", "Target", "text"], ["timeout", "Timeout (seconds)", "number"], ["threads", "Threads", "number"], ["rate", "Rate / second", "number"], ["ports", "Ports / port flags", "text"], ["depth", "Crawl depth", "number"], ["severity", "Severity", "text"], ["risk", "Risk", "number"], ["level", "Level", "number"], ["wordlist", "Wordlist path", "text"], ["outputFormat", "Output format", "select"], ["outputPath", "Output path", "text"]];
-  fields.forEach(([key, label, type]) => {
-    const row = document.createElement("label"); row.innerHTML = `<span>${label}</span>`;
-    const input = type === "select" ? document.createElement("select") : document.createElement("input");
-    if (type === "select") ["json", "xml", "txt"].forEach((value) => input.add(new Option(value.toUpperCase(), value))); else input.type = type;
-    input.value = selectedToolConfig[key] ?? ""; input.addEventListener("input", () => { selectedToolConfig[key] = type === "number" ? Number(input.value) : input.value; if (key === "outputFormat") { selectedToolConfig.outputPath = toolOutputPath(selectedCatalogTool, selectedToolConfig); renderToolFields(); } syncToolCommand(); });
+  const fieldKeys = selectedCatalogTool?.fields || ["target", "timeout", "threads", "rate", "outputFormat", "outputPath"];
+  fieldKeys.forEach((key) => {
+    const definition = TOOL_FIELD_DEFINITIONS[key];
+    if (!definition) return;
+    const row = document.createElement("label"); row.innerHTML = `<span>${definition.label}</span>`;
+    const input = definition.type === "select" ? document.createElement("select") : document.createElement("input");
+    if (definition.type === "select") {
+      (definition.options || []).forEach(([label, value]) => input.add(new Option(label, value)));
+    } else {
+      input.type = definition.type;
+      if (definition.min != null) input.min = String(definition.min);
+      if (definition.max != null) input.max = String(definition.max);
+    }
+    input.value = selectedToolConfig[key] ?? ""; input.addEventListener("input", () => { selectedToolConfig[key] = definition.type === "number" ? Number(input.value) : input.value; if (key === "outputFormat") { selectedToolConfig.outputPath = toolOutputPath(selectedCatalogTool, selectedToolConfig); renderToolFields(); } syncToolCommand(); });
     row.appendChild(input); toolConfigUi.appendChild(row);
   });
 }
 function applyToolPreset(preset) {
   selectedToolPreset = preset;
-  if (preset !== "custom") selectedToolConfig = { ...TOOL_PRESETS[preset], outputPath: toolOutputPath(selectedCatalogTool, TOOL_PRESETS[preset]) };
+  if (preset !== "custom") {
+    const base = { ...TOOL_PRESETS[preset], ...(selectedCatalogTool?.presets?.[preset] || {}) };
+    const allowedFields = new Set(selectedCatalogTool?.fields || Object.keys(base));
+    selectedToolConfig = Object.fromEntries(Object.entries(base).filter(([key]) => allowedFields.has(key)));
+    if (allowedFields.has("outputPath")) selectedToolConfig.outputPath = toolOutputPath(selectedCatalogTool, selectedToolConfig);
+  }
   document.querySelectorAll("[data-tool-preset]").forEach((button) => button.classList.toggle("active", button.dataset.toolPreset === preset));
   renderToolFields(); syncToolCommand();
 }
@@ -1068,7 +1152,9 @@ function setToolView(view) {
   if (view === "ui") renderToolFields(); syncToolCommand();
 }
 function openToolConfig(tool) {
-  selectedCatalogTool = tool; toolConfigTitle.textContent = tool.name; toolConfigDescription.textContent = tool.description; toolConfigOverlay.hidden = false; applyToolPreset("easy"); setToolView("ui");
+  selectedCatalogTool = tool; toolConfigTitle.textContent = tool.name; toolConfigDescription.textContent = tool.description;
+  const icon = $("tool-config-icon"); if (icon) icon.className = `codicon ${TOOL_ICONS[tool.id] || "codicon-tools"}`;
+  toolConfigOverlay.hidden = false; applyToolPreset("easy"); setToolView("ui");
 }
 function showToolsWorkspace() {
   if (terminalMaximized) setTerminalMaximized(false); currentWorkspaceMode = "tools";
@@ -1151,6 +1237,116 @@ function requireAuthority(permission, actionLabel) {
   return false;
 }
 
+const PROMPT_MODULE_LABELS = Object.freeze({
+  role: "Role",
+  evidence: "Evidence",
+  loop: "Loop",
+  failure: "Failure",
+  feedback: "Feedback",
+  guardrails: "Guardrails",
+  "assist:planner": "Safe Planner",
+  "assist:agent": "Safe Agent",
+  "assist:ask": "Safe Ask",
+  "testing:planner": "Test Planner",
+  "testing:agent": "Test Agent",
+  "testing:ask": "Test Ask",
+});
+
+function promptDefaults() {
+  return globalThis.PointerPromptCompiler?.defaults?.() || { version: 1, modules: {}, overlays: {} };
+}
+
+function normalizePromptSettings(value) {
+  const defaults = promptDefaults();
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    version: defaults.version,
+    modules: { ...defaults.modules, ...(input.modules || {}) },
+    overlays: { ...defaults.overlays, ...(input.overlays || {}) },
+  };
+}
+
+function normalizeAIModelSettings(value) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    verifierModel: String(input.verifierModel || ""),
+    requireQualifiedModelForTestAgent: input.requireQualifiedModelForTestAgent !== false,
+    allowUnqualifiedTestAgentDeveloperOverride: Boolean(input.allowUnqualifiedTestAgentDeveloperOverride),
+    qualification: input.qualification && typeof input.qualification === "object" ? input.qualification : {},
+    temperatures: { planner: 0.1, agent: 0.1, ask: 0.2, verifier: 0, reporter: 0, ...(input.temperatures || {}) },
+  };
+}
+
+function promptModuleValue(key, source = promptSettingsData) {
+  return key.includes(":") ? source?.overlays?.[key] || "" : source?.modules?.[key] || "";
+}
+
+function setPromptModuleValue(key, value) {
+  promptSettingsData = normalizePromptSettings(promptSettingsData);
+  const bucket = key.includes(":") ? promptSettingsData.overlays : promptSettingsData.modules;
+  bucket[key] = String(value || "");
+}
+
+function renderPromptModuleDiff(current, recommended) {
+  if (current === recommended) return "No changes from the recommended default.";
+  const currentLines = String(current || "").split("\n");
+  const defaultLines = String(recommended || "").split("\n");
+  const output = [];
+  const count = Math.max(currentLines.length, defaultLines.length);
+  for (let index = 0; index < count; index += 1) {
+    if (defaultLines[index] === currentLines[index]) continue;
+    if (defaultLines[index] !== undefined) output.push(`- ${defaultLines[index]}`);
+    if (currentLines[index] !== undefined) output.push(`+ ${currentLines[index]}`);
+  }
+  return output.join("\n") || "The profile metadata changed; module text is unchanged.";
+}
+
+function validatePromptSettings() {
+  const result = globalThis.PointerPromptCompiler?.validate?.(promptSettingsData) || { ok: true, errors: [], warnings: [] };
+  const effective = globalThis.PointerPromptCompiler?.compile?.({ family: chatFamily || "assist", mode: chatMode || "ask", overrides: promptSettingsData }) || "";
+  const defaults = promptDefaults();
+  const changed = promptModuleValue(selectedPromptModule) !== promptModuleValue(selectedPromptModule, defaults);
+  if (promptSettingsDirty) promptSettingsDirty.hidden = !changed;
+  if (promptSettingsValidation) {
+    promptSettingsValidation.textContent = result.ok
+      ? (result.warnings?.length ? result.warnings.join(" ") : "Valid. Runtime policy remains non-bypassable.")
+      : result.errors.join(" ");
+    promptSettingsValidation.classList.toggle("error", !result.ok);
+  }
+  const checksum = globalThis.PointerPromptCompiler?.checksum?.(promptSettingsData) || "unavailable";
+  if (promptSettingsTokenCost) promptSettingsTokenCost.textContent = `${Math.ceil(effective.length / 4).toLocaleString()} estimated tokens · profile v${promptSettingsData?.version || 1} · ${checksum}`;
+  if (promptSettingsDiff) promptSettingsDiff.textContent = renderPromptModuleDiff(promptModuleValue(selectedPromptModule), promptModuleValue(selectedPromptModule, defaults));
+  if (promptSettingsEffective) promptSettingsEffective.textContent = effective;
+  if (commandSettingsSave) commandSettingsSave.disabled = !result.ok;
+  return result;
+}
+
+function renderPromptSettings() {
+  promptSettingsData = normalizePromptSettings(promptSettingsData || assessmentSettingsCache?.aiPrompts);
+  aiModelSettingsData = normalizeAIModelSettings(aiModelSettingsData || assessmentSettingsCache?.aiModels);
+  const keys = Object.keys(PROMPT_MODULE_LABELS);
+  if (!keys.includes(selectedPromptModule)) selectedPromptModule = keys[0];
+  if (promptSettingsModules) {
+    promptSettingsModules.innerHTML = keys.map((key) => `<button type="button" data-prompt-module="${key}" class="${selectedPromptModule === key ? "active" : ""}"><span>${escapeHtml(PROMPT_MODULE_LABELS[key])}</span><small>${key.includes(":") ? "Mode overlay" : "Core module"}</small></button>`).join("");
+    promptSettingsModules.querySelectorAll("[data-prompt-module]").forEach((button) => button.addEventListener("click", () => {
+      selectedPromptModule = button.dataset.promptModule;
+      renderPromptSettings();
+    }));
+  }
+  if (promptSettingsTitle) promptSettingsTitle.textContent = PROMPT_MODULE_LABELS[selectedPromptModule];
+  if (promptSettingsEditor) promptSettingsEditor.value = promptModuleValue(selectedPromptModule);
+  if (promptVerifierModel) promptVerifierModel.value = aiModelSettingsData.verifierModel;
+  if (promptRequireQualified) promptRequireQualified.checked = aiModelSettingsData.requireQualifiedModelForTestAgent;
+  if (promptUnqualifiedOverride) promptUnqualifiedOverride.checked = aiModelSettingsData.allowUnqualifiedTestAgentDeveloperOverride;
+  validatePromptSettings();
+}
+
+function loadPromptSettings() {
+  promptSettingsData = normalizePromptSettings(assessmentSettingsCache?.aiPrompts);
+  aiModelSettingsData = normalizeAIModelSettings(assessmentSettingsCache?.aiModels);
+  renderPromptSettings();
+}
+
 async function loadAuthoritySettings() {
   let stored = {};
   try { stored = JSON.parse(localStorage.getItem(AUTHORITY_SETTINGS_KEY) || "{}"); } catch { stored = {}; }
@@ -1163,9 +1359,10 @@ async function loadAuthoritySettings() {
 }
 
 function setAppSettingsSection(section) {
-  appSettingsSection = ["commands", "authority", "certificates"].includes(section) ? section : "commands";
+  appSettingsSection = ["commands", "authority", "prompts", "certificates"].includes(section) ? section : "commands";
   appSettingsCommandsPanel.hidden = appSettingsSection !== "commands";
   appSettingsAuthorityPanel.hidden = appSettingsSection !== "authority";
+  appSettingsPromptsPanel.hidden = appSettingsSection !== "prompts";
   appSettingsCertificatesPanel.hidden = appSettingsSection !== "certificates";
   if (commandSettingsSave) commandSettingsSave.hidden = appSettingsSection === "certificates";
   appSettingsSectionButtons.forEach((button) => {
@@ -1174,6 +1371,7 @@ function setAppSettingsSection(section) {
     button.setAttribute("aria-pressed", String(active));
   });
   if (appSettingsSection === "authority") renderAuthoritySettings();
+  if (appSettingsSection === "prompts") renderPromptSettings();
   if (appSettingsSection === "certificates") loadCertificateSettings();
 }
 
@@ -1255,7 +1453,9 @@ async function showAppSettingsWorkspace() {
   currentWorkspaceMode = "settings";
   resourceViewer.hidden = true; securityWorkspace.hidden = true; toolsWorkspace.hidden = true; mapWorkspace.hidden = true; appSettingsWorkspace.hidden = false; webcloneWorkspace.hidden = true; window.api.webCloneHidePreview?.();
   editorPane?.setAttribute("aria-label", "Pointer Settings");
+  await refreshAssessmentSettingsCache();
   loadCommandSettings();
+  loadPromptSettings();
   await loadAuthoritySettings();
   await loadCertificateSettings();
   renderCommandSettings();
@@ -1366,7 +1566,12 @@ async function saveCommandSettings() {
       if (commandSettingsStatus) commandSettingsStatus.textContent = "Authority save failed";
       return;
     }
-    const result = await saveAssessmentSettings({ ...current, authority: authoritySettingsData });
+    const promptValidation = validatePromptSettings();
+    if (!promptValidation.ok) {
+      if (commandSettingsStatus) commandSettingsStatus.textContent = "Prompt validation failed";
+      return;
+    }
+    const result = await saveAssessmentSettings({ ...current, authority: authoritySettingsData, aiPrompts: promptSettingsData, aiModels: normalizeAIModelSettings(aiModelSettingsData || current.aiModels) });
     if (result?.error) {
       if (commandSettingsStatus) commandSettingsStatus.textContent = result.error;
       return;
@@ -2623,18 +2828,51 @@ async function showSettingsResource(filePath) {
 function checklistStatuses() {
   return resourceChecklistType === "mitre"
     ? [["not-started", "Not started"], ["in-progress", "In progress"], ["observed", "Observed"], ["not-observed", "Not observed"], ["not-applicable", "Not applicable"], ["blocked", "Blocked"]]
-    : [["not-started", "Not started"], ["in-progress", "In progress"], ["passed", "Passed"], ["failed", "Failed"], ["not-applicable", "Not applicable"], ["blocked", "Blocked"]];
+    : [["not-tested", "Not tested"], ["in-progress", "In progress"], ["passed", "Passed"], ["failed", "Failed"], ["not-applicable", "Not applicable"], ["blocked", "Blocked"]];
+}
+
+function checklistTextList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  return String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function checklistStatusIssue(check, status) {
+  if (resourceChecklistType === "mitre") return "";
+  const procedure = checklistTextList(check?.procedure);
+  const evidence = checklistTextList(check?.evidence || check?.evidenceIds);
+  const reason = String(check?.result || check?.notes || "").trim();
+  if (["passed", "failed"].includes(status) && !procedure.length) {
+    return "Record the exact test procedure before marking this check as passed or failed.";
+  }
+  if (["passed", "failed"].includes(status) && !evidence.length) {
+    return "Attach at least one evidence ID before marking this check as passed or failed.";
+  }
+  if (["blocked", "not-applicable"].includes(status) && !reason) {
+    return `Record a reason before marking this check as ${status === "blocked" ? "blocked" : "not applicable"}.`;
+  }
+  return "";
+}
+
+async function checklistEvidenceIssue(check, status) {
+  if (resourceChecklistType === "mitre" || !["passed", "failed"].includes(status)) return "";
+  const ids = checklistTextList(check?.evidence || check?.evidenceIds);
+  if (!ids.length || !assessmentPath || !window.api.assessmentEvidence) return "";
+  const result = await window.api.assessmentEvidence({ path: assessmentPath, limit: 2000 });
+  if (result?.error) return `Evidence could not be validated: ${result.error}`;
+  const available = new Set((result?.records || []).map((record) => String(record.id || "")));
+  const missing = ids.filter((id) => !available.has(id));
+  return missing.length ? `These evidence IDs do not exist in the Evidence Index: ${missing.join(", ")}.` : "";
 }
 
 function recalculateChecklistProgress() {
   const checks = Array.isArray(resourceChecklistData?.checks) ? resourceChecklistData.checks : [];
-  const counts = { total: checks.length, notStarted: 0, inProgress: 0, passed: 0, failed: 0, observed: 0, notObserved: 0, notApplicable: 0, blocked: 0 };
-  const keys = { "not-started": "notStarted", "in-progress": "inProgress", passed: "passed", failed: "failed", observed: "observed", "not-observed": "notObserved", "not-applicable": "notApplicable", blocked: "blocked" };
-  checks.forEach((check) => { const key = keys[check.status || "not-started"]; if (key) counts[key] += 1; });
+  const counts = { total: checks.length, notStarted: 0, notTested: 0, inProgress: 0, passed: 0, failed: 0, observed: 0, notObserved: 0, notApplicable: 0, blocked: 0 };
+  const keys = { "not-started": "notStarted", "not-tested": "notTested", "in-progress": "inProgress", passed: "passed", failed: "failed", observed: "observed", "not-observed": "notObserved", "not-applicable": "notApplicable", blocked: "blocked" };
+  checks.forEach((check) => { const key = keys[check.status || (resourceChecklistType === "mitre" ? "not-started" : "not-tested")]; if (key) counts[key] += 1; });
   resourceChecklistData.progress = resourceChecklistType === "mitre"
     ? { total: counts.total, notStarted: counts.notStarted, inProgress: counts.inProgress, observed: counts.observed, notObserved: counts.notObserved, notApplicable: counts.notApplicable, blocked: counts.blocked }
-    : { total: counts.total, notStarted: counts.notStarted, inProgress: counts.inProgress, passed: counts.passed, failed: counts.failed, notApplicable: counts.notApplicable, blocked: counts.blocked };
-  const completed = checks.filter((check) => !["not-started", "in-progress"].includes(check.status || "not-started")).length;
+    : { total: counts.total, notTested: counts.notTested + counts.notStarted, inProgress: counts.inProgress, passed: counts.passed, failed: counts.failed, notApplicable: counts.notApplicable, blocked: counts.blocked };
+  const completed = checks.filter((check) => !["not-started", "not-tested", "in-progress"].includes(check.status || (resourceChecklistType === "mitre" ? "not-started" : "not-tested"))).length;
   const percent = checks.length ? Math.round((completed / checks.length) * 100) : 0;
   if (checklistProgress) checklistProgress.innerHTML = `<strong>${percent}%</strong><span>${completed} of ${checks.length} reviewed</span><i><b style="width:${percent}%"></b></i>`;
 }
@@ -2667,7 +2905,7 @@ function renderChecklistUI() {
   const filter = checklistStatusFilter?.value || "all";
   const checks = (resourceChecklistData.checks || []).map((check, index) => ({ check, index })).filter(({ check }) => {
     const haystack = [check.id, check.techniqueId, check.category, check.tactic, check.title, check.technique].join(" ").toLowerCase();
-    const statusMatches = filter === "all" || check.status === filter || (filter === "failed" && check.status === "observed");
+    const statusMatches = filter === "all" || check.status === filter || (filter === "not-tested" && check.status === "not-started") || (filter === "failed" && check.status === "observed");
     return statusMatches && (!query || haystack.includes(query));
   });
   const groupKey = resourceChecklistType === "mitre" ? "tactic" : "category";
@@ -2679,18 +2917,24 @@ function renderChecklistUI() {
     const summary = document.createElement("summary"); summary.innerHTML = `<span class="codicon codicon-chevron-right"></span><strong>${escapeHtml(groupName)}</strong><small>${entries.length} checks</small>`; section.appendChild(summary);
     const list = document.createElement("div"); list.className = "checklist-items";
     entries.forEach(({ check, index }) => {
-      const card = document.createElement("article"); card.className = `checklist-item status-${check.status || "not-started"}`;
+      const normalizedStatus = resourceChecklistType !== "mitre" && check.status === "not-started" ? "not-tested" : (check.status || (resourceChecklistType === "mitre" ? "not-started" : "not-tested"));
+      const card = document.createElement("article"); card.className = `checklist-item status-${normalizedStatus}`;
       const heading = document.createElement("div"); heading.className = "checklist-item-heading";
       const identity = document.createElement("div"); identity.className = "checklist-item-identity";
       const code = document.createElement("span"); code.textContent = check.id || check.techniqueId || `#${index + 1}`;
       const title = document.createElement("strong"); title.textContent = check.title || check.technique || "Untitled check"; identity.append(code, title);
       const status = document.createElement("select"); status.className = "checklist-status"; status.dataset.index = String(index);
-      checklistStatuses().forEach(([value, label]) => status.add(new Option(label, value))); status.value = check.status || "not-started"; heading.append(identity, status); card.appendChild(heading);
+      checklistStatuses().forEach(([value, label]) => status.add(new Option(label, value))); status.value = normalizedStatus; heading.append(identity, status); card.appendChild(heading);
       if (resourceChecklistType === "mitre") {
         const applicability = document.createElement("select"); applicability.className = "checklist-applicability"; applicability.dataset.index = String(index);
         [["unknown", "Applicability unknown"], ["applicable", "Applicable"], ["not-applicable", "Not applicable"]].forEach(([value, label]) => applicability.add(new Option(label, value))); applicability.value = check.applicability || "unknown"; card.appendChild(applicability);
+      } else {
+        const procedure = document.createElement("textarea"); procedure.className = "checklist-procedure"; procedure.dataset.index = String(index); procedure.placeholder = "Test procedure (one step per line)"; procedure.value = checklistTextList(check.procedure).join("\n"); card.appendChild(procedure);
+        const evidence = document.createElement("input"); evidence.className = "checklist-evidence"; evidence.dataset.index = String(index); evidence.placeholder = "Evidence IDs (comma separated)"; evidence.value = checklistTextList(check.evidence || check.evidenceIds).join(", "); card.appendChild(evidence);
       }
-      const notes = document.createElement("textarea"); notes.className = "checklist-notes"; notes.dataset.index = String(index); notes.placeholder = resourceChecklistType === "mitre" ? "Observations, detection opportunities, or evidence paths" : "Result notes, evidence paths, or finding IDs"; notes.value = resourceChecklistType === "mitre" ? (check.observations || check.notes || "") : (check.result || check.notes || ""); card.appendChild(notes);
+      const notes = document.createElement("textarea"); notes.className = "checklist-notes"; notes.dataset.index = String(index); notes.placeholder = resourceChecklistType === "mitre" ? "Observations, detection opportunities, or evidence paths" : "Result, limitation, blocked reason, or finding IDs"; notes.value = resourceChecklistType === "mitre" ? (check.observations || check.notes || "") : (check.result || check.notes || ""); card.appendChild(notes);
+      const issue = checklistStatusIssue(check, normalizedStatus);
+      if (issue) { const validation = document.createElement("p"); validation.className = "checklist-validation"; validation.textContent = issue; card.appendChild(validation); }
       const reference = check.references?.[0]; if (/^https:\/\//i.test(reference || "")) { const link = document.createElement("a"); link.href = reference; link.target = "_blank"; link.rel = "noreferrer"; link.textContent = "Framework reference"; card.appendChild(link); }
       list.appendChild(card);
     });
@@ -2736,6 +2980,23 @@ function humanizeScopeKey(key) {
   return String(key || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[-_]/g, " ").replace(/^./, (char) => char.toUpperCase());
 }
 
+const MANAGED_CORE_RESOURCE_META = Object.freeze({
+  "scope/in-scope.json": ["In-Scope Assets", "Engagement authorization, targets, wildcard rules, testing windows, and ownership evidence."],
+  "scope/out-of-scope.json": ["Out-of-Scope Assets", "Explicit exclusions, prohibited actions, third-party systems, and exception handling."],
+  "scope/configurations.json": ["Assessment Configuration", "Operator identity, authorization gates, safety limits, network behavior, evidence, and data handling."],
+  "recon/active-recon.json": ["Active Reconnaissance", "Authorized active discovery runs, techniques, observed assets, leads, and linked evidence."],
+  "recon/passive-recon.json": ["Passive Reconnaissance", "Passive sources, discovered assets, confidence, provenance, leads, and linked evidence."],
+  "enumeration/endpoints.json": ["Endpoints", "Observed routes, methods, parameters, authentication state, technologies, testing state, and evidence."],
+  "enumeration/pages.json": ["Pages", "Observed web pages, forms, scripts, API calls, security metadata, testing state, and evidence."],
+  "enumeration/subdomains.json": ["Subdomains", "Discovered hostnames, DNS data, liveness, scope state, takeover review, provenance, and evidence."],
+  "vulnerability-scans/services.json": ["Services", "Observed services, versions, lifecycle state, TLS metadata, confidence, and linked evidence."],
+  "vulnerability-scans/info.json": ["Informational Observations", "Schema-managed informational observations and their supporting evidence."],
+  "vulnerability-scans/easy.json": ["Low-Severity Observations", "Schema-managed low-severity finding candidates and their supporting evidence."],
+  "vulnerability-scans/medium.json": ["Medium-Severity Observations", "Schema-managed medium-severity finding candidates and their supporting evidence."],
+  "vulnerability-scans/high.json": ["High-Severity Observations", "Schema-managed high-severity finding candidates and their supporting evidence."],
+  "vulnerability-scans/critical.json": ["Critical-Severity Observations", "Schema-managed critical finding candidates and their supporting evidence."],
+});
+
 function createScopeField(key, value, dataPath) {
   const label = document.createElement("label"); label.className = "scope-ui-field";
   const title = document.createElement("span"); title.textContent = humanizeScopeKey(key); label.appendChild(title);
@@ -2771,11 +3032,7 @@ function appendScopeFields(container, object, prefix = "", depth = 0) {
 
 function renderScopeUI() {
   if (!resourceScopeActive || !resourceScopeData || !scopeUIForm) return;
-  const meta = {
-    "scope/in-scope.json": ["In-Scope Assets", "Engagement authorization, targets, wildcard rules, testing windows, and ownership evidence."],
-    "scope/out-of-scope.json": ["Out-of-Scope Assets", "Explicit exclusions, prohibited actions, third-party systems, and exception handling."],
-    "scope/configurations.json": ["Assessment Configuration", "Operator identity, authorization gates, safety limits, network behavior, evidence, and data handling."],
-  }[resourceScopeRelativePath] || ["Scope", "Assessment scope data"];
+  const meta = MANAGED_CORE_RESOURCE_META[resourceScopeRelativePath] || ["Managed Core Resource", "Schema-managed assessment data."];
   scopeUITitle.textContent = meta[0]; scopeUIDescription.textContent = meta[1]; scopeUIForm.innerHTML = "";
   for (const [key, value] of Object.entries(resourceScopeData)) {
     if (key === "schemaVersion" || /Template$/.test(key)) continue;
@@ -2833,6 +3090,8 @@ const ASSESSMENT_MODULE_META = {
   "evidence/index.jsonl": ["Evidence Index", "Chain-of-custody metadata for captured traffic and tool artifacts. Raw secrets remain redacted.", "codicon-file-text"],
   "findings/findings.json": ["Finding Lifecycle", "Deduplicated findings with severity, confidence, evidence links, remediation, and retest state.", "codicon-warning"],
   "enumeration/assets.json": ["Asset Inventory", "Reconciled hosts, subdomains, services, ownership, scope state, provenance, and freshness.", "codicon-globe"],
+  "traffic/raw.jsonl": ["Raw Traffic", "Captured HTTP exchanges with request and response evidence, provenance, and capture integrity.", "codicon-arrow-swap"],
+  "traffic/filtered.jsonl": ["Filtered Traffic", "Curated HTTP exchanges linked to parameters, findings, notes, and evidence.", "codicon-filter"],
   "penetration-testing/coverage.json": ["Coverage Matrix", "Tested, passed, failed, blocked, and not-applicable coverage across security frameworks.", "codicon-checklist"],
   "report/report.md": ["Assessment Report", "Evidence-linked reporting with executive summary, findings, remediation, retest state, and limitations.", "codicon-file-text"],
   "logs/agent-runs.jsonl": ["Agent Runs", "Transparent run lifecycle records generated by the autonomous agent loop.", "codicon-history"],
@@ -2891,6 +3150,20 @@ function renderAssessmentModule() {
     const assets = Array.isArray(data?.assets) ? data.assets : [];
     summary = [moduleCard("Assets", assets.length), moduleCard("In scope", assets.filter((asset) => asset.inScope === true).length, "success"), moduleCard("Out of scope", assets.filter((asset) => asset.inScope === false).length, "danger"), moduleCard("Unknown", assets.filter((asset) => asset.inScope == null).length, "warning"), moduleCard("Untested", assets.filter((asset) => asset.tested !== true).length, "warning")].join("");
     content = `<div class="assessment-module-section"><h3>Asset inventory</h3>${moduleTable(["Asset", "Type", "Environment", "Scope", "Status", "Source", "Last seen"], assets.slice().reverse().map((asset) => [asset.value, asset.assetType, asset.environment, asset.inScope === true ? "In scope" : asset.inScope === false ? "Out of scope" : "Unknown", asset.status, asset.source, asset.lastSeen]))}</div>`;
+  } else if (["traffic/raw.jsonl", "traffic/filtered.jsonl"].includes(relativePath)) {
+    const records = (Array.isArray(data) ? data : []).filter((record) => record?.recordType !== "pointer-log-schema");
+    const methods = new Set(records.map((record) => record.method).filter(Boolean));
+    const hosts = new Set(records.map((record) => {
+      try { return new URL(record.url).host; } catch { return record.targetId || ""; }
+    }).filter(Boolean));
+    summary = [
+      moduleCard("Exchanges", records.length),
+      moduleCard("Hosts", hosts.size),
+      moduleCard("Methods", methods.size),
+      moduleCard("Linked evidence", records.filter((record) => record.requestId || record.evidenceFiles?.length).length, "success"),
+      moduleCard("Parse state", "Valid JSONL", "success"),
+    ].join("");
+    content = `<div class="assessment-module-section"><h3>HTTP records</h3>${moduleTable(["Time", "Request ID", "Method", "URL", "Status", "Type", "Source"], records.slice().reverse().slice(0, 500).map((record) => [record.timestamp || record.capturedAt, record.requestId || record.id, record.method, record.url, record.statusCode, record.contentType || record.responseContentType, record.source || record.tool]))}</div>`;
   } else if (relativePath === "penetration-testing/coverage.json") {
     const summaryData = data?.summary || {};
     const frameworks = Array.isArray(data?.frameworks) ? data.frameworks : [];
@@ -2995,7 +3268,7 @@ assessmentFindingNew?.addEventListener("click", async () => {
   if (!assessmentPath || assessmentModulePath !== "findings/findings.json") return;
   const title = window.prompt("Finding title", "New suspected issue");
   if (!title?.trim()) return;
-  const severity = (window.prompt("Severity (info/easy/medium/high/critical)", "medium") || "medium").trim().toLowerCase();
+  const severity = (window.prompt("Severity (informational/low/medium/high/critical)", "medium") || "medium").trim().toLowerCase();
   const result = await window.api.assessmentAppendFinding({ path: assessmentPath, finding: { title: title.trim(), severity, status: "draft", source: "manual" } });
   if (result?.error) addErrorMessage(result.error); else await refreshAssessmentModule();
 });
@@ -3123,7 +3396,7 @@ async function openAssessmentItem(item) {
 
   const diskPath = assessmentDiskPath(relativePath);
   const fileName = relativePath.split("/").pop();
-  if (["scope/in-scope.json", "scope/out-of-scope.json", "scope/configurations.json"].includes(relativePath)) {
+  if (MANAGED_CORE_RESOURCE_META[relativePath]) {
     await showScopeResource(diskPath, relativePath);
     return;
   }
@@ -4255,8 +4528,14 @@ function loadModelSettings() {
       const explicitManualContext =
         settings.contextLocked === true
         || (rawContext !== AUTO_CONTEXT && rawContext !== LEGACY_DEFAULT_CONTEXT);
+      // Older Pointer builds persisted `thinking: false` for every model even
+      // when the user never disabled it. Treat that legacy value as "auto" so
+      // Ollama can use its capability-aware default. A true value could only
+      // have been chosen explicitly in the old UI, so preserve it.
+      const thinkingConfigured = settings.thinkingConfigured === true || settings.thinking === true;
       normalized[name] = {
-        thinking: Boolean(settings.thinking),
+        thinking: thinkingConfigured ? Boolean(settings.thinking) : null,
+        thinkingConfigured,
         context: CONTEXT_OPTIONS.includes(rawContext)
           ? (explicitManualContext ? rawContext : AUTO_CONTEXT)
           : AUTO_CONTEXT,
@@ -4279,9 +4558,20 @@ syncChatModeUi();
 
 function getModelSettings(name) {
   if (!modelSettings[name]) {
-    modelSettings[name] = { thinking: false, context: AUTO_CONTEXT, contextLocked: false };
+    modelSettings[name] = {
+      thinking: null,
+      thinkingConfigured: false,
+      context: AUTO_CONTEXT,
+      contextLocked: false,
+    };
   }
   return modelSettings[name];
+}
+
+function modelThinkingEnabled(settings) {
+  // null means automatic: omit the API option and let Ollama enable thinking
+  // only for models that advertise the capability.
+  return settings?.thinking !== false;
 }
 
 function saveModelSettings() {
@@ -4357,7 +4647,7 @@ function getContextBreakdown() {
   const contextBudget = contextToTokens(contextSettings.context);
   const systemPrompt = [
     ToolParser.SYSTEM_PROMPT,
-    ToolParser.MODE_PROMPTS?.[chatMode],
+    ToolParser.MODE_PROMPTS?.[`${chatFamily}:${chatMode}`],
   ].filter(Boolean).join("\n\n").trim();
   const projectContext = buildProjectContextMessage({
     dirMap: dirMapCache,
@@ -5556,6 +5846,56 @@ if (webclonePreviewFrame && typeof ResizeObserver !== "undefined") {
 $("app-settings-close")?.addEventListener("click", () => { appSettingsOverlay.hidden = true; });
 commandSettingsSave?.addEventListener("click", saveCommandSettings);
 commandSettingsAdd?.addEventListener("click", beginCreateCommand);
+promptSettingsEditor?.addEventListener("input", () => {
+  setPromptModuleValue(selectedPromptModule, promptSettingsEditor.value);
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved prompt changes";
+  validatePromptSettings();
+});
+promptVerifierModel?.addEventListener("input", () => { aiModelSettingsData = normalizeAIModelSettings({ ...aiModelSettingsData, verifierModel: promptVerifierModel.value.trim() }); });
+promptRequireQualified?.addEventListener("change", () => { aiModelSettingsData = normalizeAIModelSettings({ ...aiModelSettingsData, requireQualifiedModelForTestAgent: promptRequireQualified.checked }); });
+promptUnqualifiedOverride?.addEventListener("change", () => { aiModelSettingsData = normalizeAIModelSettings({ ...aiModelSettingsData, allowUnqualifiedTestAgentDeveloperOverride: promptUnqualifiedOverride.checked }); });
+promptSettingsRestore?.addEventListener("click", () => {
+  setPromptModuleValue(selectedPromptModule, promptModuleValue(selectedPromptModule, promptDefaults()));
+  renderPromptSettings();
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Prompt module restored; save to apply";
+});
+promptSettingsRestoreAll?.addEventListener("click", () => {
+  promptSettingsData = promptDefaults();
+  renderPromptSettings();
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Default prompt profile restored; save to apply";
+});
+promptSettingsExport?.addEventListener("click", async () => {
+  const profileValue = { ...promptSettingsData, checksum: globalThis.PointerPromptCompiler?.checksum?.(promptSettingsData) || "" };
+  const profile = JSON.stringify(profileValue, null, 2);
+  await navigator.clipboard.writeText(profile);
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Prompt profile copied to clipboard";
+});
+promptSettingsImport?.addEventListener("click", async () => {
+  if (!promptSettingsImportBuffer) return;
+  if (promptSettingsImportBuffer.hidden) {
+    promptSettingsImportBuffer.hidden = false;
+    promptSettingsImportBuffer.value = "";
+    promptSettingsImportBuffer.placeholder = "Paste a Pointer prompt profile, then click Import profile again";
+    promptSettingsImportBuffer.focus();
+    return;
+  }
+  try {
+    const imported = JSON.parse(promptSettingsImportBuffer.value);
+    if (imported.checksum) {
+      const { checksum, ...profile } = imported;
+      const actual = globalThis.PointerPromptCompiler?.checksum?.(profile);
+      if (actual && checksum !== actual) throw new Error("Prompt profile checksum does not match its contents.");
+    }
+    const validation = globalThis.PointerPromptCompiler?.validate?.(imported);
+    if (validation && !validation.ok) throw new Error(validation.errors.join(" "));
+    promptSettingsData = normalizePromptSettings(imported);
+    promptSettingsImportBuffer.hidden = true;
+    renderPromptSettings();
+    if (commandSettingsStatus) commandSettingsStatus.textContent = "Prompt profile imported; save to apply";
+  } catch (error) {
+    if (commandSettingsStatus) commandSettingsStatus.textContent = `Import failed: ${error.message}`;
+  }
+});
 btnNotifications?.addEventListener("click", (event) => {
   event.stopPropagation();
   const opening = notificationPanel?.hidden !== false;
@@ -7015,21 +7355,35 @@ settingsUIView?.addEventListener("input", (event) => {
 });
 checklistSearch?.addEventListener("input", renderChecklistUI);
 checklistStatusFilter?.addEventListener("change", renderChecklistUI);
-checklistGroups?.addEventListener("change", (event) => {
+checklistGroups?.addEventListener("change", async (event) => {
   const index = Number(event.target.dataset.index);
   const check = resourceChecklistData?.checks?.[index];
   if (!check) return;
-  if (event.target.classList.contains("checklist-status")) check.status = event.target.value;
+  if (event.target.classList.contains("checklist-status")) {
+    const requestedStatus = event.target.value;
+    const issue = checklistStatusIssue(check, requestedStatus) || await checklistEvidenceIssue(check, requestedStatus);
+    if (issue) {
+      resourceViewerMeta.textContent = issue;
+      event.target.value = check.status === "not-started" && resourceChecklistType !== "mitre" ? "not-tested" : (check.status || "not-tested");
+      renderChecklistUI();
+      return;
+    }
+    check.status = requestedStatus;
+    if (["passed", "failed"].includes(requestedStatus)) check.completedAt = new Date().toISOString();
+  }
   if (event.target.classList.contains("checklist-applicability")) check.applicability = event.target.value;
   scheduleChecklistSave();
   if (event.target.classList.contains("checklist-status")) renderChecklistUI();
 });
 checklistGroups?.addEventListener("input", (event) => {
-  if (!event.target.classList.contains("checklist-notes")) return;
   const check = resourceChecklistData?.checks?.[Number(event.target.dataset.index)];
   if (!check) return;
-  if (resourceChecklistType === "mitre") check.observations = event.target.value;
-  else check.result = event.target.value;
+  if (event.target.classList.contains("checklist-procedure")) check.procedure = checklistTextList(event.target.value);
+  else if (event.target.classList.contains("checklist-evidence")) check.evidence = checklistTextList(event.target.value);
+  else if (event.target.classList.contains("checklist-notes")) {
+    if (resourceChecklistType === "mitre") check.observations = event.target.value;
+    else check.result = event.target.value;
+  } else return;
   scheduleChecklistSave();
 });
 scopeUIForm?.addEventListener("input", (event) => {
@@ -7247,8 +7601,12 @@ function openModelEditMenu(modelName, rowEl) {
   rowEl.classList.add("editing");
 
   const settings = getModelSettings(modelName);
-  thinkingToggle.classList.toggle("on", settings.thinking);
-  thinkingToggle.setAttribute("aria-pressed", String(settings.thinking));
+  const thinkingEnabled = modelThinkingEnabled(settings);
+  thinkingToggle.classList.toggle("on", thinkingEnabled);
+  thinkingToggle.setAttribute("aria-pressed", String(thinkingEnabled));
+  thinkingToggle.title = settings.thinkingConfigured
+    ? (thinkingEnabled ? "Thinking enabled" : "Thinking disabled")
+    : "Thinking automatic for supported models";
   renderContextOptions(settings.context);
   updateModelRuntimeNote(modelName);
 
@@ -7328,10 +7686,13 @@ thinkingToggle?.addEventListener("click", (e) => {
   e.stopPropagation();
   if (!editingModel) return;
   const settings = getModelSettings(editingModel);
-  settings.thinking = !settings.thinking;
+  settings.thinking = !modelThinkingEnabled(settings);
+  settings.thinkingConfigured = true;
   saveModelSettings();
-  thinkingToggle.classList.toggle("on", settings.thinking);
-  thinkingToggle.setAttribute("aria-pressed", String(settings.thinking));
+  const thinkingEnabled = modelThinkingEnabled(settings);
+  thinkingToggle.classList.toggle("on", thinkingEnabled);
+  thinkingToggle.setAttribute("aria-pressed", String(thinkingEnabled));
+  thinkingToggle.title = thinkingEnabled ? "Thinking enabled" : "Thinking disabled";
 });
 
 function showModelListLoading() {
@@ -7963,11 +8324,13 @@ function waitForOllamaRound(assistant, editContext) {
     window.api.removeAllListeners("ollama:toolcall");
 
     window.api.onThinking((token) => {
-      if (!contentStarted) assistant.setStatus("Thinking…");
-      assistant.appendThinking(token);
+      if (assistant.appendThinking(token)) {
+        assistant.setStatus("Thinking…");
+      }
     });
 
     window.api.onToolCall((calls) => {
+      assistant.finalizeThinking();
       const tools = ToolParser.resolveTools(
         ToolParser.parseNativeToolCalls(calls),
         editContext,
@@ -7991,6 +8354,8 @@ function waitForOllamaRound(assistant, editContext) {
     });
 
     window.api.onToken((token) => {
+      if (!token) return;
+      assistant.finalizeThinking();
       if (abortedForRepetition) {
         roundContent += token;
         return;
@@ -8013,7 +8378,6 @@ function waitForOllamaRound(assistant, editContext) {
       }
       if (!contentStarted) {
         contentStarted = true;
-        assistant.finalizeThinking();
         assistant.clearStatus();
       }
       roundContent = nextContent;
@@ -8051,23 +8415,62 @@ async function requestOllamaChat(settings) {
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
-function scrollMessages() {
+const CHAT_BOTTOM_THRESHOLD = 8;
+let chatAutoFollow = true;
+
+function messagesAreNearBottom() {
+  if (!messages) return true;
+  return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= CHAT_BOTTOM_THRESHOLD;
+}
+
+function scrollMessages({ force = false } = {}) {
+  if (!messages) return;
+  if (force) chatAutoFollow = true;
+  if (!chatAutoFollow) return;
   messages.scrollTop = messages.scrollHeight;
 }
 
-function createThinkingTimer(metaEl) {
-  const start = Date.now();
-  const interval = setInterval(() => {
-    const secs = ((Date.now() - start) / 1000).toFixed(1);
-    metaEl.textContent = `Thinking for ${secs}s`;
-  }, 100);
-  return {
-    stop() {
-      clearInterval(interval);
-      const secs = ((Date.now() - start) / 1000).toFixed(1);
-      metaEl.textContent = `Thought for ${secs}s`;
-    },
-  };
+messages.addEventListener("wheel", (event) => {
+  // Disable follow immediately, including for a small upward wheel movement
+  // that has not yet crossed the bottom-distance threshold.
+  if (event.deltaY < 0) chatAutoFollow = false;
+}, { passive: true });
+
+messages.addEventListener("scroll", () => {
+  chatAutoFollow = messagesAreNearBottom();
+}, { passive: true });
+
+function animateStreamDelta(container, delta) {
+  if (!container || !String(delta || "").trim()) return;
+  if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let candidate = null;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (!node.data?.trim()) continue;
+    const parent = node.parentElement;
+    if (!parent || parent.closest("button, .md-code-copy, [aria-hidden='true']")) continue;
+    candidate = node;
+  }
+  if (!candidate?.parentNode) return;
+
+  const visibleDelta = String(delta).trimEnd();
+  const revealLength = Math.min(candidate.data.length, Math.max(1, visibleDelta.length));
+  const suffix = candidate.splitText(Math.max(0, candidate.data.length - revealLength));
+  const reveal = document.createElement("span");
+  reveal.className = "stream-text-reveal";
+  suffix.parentNode.insertBefore(reveal, suffix);
+  reveal.appendChild(suffix);
+}
+
+let thinkingDisclosureSequence = 0;
+
+function completedThinkingLabel(startedAt) {
+  const elapsedSeconds = Math.max(0, (Date.now() - startedAt) / 1000);
+  if (elapsedSeconds < 1) return "Thought for a moment";
+  const seconds = Math.max(1, Math.round(elapsedSeconds));
+  return `Thought for ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
 }
 
 function addUserMessage(text) {
@@ -8081,7 +8484,7 @@ function addUserMessage(text) {
   box.appendChild(content);
   turn.appendChild(box);
   messages.appendChild(turn);
-  scrollMessages();
+  scrollMessages({ force: true });
 }
 
 function addErrorMessage(text) {
@@ -8096,52 +8499,16 @@ function addErrorMessage(text) {
   turn.appendChild(box);
   messages.appendChild(turn);
   syncActiveChatSession();
-  scrollMessages();
+  scrollMessages({ force: true });
 }
 
-function createAssistantTurn(enableThinking) {
+function createAssistantTurn() {
   const turn = document.createElement("div");
   turn.className = "chat-turn assistant";
+  turn.setAttribute("aria-busy", "true");
 
-  let thinkingBlock = null;
-  let thinkingBody = null;
-  let thinkingMeta = null;
-  let thinkingTimer = null;
-
-  if (enableThinking) {
-    thinkingBlock = document.createElement("div");
-    thinkingBlock.className = "thinking-block collapsed";
-    thinkingBlock.hidden = true;
-
-    const header = document.createElement("button");
-    header.type = "button";
-    header.className = "thinking-header";
-    header.innerHTML = `
-      <span class="codicon codicon-chevron-right thinking-chevron"></span>
-      <span class="thinking-title">Thinking</span>
-      <span class="thinking-meta">Thinking…</span>
-    `;
-
-    thinkingBody = document.createElement("div");
-    thinkingBody.className = "thinking-body";
-    thinkingMeta = header.querySelector(".thinking-meta");
-
-    header.addEventListener("click", () => {
-      thinkingBlock.classList.toggle("collapsed");
-      const chevron = header.querySelector(".thinking-chevron");
-      chevron.classList.toggle("codicon-chevron-right", thinkingBlock.classList.contains("collapsed"));
-      chevron.classList.toggle("codicon-chevron-down", !thinkingBlock.classList.contains("collapsed"));
-    });
-
-    thinkingBlock.appendChild(header);
-    thinkingBlock.appendChild(thinkingBody);
-    turn.appendChild(thinkingBlock);
-  }
-
-  const statusEl = document.createElement("div");
-  statusEl.className = "assistant-status is-active";
-  statusEl.textContent = "Planning…";
-  turn.appendChild(statusEl);
+  let activeThinkingPhase = null;
+  let pendingThinkingPrefix = "";
 
   const contentEl = document.createElement("div");
   contentEl.className = "assistant-reply";
@@ -8152,27 +8519,26 @@ function createAssistantTurn(enableThinking) {
 
   const assistant = {
     turn,
-    statusEl,
+    statusEl: null,
     contentEl,
     rawContent: "",
     rawThinking: "",
-    thinkingBlock,
-    thinkingBody,
-    thinkingMeta,
+    thinkingBlock: null,
+    thinkingBody: null,
+    thinkingPhases: [],
     setStatus(text) {
-      if (!this.statusEl) return;
-      this.statusEl.textContent = text;
-      this.statusEl.classList.add("is-active");
+      this.turn.dataset.activity = String(text || "");
+      this.turn.setAttribute("aria-busy", "true");
     },
     clearStatus() {
-      if (!this.statusEl) return;
-      this.statusEl.classList.remove("is-active");
+      delete this.turn.dataset.activity;
+      this.turn.setAttribute("aria-busy", "false");
     },
     displayContent() {
       const streaming = this.contentEl.classList.contains("streaming");
       return ToolParser.cleanReplyForDisplay(this.rawContent, { streaming });
     },
-    syncDisplay() {
+    syncDisplay({ animateToken = "" } = {}) {
       const text = this.displayContent();
       if (text) {
         this.clearStatus();
@@ -8182,12 +8548,13 @@ function createAssistantTurn(enableThinking) {
           text,
           { streaming: this.contentEl.classList.contains("streaming") },
         );
+        if (animateToken) animateStreamDelta(this.contentEl, animateToken);
       }
       scrollMessages();
     },
     appendContent(token) {
       this.rawContent += token;
-      this.syncDisplay();
+      this.syncDisplay({ animateToken: token });
     },
     finalizeContent() {
       const text = this.displayContent();
@@ -8207,37 +8574,92 @@ function createAssistantTurn(enableThinking) {
     },
     pruneIfEmpty() {
       const hasContent = !this.contentEl.hidden && this.contentEl.textContent.trim();
-      const statusActive = this.statusEl?.classList.contains("is-active");
+      const statusActive = this.turn.getAttribute("aria-busy") === "true";
       const hasThinking = this.thinkingBlock && !this.thinkingBlock.hidden && this.rawThinking.trim();
       const hasTools = this.turn.querySelector(".tool-card");
       if (!hasContent && !statusActive && !hasThinking && !hasTools) {
         this.turn.remove();
       }
     },
-    startThinkingTimer() {
-      if (!thinkingMeta || thinkingTimer) return;
-      thinkingTimer = createThinkingTimer(thinkingMeta);
-    },
-    stopThinkingTimer() {
-      if (!thinkingTimer) return;
-      thinkingTimer.stop();
-      thinkingTimer = null;
-    },
     appendThinking(text) {
-      if (!thinkingBody) return;
-      if (thinkingBlock.hidden) {
-        thinkingBlock.hidden = false;
-        this.startThinkingTimer();
+      const delta = String(text || "");
+      if (!delta) return false;
+
+      this.rawThinking += delta;
+      if (!activeThinkingPhase) {
+        pendingThinkingPrefix += delta;
+        // Retain leading whitespace, but do not flash a blank disclosure.
+        if (!pendingThinkingPrefix.trim()) return false;
+
+        const block = document.createElement("section");
+        block.className = "thinking-block collapsed is-thinking";
+        block.dataset.userInteracted = "false";
+
+        const bodyId = `thinking-body-${++thinkingDisclosureSequence}`;
+        const header = document.createElement("button");
+        header.type = "button";
+        header.className = "thinking-header";
+        header.setAttribute("aria-expanded", "false");
+        header.setAttribute("aria-controls", bodyId);
+        header.innerHTML = `
+          <span class="codicon codicon-chevron-right thinking-chevron" aria-hidden="true"></span>
+          <span class="thinking-title">Thinking...</span>
+        `;
+
+        const body = document.createElement("div");
+        body.id = bodyId;
+        body.className = "thinking-body";
+        body.setAttribute("role", "region");
+        body.setAttribute("aria-label", "Model reasoning");
+
+        block.appendChild(header);
+        block.appendChild(body);
+        this.turn.insertBefore(block, this.contentEl);
+
+        activeThinkingPhase = {
+          block,
+          body,
+          header,
+          title: header.querySelector(".thinking-title"),
+          startedAt: Date.now(),
+          text: pendingThinkingPrefix,
+        };
+        pendingThinkingPrefix = "";
+        this.thinkingBlock = block;
+        this.thinkingBody = body;
+        this.thinkingPhases.push(activeThinkingPhase);
+      } else {
+        activeThinkingPhase.text += delta;
       }
-      this.rawThinking += text;
-      renderMarkdown(thinkingBody, this.rawThinking, { streaming: true });
+
+      renderMarkdown(activeThinkingPhase.body, activeThinkingPhase.text, { streaming: true });
+      animateStreamDelta(activeThinkingPhase.body, delta);
+      // Keep the compact live tail pinned to the newest reasoning token.
+      if (activeThinkingPhase.block.classList.contains("collapsed")) {
+        activeThinkingPhase.body.scrollTop = activeThinkingPhase.body.scrollHeight;
+      }
       scrollMessages();
+      return true;
     },
     finalizeThinking() {
-      this.stopThinkingTimer();
-      if (thinkingBody) {
-        renderMarkdown(thinkingBody, this.rawThinking);
+      if (!activeThinkingPhase) {
+        pendingThinkingPrefix = "";
+        return false;
       }
+      const phase = activeThinkingPhase;
+      activeThinkingPhase = null;
+      phase.block.classList.remove("is-thinking");
+      phase.title.textContent = completedThinkingLabel(phase.startedAt);
+      renderMarkdown(phase.body, phase.text);
+
+      if (phase.block.dataset.userInteracted !== "true") {
+        phase.block.classList.add("collapsed");
+        phase.header.setAttribute("aria-expanded", "false");
+        const chevron = phase.header.querySelector(".thinking-chevron");
+        chevron?.classList.add("codicon-chevron-right");
+        chevron?.classList.remove("codicon-chevron-up");
+      }
+      return true;
     },
   };
 
@@ -8275,7 +8697,7 @@ async function sendMessage() {
   updateContextUsage();
 
   const settings = getModelSettings(selectedModel);
-  const assistant = createAssistantTurn(settings.thinking);
+  const assistant = createAssistantTurn();
   assistant.contentEl.classList.add("streaming");
 
   const activeFile = getActiveFileContext();
@@ -8321,10 +8743,6 @@ async function sendMessage() {
       const payload = await donePromise;
       assistant.contentEl.classList.remove("streaming");
       assistant.finalizeThinking();
-
-      if (assistant.thinkingBlock && !assistant.rawThinking) {
-        assistant.thinkingBlock.hidden = true;
-      }
 
       const rawRound = payload.roundContent || "";
       const roundText = ToolParser.cleanReplyForDisplay(rawRound, {
@@ -8651,8 +9069,14 @@ async function runStaticSlashCommand(rawCommand) {
   if (authority.superMode === "ask" && parsed.command !== "/passive" && !window.confirm(`Approve ${parsed.command} for this authorized target?`)) return true;
   addUserMessage(rawCommand);
   chatHistory.push({ role: "user", content: rawCommand });
-  const result = await window.api.runSlashCommand({ assessment: assessmentPath, command: rawCommand, modeFamily: chatFamily, overrides: slashCommandOverrides() });
-  const assistant = createAssistantTurn(false);
+  const commandPayload = { assessment: assessmentPath, command: rawCommand, modeFamily: chatFamily, mode: chatMode, authority: authoritySettingsData, overrides: slashCommandOverrides() };
+  let result = await window.api.runSlashCommand(commandPayload);
+  if (result?.policyDecision?.requiresApproval && result?.approvalProposal) {
+    const proposal = result.approvalProposal;
+    const approved = window.confirm(`Approve this one slash-command action?\n\nTarget: ${proposal.target}\nCapability: ${proposal.capability}\nRisk: ${proposal.risk}\n\n${result.error}`);
+    if (approved) result = await window.api.runSlashCommand({ ...commandPayload, approvalGranted: proposal });
+  }
+  const assistant = createAssistantTurn();
   const message = result?.ok
     ? `${parsed.command} completed for ${result.target}.\n\nNormalized results: ${JSON.stringify(result.normalized || {})}\nOutput: ${result.output || "assessment output"}\n\n${(result.results || []).map((item) => `- ${item.tool}: ${item.status || (item.exitCode === 0 ? "completed" : `exit ${item.exitCode}`)}${item.error ? ` (${item.error})` : ""}`).join("\n")}`
     : `/${String(parsed.command || "command").replace(/^\//, "")} failed: ${result?.error || "Unknown command error"}`;
@@ -8701,7 +9125,7 @@ async function sendMessageWithAgentRuntime() {
   updateContextUsage();
 
   const settings = getModelSettings(selectedModel);
-  const assistant = createAssistantTurn(settings.thinking);
+  const assistant = createAssistantTurn();
   assistant.contentEl.classList.add("streaming");
 
   const activeFile = getActiveFileContext();
@@ -8718,21 +9142,38 @@ async function sendMessageWithAgentRuntime() {
     }
 
     if (payload.type === "thinking") {
-      if (!contentStarted) assistant.setStatus("Thinking...");
-      assistant.appendThinking(payload.delta || "");
+      if (assistant.appendThinking(payload.delta || "")) {
+        assistant.setStatus("Thinking...");
+      }
       return;
     }
 
     if (payload.type === "content") {
+      const delta = String(payload.delta || "");
+      if (!delta) return;
+      assistant.finalizeThinking();
       if (!contentStarted) {
         contentStarted = true;
-        assistant.finalizeThinking();
         assistant.clearStatus();
       }
-      assistant.appendContent(payload.delta || "");
+      assistant.appendContent(delta);
       activeStreamContent = assistant.rawContent;
       lastAgentText = assistant.rawContent;
       updateContextUsage();
+      return;
+    }
+
+    if (payload.type === "run_state") {
+      const state = payload.state || {};
+      const phase = String(state.phase || "preflight").replace(/-/g, " ");
+      assistant.setStatus(`${phase} · ${state.completionGate || "evaluating gate"}`);
+      setAgentStatus(`${modeLabel()} · ${phase}`);
+      return;
+    }
+
+    if (payload.type === "model_qualification") {
+      const qualification = payload.qualification || {};
+      assistant.setStatus(qualification.qualified ? `Model qualified (${Math.round((qualification.score || 0) * 100)}%)` : "Model is unqualified for Test Agent");
       return;
     }
 
@@ -8743,8 +9184,24 @@ async function sendMessageWithAgentRuntime() {
       return;
     }
 
+    if (payload.type === "approval_required") {
+      const details = [
+        `Tool: ${payload.tool || "unknown"}`,
+        `Target: ${payload.target || "workspace"}`,
+        `Capability: ${payload.capability || "unknown"}`,
+        `Risk: ${payload.risk || "unknown"}`,
+        "",
+        payload.reason || "This action requires operator approval.",
+      ].join("\n");
+      const approved = window.confirm(`Approve this one action?\n\n${details}`);
+      await window.api.agentResolveApproval({ actionId: payload.actionId, approved });
+      assistant.setStatus(approved ? "Action-specific approval granted" : "Action denied by operator");
+      return;
+    }
+
     if (payload.type === "tool_call") {
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
+      assistant.finalizeThinking();
       for (const tool of tools) {
         ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
       }
@@ -8758,6 +9215,7 @@ async function sendMessageWithAgentRuntime() {
     }
 
     if (payload.type === "tool_start" && payload.tool) {
+      assistant.finalizeThinking();
       ensureToolCard(assistant.turn, assistant.contentEl, payload.tool);
       assistant.setStatus(ToolParser.toolStatusLabel(payload.tool));
       scrollMessages();
@@ -8771,15 +9229,11 @@ async function sendMessageWithAgentRuntime() {
   };
 
   const activeAuthority = await loadAuthoritySettings();
-  const selectedRole = String(chatMode || "").split(":").pop();
-  let authorityApproval = activeAuthority.superMode === "full" || activeAuthority.superMode === "approve" || exploitApprovalGranted;
-  if (activeAuthority.superMode === "ask" && selectedRole === "agent") {
-    authorityApproval = window.confirm("Pointer Authority is set to Ask for Approval. Approve sensitive or mutating actions for this run? Cancel keeps the run analysis-only.");
-  }
+  const authorityApproval = activeAuthority.superMode === "full" || activeAuthority.superMode === "approve" || exploitApprovalGranted;
+  let unsubscribeAgentEvent = () => {};
 
   try {
-    window.api.removeAllListeners("agent:event");
-    window.api.onAgentEvent((payload) => {
+    unsubscribeAgentEvent = window.api.onAgentEvent((payload) => {
       Promise.resolve(handleAgentEvent(payload)).catch(() => {});
     });
 
@@ -8802,12 +9256,19 @@ async function sendMessageWithAgentRuntime() {
       userMessage: text,
     });
 
+    // The event stream is authoritative for live rendering. The completed
+    // result is a lossless fallback if an Electron event was missed while the
+    // renderer was busy processing a large tool result.
+    const completedThinking = String(result?.thinking || "");
+    if (completedThinking && completedThinking !== assistant.rawThinking) {
+      const missingThinking = completedThinking.startsWith(assistant.rawThinking)
+        ? completedThinking.slice(assistant.rawThinking.length)
+        : (assistant.rawThinking ? `\n\n${completedThinking}` : completedThinking);
+      if (missingThinking) assistant.appendThinking(missingThinking);
+    }
+
     assistant.contentEl.classList.remove("streaming");
     assistant.finalizeThinking();
-
-    if (assistant.thinkingBlock && !assistant.rawThinking) {
-      assistant.thinkingBlock.hidden = true;
-    }
 
     if (result?.error) {
       assistant.turn.remove();
@@ -8835,11 +9296,33 @@ async function sendMessageWithAgentRuntime() {
       assistant.rawContent = lastAgentText;
     }
 
+    const claimBadges = [];
+    for (const claim of Array.isArray(result?.claims) ? result.claims : []) {
+      if (claim?.state) claimBadges.push([claim.state, `${claim.state[0].toUpperCase()}${claim.state.slice(1)}${claim.evidenceIds?.length ? ` · ${claim.evidenceIds.length} evidence` : ""}`]);
+    }
+    if (!claimBadges.length && result?.runState?.evidenceIds?.length) claimBadges.push(["observed", `Observed · ${result.runState.evidenceIds.length} evidence`]);
+    if (result?.runState?.hypothesisId) claimBadges.push(["hypothesis", "Hypothesis"]);
+    if (result?.runState?.verification?.status === "passed") claimBadges.push(["verified", "Verified"]);
+    if (result?.runState?.status === "inconclusive" || result?.claimWarnings?.length) claimBadges.push(["inconclusive", "Inconclusive"]);
+    if (claimBadges.length) {
+      const strip = document.createElement("div");
+      strip.className = "claim-state-strip";
+      strip.innerHTML = claimBadges.map(([state, label]) => `<span class="claim-state ${state}">${escapeHtml(label)}</span>`).join("");
+      assistant.contentEl.before(strip);
+    }
+    if (result?.operatorFeedback) {
+      const feedback = result.operatorFeedback;
+      const panel = document.createElement("details");
+      panel.className = "operator-feedback";
+      panel.innerHTML = `<summary>Run evidence and policy</summary><dl><dt>Known</dt><dd>${escapeHtml((feedback.known || []).join(" ") || "None")}</dd><dt>Unknown</dt><dd>${escapeHtml((feedback.unknown || []).join(" ") || "None")}</dd><dt>Hypothesis</dt><dd>${escapeHtml(feedback.hypothesis || "None")}</dd><dt>Action</dt><dd>${escapeHtml(feedback.action || "None")}</dd><dt>Policy</dt><dd>${escapeHtml(`${feedback.policy?.code || "NOT_EVALUATED"}: ${feedback.policy?.reason || ""}`)}</dd><dt>Evidence</dt><dd>${escapeHtml((feedback.evidence || []).join(", ") || "None")}</dd><dt>Verification</dt><dd>${escapeHtml(`${feedback.verification?.status || "not-run"}${feedback.verification?.details ? ` · ${feedback.verification.details}` : ""}`)}</dd><dt>Limitations</dt><dd>${escapeHtml((feedback.limitations || []).map((item) => typeof item === "string" ? item : item.phase || JSON.stringify(item)).join(" ") || "None")}</dd><dt>Next step</dt><dd>${escapeHtml(feedback.nextStep || "Review the run record.")}</dd></dl>`;
+      assistant.contentEl.before(panel);
+    }
+
     assistant.finalizeContent();
     assistant.pruneIfEmpty();
     syncActiveChatSession();
   } finally {
-    window.api.removeAllListeners("agent:event");
+    unsubscribeAgentEvent();
     activeStreamContent = "";
     streaming = false;
     stopRequested = false;
@@ -9071,10 +9554,13 @@ messages.addEventListener("click", (e) => {
   if (thinkingHeader) {
     const block = thinkingHeader.closest(".thinking-block");
     if (block) {
+      block.dataset.userInteracted = "true";
       block.classList.toggle("collapsed");
+      const collapsed = block.classList.contains("collapsed");
+      thinkingHeader.setAttribute("aria-expanded", String(!collapsed));
       const chevron = thinkingHeader.querySelector(".thinking-chevron");
-      chevron?.classList.toggle("codicon-chevron-right", block.classList.contains("collapsed"));
-      chevron?.classList.toggle("codicon-chevron-down", !block.classList.contains("collapsed"));
+      chevron?.classList.toggle("codicon-chevron-right", collapsed);
+      chevron?.classList.toggle("codicon-chevron-up", !collapsed);
     }
     return;
   }

@@ -283,11 +283,72 @@ const ToolMap = (() => {
           question: { type: "string", description: "Security question to answer" },
           target: { type: "string", description: "In-scope asset or route under consideration" },
           expected_signal: { type: "string", description: "What evidence would support or reject the hypothesis" },
+          rejecting_signal: { type: "string", description: "What evidence would reject the hypothesis" },
+          proposed_technique: { type: "string", description: "Least-invasive proposed technique" },
+          evidence_plan: { type: "array", items: { type: "string" } },
+          stop_conditions: { type: "array", items: { type: "string" } },
           evidence_ids: { type: "array", items: { type: "string" } },
         },
-        required: ["question"],
+        required: ["id", "question", "target", "expected_signal", "rejecting_signal", "proposed_technique", "evidence_plan", "stop_conditions"],
       },
-      meta: { label: "Recording", badge: "hypothesis", target: "question", mutates: false, capability: "evidence", risk: "evidence" },
+      meta: { label: "Recording", badge: "hypothesis", target: "question", mutates: true, capability: "evidence", risk: "evidence" },
+    },
+    {
+      name: "ingest_assessment_records",
+      description: "Submit structured tool or AI observations to Pointer's schema-managed Python parser. The parser validates fields, deduplicates records, recomputes statistics, and atomically updates only an approved Core dataset. Never edit Core JSON/JSONL files directly.",
+      parameters: {
+        type: "object",
+        properties: {
+          resource: {
+            type: "string",
+            enum: ["active-recon", "passive-recon", "endpoints", "pages", "subdomains", "assets", "services"],
+            description: "Approved canonical dataset. Scope, traffic, and vulnerability findings cannot be written through this tool.",
+          },
+          records: {
+            type: "array",
+            items: { type: "object" },
+            description: "Structured records only. Unknown fields are discarded against the canonical template.",
+          },
+          source: { type: "string", description: "Tool, parser, or observation source used for provenance." },
+        },
+        required: ["resource", "records", "source"],
+      },
+      meta: { label: "Ingesting", badge: "validated records", target: "resource", mutates: true, capability: "evidence", risk: "evidence" },
+    },
+    {
+      name: "run_security_tool",
+      description: "Run one supported security tool through a typed, policy-controlled adapter. Supply a canonical in-scope target, hypothesis, expected signal, evidence plan, and conservative configuration; never construct the shell command yourself.",
+      parameters: {
+        type: "object",
+        properties: {
+          adapter_id: { type: "string", enum: ["subfinder", "amass", "theharvester", "httpx", "nmap", "naabu", "katana", "ffuf", "gobuster", "nuclei", "nikto", "testssl", "sqlmap", "wafw00f", "nmap-firewall", "hping3", "traceroute"] },
+          target: { type: "string" },
+          hypothesis_id: { type: "string" },
+          expected_signal: { type: "string" },
+          technique_ids: { type: "array", items: { type: "string" } },
+          evidence_plan: { type: "array", items: { type: "string" } },
+          output_path: { type: "string" },
+          configuration: { type: "object" },
+        },
+        required: ["adapter_id", "target", "hypothesis_id", "expected_signal", "technique_ids", "evidence_plan"],
+      },
+      meta: { label: "Running", badge: "security adapter", target: "target", mutates: false, capability: "execute", risk: "contextual", requiresApproval: true },
+    },
+    {
+      name: "record_finding_candidate",
+      description: "Persist one structured finding candidate through Pointer's evidence, scope, reproduction, impact, false-positive, and hybrid-verifier promotion gate. Never edit findings JSON directly.",
+      parameters: {
+        type: "object",
+        properties: { finding: { type: "object", description: "Structured finding candidate including target, status, severity, reproduction, impact, evidence IDs, and verification." } },
+        required: ["finding"],
+      },
+      meta: { label: "Recording", badge: "finding candidate", target: "finding", mutates: true, capability: "evidence", risk: "evidence" },
+    },
+    {
+      name: "verify_finding_candidate",
+      description: "Submit one structured finding candidate and its referenced evidence to Pointer's separate temperature-zero no-tools verifier. An invalid response is inconclusive.",
+      parameters: { type: "object", properties: { finding: { type: "object" } }, required: ["finding"] },
+      meta: { label: "Verifying", badge: "hybrid verifier", target: "finding", mutates: true, capability: "evidence", risk: "evidence" },
     },
     {
       name: "run_command",
@@ -349,7 +410,7 @@ const ToolMap = (() => {
     const name = tool.name;
     const mutation = ["write_file", "create_file", "patch_file", "replace_in_file", "insert_in_file", "append_file", "delete_file"].includes(name);
     const process = ["run_command", "start_process", "read_process", "stop_process"].includes(name);
-    const evidence = ["record_hypothesis", "annotate_map_finding"].includes(name);
+    const evidence = ["ingest_assessment_records", "record_hypothesis", "record_finding_candidate", "verify_finding_candidate", "annotate_map_finding"].includes(name);
     return [name, { ...tool.meta, typed: true, capability: tool.meta.capability || (evidence ? "evidence" : mutation ? "workspace" : process ? "execute" : "observe"), risk: tool.meta.risk || (evidence ? "evidence" : mutation ? "workspace" : process ? "contextual" : "read"), requiresApproval: tool.meta.requiresApproval ?? (mutation || process) }];
   }));
   const TOOL_NAMES = TOOL_DEFS.map((tool) => tool.name);
@@ -548,6 +609,39 @@ const ToolMap = (() => {
     if (["get_map_node", "get_map_neighbors"].includes(toolName) && !args.id) return validationError("Missing required Map node id", "MISSING_MAP_NODE_ID");
     if (toolName === "find_map_paths" && (!args.from || !args.to)) return validationError("Both from and to Map node IDs are required", "MISSING_MAP_PATH_ENDPOINTS");
     if (toolName === "get_map_evidence" && (!Array.isArray(args.evidence_ids) || !args.evidence_ids.length)) return validationError("Missing required evidence_ids", "MISSING_EVIDENCE_IDS");
+    if (toolName === "run_security_tool") {
+      if (!args.adapter_id || !args.target || !args.hypothesis_id || !args.expected_signal || !Array.isArray(args.technique_ids) || !args.technique_ids.length || !Array.isArray(args.evidence_plan) || !args.evidence_plan.length) return validationError("Typed security actions require adapter_id, target, hypothesis_id, expected_signal, technique_ids, and evidence_plan", "SECURITY_ACTION_INCOMPLETE");
+      args.adapter_id = sanitizeText(args.adapter_id).toLowerCase();
+      args.target = sanitizeText(args.target);
+      args.hypothesis_id = sanitizeText(args.hypothesis_id);
+      args.expected_signal = sanitizeText(args.expected_signal);
+      args.output_path = sanitizePath(args.output_path || "");
+    }
+    if (toolName === "ingest_assessment_records") {
+      const allowedResources = new Set(["active-recon", "passive-recon", "endpoints", "pages", "subdomains", "assets", "services"]);
+      args.resource = sanitizeText(args.resource).toLowerCase();
+      args.source = sanitizeText(args.source).slice(0, 160);
+      if (!allowedResources.has(args.resource)) return validationError("Only approved Recon, Enumeration, and Services datasets accept typed ingestion", "RESOURCE_NOT_ALLOWED", false);
+      if (!Array.isArray(args.records) || !args.records.length) return validationError("At least one structured record is required", "RECORDS_REQUIRED");
+      if (args.records.length > 250) return validationError("At most 250 records may be ingested at once", "RECORD_LIMIT", false);
+      if (!args.records.every((record) => record && typeof record === "object" && !Array.isArray(record))) return validationError("Every ingestion record must be an object", "RECORD_INVALID");
+      if (JSON.stringify(args.records).length > 750000) return validationError("Ingestion records exceed 750,000 characters", "PAYLOAD_TOO_LARGE", false);
+      if (!args.source) return validationError("A provenance source is required", "SOURCE_REQUIRED");
+    }
+    if (toolName === "record_hypothesis") {
+      if (!args.id || !args.question || !args.target || !args.expected_signal || !args.rejecting_signal || !args.proposed_technique || !Array.isArray(args.evidence_plan) || !args.evidence_plan.length || !Array.isArray(args.stop_conditions) || !args.stop_conditions.length) return validationError("A ready hypothesis requires a stable id, target, question, supporting and rejecting signals, least-invasive technique, evidence plan, and stop conditions", "HYPOTHESIS_INCOMPLETE");
+    }
+    if (toolName === "record_finding_candidate") {
+      if (!args.finding || typeof args.finding !== "object" || Array.isArray(args.finding)) return validationError("A structured finding object is required", "FINDING_REQUIRED");
+      const findingSize = JSON.stringify(args.finding).length;
+      if (findingSize > 50000) return validationError("Finding candidate exceeds 50,000 characters", "FINDING_TOO_LARGE", false);
+      if (!args.finding.title || !args.finding.asset || !Array.isArray(args.finding.evidence)) return validationError("Finding candidates require title, affected asset, and an evidence ID array", "FINDING_INCOMPLETE");
+    }
+    if (toolName === "verify_finding_candidate") {
+      if (!args.finding || typeof args.finding !== "object" || Array.isArray(args.finding)) return validationError("A structured finding object is required", "FINDING_REQUIRED");
+      if (!Array.isArray(args.finding.evidence) || !args.finding.evidence.length) return validationError("The verifier requires evidence IDs", "VERIFIER_EVIDENCE_REQUIRED");
+      if (JSON.stringify(args.finding).length > 50000) return validationError("Finding candidate exceeds 50,000 characters", "FINDING_TOO_LARGE", false);
+    }
     if (toolName === "annotate_map_finding" && !args.hypothesis) return validationError("Missing required hypothesis", "MISSING_HYPOTHESIS");
     if (args.min_confidence != null) args.min_confidence = Math.max(0, Math.min(1, Number(args.min_confidence) || 0));
     if (args.max_hops != null) args.max_hops = Math.max(1, Math.min(8, Math.round(Number(args.max_hops) || 5)));

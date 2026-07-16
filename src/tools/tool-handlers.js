@@ -1,4 +1,9 @@
 const ToolMap = require("./tool-map");
+const SecurityToolAdapters = require("./security-tool-adapters");
+const ScopeEngine = require("../agent/scope-engine");
+
+const PROTECTED_ASSESSMENT_PATH_RE = /^(?:scope|recon|enumeration|traffic|vulnerability-scans|findings|penetration-testing|evidence|runs|logs|map|report)(?:\/|$)|^settings\.config$/i;
+const PROTECTED_ASSESSMENT_COMMAND_RE = /(?:^|[\s"'`])(?:\.\/?|\.\\)?(?:scope|recon|enumeration|traffic|vulnerability-scans|findings|penetration-testing|evidence|runs|logs|map|report)[\\/]|settings\.config/i;
 
 function createToolHandlers(deps) {
   const {
@@ -11,6 +16,7 @@ function createToolHandlers(deps) {
     searchWorkspaceIndex,
     findWorkspaceFiles,
     runWorkspaceCommand,
+    runWorkspaceProcessArgs,
     startWorkspaceProcess,
     readToolProcess,
     stopToolProcess,
@@ -18,6 +24,10 @@ function createToolHandlers(deps) {
     searchWeb,
     fetchWebPage,
     assessmentMap,
+    assessmentWorkspace,
+    crypto,
+    verifyFindingCandidate,
+    ingestAssessmentRecords,
   } = deps;
 
   function ok(toolName, mode, fields = {}) {
@@ -31,6 +41,18 @@ function createToolHandlers(deps) {
   function requireWorkspace(workspace, toolName) {
     if (!workspace) return fail(toolName, "No workspace open");
     return null;
+  }
+
+  function rejectProtectedMutation(toolName, file) {
+    const normalized = String(file || "").replace(/\\/g, "/").replace(/^\.\//, "").trim();
+    if (!PROTECTED_ASSESSMENT_PATH_RE.test(normalized)) return null;
+    return fail(
+      toolName,
+      `Core assessment resource '${normalized}' is schema-managed. Submit structured records through ingest_assessment_records instead of editing the file.`,
+      { file: normalized },
+      "TYPED_ASSESSMENT_MUTATION_REQUIRED",
+      false,
+    );
   }
 
   function mapResult(workspace, toolName, mode, operation) {
@@ -55,7 +77,125 @@ function createToolHandlers(deps) {
     };
   }
 
+  const adapterQueues = new Map();
+  const adapterLastStart = new Map();
+  async function withTargetExecutionLease(hostname, rateLimit, operation) {
+    const key = String(hostname || "").toLowerCase();
+    const previous = adapterQueues.get(key) || Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => { release = resolve; });
+    const queued = previous.then(() => current);
+    adapterQueues.set(key, queued);
+    await previous;
+    try {
+      const interval = Math.ceil(1000 / Math.max(1, Number(rateLimit) || 1));
+      const remaining = interval - (Date.now() - (adapterLastStart.get(key) || 0));
+      if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+      adapterLastStart.set(key, Date.now());
+      return await operation();
+    } finally {
+      release();
+      if (adapterQueues.get(key) === queued) adapterQueues.delete(key);
+    }
+  }
+
   const TOOL_HANDLERS = {
+    async ingest_assessment_records({ workspace, args }) {
+      const missing = requireWorkspace(workspace, "ingest_assessment_records");
+      if (missing) return missing;
+      if (typeof ingestAssessmentRecords !== "function") {
+        return fail("ingest_assessment_records", "The schema-managed Python ingestion service is unavailable.", {}, "INGEST_UNAVAILABLE", false);
+      }
+      const result = await ingestAssessmentRecords({
+        workspace,
+        resource: args.resource,
+        records: args.records,
+        source: args.source || "agent-structured-output",
+      });
+      if (!result?.ok) return fail("ingest_assessment_records", result?.error || "Assessment ingestion failed", result || {}, result?.code || "INGEST_FAILED", false);
+      return ok("ingest_assessment_records", "typed_ingest", {
+        ...result,
+        mutated: result.accepted > 0,
+        summary: `Validated ${result.accepted} ${result.resource} record${result.accepted === 1 ? "" : "s"}; ${result.total} total.`,
+        content: JSON.stringify(result, null, 2),
+      });
+    },
+
+    async run_security_tool({ workspace, args }) {
+      const missing = requireWorkspace(workspace, "run_security_tool");
+      if (missing) return missing;
+      const hypothesisFile = path.join(workspace, "logs", "agent-hypotheses.jsonl");
+      let hypothesis = null;
+      try {
+        if (fs.existsSync(hypothesisFile)) {
+          for (const line of fs.readFileSync(hypothesisFile, "utf8").split(/\r?\n/)) {
+            if (!line.trim()) continue;
+            try { const record = JSON.parse(line); if (String(record.id) === String(args.hypothesis_id)) hypothesis = record; } catch { /* tolerate a truncated tail */ }
+          }
+        }
+      } catch { /* handled as an unresolved hypothesis below */ }
+      if (!hypothesis || hypothesis.status !== "ready") return fail("run_security_tool", "Typed security actions require an existing ready hypothesis record.", {}, "HYPOTHESIS_NOT_READY", false);
+      const built = SecurityToolAdapters.buildAction(args);
+      if (!built.ok) return fail("run_security_tool", built.error, { adapter: built.action }, built.code, false);
+      const currentResolution = await ScopeEngine.resolveTargetAddresses(built.action.target);
+      if (!currentResolution.ok) return fail("run_security_tool", currentResolution.reason, { resolution: currentResolution }, currentResolution.code, false);
+      const stableResolution = ScopeEngine.compareResolution(args.resolution_addresses, currentResolution.addresses);
+      if (!stableResolution.ok) return fail("run_security_tool", stableResolution.reason, { resolution: stableResolution }, stableResolution.code, false);
+      const result = await withTargetExecutionLease(built.action.target.hostname, built.action.configuration.rateLimit, () => runWorkspaceProcessArgs(workspace, built.action.executable, built.action.processArgs, { timeoutMs: built.action.configuration.timeoutMs }));
+      const redact = (value) => String(value || "")
+        .replace(/(["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[_-]?key|password|passwd|secret|token)["']?\s*[:=]\s*["']?)[^"'\s,;&}]+/gi, "$1[REDACTED]")
+        .replace(/\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b/g, "[REDACTED_JWT]")
+        .slice(0, 50000);
+      let evidence = null;
+      try {
+        const resolved = resolveWorkspaceTarget(workspace, built.action.outputPath);
+        if (resolved.error) return fail("run_security_tool", resolved.error, {}, "OUTPUT_PATH_INVALID", false);
+        const artifact = {
+          schemaVersion: 1,
+          adapterId: built.action.adapterId,
+          target: built.action.target,
+          status: result.timedOut ? "timeout" : result.ok ? "complete" : "failed",
+          exitCode: result.exitCode,
+          signal: result.signal,
+          capturedAt: new Date().toISOString(),
+          stdout: redact(result.stdout),
+          stderr: redact(result.stderr),
+          truncated: String(result.stdout || "").length > 50000 || String(result.stderr || "").length > 50000,
+          redacted: true,
+        };
+        const content = `${JSON.stringify(artifact, null, 2)}\n`;
+        fs.mkdirSync(path.dirname(resolved.target), { recursive: true });
+        fs.writeFileSync(resolved.target, content, { encoding: "utf8", mode: 0o600 });
+        evidence = assessmentWorkspace?.appendEvidenceRecord?.(workspace, {
+          type: "tool-output",
+          title: `${built.action.adapterId} output for ${built.action.target.hostname}`,
+          capturedBy: built.action.adapterId,
+          source: "typed-security-adapter",
+          host: built.action.target.hostname,
+          url: `${built.action.target.scheme}://${built.action.target.hostname}:${built.action.target.port}${built.action.target.path}`,
+          sha256: crypto?.createHash?.("sha256").update(content).digest("hex"),
+          content,
+          redacted: true,
+          filePath: built.action.outputPath,
+          notes: `${artifact.status}; hypothesis ${built.action.hypothesisId || "not-linked"}`,
+        }) || null;
+      } catch (error) {
+        return fail("run_security_tool", `Tool completed but evidence persistence failed: ${error.message}`, { result }, "EVIDENCE_WRITE_FAILED", false);
+      }
+      return normalizeResult({
+        ...result,
+        toolName: "run_security_tool",
+        mode: "security-adapter",
+        adapter: { ...built.action, command: undefined, processArgs: undefined },
+        command: built.action.command,
+        outputPath: built.action.outputPath,
+        expectedSignal: built.action.expectedSignal,
+        evidencePlan: built.action.evidencePlan,
+        evidence,
+        evidenceId: evidence?.record?.id || "",
+        status: result.timedOut ? "timeout" : result.ok ? "complete" : "failed",
+      });
+    },
     async record_hypothesis({ workspace, args }) {
       const missing = requireWorkspace(workspace, "record_hypothesis");
       if (missing) return missing;
@@ -67,8 +207,12 @@ function createToolHandlers(deps) {
         question: question.slice(0, 1200),
         target: String(args.target || "").slice(0, 500),
         expectedSignal: String(args.expected_signal || "").slice(0, 1200),
+        rejectingSignal: String(args.rejecting_signal || "").slice(0, 1200),
+        proposedTechnique: String(args.proposed_technique || "").slice(0, 300),
+        evidencePlan: Array.isArray(args.evidence_plan) ? args.evidence_plan.map((value) => String(value).slice(0, 500)).slice(0, 20) : [],
+        stopConditions: Array.isArray(args.stop_conditions) ? args.stop_conditions.map((value) => String(value).slice(0, 500)).slice(0, 20) : [],
         evidenceIds: Array.isArray(args.evidence_ids) ? args.evidence_ids.map((value) => String(value).slice(0, 120)).slice(0, 50) : [],
-        status: "untested",
+        status: "ready",
         source: "agent",
         recordedAt: new Date().toISOString(),
       };
@@ -80,6 +224,22 @@ function createToolHandlers(deps) {
       } catch (error) {
         return fail("record_hypothesis", error.message, {}, "HYPOTHESIS_LOG_FAILED", false);
       }
+    },
+    async record_finding_candidate({ workspace, args }) {
+      const missing = requireWorkspace(workspace, "record_finding_candidate");
+      if (missing) return missing;
+      if (!assessmentWorkspace?.appendFinding) return fail("record_finding_candidate", "Finding persistence is unavailable", {}, "FINDING_SERVICE_UNAVAILABLE", false);
+      const result = assessmentWorkspace.appendFinding(workspace, args.finding || {});
+      if (result?.error) return fail("record_finding_candidate", result.error, { gate: result.gate }, result.code || "FINDING_GATE_FAILED", false);
+      return ok("record_finding_candidate", "finding-candidate", { finding: result.finding, duplicateOf: result.duplicateOf || "", file: result.path, evidenceIds: result.finding?.evidence || [], content: result.duplicateOf ? `Candidate matches existing finding ${result.duplicateOf}.` : `Recorded finding candidate ${result.finding?.id || ""} with status ${result.finding?.status || "draft"}.` });
+    },
+    async verify_finding_candidate({ workspace, args }) {
+      const missing = requireWorkspace(workspace, "verify_finding_candidate");
+      if (missing) return missing;
+      if (typeof verifyFindingCandidate !== "function") return fail("verify_finding_candidate", "Hybrid verifier is unavailable", {}, "VERIFIER_UNAVAILABLE", false);
+      const result = await verifyFindingCandidate(workspace, args.model, args.finding);
+      if (result?.error || result?.verdict === "inconclusive") return fail("verify_finding_candidate", result?.error || "Verifier returned inconclusive", { verdict: result }, result?.code || "VERIFIER_INCONCLUSIVE", false);
+      return ok("verify_finding_candidate", "hybrid-verifier", { verdict: result, evidenceId: result.verifierEvidenceId || "", evidenceIds: result.verifierEvidenceId ? [result.verifierEvidenceId] : [], content: JSON.stringify(result) });
     },
 
     async get_map_overview({ workspace }) {
@@ -236,6 +396,8 @@ function createToolHandlers(deps) {
       const file = String(args.path || "").trim();
       const content = args.content ?? args.code;
       if (!file) return fail("write_file", "Missing required path", {}, "MISSING_PATH", true);
+      const protectedError = rejectProtectedMutation("write_file", file);
+      if (protectedError) return protectedError;
       if (content == null) return fail("write_file", "Missing required content", { file }, "MISSING_CONTENT", true);
       const result = await editWorkspaceFile(workspace, file, { code: String(content) });
       if (result.error) return fail("write_file", result.error, { file }, "WRITE_FAILED", false);
@@ -256,6 +418,8 @@ function createToolHandlers(deps) {
       const file = String(args.path || "").trim();
       const content = args.content ?? args.code;
       if (!file) return fail("create_file", "Missing required path", {}, "MISSING_PATH", true);
+      const protectedError = rejectProtectedMutation("create_file", file);
+      if (protectedError) return protectedError;
       if (content == null) return fail("create_file", "Missing required content", { file }, "MISSING_CONTENT", true);
       const resolved = resolveWorkspaceTarget(workspace, file);
       if (resolved.error) return fail("create_file", resolved.error, { file }, "INVALID_PATH", false);
@@ -277,6 +441,8 @@ function createToolHandlers(deps) {
       if (missing) return missing;
       const file = String(args.path || "").trim();
       if (!file) return fail("patch_file", "Missing required path", {}, "MISSING_PATH", true);
+      const protectedError = rejectProtectedMutation("patch_file", file);
+      if (protectedError) return protectedError;
       const patches = Array.isArray(args.patches)
         ? args.patches
         : [{ search: args.search, replace: args.replace }];
@@ -314,6 +480,8 @@ function createToolHandlers(deps) {
       const search = String(args.old_text ?? args.search ?? "");
       const replace = String(args.new_text ?? args.replace ?? "");
       if (!file) return fail("replace_in_file", "Missing required path", {}, "MISSING_PATH", true);
+      const protectedError = rejectProtectedMutation("replace_in_file", file);
+      if (protectedError) return protectedError;
       if (!search) return fail("replace_in_file", "Missing required old_text", { file }, "MISSING_SEARCH", true);
       const result = await editWorkspaceFile(workspace, file, { patches: [{ search, replace }] });
       if (result.error) return fail("replace_in_file", result.error, { file }, "REPLACE_FAILED", true);
@@ -336,6 +504,8 @@ function createToolHandlers(deps) {
       const content = String(args.content ?? args.text ?? "");
       const position = String(args.position || "after").toLowerCase() === "before" ? "before" : "after";
       if (!file) return fail("insert_in_file", "Missing required path", {}, "MISSING_PATH", true);
+      const protectedError = rejectProtectedMutation("insert_in_file", file);
+      if (protectedError) return protectedError;
       if (!anchor) return fail("insert_in_file", "Missing required anchor", { file }, "MISSING_ANCHOR", true);
       if (!content) return fail("insert_in_file", "Missing required content", { file }, "MISSING_CONTENT", true);
       const replace = position === "before" ? `${content}${anchor}` : `${anchor}${content}`;
@@ -358,6 +528,8 @@ function createToolHandlers(deps) {
       const file = String(args.path || "").trim();
       const content = String(args.content ?? args.code ?? "");
       if (!file) return fail("append_file", "Missing required path", {}, "MISSING_PATH", true);
+      const protectedError = rejectProtectedMutation("append_file", file);
+      if (protectedError) return protectedError;
       if (!content) return fail("append_file", "Missing required content", { file }, "MISSING_CONTENT", true);
       const current = readFile(workspace, file);
       if (current.error) return fail("append_file", current.error, { file }, "FILE_NOT_FOUND", true);
@@ -379,6 +551,8 @@ function createToolHandlers(deps) {
       if (missing) return missing;
       const file = String(args.path || "").trim();
       if (!file) return fail("delete_file", "Missing required path", {}, "MISSING_PATH", true);
+      const protectedError = rejectProtectedMutation("delete_file", file);
+      if (protectedError) return protectedError;
       const result = deleteWorkspaceFile(workspace, file);
       if (result.error) return fail("delete_file", result.error, { file }, "DELETE_FAILED", false);
       return ok("delete_file", "delete", { file, mutated: true });
@@ -437,6 +611,7 @@ function createToolHandlers(deps) {
       if (missing) return missing;
       const command = String(args.command || "").trim();
       if (!command) return fail("run_command", "Missing required command", {}, "MISSING_COMMAND", true);
+      if (PROTECTED_ASSESSMENT_COMMAND_RE.test(command)) return fail("run_command", "Commands cannot address schema-managed Core resources. Use a typed ingestion or evidence adapter.", { command }, "TYPED_ASSESSMENT_MUTATION_REQUIRED", false);
       const result = await runWorkspaceCommand(workspace, command, {
         timeoutMs: Number(args.timeout_ms) || Number(args.timeoutMs) || 20000,
       });
@@ -449,6 +624,7 @@ function createToolHandlers(deps) {
       if (missing) return missing;
       const command = String(args.command || "").trim();
       if (!command) return fail("start_process", "Missing required command", {}, "MISSING_COMMAND", true);
+      if (PROTECTED_ASSESSMENT_COMMAND_RE.test(command)) return fail("start_process", "Processes cannot address schema-managed Core resources. Use a typed ingestion or evidence adapter.", { command }, "TYPED_ASSESSMENT_MUTATION_REQUIRED", false);
       const result = startWorkspaceProcess(workspace, command);
       if (result.error) return fail("start_process", result.error, { command }, "PROCESS_START_FAILED", false);
       return ok("start_process", "process_start", result);

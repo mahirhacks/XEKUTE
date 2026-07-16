@@ -15,15 +15,15 @@ test("testing and assist profiles normalize with separate capabilities", () => {
   assert.equal(normalizeProfile("testing", "agent").capability, "active");
   assert.equal(normalizeProfile("testing", "ask").capability, "observe");
   assert.equal(normalizeProfile("testing", "execution").legacyMode, "agent");
-  assert.equal(normalizeProfile("testing:exploit").key, "exploit");
+  assert.equal(normalizeProfile("testing:exploit").key, "agent");
   assert.equal(normalizeProfile("assist", "planner").legacyMode, "plan");
   assert.equal(normalizeProfile("assist", "agent").capability, "workspace");
   assert.equal(normalizeProfile("assist", "ask").capability, "observe");
-  assert.equal(normalizeProfile("agent").key, "executor");
+  assert.equal(normalizeProfile("agent").key, "agent");
 });
 
 test("policy engine blocks active and exploit actions until policy gates are enabled", () => {
-  const active = { toolName: "run_command", command: "nmap -Pn example.com" };
+  const active = { toolName: "run_security_tool", callId: "action-1", args: { adapter_id: "nmap", target: "https://example.com", technique_ids: ["service-discovery"] } };
   const analyze = evaluateAction({ tool: active, profile: normalizeProfile("testing", "analyze"), policy: { allowActiveTesting: true, allowAutomatedScanning: true, allowExploitValidation: false } });
   assert.equal(analyze.allowed, false);
   assert.equal(analyze.code, "MODE_READ_ONLY");
@@ -32,14 +32,14 @@ test("policy engine blocks active and exploit actions until policy gates are ena
   assert.equal(executionBlocked.allowed, false);
   assert.equal(executionBlocked.code, "POLICY_ACTIVE_DISABLED");
 
-  const executionAllowed = evaluateAction({ tool: active, profile: normalizeProfile("testing", "execution"), policy: { allowActiveTesting: true, allowAutomatedScanning: true, allowExploitValidation: false } });
+  const executionAllowed = evaluateAction({ tool: active, profile: normalizeProfile("testing", "execution"), policy: { allowActiveTesting: true, allowAutomatedScanning: true, allowExploitValidation: false, authorizationConfirmed: true, scopeReviewed: true, rulesAccepted: true, targets: ["example.com"], authoritySuperMode: "approve" } });
   assert.equal(executionAllowed.allowed, true);
 
   const authorizationBlocked = evaluateAction({ tool: active, profile: normalizeProfile("testing", "execution"), policy: { allowActiveTesting: true, allowAutomatedScanning: true, allowExploitValidation: false, authorizationConfirmed: false, scopeReviewed: true, rulesAccepted: true } });
   assert.equal(authorizationBlocked.allowed, false);
   assert.equal(authorizationBlocked.code, "AUTHORIZATION_REQUIRED");
 
-  const exploit = { toolName: "run_command", command: "sqlmap -u https://example.com/item?id=1" };
+  const exploit = { toolName: "run_security_tool", callId: "action-2", args: { adapter_id: "sqlmap", target: "https://example.com/item?id=1", technique_ids: ["sql-injection"] } };
   const exploitBlocked = evaluateAction({ tool: exploit, profile: normalizeProfile("testing", "exploit"), approvalGranted: true, policy: { allowActiveTesting: true, allowAutomatedScanning: true, allowExploitValidation: false } });
   assert.equal(exploitBlocked.allowed, false);
   assert.equal(exploitBlocked.code, "POLICY_EXPLOIT_DISABLED");
@@ -67,10 +67,13 @@ test("authority modes enforce detailed permissions and approval behavior", () =>
 test("typed hypothesis adapter and action log preserve transparent metadata", () => {
   assert.equal(ToolMap.TOOL_META.record_hypothesis.typed, true);
   assert.equal(ToolMap.TOOL_META.record_hypothesis.capability, "evidence");
+  assert.equal(ToolMap.TOOL_META.record_finding_candidate.capability, "evidence");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-agent-modes-"));
-  const result = appendAgentAction(root, { runId: "run-1", type: "action_result", tool: "record_hypothesis", ok: true });
+  const result = appendAgentAction(root, { runId: "run-1", type: "action_result", tool: "record_hypothesis", ok: true, output: '{"token":"top-secret"}', authorization: "Bearer secret" });
   assert.equal(result.ok, true);
   const log = fs.readFileSync(path.join(root, "logs", "agent-actions.jsonl"), "utf8");
   assert.match(log, /run-1/);
+  assert.doesNotMatch(log, /top-secret|Bearer secret/);
+  assert.match(log, /REDACTED/);
   fs.rmSync(root, { recursive: true, force: true });
 });

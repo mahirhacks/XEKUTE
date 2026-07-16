@@ -97,6 +97,34 @@ def in_scope(assessment, target):
     allowed = allowed or any(matches(item.get("pattern", item.get("value", "")) if isinstance(item, dict) else item) for item in wildcards)
     return allowed, "Matched configured scope" if allowed else "Target is not in scope"
 
+def default_scope_target(assessment):
+    """Return the first concrete enabled target from the reviewed allowlist."""
+    scope = read_json(os.path.join(assessment, "scope", "in-scope.json"), {})
+    for item in scope.get("targets", []):
+        if isinstance(item, dict) and (item.get("enabled") is False or item.get("inScope") is False):
+            continue
+        value = item if isinstance(item, str) else item.get("value") or item.get("url") or item.get("host") or item.get("hostname") or ""
+        value = str(value or "").strip()
+        if not value or value.startswith("*.") or (re.match(r"^[^/]+/\d{1,2}$", value) and "://" not in value):
+            continue
+        parsed = urlparse(value if "://" in value else f"https://{value}")
+        if parsed.hostname:
+            return value
+    return ""
+
+def target_for_tool(tool, target):
+    """Give domain-oriented tools a hostname and HTTP tools a canonical URL."""
+    parsed = urlparse(target if "://" in target else f"https://{target}")
+    hostname = parsed.hostname or target
+    if tool in {"subfinder", "amass", "theharvester", "nmap"}:
+        return hostname
+    if tool in {"httpx", "katana", "gowitness", "ffuf"}:
+        scheme = parsed.scheme if parsed.scheme in {"http", "https"} else "https"
+        port = f":{parsed.port}" if parsed.port else ""
+        path = parsed.path or ""
+        return f"{scheme}://{hostname}{port}{path}"
+    return target
+
 def active_authorized(assessment):
     scope = read_json(os.path.join(assessment, "scope", "in-scope.json"), {})
     config = read_json(os.path.join(assessment, "scope", "configurations.json"), {})
@@ -110,6 +138,7 @@ def active_authorized(assessment):
     return authorized, "Authorization, scope, and Rules of Engagement confirmed" if authorized else "Active recon requires confirmed authorization, reviewed scope, accepted Rules of Engagement, and allowActiveRecon"
 
 def build_tool_command(tool, target, config, tool_dir):
+    effective_target = target_for_tool(tool, target)
     if tool == "ffuf":
         wordlist = str(config.get("wordlist") or os.environ.get("POINTER_FFUF_WORDLIST") or "").strip()
         if not wordlist or not os.path.isfile(os.path.expanduser(wordlist)):
@@ -117,9 +146,9 @@ def build_tool_command(tool, target, config, tool_dir):
         output_file = os.path.join(tool_dir, f"ffuf-{int(time.time())}.json")
         rate = max(1, min(20, int(config.get("rate", 2))))
         threads = max(1, min(20, int(config.get("threads", 10))))
-        return ["ffuf", "-u", target.rstrip("/") + "/FUZZ", "-w", os.path.expanduser(wordlist), "-ac", "-rate", str(rate), "-t", str(threads), "-of", "json", "-o", output_file], None
+        return ["ffuf", "-u", effective_target.rstrip("/") + "/FUZZ", "-w", os.path.expanduser(wordlist), "-ac", "-rate", str(rate), "-t", str(threads), "-of", "json", "-o", output_file], None
     command = TOOL_COMMANDS.get(tool)
-    return (command(target) if command else [tool, target]), None
+    return (command(effective_target) if command else [tool, effective_target]), None
 
 def parse_lines(tool, text, target):
     assets, endpoints, pages = [], [], []
@@ -229,9 +258,9 @@ def run_command(raw, assessment, overrides=None):
         return {**parsed, "ok": True, "mode": "ai"}
     if not assessment or not os.path.isdir(assessment):
         return {"ok": False, "error": "Open an assessment before running static recon commands", "code": "ASSESSMENT_REQUIRED"}
-    target = parsed["args"][0] if parsed["args"] else ""
+    target = parsed["args"][0] if parsed["args"] else default_scope_target(assessment)
     if not target:
-        return {"ok": False, "error": f"Usage: {parsed['command']} <authorized-target>", "code": "TARGET_REQUIRED"}
+        return {"ok": False, "error": f"No target was supplied and {parsed['command']} could not derive one from scope/in-scope.json", "code": "TARGET_REQUIRED"}
     allowed, reason = in_scope(assessment, target)
     if not allowed:
         return {"ok": False, "error": reason, "code": "OUT_OF_SCOPE"}

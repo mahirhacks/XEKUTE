@@ -247,8 +247,8 @@
             </button>
             <div class="bounty-phase-items" role="group">
               <button type="button" class="bounty-tree-item" data-bounty-item="services" data-bounty-file="vulnerability-scans/services.json" role="treeitem"><span class="bounty-status status-services"></span><span>Services</span></button>
-              <button type="button" class="bounty-tree-item severity-info" data-bounty-item="info" data-bounty-file="vulnerability-scans/info.json" role="treeitem"><span class="bounty-status"></span><span>Info</span><span class="bounty-item-count">0</span></button>
-              <button type="button" class="bounty-tree-item severity-easy" data-bounty-item="easy" data-bounty-file="vulnerability-scans/easy.json" role="treeitem"><span class="bounty-status"></span><span>Easy</span><span class="bounty-item-count">0</span></button>
+              <button type="button" class="bounty-tree-item severity-info" data-bounty-item="informational" data-bounty-file="vulnerability-scans/info.json" role="treeitem"><span class="bounty-status"></span><span>Informational</span><span class="bounty-item-count">0</span></button>
+              <button type="button" class="bounty-tree-item severity-easy" data-bounty-item="low" data-bounty-file="vulnerability-scans/easy.json" role="treeitem"><span class="bounty-status"></span><span>Low</span><span class="bounty-item-count">0</span></button>
               <button type="button" class="bounty-tree-item severity-medium" data-bounty-item="medium" data-bounty-file="vulnerability-scans/medium.json" role="treeitem"><span class="bounty-status"></span><span>Medium</span><span class="bounty-item-count">0</span></button>
               <button type="button" class="bounty-tree-item severity-high" data-bounty-item="high" data-bounty-file="vulnerability-scans/high.json" role="treeitem"><span class="bounty-status"></span><span>High</span><span class="bounty-item-count">0</span></button>
               <button type="button" class="bounty-tree-item severity-critical" data-bounty-item="critical" data-bounty-file="vulnerability-scans/critical.json" role="treeitem"><span class="bounty-status"></span><span>Critical</span><span class="bounty-item-count">0</span></button>
@@ -329,7 +329,7 @@
               <div><strong id="checklist-framework-name">Security checklist</strong><span id="checklist-framework-version"></span></div>
               <div id="checklist-progress" class="checklist-progress"></div>
             </header>
-            <div class="checklist-filters"><span class="codicon codicon-search"></span><input id="checklist-search" type="search" placeholder="Filter checks, IDs, and categories"><select id="checklist-status-filter"><option value="all">All statuses</option><option value="not-started">Not started</option><option value="in-progress">In progress</option><option value="passed">Passed</option><option value="failed">Failed / observed</option><option value="not-applicable">Not applicable</option><option value="blocked">Blocked</option></select></div>
+            <div class="checklist-filters"><span class="codicon codicon-search"></span><input id="checklist-search" type="search" placeholder="Filter checks, IDs, and categories"><select id="checklist-status-filter"><option value="all">All statuses</option><option value="not-tested">Not tested</option><option value="in-progress">In progress</option><option value="passed">Passed</option><option value="failed">Failed / observed</option><option value="not-applicable">Not applicable</option><option value="blocked">Blocked</option></select></div>
             <div id="checklist-groups" class="checklist-groups"></div>
           </div>
           <div id="scope-ui-view" class="scope-ui-view" hidden>
@@ -357,6 +357,7 @@
           <nav class="app-settings-tabs" aria-label="Settings sections">
             <button type="button" class="active" data-app-settings-section="commands" aria-pressed="true"><span class="codicon codicon-terminal"></span>Commands</button>
             <button type="button" data-app-settings-section="authority" aria-pressed="false"><span class="codicon codicon-shield"></span>Authority</button>
+            <button type="button" data-app-settings-section="prompts" aria-pressed="false"><span class="codicon codicon-symbol-keyword"></span>Prompts</button>
             <button type="button" data-app-settings-section="certificates" aria-pressed="false"><span class="codicon codicon-verified-filled"></span>Certificates</button>
           </nav>
           <div id="app-settings-commands-panel" class="app-settings-panel">
@@ -366,6 +367,19 @@
             </div>
           </div>
           <section id="app-settings-authority-panel" class="app-settings-panel authority-settings-panel" hidden><div id="authority-settings-content"></div></section>
+          <section id="app-settings-prompts-panel" class="app-settings-panel prompt-settings-panel" hidden>
+            <aside id="prompt-settings-modules" class="prompt-settings-modules" aria-label="Prompt modules"></aside>
+            <main class="prompt-settings-main">
+              <header><div><h2 id="prompt-settings-title">Role</h2><p>Prompt text is advisory. Authorization, scope, RoE, windows, and finding gates remain enforced by the runtime.</p></div><span id="prompt-settings-dirty" class="prompt-settings-dirty" hidden>Modified</span></header>
+              <textarea id="prompt-settings-editor" spellcheck="false" aria-label="Prompt module editor"></textarea>
+              <div class="prompt-settings-actions"><button type="button" id="prompt-settings-restore" class="secondary-button">Restore module</button><button type="button" id="prompt-settings-restore-all" class="secondary-button">Restore all</button><button type="button" id="prompt-settings-export" class="secondary-button">Export profile</button><button type="button" id="prompt-settings-import" class="secondary-button">Import profile</button></div>
+              <section class="prompt-settings-validation"><strong>Validation</strong><span id="prompt-settings-validation">Ready</span><small id="prompt-settings-token-cost">0 estimated tokens</small></section>
+              <section class="prompt-model-settings" aria-labelledby="prompt-model-settings-title"><h3 id="prompt-model-settings-title">Model reliability</h3><p>Test Agent qualification is deterministic and cannot weaken runtime scope or policy.</p><label>Dedicated verifier model<input id="prompt-verifier-model" placeholder="Use the selected model when blank"></label><label class="prompt-model-toggle"><input id="prompt-require-qualified" type="checkbox"><span><strong>Require a qualified Test Agent model</strong><small>Checks JSON, failure-state, evidence-state, and prompt-injection obedience.</small></span></label><label class="prompt-model-toggle warning"><input id="prompt-unqualified-override" type="checkbox"><span><strong>Developer override for unqualified models</strong><small>Allows Test Agent startup with a warning. Runtime policy and evidence gates still apply.</small></span></label></section>
+              <details class="prompt-settings-preview"><summary>Default/current diff</summary><pre id="prompt-settings-diff">No changes from the recommended default.</pre></details>
+              <details class="prompt-settings-preview"><summary>Effective compiled prompt</summary><pre id="prompt-settings-effective"></pre></details>
+              <textarea id="prompt-settings-import-buffer" hidden aria-label="Imported prompt profile JSON"></textarea>
+            </main>
+          </section>
           <section id="app-settings-certificates-panel" class="app-settings-panel certificate-settings-panel" hidden>
             <div class="certificate-settings-content">
               <header><span class="codicon codicon-verified-filled" aria-hidden="true"></span><div><h2>Proxy CA certificate</h2><p>Pointer uses one shared certificate authority for every assessment. Install its public certificate only in browsers and systems dedicated to authorized testing.</p></div></header>
@@ -431,7 +445,7 @@
           </div>
         </section>
         <section id="tools-workspace" class="tools-workspace" aria-label="Security toolbox" hidden>
-          <header class="tools-workspace-header"><div><span class="codicon codicon-tools"></span><strong>Toolbox</strong><small>Configure authorized security workflows without leaving Pointer.</small></div><div class="tools-workspace-actions"><button type="button" id="tool-register-action" class="secondary-button"><span class="codicon codicon-add"></span>Register custom tool</button><button type="button" id="tool-health-action" class="secondary-button"><span class="codicon codicon-pulse"></span>Check tool health</button></div></header>
+          <header class="tools-workspace-header"><div class="tools-workspace-title"><span class="codicon codicon-tools"></span><strong>Toolbox</strong><small>Configure authorized security workflows without leaving Pointer.</small></div><div class="tools-workspace-actions"><button type="button" id="tool-register-action" class="secondary-button"><span class="codicon codicon-add"></span><span>Register custom tool</span></button><button type="button" id="tool-health-action" class="secondary-button"><span class="codicon codicon-pulse"></span><span>Check tool health</span></button></div></header>
           <div id="tool-health-results" class="tool-health-results" hidden></div>
           <div id="tool-catalog" class="tool-catalog"></div>
         </section>
@@ -991,6 +1005,7 @@
   <script src="terminal.js"></script>
   <script src="bugbounty/security-inspector.js"></script>
   <script src="tools/tool-map.js"></script>
+  <script src="agent/prompt-compiler.js"></script>
   <script src="tools/tools.js"></script>
   <script src="agent/context-memory.js"></script>
   <script src="markdown.js"></script>

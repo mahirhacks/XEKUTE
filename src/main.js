@@ -16,7 +16,11 @@ const { buildIntruderRequests, createSecurityHttpWorkbench } = require("./bugbou
 const { createProxyListenerService } = require("./bugbounty/proxy-listener");
 const { runAgentTurn } = require("./agent/agent-controller");
 const { normalizeProfile } = require("./agent/operating-modes");
-const { loadPolicy } = require("./agent/policy-engine");
+const { loadPolicy, evaluateAction } = require("./agent/policy-engine");
+const ScopeEngine = require("./agent/scope-engine");
+const AgentVerifier = require("./agent/verifier");
+const { captureOllamaStream } = require("./agent/ollama-stream-capture");
+const { appendAgentAction, appendHypothesis } = require("./agent/action-log");
 const ContextMemory = require("./agent/context-memory");
 const { createChatSessionStore } = require("./chat-session-store");
 const { validateIpcRequest } = require("./shared/ipc-contracts");
@@ -31,6 +35,7 @@ let mainWindow;
 const terminals = new Map();
 const toolProcesses = new Map();
 const ollamaControllers = new Map();
+const pendingAgentApprovals = new Map();
 const webClonePreviewDocuments = new Map();
 let webClonePreviewServer = null;
 let webClonePreviewServerPromise = null;
@@ -488,6 +493,11 @@ if (!hasSingleInstanceLock) {
 
 app.on("window-all-closed", () => {
   proxyListener.stop();
+  for (const pending of pendingAgentApprovals.values()) {
+    clearTimeout(pending.timer);
+    pending.resolve({ approved: false, expired: true, reason: "Application shutdown" });
+  }
+  pendingAgentApprovals.clear();
   for (const record of terminals.values()) {
     try { record.pty.kill(); } catch { /* ignore */ }
   }
@@ -677,14 +687,13 @@ ipcMain.handle("assessment:appendFinding", async (_event, { path: assessmentPath
   return assessmentWorkspace.appendFinding(assessmentPath, finding || {});
 });
 ipcMain.handle("assessment:createRun", async (_event, { path: assessmentPath, run } = {}) => {
-  const profile = normalizeProfile(run?.profile || "testing:analyze");
-  if (profile.family === "testing" && ["agent", "execution", "exploit"].includes(profile.key)) {
+  const profile = normalizeProfile(run?.profile || "assist:planner");
+  if (profile.family === "testing" && profile.key === "agent") {
     const policy = loadPolicy(assessmentPath);
     if (!policy.authorizationConfirmed) return { error: "Authorization must be confirmed before starting an active run.", code: "AUTHORIZATION_REQUIRED" };
     if (!policy.scopeReviewed) return { error: "Scope must be reviewed before starting an active run.", code: "SCOPE_REVIEW_REQUIRED" };
     if (!policy.rulesAccepted) return { error: "Rules of Engagement must be accepted before starting an active run.", code: "ROE_ACCEPTANCE_REQUIRED" };
     if (!policy.allowActiveTesting) return { error: "Active testing is disabled in the assessment policy.", code: "POLICY_ACTIVE_DISABLED" };
-    if (profile.key === "exploit" && !policy.allowExploitValidation) return { error: "Exploit validation is disabled in the assessment policy.", code: "POLICY_EXPLOIT_DISABLED" };
   }
   return assessmentWorkspace.createRun(assessmentPath, run || {});
 });
@@ -1276,6 +1285,27 @@ function readToolProcess(id, ownerId = "agent") {
   return { ok: true, ...processSnapshot(record) };
 }
 
+function runWorkspaceProcessArgs(workspace, executable, args = [], { timeoutMs = 20000 } = {}) {
+  const resolved = resolveWorkspaceTarget(workspace);
+  if (resolved.error) return Promise.resolve(resolved);
+  if (!/^[a-z0-9_.-]+$/i.test(String(executable || "")) || !Array.isArray(args) || args.some((value) => typeof value !== "string" || /[\u0000\r\n]/.test(value))) {
+    return Promise.resolve({ error: "Typed adapter produced invalid process arguments", code: "PROCESS_ARGUMENT_INVALID" });
+  }
+  return new Promise((resolve) => {
+    const child = spawn(executable, args, { cwd: resolved.root, shell: false, windowsHide: true, env: { ...process.env } });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    const finish = (value) => { if (settled) return; settled = true; resolve(value); };
+    const timer = setTimeout(() => { timedOut = true; terminateProcessTree(child); }, Math.max(1000, Math.min(timeoutMs, 120000)));
+    child.stdout?.on("data", (chunk) => { stdout = takeLimited(stdout + chunk.toString(), 50000); });
+    child.stderr?.on("data", (chunk) => { stderr = takeLimited(stderr + chunk.toString(), 50000); });
+    child.on("error", (error) => { clearTimeout(timer); finish({ ok: false, error: error.message, code: error.code || "PROCESS_START_FAILED", executable, args }); });
+    child.on("close", (exitCode, signal) => { clearTimeout(timer); finish({ ok: !timedOut && exitCode === 0, mode: "typed-process", executable, args, exitCode, signal, timedOut, stdout: stdout.trimEnd(), stderr: stderr.trimEnd() }); });
+  });
+}
+
 function stopToolProcess(id, ownerId = "agent") {
   const record = toolProcesses.get(id);
   if (!record) return { error: `Unknown process: ${id}` };
@@ -1297,6 +1327,7 @@ const toolExecutor = createToolHandlers({
   searchWorkspaceIndex,
   findWorkspaceFiles,
   runWorkspaceCommand,
+  runWorkspaceProcessArgs,
   startWorkspaceProcess,
   readToolProcess,
   stopToolProcess,
@@ -1304,7 +1335,67 @@ const toolExecutor = createToolHandlers({
   searchWeb: webResearch.searchWeb,
   fetchWebPage: webResearch.fetchWebPage,
   assessmentMap,
+  assessmentWorkspace,
+  crypto,
+  verifyFindingCandidate,
+  ingestAssessmentRecords: runAssessmentIngestPython,
 });
+
+const assessmentIngestQueues = new Map();
+
+function runAssessmentIngestPython(payload = {}) {
+  const key = path.resolve(String(payload.workspace || APP_ROOT));
+  const previous = assessmentIngestQueues.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(() => runAssessmentIngestProcess(payload));
+  assessmentIngestQueues.set(key, current);
+  return current.finally(() => {
+    if (assessmentIngestQueues.get(key) === current) assessmentIngestQueues.delete(key);
+  });
+}
+
+function runAssessmentIngestProcess(payload = {}) {
+  return new Promise((resolve) => {
+    const script = path.join(__dirname, "commands", "assessment_ingest.py");
+    const executable = process.env.POINTER_PYTHON || (process.platform === "win32" ? "python" : "python3");
+    const child = spawn(executable, [script, "--payload", "-"], {
+      cwd: APP_ROOT,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      terminateProcessTree(child);
+      finish({ ok: false, error: "Assessment ingestion timed out", code: "INGEST_TIMEOUT" });
+    }, 30000);
+    child.stdout.on("data", (chunk) => { stdout = takeLimited(stdout + chunk.toString(), 100000); });
+    child.stderr.on("data", (chunk) => { stderr = takeLimited(stderr + chunk.toString(), 50000); });
+    child.on("error", (error) => finish({ ok: false, error: `Python assessment parser unavailable: ${error.message}`, code: "PYTHON_UNAVAILABLE" }));
+    child.on("close", (code) => {
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      try {
+        const parsed = JSON.parse(lines.at(-1) || "{}");
+        finish(code === 0
+          ? parsed
+          : { ...parsed, ok: false, error: parsed.error || stderr.trim() || `Assessment parser exited with code ${code}`, code: parsed.code || "INGEST_FAILED" });
+      } catch {
+        finish({ ok: false, error: stderr.trim() || stdout.trim() || "Assessment parser returned no JSON result", code: "INGEST_FAILED" });
+      }
+    });
+    try {
+      child.stdin.end(JSON.stringify(payload));
+    } catch (error) {
+      finish({ ok: false, error: error.message, code: "INGEST_PAYLOAD_FAILED" });
+    }
+  });
+}
 
 function runSlashCommandPython(action, payload = {}) {
   return new Promise((resolve) => {
@@ -1417,7 +1508,7 @@ ipcMain.handle("tools:execute", async (_event, { workspace, toolCall }) => {
 });
 
 ipcMain.handle("tools:health", async (_event, { customTools = [] } = {}) => {
-  const executables = ["subfinder", "amass", "theHarvester", "httpx", "nmap", "ffuf", "katana", "gowitness", "gobuster", "nuclei", "nikto", "testssl", "sqlmap"];
+  const executables = ["subfinder", "amass", "theHarvester", "httpx", "nmap", "naabu", "masscan", "ffuf", "katana", "gowitness", "gobuster", "nuclei", "nikto", "testssl", "sqlmap", "wafw00f", "hping3", process.platform === "win32" ? "tracert" : "traceroute"];
   const check = (executable) => new Promise((resolve) => {
     const child = spawn(executable, ["--version"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
@@ -1433,17 +1524,77 @@ ipcMain.handle("tools:health", async (_event, { customTools = [] } = {}) => {
 });
 
 ipcMain.handle("commands:parse", async (_event, payload = {}) => runSlashCommandPython("parse", payload));
+
+function configuredSlashTarget(policy = {}) {
+  for (const entry of Array.isArray(policy.targets) ? policy.targets : []) {
+    if (entry?.enabled === false || entry?.inScope === false) continue;
+    const raw = String(typeof entry === "string" ? entry : entry?.value || entry?.url || entry?.host || entry?.hostname || "").trim();
+    if (!raw || raw.startsWith("*.") || (/^[^/]+\/\d{1,2}$/.test(raw) && !raw.includes("://"))) continue;
+    const target = ScopeEngine.canonicalTarget(raw);
+    if (!target || !ScopeEngine.evaluateTarget(target, policy).allowed) continue;
+    const defaultPort = target.scheme === "https" ? 443 : 80;
+    return `${target.scheme}://${target.hostname}${target.port === defaultPort ? "" : `:${target.port}`}${target.path || "/"}`;
+  }
+  return "";
+}
+
 ipcMain.handle("commands:run", async (_event, payload = {}) => {
+  const parsed = await runSlashCommandPython("parse", payload);
+  if (parsed?.error || parsed?.ok === false) return parsed;
   const modeFamily = String(payload.modeFamily || "assist").toLowerCase();
   if (modeFamily === "assist") {
-    const parsed = await runSlashCommandPython("parse", payload);
-    const sensitiveTools = new Set(["httpx", "nmap", "ffuf", "gobuster", "dirb", "katana", "nikto", "sqlmap", "testssl", "gowitness", "custom_script"]);
+    const sensitiveTools = new Set(["httpx", "nmap", "ffuf", "gobuster", "dirb", "katana", "nikto", "sqlmap", "testssl", "gowitness", "wafw00f", "nmap-firewall", "hping3", "traceroute", "custom_script"]);
     const tools = Array.isArray(parsed?.tools) ? parsed.tools.map((tool) => String(tool).toLowerCase()) : [];
     const command = String(parsed?.command || "").toLowerCase();
     const sensitive = parsed?.role === "static" && (command !== "/passive" || tools.some((tool) => sensitiveTools.has(tool)));
     if (sensitive) {
       return { ok: false, error: "Safe mode blocks sensitive static commands. Switch to Testing mode before running active recon or custom scripts.", code: "SAFE_MODE_ACTIVE_BLOCK", parsed };
     }
+  }
+  if (parsed?.role === "static") {
+    const workspace = payload.assessment || payload.workspace || payload.path;
+    if (!workspace) return { ok: false, error: "An assessment workspace is required", code: "WORKSPACE_REQUIRED" };
+    const profile = normalizeProfile(modeFamily, payload.mode || "agent");
+    const policy = loadPolicy(workspace, payload.authority || null);
+    const target = String(parsed.args?.[0] || configuredSlashTarget(policy));
+    if (!target) return { ok: false, error: `No concrete target was supplied and ${parsed.command} could not derive one from Scope → In-Scope.`, code: "TARGET_REQUIRED", parsed };
+    const runPayload = parsed.args?.length ? payload : { ...payload, command: `${parsed.command} ${target}` };
+    const slashRunId = `slash-${Date.now().toString(36)}`;
+    const hypothesisId = `${slashRunId}-hypothesis`;
+    appendHypothesis(workspace, {
+      id: hypothesisId,
+      runId: slashRunId,
+      title: `${parsed.command} operator-directed assessment hypothesis`,
+      question: `What authorized attack-surface evidence does ${parsed.command} produce for the selected target?`,
+      target,
+      expectedSignal: "The configured adapters return target-specific observations that can be preserved and reviewed.",
+      rejectingSignal: "The adapters return no target-specific observations or fail to complete.",
+      proposedTechnique: String(parsed.command || "").replace(/^\//, ""),
+      evidencePlan: ["Preserve per-tool output", "Record exit status and output path"],
+      stopConditions: ["Out-of-scope resolution or redirect", "Unexpected impact", "Policy revocation"],
+      evidenceIds: [],
+      status: "ready",
+      source: "operator-slash-command",
+      recordedAt: new Date().toISOString(),
+    });
+    const adapterIds = new Set(["subfinder", "amass", "theharvester", "httpx", "nmap", "naabu", "katana", "ffuf", "gobuster", "nuclei", "nikto", "testssl", "sqlmap", "wafw00f", "nmap-firewall", "hping3", "traceroute"]);
+    for (const toolName of Array.isArray(parsed.tools) ? parsed.tools : []) {
+      const normalized = String(toolName || "").toLowerCase();
+      const tool = adapterIds.has(normalized)
+        ? { toolName: "run_security_tool", callId: `slash:${parsed.command}:${normalized}:${target}`, args: { adapter_id: normalized, target, hypothesis_id: hypothesisId, technique_ids: [String(parsed.command || "").replace(/^\//, "")] } }
+        : normalized === "custom_script"
+          ? { toolName: "run_custom_script", callId: `slash:${parsed.command}:${normalized}:${target}`, args: { target, script: parsed.script || "" } }
+        : { toolName: "run_command", callId: `slash:${parsed.command}:${normalized}:${target}`, command: `${normalized} ${target}`, args: { target } };
+      const decision = evaluateAction({ tool, profile, policy, approvalGranted: payload.approvalGranted || false });
+      appendAgentAction(workspace, { runId: slashRunId, type: "action_proposed", timestamp: new Date().toISOString(), profile: `${profile.family}:${profile.key}`, tool: normalized, target, risk: decision.risk, capability: decision.capability, allowed: decision.allowed, reason: decision.reason, hypothesisId });
+      if (!decision.allowed) {
+        appendAgentAction(workspace, { runId: slashRunId, type: "run_terminal", timestamp: new Date().toISOString(), profile: `${profile.family}:${profile.key}`, tool: parsed.command, target, ok: false, status: "stopped", errorCode: decision.code, output: decision.reason, hypothesisId });
+        return { ok: false, error: decision.reason, code: decision.code, policyDecision: decision, approvalProposal: { actionId: tool.callId, target, capability: decision.capability, risk: decision.risk, expiresAt: new Date(Date.now() + 60_000).toISOString() }, parsed };
+      }
+    }
+    const result = await runSlashCommandPython("run", runPayload);
+    appendAgentAction(workspace, { runId: slashRunId, type: "run_terminal", timestamp: new Date().toISOString(), profile: `${profile.family}:${profile.key}`, tool: parsed.command, target, ok: Boolean(result?.ok), status: result?.ok ? "completed" : "failed", errorCode: result?.code || "", output: result?.output || "", hypothesisId });
+    return result;
   }
   return runSlashCommandPython("run", payload);
 });
@@ -1879,7 +2030,6 @@ ipcMain.handle("ollama:chat", async (event, { messages, model, numCtx, thinking,
   };
 
   let res;
-  let buffer = "";
   let fullText = "";
   let fullThinking = "";
   let toolCalls = [];
@@ -1915,174 +2065,47 @@ ipcMain.handle("ollama:chat", async (event, { messages, model, numCtx, thinking,
     return { error: `Ollama error: ${res.status} ${res.statusText}${detail ? `\n${detail}` : ""}` };
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-
-  function mergeToolCalls(existing, incoming) {
-    if (!incoming?.length) return existing;
-    const merged = existing.slice();
-
-    for (const call of incoming) {
-      const fn = call.function || {};
-      const args = fn.arguments ?? {};
-      const index = Number.isInteger(call.index)
-        ? call.index
-        : Number.isInteger(fn.index) ? fn.index : null;
-      let targetIndex = index;
-
-      if (targetIndex == null) {
-        targetIndex = merged.findIndex((item) => {
-          if (call.id && item.id === call.id) return true;
-          return item.function?.name && fn.name && item.function.name === fn.name
-            && JSON.stringify(item.function.arguments ?? {}) === JSON.stringify(args ?? {});
-        });
-        if (targetIndex < 0) targetIndex = merged.length;
-      }
-
-      const normalizedArgs = typeof args === "string" ? args : { ...(args || {}) };
-
-      while (merged.length <= targetIndex) {
-        merged.push({
-          type: "function",
-          function: { name: "", arguments: {} },
-        });
-      }
-
-      const target = merged[targetIndex];
-      if (call.id) target.id = call.id;
-      if (call.type) target.type = call.type;
-      if (fn.name) {
-        target.function.name = fn.name;
-      }
-      if (index != null) {
-        target.function.index = index;
-      }
-
-      if (typeof normalizedArgs === "string") {
-        const prev = typeof target.function.arguments === "string" ? target.function.arguments : "";
-        target.function.arguments = `${prev}${normalizedArgs}`;
-      } else {
-        const prev = typeof target.function.arguments === "object" && target.function.arguments
-          ? target.function.arguments
-          : {};
-        target.function.arguments = { ...prev, ...normalizedArgs };
-      }
-    }
-
-    return merged.filter((call) => call.function?.name);
-  }
-
   try {
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let idx;
-    while ((idx = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 1);
-      if (!line) continue;
-      try {
-        const parsed = JSON.parse(line);
-        const msg = parsed.message ?? {};
-
-        const thinkingToken = msg.thinking ?? "";
-        if (thinkingToken) {
-          fullThinking += thinkingToken;
-          event.sender.send("ollama:thinking", thinkingToken);
-        }
-
-        const token = msg.content ?? "";
-        if (token) {
-          fullText += token;
-          event.sender.send("ollama:token", token);
-        }
-
-        if (msg.tool_calls?.length) {
-          toolCalls = mergeToolCalls(toolCalls, msg.tool_calls);
-          event.sender.send("ollama:toolcall", toolCalls);
-        }
-
-        if (parsed.done) {
-          const payload = { fullText, toolCalls, thinking: fullThinking };
-          sendDone(payload);
-          return { ok: true, fullText, toolCalls, thinking: fullThinking };
-        }
-      } catch {
-        // partial line – wait for next chunk
-      }
-    }
-  }
-
-  const payload = { fullText, toolCalls, thinking: fullThinking };
-  sendDone(payload);
-  return { ok: true, fullText, toolCalls, thinking: fullThinking };
+    const captured = await captureOllamaStream(res.body, {
+      onThinking(token) {
+        fullThinking += token;
+        if (!event.sender.isDestroyed()) event.sender.send("ollama:thinking", token);
+      },
+      onContent(token) {
+        fullText += token;
+        if (!event.sender.isDestroyed()) event.sender.send("ollama:token", token);
+      },
+      onToolCalls(calls) {
+        toolCalls = calls;
+        if (!event.sender.isDestroyed()) event.sender.send("ollama:toolcall", calls);
+      },
+    });
+    fullText = captured.fullText;
+    fullThinking = captured.thinking;
+    toolCalls = captured.toolCalls;
+    const payload = { fullText, toolCalls, thinking: fullThinking };
+    sendDone(payload);
+    return { ok: true, ...payload };
   } catch (err) {
     if (err?.name === "AbortError" || controller.signal.aborted) {
       const payload = { fullText, toolCalls, thinking: fullThinking, aborted: true };
       sendDone(payload);
-      return { ok: false, aborted: true, fullText, toolCalls, thinking: fullThinking };
+      return { ok: false, ...payload };
     }
-    return { error: err?.message || "Ollama stream failed." };
+    return {
+      error: err?.message || "Ollama stream failed.",
+      code: err?.code || "OLLAMA_STREAM_FAILED",
+      fullText,
+      toolCalls,
+      thinking: fullThinking,
+    };
   } finally {
-    if (ollamaControllers.get(senderId) === controller) {
-      ollamaControllers.delete(senderId);
-    }
+    if (ollamaControllers.get(senderId) === controller) ollamaControllers.delete(senderId);
   }
+
 });
 
-function mergeAgentToolCalls(existing, incoming) {
-  if (!incoming?.length) return existing;
-  const merged = existing.slice();
-
-  for (const call of incoming) {
-    const fn = call.function || {};
-    const args = fn.arguments ?? {};
-    const index = Number.isInteger(call.index)
-      ? call.index
-      : Number.isInteger(fn.index) ? fn.index : null;
-    let targetIndex = index;
-
-    if (targetIndex == null) {
-      targetIndex = merged.findIndex((item) => {
-        if (call.id && item.id === call.id) return true;
-        return item.function?.name && fn.name && item.function.name === fn.name
-          && JSON.stringify(item.function.arguments ?? {}) === JSON.stringify(args ?? {});
-      });
-      if (targetIndex < 0) targetIndex = merged.length;
-    }
-
-    const normalizedArgs = typeof args === "string" ? args : { ...(args || {}) };
-
-    while (merged.length <= targetIndex) {
-      merged.push({
-        type: "function",
-        function: { name: "", arguments: {} },
-      });
-    }
-
-    const target = merged[targetIndex];
-    if (call.id) target.id = call.id;
-    if (call.type) target.type = call.type;
-    if (fn.name) target.function.name = fn.name;
-    if (index != null) target.function.index = index;
-
-    if (typeof normalizedArgs === "string") {
-      const prev = typeof target.function.arguments === "string" ? target.function.arguments : "";
-      target.function.arguments = `${prev}${normalizedArgs}`;
-    } else {
-      const prev = typeof target.function.arguments === "object" && target.function.arguments
-        ? target.function.arguments
-        : {};
-      target.function.arguments = { ...prev, ...normalizedArgs };
-    }
-  }
-
-  return merged.filter((call) => call.function?.name);
-}
-
-async function runOllamaAgentRound(senderId, { messages, model, numCtx, thinking, tools }, hooks = {}) {
+async function runOllamaAgentRound(senderId, { messages, model, numCtx, thinking, tools, temperature = 0.1 }, hooks = {}) {
   const url = `${getOllamaBaseUrl()}/api/chat`;
   const mdl = model ?? "qwen2.5-coder:7b";
   const previous = ollamaControllers.get(senderId);
@@ -2093,6 +2116,7 @@ async function runOllamaAgentRound(senderId, { messages, model, numCtx, thinking
 
   const options = {};
   if (numCtx) options.num_ctx = numCtx;
+  options.temperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
 
   const body = {
     model: mdl,
@@ -2104,7 +2128,6 @@ async function runOllamaAgentRound(senderId, { messages, model, numCtx, thinking
   };
 
   let res;
-  let buffer = "";
   let fullText = "";
   let fullThinking = "";
   let toolCalls = [];
@@ -2129,61 +2152,181 @@ async function runOllamaAgentRound(senderId, { messages, model, numCtx, thinking
     return { error: `Ollama error: ${res.status} ${res.statusText}${detail ? `\n${detail}` : ""}` };
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let idx;
-      while ((idx = buffer.indexOf("\n")) !== -1) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (!line) continue;
-        try {
-          const parsed = JSON.parse(line);
-          const msg = parsed.message ?? {};
-
-          const thinkingToken = msg.thinking ?? "";
-          if (thinkingToken) {
-            fullThinking += thinkingToken;
-            hooks.onThinking?.(thinkingToken);
-          }
-
-          const token = msg.content ?? "";
-          if (token) {
-            fullText += token;
-            hooks.onToken?.(token);
-          }
-
-          if (msg.tool_calls?.length) {
-            toolCalls = mergeAgentToolCalls(toolCalls, msg.tool_calls);
-            hooks.onToolCalls?.(toolCalls);
-          }
-
-          if (parsed.done) {
-            return { ok: true, fullText, toolCalls, thinking: fullThinking };
-          }
-        } catch {
-          // partial line, wait for next chunk
-        }
-      }
-    }
-
-    return { ok: true, fullText, toolCalls, thinking: fullThinking };
+    const captured = await captureOllamaStream(res.body, {
+      onEvent(streamEvent) {
+        hooks.onStreamEvent?.(streamEvent);
+      },
+      onThinking(token) {
+        fullThinking += token;
+        hooks.onThinking?.(token);
+      },
+      onContent(token) {
+        fullText += token;
+        hooks.onToken?.(token);
+      },
+      onToolCalls(calls) {
+        toolCalls = calls;
+        hooks.onToolCalls?.(calls);
+      },
+    });
+    return {
+      ok: true,
+      fullText: captured.fullText,
+      toolCalls: captured.toolCalls,
+      thinking: captured.thinking,
+      streamSequence: captured.sequence,
+    };
   } catch (err) {
     if (err?.name === "AbortError" || controller.signal.aborted) {
       return { ok: false, aborted: true, fullText, toolCalls, thinking: fullThinking };
     }
-    return { error: err?.message || "Ollama stream failed." };
+    return {
+      error: err?.message || "Ollama stream failed.",
+      code: err?.code || "OLLAMA_STREAM_FAILED",
+      fullText,
+      toolCalls,
+      thinking: fullThinking,
+    };
   } finally {
-    if (ollamaControllers.get(senderId) === controller) {
-      ollamaControllers.delete(senderId);
-    }
+    if (ollamaControllers.get(senderId) === controller) ollamaControllers.delete(senderId);
   }
+
+}
+
+async function runOllamaJson({ model, messages, numCtx = 4096, temperature = 0 }) {
+  const response = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: sanitizeOllamaMessages(messages),
+      stream: false,
+      format: "json",
+      options: {
+        num_ctx: Math.max(2048, Math.min(Number(numCtx) || 4096, 32768)),
+        temperature,
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(`Ollama error: ${response.status} ${response.statusText}`);
+  const body = await response.json();
+  return String(body?.message?.content || "");
+}
+
+async function qualifyOllamaModel(model) {
+  try {
+    const output = await runOllamaJson({
+      model,
+      messages: AgentVerifier.qualificationPrompt(),
+      temperature: 0,
+    });
+    return {
+      ok: true,
+      model,
+      qualificationVersion: AgentVerifier.QUALIFICATION_VERSION,
+      ...AgentVerifier.scoreQualification(output),
+      checkedAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      qualified: false,
+      score: 0,
+      model,
+      qualificationVersion: AgentVerifier.QUALIFICATION_VERSION,
+      error: error.message,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+}
+
+ipcMain.handle("agent:qualifyModel", async (_event, { model } = {}) => {
+  if (!String(model || "").trim()) return { error: "A model is required", code: "MODEL_REQUIRED" };
+  return qualifyOllamaModel(String(model));
+});
+
+async function verifyFindingCandidate(workspace, model, candidate) {
+  if (!workspace || !candidate || typeof candidate !== "object") return { error: "Workspace and candidate are required", code: "INVALID_VERIFIER_REQUEST" };
+  const configuredVerifier = assessmentWorkspace.readSettings(workspace)?.settings?.aiModels?.verifierModel;
+  const verifierModel = String(configuredVerifier || model || "").trim();
+  if (!verifierModel) return { error: "A verifier model is required", code: "VERIFIER_MODEL_REQUIRED" };
+  const evidence = assessmentWorkspace.readJsonl(workspace, "evidence/index.jsonl", { limit: 2000 });
+  if (evidence?.error) return evidence;
+  const ids = new Set((Array.isArray(candidate.evidence) ? candidate.evidence : []).map(String));
+  const traffic = assessmentWorkspace.readJsonl(workspace, "traffic/raw.jsonl", { limit: 2000 });
+  const trafficByRequest = new Map((traffic.records || []).map((record) => [String(record.requestId || record.id || ""), record]));
+  const selectedEvidence = (evidence.records || []).filter((record) => ids.has(String(record.id || ""))).map((record) => {
+    let excerpt = "";
+    let hashValid = /^[a-f0-9]{64}$/i.test(String(record.sha256 || ""));
+    if (record.filePath) {
+      try {
+        const root = path.resolve(workspace);
+        const artifact = path.resolve(root, ...String(record.filePath).replace(/\\/g, "/").split("/"));
+        const relative = path.relative(root, artifact);
+        if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+          const artifactBytes = fs.readFileSync(artifact);
+          hashValid = hashValid && crypto.createHash("sha256").update(artifactBytes).digest("hex") === record.sha256;
+          excerpt = artifactBytes.toString("utf8").slice(0, 4000);
+        } else hashValid = false;
+      } catch { excerpt = ""; hashValid = false; }
+    }
+    const exchange = trafficByRequest.get(String(record.requestId || record.id || ""));
+    if (!excerpt && exchange) excerpt = `${String(exchange.request || "").slice(0, 2000)}\n${String(exchange.response || "").slice(0, 2000)}`;
+    return { ...record, excerpt, hashValid };
+  });
+  const resolvedIds = new Set(selectedEvidence.map((record) => String(record.id || "")));
+  const missingIds = [...ids].filter((id) => !resolvedIds.has(id));
+  if (missingIds.length) return { ok: false, verdict: "inconclusive", error: `Verifier evidence IDs do not exist: ${missingIds.join(", ")}`, code: "VERIFIER_EVIDENCE_NOT_FOUND" };
+  if (selectedEvidence.some((record) => record.hashValid === false)) return { ok: false, verdict: "inconclusive", error: "Verifier evidence failed SHA-256 integrity validation.", code: "VERIFIER_EVIDENCE_TAMPERED" };
+  const packet = AgentVerifier.boundedEvidencePacket(candidate, selectedEvidence);
+  const packetSha256 = crypto.createHash("sha256").update(JSON.stringify(packet), "utf8").digest("hex");
+  try {
+    const output = await runOllamaJson({ model: verifierModel, messages: AgentVerifier.verifierMessages(packet), temperature: 0 });
+    const verdict = AgentVerifier.parseVerifierResponse(output);
+    const verifiedAt = new Date().toISOString();
+    const verifierRecord = { ...verdict, model: verifierModel, verifiedAt, packetSha256, candidateId: candidate.id || "", inputEvidenceIds: [...ids] };
+    const persisted = assessmentWorkspace.appendEvidenceRecord(workspace, {
+      type: "verification-verdict",
+      title: `Hybrid verifier verdict for ${candidate.id || candidate.title || "finding candidate"}`,
+      capturedAt: verifiedAt,
+      capturedBy: verifierModel,
+      source: "pointer-hybrid-verifier",
+      host: candidate.asset?.host || "",
+      url: candidate.asset?.url || "",
+      content: JSON.stringify(verifierRecord),
+      redacted: true,
+      findingIds: candidate.id ? [candidate.id] : [],
+      notes: `${verdict.verdict}; packet ${packetSha256}`,
+    });
+    if (persisted?.error) return { ok: false, verdict: "inconclusive", error: `Verifier result could not be persisted: ${persisted.error}`, model: verifierModel, verifiedAt };
+    return { ok: verdict.ok, ...verdict, model: verifierModel, verifiedAt, evidenceIds: [...ids], verifierEvidenceId: persisted.record?.id || "", packetSha256, provenance: "pointer-hybrid-verifier" };
+  } catch (error) {
+    return { ok: false, verdict: "inconclusive", error: error.message, model: verifierModel, verifiedAt: new Date().toISOString() };
+  }
+}
+
+ipcMain.handle("agent:verifyFinding", async (_event, { workspace, model, candidate } = {}) => verifyFindingCandidate(workspace, model, candidate));
+
+ipcMain.handle("agent:resolveApproval", async (event, { actionId, approved } = {}) => {
+  const pending = pendingAgentApprovals.get(String(actionId || ""));
+  if (!pending || pending.ownerId !== event.sender.id) return { error: "Approval request is no longer active", code: "APPROVAL_NOT_FOUND" };
+  clearTimeout(pending.timer);
+  pendingAgentApprovals.delete(String(actionId));
+  pending.resolve({ approved: Boolean(approved), expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  return { ok: true };
+});
+
+function requestAgentActionApproval(sender, proposal) {
+  const actionId = String(proposal.actionId || "");
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingAgentApprovals.delete(actionId);
+      resolve({ approved: false, expired: true });
+    }, 60_000);
+    pendingAgentApprovals.set(actionId, { ownerId: sender.id, resolve, timer });
+    if (!sender.isDestroyed()) sender.send("agent:event", { type: "approval_required", ...proposal, expiresInMs: 60_000 });
+  });
 }
 
 ipcMain.handle("agent:run", async (event, payload) => {
@@ -2201,6 +2344,29 @@ ipcMain.handle("agent:run", async (event, payload) => {
     });
     if (runResult?.ok) assessmentRun = runResult.run;
   }
+  const requestedProfile = normalizeProfile(payload.modeFamily || "assist", payload.mode || "agent");
+  if (requestedProfile.family === "testing" && requestedProfile.key === "agent") {
+    const settingsResult = payload.workspace ? assessmentWorkspace.readSettings(payload.workspace) : null;
+    const modelPolicy = settingsResult?.settings?.aiModels || {};
+    if (modelPolicy.requireQualifiedModelForTestAgent !== false) {
+      const cached = modelPolicy.qualification?.[payload.model];
+      const cacheFresh = cached?.qualificationVersion === AgentVerifier.QUALIFICATION_VERSION && Number.isFinite(Date.parse(cached.checkedAt)) && Date.now() - Date.parse(cached.checkedAt) < 7 * 24 * 60 * 60 * 1000;
+      const qualification = cacheFresh ? { ...cached, cached: true } : await qualifyOllamaModel(payload.model);
+      if (!cacheFresh && settingsResult?.settings && payload.workspace) {
+        assessmentWorkspace.writeSettings(payload.workspace, {
+          ...settingsResult.settings,
+          aiModels: { ...modelPolicy, qualification: { ...(modelPolicy.qualification || {}), [payload.model]: qualification } },
+        });
+      }
+      sendAgentEvent({ type: "model_qualification", qualification });
+      if (!qualification.qualified && !modelPolicy.allowUnqualifiedTestAgentDeveloperOverride) {
+        const result = { error: "The selected model did not pass Pointer's JSON, failure-state, evidence-state, and prompt-injection qualification check. Use Safe Ask or enable the explicit developer override.", code: "MODEL_UNQUALIFIED", qualification };
+        if (assessmentRun?.id) assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, { status: "failed", completedAt: new Date().toISOString(), stopReason: result.error });
+        if (payload.workspace) appendAgentAction(payload.workspace, { runId: assessmentRun?.id || "", type: "run_terminal", timestamp: new Date().toISOString(), profile: `${requestedProfile.family}:${requestedProfile.key}`, status: "failed", ok: false, errorCode: result.code, output: result.error, model: payload.model });
+        return result;
+      }
+    }
+  }
   const result = await runAgentTurn({
     workspace: payload.workspace,
     model: payload.model,
@@ -2210,7 +2376,7 @@ ipcMain.handle("agent:run", async (event, payload) => {
     tools: payload.tools || [],
     mode: payload.mode || "agent",
     modeFamily: payload.modeFamily || "assist",
-    approvalGranted: Boolean(payload.approvalGranted),
+    approvalGranted: payload.approvalGranted || false,
     authority: payload.authority || null,
     runId: assessmentRun?.id || "",
     chatHistory: payload.chatHistory || [],
@@ -2220,14 +2386,21 @@ ipcMain.handle("agent:run", async (event, payload) => {
     extraFiles: payload.extraFiles || [],
     userMessage: payload.userMessage || "",
     sendEvent: sendAgentEvent,
-    runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, roundPayload),
+    runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, roundPayload, {
+      onThinking: roundPayload.onThinking,
+      onToken: roundPayload.onToken,
+      onToolCalls: roundPayload.onToolCalls,
+      onStreamEvent: roundPayload.onStreamEvent,
+    }),
     executeToolCall: ({ workspace, toolCall }) => toolExecutor.executeToolCall({ workspace, toolCall }),
+    requestApproval: (proposal) => requestAgentActionApproval(event.sender, proposal),
     findWorkspaceFiles,
     searchWorkspaceIndex,
   });
   if (assessmentRun?.id) {
+    const runtimeStatus = result?.runState?.status;
     assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, {
-      status: result?.aborted ? "stopped" : result?.ok ? "completed" : "failed",
+      status: result?.aborted ? "stopped" : ["completed", "inconclusive", "stopped", "failed"].includes(runtimeStatus) ? runtimeStatus : result?.ok ? "completed" : "failed",
       completedAt: new Date().toISOString(),
       stopReason: result?.aborted ? "Aborted by operator" : result?.error || "",
       notes: String(result?.finalText || result?.error || "").slice(0, 2000),

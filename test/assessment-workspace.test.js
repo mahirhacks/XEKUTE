@@ -158,6 +158,7 @@ test("target workspace exposes Core, Context, Custom, Toolbox, and configurable 
   assert.ok(html.includes('id="command-settings-detail"'));
   assert.ok(html.includes('data-app-settings-section="commands"'));
   assert.ok(html.includes('data-app-settings-section="authority"'));
+  assert.ok(html.includes('data-app-settings-section="prompts"'));
   assert.ok(html.includes('data-app-settings-section="certificates"'));
   assert.ok(html.includes('id="app-settings-authority-panel"'));
   assert.ok(html.includes('id="app-settings-certificates-panel"'));
@@ -269,8 +270,8 @@ test("Scout Map is a dedicated buildable behavior-graph workspace", () => {
 });
 
 test("professional assessment schemas cover scope, evidence, services, findings, and frameworks", () => {
-  assert.equal(ASSESSMENT_VERSION, 3);
-  assert.ok(Object.values(JSON_TEMPLATES).every((template) => template.schemaVersion === 3));
+  assert.equal(ASSESSMENT_VERSION, 4);
+  assert.ok(Object.values(JSON_TEMPLATES).every((template) => template.schemaVersion === 4));
   assert.ok(JSON_TEMPLATES["scope/engagement.json"].rulesOfEngagement.stopConditions.length);
   assert.ok(JSON_TEMPLATES["enumeration/assets.json"].assetTemplate.inScope === null);
   assert.ok(JSON_TEMPLATES["findings/findings.json"].lifecycle.includes("retest-required"));
@@ -450,7 +451,7 @@ test("assessment repair creates the complete versioned workspace", () => {
   assert.ok(repaired.created.includes("WebClone"));
 
   const manifest = JSON.parse(fs.readFileSync(path.join(root, ".pointer-assessment.json"), "utf8"));
-  assert.equal(manifest.schemaVersion, 3);
+  assert.equal(manifest.schemaVersion, 4);
   assert.equal(manifest.name, "example-target");
   assert.equal(manifest.createdAt, "2026-01-02T03:04:05.000Z");
 
@@ -512,7 +513,7 @@ test("assessment migration adds missing fields without losing existing evidence"
   assert.ok(repaired.updated.includes("scope/in-scope.json"));
   const migrated = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
   assert.deepEqual(migrated.targets, ["https://authorized.example"]);
-  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.schemaVersion, 4);
   assert.ok("engagement" in migrated);
   assert.ok("authorization" in migrated);
   assert.ok("targetTemplate" in migrated);
