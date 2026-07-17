@@ -9,7 +9,7 @@ const path = require("node:path");
 function loadCore() {
   const context = { globalThis: {}, AbortController, setTimeout, clearTimeout };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../src/app-core.js"), "utf8"), context);
-  return context.globalThis.PointerCore;
+  return context.globalThis.XekuteCore;
 }
 
 test("renderer store owns explicit slices and publishes scoped updates", () => {

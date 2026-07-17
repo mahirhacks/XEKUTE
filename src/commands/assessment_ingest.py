@@ -1,4 +1,4 @@
-"""Schema-preserving ingestion for Pointer's canonical assessment datasets.
+"""Schema-preserving ingestion for XEKUTE's canonical assessment datasets.
 
 The LLM and external tools submit structured records to this process.  They never
 receive a filesystem write primitive for Core assessment files.  This module

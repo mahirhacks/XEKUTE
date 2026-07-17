@@ -1,4 +1,4 @@
-You're starting from a clean slate — good place to be for a project this size. Here's a practical roadmap for **Pointer v1.0**: a desktop AI IDE like early Cursor, with privacy and local LLM as the core differentiators.
+You're starting from a clean slate — good place to be for a project this size. Here's a practical roadmap for **XEKUTE v1.0**: a desktop AI IDE like early Cursor, with privacy and local LLM as the core differentiators.
 
 ---
 
@@ -15,7 +15,7 @@ Early Cursor wasn't a full agent platform. It was roughly:
 | **Codebase indexing** | Embeddings over the repo for `@codebase` |
 | **Cloud models** | GPT-4 class models via their API |
 
-No Composer multi-file agent, no background agents, no MCP — those came later. **Pointer v1.0 should match this scope**, not today's Cursor.
+No Composer multi-file agent, no background agents, no MCP — those came later. **XEKUTE v1.0 should match this scope**, not today's Cursor.
 
 ---
 
@@ -44,7 +44,7 @@ VS Code fork (Electron)
 
 ---
 
-## Pointer v1.0 feature scope (be ruthless)
+## XEKUTE v1.0 feature scope (be ruthless)
 
 ### Ship in v1.0
 
@@ -74,7 +74,7 @@ VS Code fork (Electron)
 Don't build your own inference engine. Use a **provider abstraction**:
 
 ```
-Pointer LLM Provider Interface
+XEKUTE LLM Provider Interface
 ├── OllamaProvider          ← ship first (best local UX)
 ├── OpenAICompatibleProvider ← LM Studio, llama.cpp, vLLM, LocalAI
 ├── OpenAIProvider          ← opt-in cloud
@@ -93,7 +93,7 @@ Pointer LLM Provider Interface
 - 13–32B (Qwen2.5-Coder, DeepSeek-Coder, Codestral): usable for chat + simple edits
 - 70B+: needs serious GPU RAM; most users won't have it
 
-Position Pointer honestly: *"Works fully offline with local models; cloud models optional for harder tasks."*
+Position XEKUTE honestly: *"Works fully offline with local models; cloud models optional for harder tasks."*
 
 ---
 
@@ -105,8 +105,8 @@ This is where you beat Cursor on day one:
 ```
 Code → [Local Index] → [Local Embeddings] → [User's chosen LLM]
                               ↓
-                    Never touches Pointer servers
-                    (because there are no Pointer servers in v1.0)
+                    Never touches XEKUTE servers
+                    (because there are no XEKUTE servers in v1.0)
 ```
 
 ### Concrete v1.0 security features
@@ -215,7 +215,7 @@ Start with **just the extension** inside a stock VS Code fork. Don't customize t
 
 ## v1.0 success criteria
 
-Pointer v1.0 is done when a user can:
+XEKUTE v1.0 is done when a user can:
 
 1. Open a project
 2. Chat with a local model about their code using `@file` and `@codebase`

@@ -97,13 +97,13 @@ function ok(value) {
   return { ok: true, value };
 }
 
-function fail(input, fallbackCode = "POINTER_OPERATION_FAILED") {
+function fail(input, fallbackCode = "XEKUTE_OPERATION_FAILED") {
   const source = input && typeof input === "object" ? input : {};
   return {
     ok: false,
     error: {
       code: String(source.code || fallbackCode),
-      message: String(source.error || source.message || input || "Pointer operation failed"),
+      message: String(source.error || source.message || input || "XEKUTE operation failed"),
       retryable: Boolean(source.retryable),
       ...(source.details === undefined ? {} : { details: source.details }),
     },

@@ -171,7 +171,7 @@ function evaluateAction({ tool, profile: rawProfile, policy = DEFAULT_POLICY, ap
   const effectiveApproval = Boolean(actionApproval || (autoApprove && !classification.exploit && !classification.unclassifiedExternal));
 
   if (!fullAuthority && classification.authorityPermission && permissions[classification.authorityPermission] === false) {
-    return { ...result, allowed: false, reason: `${classification.authorityPermission} is disabled in Pointer Authority settings.`, code: "AUTHORITY_PERMISSION_DISABLED" };
+    return { ...result, allowed: false, reason: `${classification.authorityPermission} is disabled in XEKUTE Authority settings.`, code: "AUTHORITY_PERMISSION_DISABLED" };
   }
 
   if (classification.exploit && profile.family === "assist") {
@@ -233,7 +233,7 @@ function evaluateAction({ tool, profile: rawProfile, policy = DEFAULT_POLICY, ap
   }
   const sensitive = classification.active || classification.exploit || classification.mutatesWorkspace || classification.mutatesAssessment || ["commandExecution", "backgroundProcesses", "outboundHttp", "proxyInterception", "customScripts"].includes(classification.authorityPermission);
   if (policy.authoritySuperMode === "ask" && sensitive && !effectiveApproval) {
-    return { ...result, allowed: false, requiresApproval: true, reason: "Pointer Authority is set to Ask for Approval for this action.", code: "AUTHORITY_APPROVAL_REQUIRED" };
+    return { ...result, allowed: false, requiresApproval: true, reason: "XEKUTE Authority is set to Ask for Approval for this action.", code: "AUTHORITY_APPROVAL_REQUIRED" };
   }
   return result;
 }

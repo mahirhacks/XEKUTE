@@ -2,15 +2,15 @@
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
-const pointerStore = globalThis.PointerCore.createAppStore();
-const appController = new globalThis.PointerCore.AppController(pointerStore);
-const appLifecycle = new globalThis.PointerCore.LifecycleCollection();
+const xekuteStore = globalThis.XekuteCore.createAppStore();
+const appController = new globalThis.XekuteCore.AppController(xekuteStore);
+const appLifecycle = new globalThis.XekuteCore.LifecycleCollection();
 globalThis.addEventListener("beforeunload", () => {
   appController.dispose();
   appLifecycle.dispose();
 }, { once: true });
 
-// Pointer no longer exposes a code editor. These no-op hooks keep legacy file-tool
+// XEKUTE no longer exposes a code editor. These no-op hooks keep legacy file-tool
 // result handling isolated while Search and Target render through the read-only viewer.
 const EditorManager = Object.freeze({
   clear() {},
@@ -678,7 +678,7 @@ function sanitizePersistedChatHtml(html) {
   template.innerHTML = clean;
   template.content.querySelectorAll(".stream-cursor").forEach((node) => node.remove());
   template.content.querySelectorAll(".streaming").forEach((node) => node.classList.remove("streaming"));
-  // Old chat snapshots may contain Pointer's former Planning/Working line.
+  // Old chat snapshots may contain XEKUTE's former Planning/Working line.
   template.content.querySelectorAll(".assistant-status").forEach((node) => node.remove());
   return template.innerHTML;
 }
@@ -1231,7 +1231,7 @@ function authorityAllows(permission) {
 
 function requireAuthority(permission, actionLabel) {
   if (authorityAllows(permission)) return true;
-  const message = `${actionLabel} is disabled in Pointer Settings → Authority.`;
+  const message = `${actionLabel} is disabled in XEKUTE Settings → Authority.`;
   setAgentStatus(message);
   addErrorMessage(message);
   return false;
@@ -1253,7 +1253,7 @@ const PROMPT_MODULE_LABELS = Object.freeze({
 });
 
 function promptDefaults() {
-  return globalThis.PointerPromptCompiler?.defaults?.() || { version: 1, modules: {}, overlays: {} };
+  return globalThis.XekutePromptCompiler?.defaults?.() || { version: 1, modules: {}, overlays: {} };
 }
 
 function normalizePromptSettings(value) {
@@ -1302,8 +1302,8 @@ function renderPromptModuleDiff(current, recommended) {
 }
 
 function validatePromptSettings() {
-  const result = globalThis.PointerPromptCompiler?.validate?.(promptSettingsData) || { ok: true, errors: [], warnings: [] };
-  const effective = globalThis.PointerPromptCompiler?.compile?.({ family: chatFamily || "assist", mode: chatMode || "ask", overrides: promptSettingsData }) || "";
+  const result = globalThis.XekutePromptCompiler?.validate?.(promptSettingsData) || { ok: true, errors: [], warnings: [] };
+  const effective = globalThis.XekutePromptCompiler?.compile?.({ family: chatFamily || "assist", mode: chatMode || "ask", overrides: promptSettingsData }) || "";
   const defaults = promptDefaults();
   const changed = promptModuleValue(selectedPromptModule) !== promptModuleValue(selectedPromptModule, defaults);
   if (promptSettingsDirty) promptSettingsDirty.hidden = !changed;
@@ -1313,7 +1313,7 @@ function validatePromptSettings() {
       : result.errors.join(" ");
     promptSettingsValidation.classList.toggle("error", !result.ok);
   }
-  const checksum = globalThis.PointerPromptCompiler?.checksum?.(promptSettingsData) || "unavailable";
+  const checksum = globalThis.XekutePromptCompiler?.checksum?.(promptSettingsData) || "unavailable";
   if (promptSettingsTokenCost) promptSettingsTokenCost.textContent = `${Math.ceil(effective.length / 4).toLocaleString()} estimated tokens · profile v${promptSettingsData?.version || 1} · ${checksum}`;
   if (promptSettingsDiff) promptSettingsDiff.textContent = renderPromptModuleDiff(promptModuleValue(selectedPromptModule), promptModuleValue(selectedPromptModule, defaults));
   if (promptSettingsEffective) promptSettingsEffective.textContent = effective;
@@ -1419,12 +1419,12 @@ function renderAuthoritySettings() {
   authoritySettingsData = normalizeAuthoritySettings(authoritySettingsData);
   const mode = authoritySettingsData.superMode;
   const superOptions = [
-    ["full", "Full Authority", "Forces every listed permission ON and bypasses Pointer approval prompts.", "Overrides all permission switches and approval behavior.", "danger"],
+    ["full", "Full Authority", "Forces every listed permission ON and bypasses XEKUTE approval prompts.", "Overrides all permission switches and approval behavior.", "danger"],
     ["ask", "Ask for Approval", "Uses the detailed permission switches and asks before sensitive or mutating actions.", "Overrides automatic approval; recommended for human-in-the-loop work.", ""],
     ["approve", "Approve for me", "Uses the detailed permission switches and automatically approves actions that they allow.", "Overrides approval prompts, but does not enable disabled permissions.", ""],
   ];
   const modeSummary = mode === "full"
-    ? '<strong>Effective override:</strong> every permission below is ON and Pointer approval prompts are bypassed. Safe/Test mode and engagement scope remain visible operational boundaries.'
+    ? '<strong>Effective override:</strong> every permission below is ON and XEKUTE approval prompts are bypassed. Safe/Test mode and engagement scope remain visible operational boundaries.'
     : mode === "approve"
       ? '<strong>Effective override:</strong> enabled permissions are automatically approved. Disabled permissions still block the app and AI.'
       : '<strong>Effective override:</strong> detailed permissions remain authoritative and sensitive actions require operator approval.';
@@ -1432,9 +1432,9 @@ function renderAuthoritySettings() {
     const effective = mode === "full" || authoritySettingsData.permissions[key] !== false;
     return `<label class="authority-permission${mode === "full" ? " overridden" : ""}"><span><strong>${escapeHtml(label)}${mode === "full" ? '<em class="authority-effective">Forced on</em>' : ""}</strong><small>${escapeHtml(detail)}</small></span><input type="checkbox" data-authority-permission="${key}" ${effective ? "checked" : ""} ${mode === "full" ? "disabled" : ""}></label>`;
   }).join("")}</section>`).join("");
-  authoritySettingsContent.innerHTML = `<div class="authority-intro"><h2>Authority</h2><p>Control exactly what Pointer and its AI workflows may read, change, execute, send, capture, and validate. Engagement scope and authorization remain separately documented under Scope.</p></div><div class="authority-super-grid">${superOptions.map(([key, label, description, override, tone]) => `<label class="authority-super-option ${tone}${mode === key ? " selected" : ""}"><input type="radio" name="authority-super" value="${key}" ${mode === key ? "checked" : ""}><strong>${label}</strong><small>${description}</small><em>${override}</em></label>`).join("")}</div><div class="authority-override-summary ${mode === "full" ? "danger" : mode === "ask" ? "warning" : ""}">${modeSummary}</div><div class="authority-groups">${groups}</div>`;
+  authoritySettingsContent.innerHTML = `<div class="authority-intro"><h2>Authority</h2><p>Control exactly what XEKUTE and its AI workflows may read, change, execute, send, capture, and validate. Engagement scope and authorization remain separately documented under Scope.</p></div><div class="authority-super-grid">${superOptions.map(([key, label, description, override, tone]) => `<label class="authority-super-option ${tone}${mode === key ? " selected" : ""}"><input type="radio" name="authority-super" value="${key}" ${mode === key ? "checked" : ""}><strong>${label}</strong><small>${description}</small><em>${override}</em></label>`).join("")}</div><div class="authority-override-summary ${mode === "full" ? "danger" : mode === "ask" ? "warning" : ""}">${modeSummary}</div><div class="authority-groups">${groups}</div>`;
   authoritySettingsContent.querySelectorAll('input[name="authority-super"]').forEach((input) => input.addEventListener("change", () => {
-    if (input.value === "full" && !window.confirm("Full Authority enables every listed capability and bypasses Pointer approval prompts. Engagement scope still applies. Continue?")) {
+    if (input.value === "full" && !window.confirm("Full Authority enables every listed capability and bypasses XEKUTE approval prompts. Engagement scope still applies. Continue?")) {
       renderAuthoritySettings();
       return;
     }
@@ -1452,7 +1452,7 @@ async function showAppSettingsWorkspace() {
   if (terminalMaximized) setTerminalMaximized(false);
   currentWorkspaceMode = "settings";
   resourceViewer.hidden = true; securityWorkspace.hidden = true; toolsWorkspace.hidden = true; mapWorkspace.hidden = true; appSettingsWorkspace.hidden = false; webcloneWorkspace.hidden = true; window.api.webCloneHidePreview?.();
-  editorPane?.setAttribute("aria-label", "Pointer Settings");
+  editorPane?.setAttribute("aria-label", "XEKUTE Settings");
   await refreshAssessmentSettingsCache();
   loadCommandSettings();
   loadPromptSettings();
@@ -1473,7 +1473,7 @@ const COMMAND_SETTINGS_DEFAULTS = {
   "/scope": { role: "ai", enabled: true, tools: [], aim: "Establish what may be tested before any security action is taken.", description: "Review authorization, scope, exclusions, and rules of engagement.", prompt: "Review authorization, scope, exclusions, and rules of engagement." },
   "/report": { role: "ai", enabled: true, tools: [], aim: "Turn assessment evidence into a clear, traceable security report.", description: "Synthesize findings while preserving evidence IDs, confidence, and reproduction details.", prompt: "Synthesize the current assessment evidence into a traceable report." },
   "/map": { role: "ai", enabled: true, tools: [], aim: "Explain how hosts, routes, observations, and workflows relate to one another.", description: "Analyze the application behavior Map and identify evidence-backed relationships.", prompt: "Analyze the application behavior Map and identify evidence-backed relationships." },
-  "/settings": { role: "ai", enabled: true, tools: [], aim: "Configure Pointer commands and execution behavior.", description: "Open the dedicated Pointer Settings workspace.", prompt: "" },
+  "/settings": { role: "ai", enabled: true, tools: [], aim: "Configure XEKUTE commands and execution behavior.", description: "Open the dedicated XEKUTE Settings workspace.", prompt: "" },
 };
 const COMMAND_TOOL_OPTIONS = ["subfinder", "amass", "theharvester", "httpx", "nmap", "ffuf", "katana", "gowitness", "gobuster", "nuclei", "nikto", "testssl", "sqlmap", "custom_script"];
 
@@ -2044,7 +2044,7 @@ async function toggleWebClonePreview(show = true) {
   }
   if (show && webcloneFileContent && webcloneSelectedFile.endsWith("index.html")) {
     // Run the cloned application in an opaque sandbox. A strict document CSP
-    // prevents it from making network calls or reaching the Pointer parent.
+    // prevents it from making network calls or reaching the XEKUTE parent.
     const html = String(webcloneFileContent.textContent || "").replace(/^\uFEFF/, "");
     const previewDocument = new DOMParser().parseFromString(html, "text/html");
     const csp = previewDocument.createElement("meta");
@@ -2069,7 +2069,7 @@ async function toggleWebClonePreview(show = true) {
       } catch { /* Source metadata is optional. */ }
       embeddedAssets.push({ relative, basename: relative.split("/").pop(), sourceUrl, sourcePath, encoded });
     }
-    const baseUrl = webcloneManifest?.finalUrl || webcloneManifest?.target || "https://pointer.invalid/";
+    const baseUrl = webcloneManifest?.finalUrl || webcloneManifest?.target || "https://xekute.invalid/";
     previewDocument.querySelectorAll("script[src], link[rel~='stylesheet'][href]").forEach((element) => {
       const attribute = element.hasAttribute("src") ? "src" : "href";
       const original = String(element.getAttribute(attribute) || "").trim();
@@ -2249,8 +2249,8 @@ function renderAssessmentRepairDialog(verification = assessmentVerification) {
   }
   if (assessmentRepairDescription) {
     assessmentRepairDescription.textContent = blockedCount
-      ? "Pointer noticed differences from the starter template. Work is never blocked and existing files are never overwritten; incompatible paths are informational only."
-      : "Pointer noticed optional starter-template items that can be created or merged. Your assessment remains fully usable.";
+      ? "XEKUTE noticed differences from the starter template. Work is never blocked and existing files are never overwritten; incompatible paths are informational only."
+      : "XEKUTE noticed optional starter-template items that can be created or merged. Your assessment remains fully usable.";
   }
   if (assessmentRepairSummary) {
     const parts = [];
@@ -4067,7 +4067,7 @@ async function runSecurityWorkbench() {
       const result = await runSecurityRequest(request, selectedSecurityTool);
       if (result?.error) {
         setSecurityStatus(result.error, "error");
-        securityResponseEditor.value = `Pointer blocked the request:\n${result.error}\n${result.code ? `\nCode: ${result.code}` : ""}`;
+        securityResponseEditor.value = `XEKUTE blocked the request:\n${result.error}\n${result.code ? `\nCode: ${result.code}` : ""}`;
       } else {
         securityResponseEditor.value = result.response || "";
         lastLoggedSecuritySignature = securityExchangeSignature();
@@ -4210,7 +4210,7 @@ async function dropInterceptedRequest() {
   setSecurityStatus("Request dropped", "success");
 }
 
-globalThis.PointerSecurity = {
+globalThis.XekuteSecurity = {
   async captureExchange({ request = "", response = "", tool = "interceptor" } = {}) {
     if (currentSidebarView !== "bugbounty") activateSidebarView("bugbounty");
     showSecurityWorkspace(SECURITY_TOOL_META[tool] ? tool : "interceptor");
@@ -4222,6 +4222,7 @@ globalThis.PointerSecurity = {
     return logged;
   },
 };
+globalThis.PointerSecurity = globalThis.XekuteSecurity;
 
 function modeButtonClass(mode = chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode, mode.includes(":") ? mode.split(":")[0] : chatFamily)];
@@ -4528,7 +4529,7 @@ function loadModelSettings() {
       const explicitManualContext =
         settings.contextLocked === true
         || (rawContext !== AUTO_CONTEXT && rawContext !== LEGACY_DEFAULT_CONTEXT);
-      // Older Pointer builds persisted `thinking: false` for every model even
+      // Older XEKUTE builds persisted `thinking: false` for every model even
       // when the user never disabled it. Treat that legacy value as "auto" so
       // Ollama can use its capability-aware default. A true value could only
       // have been chosen explicitly in the old UI, so preserve it.
@@ -5865,7 +5866,7 @@ promptSettingsRestoreAll?.addEventListener("click", () => {
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Default prompt profile restored; save to apply";
 });
 promptSettingsExport?.addEventListener("click", async () => {
-  const profileValue = { ...promptSettingsData, checksum: globalThis.PointerPromptCompiler?.checksum?.(promptSettingsData) || "" };
+  const profileValue = { ...promptSettingsData, checksum: globalThis.XekutePromptCompiler?.checksum?.(promptSettingsData) || "" };
   const profile = JSON.stringify(profileValue, null, 2);
   await navigator.clipboard.writeText(profile);
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Prompt profile copied to clipboard";
@@ -5875,7 +5876,7 @@ promptSettingsImport?.addEventListener("click", async () => {
   if (promptSettingsImportBuffer.hidden) {
     promptSettingsImportBuffer.hidden = false;
     promptSettingsImportBuffer.value = "";
-    promptSettingsImportBuffer.placeholder = "Paste a Pointer prompt profile, then click Import profile again";
+    promptSettingsImportBuffer.placeholder = "Paste a XEKUTE prompt profile, then click Import profile again";
     promptSettingsImportBuffer.focus();
     return;
   }
@@ -5883,10 +5884,10 @@ promptSettingsImport?.addEventListener("click", async () => {
     const imported = JSON.parse(promptSettingsImportBuffer.value);
     if (imported.checksum) {
       const { checksum, ...profile } = imported;
-      const actual = globalThis.PointerPromptCompiler?.checksum?.(profile);
+      const actual = globalThis.XekutePromptCompiler?.checksum?.(profile);
       if (actual && checksum !== actual) throw new Error("Prompt profile checksum does not match its contents.");
     }
-    const validation = globalThis.PointerPromptCompiler?.validate?.(imported);
+    const validation = globalThis.XekutePromptCompiler?.validate?.(imported);
     if (validation && !validation.ok) throw new Error(validation.errors.join(" "));
     promptSettingsData = normalizePromptSettings(imported);
     promptSettingsImportBuffer.hidden = true;
@@ -6146,7 +6147,7 @@ function runMenuAction(action) {
       newChatSession();
       break;
     case "about":
-      alert("Pointer - local-first search, target, terminal, and chat workspace");
+      alert("XEKUTE — local-first penetration testing and vulnerability assessment workspace");
       break;
     case "configure-run":
       configureRunCommand();
@@ -9059,9 +9060,9 @@ async function runStaticSlashCommand(rawCommand) {
   const safeStaticTools = new Set(["httpx", "nmap", "ffuf", "gobuster", "dirb", "katana", "nikto", "sqlmap", "testssl", "gowitness", "custom_script"]);
   const parsedTools = Array.isArray(parsed.tools) ? parsed.tools.map((tool) => String(tool).toLowerCase()) : [];
   const requiredPermission = parsed.command === "/passive" ? "passiveRecon" : "activeRecon";
-  if (!authorityAllows(requiredPermission)) { addErrorMessage(`${parsed.command} is disabled in Pointer Settings → Authority.`); return true; }
-  if (parsedTools.includes("custom_script") && !authorityAllows("customScripts")) { addErrorMessage("Custom scripts are disabled in Pointer Settings → Authority."); return true; }
-  if (parsed.command !== "/passive" && !authorityAllows("automatedScanning")) { addErrorMessage("Automated scanning is disabled in Pointer Settings → Authority."); return true; }
+  if (!authorityAllows(requiredPermission)) { addErrorMessage(`${parsed.command} is disabled in XEKUTE Settings → Authority.`); return true; }
+  if (parsedTools.includes("custom_script") && !authorityAllows("customScripts")) { addErrorMessage("Custom scripts are disabled in XEKUTE Settings → Authority."); return true; }
+  if (parsed.command !== "/passive" && !authorityAllows("automatedScanning")) { addErrorMessage("Automated scanning is disabled in XEKUTE Settings → Authority."); return true; }
   if (chatFamily === "assist" && (parsed.command !== "/passive" || parsedTools.some((tool) => safeStaticTools.has(tool)))) {
     addErrorMessage("Safe mode blocks sensitive static commands. Switch to Testing mode before running active recon or custom scripts.");
     return true;

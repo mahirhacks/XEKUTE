@@ -53,7 +53,7 @@ function createChatSessionStore({ fs, path, crypto, baseDir, protector = null })
               recovered: true,
               activeSessionId: typeof parsed.activeSessionId === "string" ? parsed.activeSessionId : "",
               sessions: parsed.sessions,
-              warning: `Primary chat storage was damaged; Pointer recovered the backup: ${error.message}`,
+              warning: `Primary chat storage was damaged; XEKUTE recovered the backup: ${error.message}`,
             };
           }
         }

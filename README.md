@@ -1,16 +1,16 @@
-# Pointer
+# XEKUTE
 
 **A local-first, AI-assisted workspace for authorized penetration testing and vulnerability assessment.**
 
-Pointer brings assessment scope, HTTP traffic, evidence, security tools, an application behavior map, a terminal, and a local AI assistant into one Windows desktop application. Its primary workflow is human-in-the-loop: the operator defines the authority and remains able to inspect, approve, interrupt, and review every action.
+XEKUTE brings assessment scope, HTTP traffic, evidence, security tools, an application behavior map, a terminal, and a local AI assistant into one Windows desktop application. Its primary workflow is human-in-the-loop: the operator defines the authority and remains able to inspect, approve, interrupt, and review every action.
 
-> **Project status:** Alpha. Pointer is under active development and should currently be used in controlled, authorized environments. Keep backups of important assessment data.
+> **Project status:** Alpha. XEKUTE is under active development and should currently be used in controlled, authorized environments. Keep backups of important assessment data.
 
-## Why Pointer?
+## Why XEKUTE?
 
-Security work is often split across terminals, proxy tools, notes, JSON files, browser tabs, and AI chats. Pointer organizes those parts around a persistent assessment workspace so that traffic, tool output, hypotheses, findings, and reports remain connected to their evidence.
+Security work is often split across terminals, proxy tools, notes, JSON files, browser tabs, and AI chats. XEKUTE organizes those parts around a persistent assessment workspace so that traffic, tool output, hypotheses, findings, and reports remain connected to their evidence.
 
-Pointer is designed to provide:
+XEKUTE is designed to provide:
 
 - A compact, VS Code-inspired interface for security assessments.
 - Local AI through Ollama instead of a mandatory cloud service.
@@ -50,8 +50,8 @@ Pointer is designed to provide:
 
 - Download bounded public HTML, JavaScript, and CSS assets from an authorized HTTPS target.
 - Browse captured files in a collapsible right-side file drawer.
-- Inspect source files in Pointer's editor or render the cloned application in an isolated preview.
-- Preview cloned applications without allowing them to access Pointer, Node.js, the filesystem, popups, or outbound network services.
+- Inspect source files in XEKUTE's editor or render the cloned application in an isolated preview.
+- Preview cloned applications without allowing them to access XEKUTE, Node.js, the filesystem, popups, or outbound network services.
 
 WebClone is a review aid, not a guaranteed offline reproduction. Applications that depend on authenticated APIs, server-side rendering, external assets, or live backend requests may only render partially.
 
@@ -69,14 +69,14 @@ Safety modes and policy checks are defense-in-depth controls; they do not replac
 
 ### Commands and Toolbox
 
-Pointer currently includes configurable workflows for:
+XEKUTE currently includes configurable workflows for:
 
 - `/passive` - passive public-source reconnaissance.
 - `/active` - authorized active reconnaissance.
 - `/endpoint` - page and endpoint discovery.
 - `/webclone` - authorized public-site inventory and cloning.
 
-Commands can use static Python orchestration or an AI-assisted role. Tool selection, output locations, rate limits, threads, wordlists, advanced JSON options, and custom commands can be configured in Pointer Settings.
+Commands can use static Python orchestration or an AI-assisted role. Tool selection, output locations, rate limits, threads, wordlists, advanced JSON options, and custom commands can be configured in XEKUTE Settings.
 
 The Toolbox provides presets and configuration surfaces for tools including:
 
@@ -87,7 +87,7 @@ The Toolbox provides presets and configuration surfaces for tools including:
 | Web and endpoint discovery | httpx, Katana, ffuf, Gobuster |
 | Vulnerability and TLS analysis | Nuclei, Nikto, testssl.sh, SQLmap |
 
-Pointer does **not** bundle most third-party security binaries. Install only the tools you need and ensure their executables are available on `PATH`. On Windows, some tools may be easier to run through WSL. Each third-party tool remains subject to its own license and installation requirements.
+XEKUTE does **not** bundle most third-party security binaries. Install only the tools you need and ensure their executables are available on `PATH`. On Windows, some tools may be easier to run through WSL. Each third-party tool remains subject to its own license and installation requirements.
 
 ## Requirements
 
@@ -112,8 +112,8 @@ Pointer does **not** bundle most third-party security binaries. Install only the
 ## Quick Start
 
 ```powershell
-git clone <your-repository-url>
-cd Pointer
+git clone https://github.com/mahirhacks/XEKUTE.git
+cd Xekute
 npm install
 ```
 
@@ -124,17 +124,17 @@ ollama pull qwen2.5-coder:7b
 ollama serve
 ```
 
-Start Pointer:
+Start XEKUTE:
 
 ```powershell
 npm start
 ```
 
-Ollama is optional when using Pointer without AI features.
+Ollama is optional when using XEKUTE without AI features.
 
 ## Development Mode
 
-Run Pointer with automatic application restarts when source files change:
+Run XEKUTE with automatic application restarts when source files change:
 
 ```powershell
 npm run dev
@@ -189,7 +189,7 @@ Do not commit signing certificates or passwords.
 ## Project Structure
 
 ```text
-Pointer/
+Xekute/
 |-- src/
 |   |-- agent/          # Agent loop, prompts, operating modes, and policy engine
 |   |-- bugbounty/      # Assessment, Map, proxy, traffic, and Inspector services
@@ -202,7 +202,7 @@ Pointer/
 |   |-- renderer.js     # Application workspace behavior
 |   |-- terminal.js     # Integrated terminal presentation
 |   |-- index.html      # Desktop application shell
-|   `-- style.css       # Pointer design system and feature styling
+|   `-- style.css       # XEKUTE design system and feature styling
 |-- test/               # Node test suite
 |-- scripts/            # Production verification and release helpers
 |-- forge.config.js     # Electron Forge packaging and security fuses
@@ -211,7 +211,7 @@ Pointer/
 
 ## Security Model
 
-Pointer uses Electron context isolation, renderer sandboxing, disabled Node integration, validated IPC payloads, workspace-confined file operations, process ownership checks, permission denial by default, and hardened Electron fuses.
+XEKUTE uses Electron context isolation, renderer sandboxing, disabled Node integration, validated IPC payloads, workspace-confined file operations, process ownership checks, permission denial by default, and hardened Electron fuses.
 
 Additional safeguards include:
 
@@ -219,7 +219,7 @@ Additional safeguards include:
 - Granular authority permissions and approval policy.
 - Scope and authorization checks before supported active workflows.
 - Bounded process output, traffic parsing, Map queries, and WebClone assets.
-- Centralized proxy CA storage configurable from Pointer Settings.
+- Centralized proxy CA storage configurable from XEKUTE Settings.
 - Encrypted local chat persistence when Windows secure storage is available.
 - Evidence-preserving traffic storage with configurable secret redaction.
 
@@ -227,7 +227,7 @@ No software control can make unauthorized testing acceptable. Always verify scop
 
 ## Responsible Use
 
-Pointer is intended only for systems you own or are explicitly authorized to assess. You are responsible for complying with applicable laws, contracts, disclosure requirements, and testing restrictions. Avoid destructive actions, denial-of-service behavior, unnecessary access to personal data, and unapproved exploitation.
+XEKUTE is intended only for systems you own or are explicitly authorized to assess. You are responsible for complying with applicable laws, contracts, disclosure requirements, and testing restrictions. Avoid destructive actions, denial-of-service behavior, unnecessary access to personal data, and unapproved exploitation.
 
 ## Contributing
 
@@ -241,4 +241,4 @@ Issues and focused pull requests are welcome while the project is in alpha. Befo
 
 ## License
 
-Pointer is released under the [MIT License](LICENSE).
+XEKUTE is released under the [MIT License](LICENSE).

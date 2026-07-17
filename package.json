@@ -1,8 +1,8 @@
 {
-  "name": "pointer-app",
+  "name": "xekute-app",
   "version": "0.1.0",
-  "productName": "Pointer",
-  "description": "Pointer - local-first penetration testing and vulnerability assessment workspace",
+  "productName": "XEKUTE",
+  "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",

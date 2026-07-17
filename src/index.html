@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'self' blob:; base-uri 'none'; form-action 'none'" />
-  <title>Pointer</title>
+  <title>XEKUTE</title>
   <link rel="stylesheet" href="../node_modules/@vscode/codicons/dist/codicon.css" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="../node_modules/highlight.js/styles/github-dark.min.css" />
@@ -13,7 +13,7 @@
 <body>
   <div id="app-shell">
   <div id="app-topbar">
-    <div class="app-brand" aria-label="Pointer">
+    <div class="app-brand" aria-label="XEKUTE">
       <span class="codicon codicon-target" aria-hidden="true"></span>
     </div>
     <nav id="app-menu" aria-label="Application menu">
@@ -54,14 +54,14 @@
           <button type="button" data-action="show-target" role="menuitem">Target Workspace</button>
           <button type="button" data-action="show-security" role="menuitem">Security Tools</button>
           <button type="button" data-action="show-toolbox" role="menuitem">Toolbox</button>
-          <button type="button" data-action="show-settings" role="menuitem">Pointer Settings</button>
+          <button type="button" data-action="show-settings" role="menuitem">XEKUTE Settings</button>
         </div>
       </div>
       <div class="app-menu-item">
         <button type="button" class="app-menu-button" data-menu="help" aria-haspopup="true" aria-expanded="false">Help</button>
         <div class="app-menu-dropdown" data-menu-panel="help" role="menu" hidden>
-          <button type="button" data-action="help-guide" role="menuitem">Pointer Guide</button>
-          <button type="button" data-action="about" role="menuitem">About Pointer</button>
+          <button type="button" data-action="help-guide" role="menuitem">XEKUTE Guide</button>
+          <button type="button" data-action="about" role="menuitem">About XEKUTE</button>
         </div>
       </div>
     </nav>
@@ -115,7 +115,7 @@
           <span class="codicon codicon-comment-discussion"></span>
         </button>
       </div>
-      <div class="activitybar-secondary"><button type="button" id="activity-settings" class="activity-item" title="Pointer Settings" aria-label="Pointer Settings"><span class="codicon codicon-settings-gear"></span></button></div>
+      <div class="activitybar-secondary"><button type="button" id="activity-settings" class="activity-item" title="XEKUTE Settings" aria-label="XEKUTE Settings"><span class="codicon codicon-settings-gear"></span></button></div>
     </nav>
 
     <aside id="sidebar">
@@ -352,8 +352,8 @@
             <div id="assessment-module-content" class="assessment-module-content"></div>
           </div>
         </section>
-        <section id="app-settings-workspace" class="app-settings-workspace" aria-label="Pointer Settings" hidden>
-          <header class="app-settings-workspace-header"><div><span class="codicon codicon-settings-gear"></span><div><strong>Pointer Settings</strong><small>Configure workflows, commands, tools, and authority.</small></div></div><div class="app-settings-workspace-actions"><span id="command-settings-status">Ready</span><button type="button" id="command-settings-save" class="primary-button"><span class="codicon codicon-save"></span>Save</button></div></header>
+        <section id="app-settings-workspace" class="app-settings-workspace" aria-label="XEKUTE Settings" hidden>
+          <header class="app-settings-workspace-header"><div><span class="codicon codicon-settings-gear"></span><div><strong>XEKUTE Settings</strong><small>Configure workflows, commands, tools, and authority.</small></div></div><div class="app-settings-workspace-actions"><span id="command-settings-status">Ready</span><button type="button" id="command-settings-save" class="primary-button"><span class="codicon codicon-save"></span>Save</button></div></header>
           <nav class="app-settings-tabs" aria-label="Settings sections">
             <button type="button" class="active" data-app-settings-section="commands" aria-pressed="true"><span class="codicon codicon-terminal"></span>Commands</button>
             <button type="button" data-app-settings-section="authority" aria-pressed="false"><span class="codicon codicon-shield"></span>Authority</button>
@@ -382,7 +382,7 @@
           </section>
           <section id="app-settings-certificates-panel" class="app-settings-panel certificate-settings-panel" hidden>
             <div class="certificate-settings-content">
-              <header><span class="codicon codicon-verified-filled" aria-hidden="true"></span><div><h2>Proxy CA certificate</h2><p>Pointer uses one shared certificate authority for every assessment. Install its public certificate only in browsers and systems dedicated to authorized testing.</p></div></header>
+              <header><span class="codicon codicon-verified-filled" aria-hidden="true"></span><div><h2>Proxy CA certificate</h2><p>XEKUTE uses one shared certificate authority for every assessment. Install its public certificate only in browsers and systems dedicated to authorized testing.</p></div></header>
               <section class="certificate-settings-card">
                 <div class="certificate-setting-heading"><div><strong>Central CA storage folder</strong><small>All assessment proxy listeners use this location. The private key is never copied into an assessment.</small></div><span id="certificate-location-badge" class="certificate-location-badge">Default</span></div>
                 <div class="certificate-location-row"><input id="certificate-directory" type="text" readonly aria-label="Central CA storage folder"><button type="button" id="certificate-browse" class="secondary-button"><span class="codicon codicon-folder-opened"></span>Choose folder</button></div>
@@ -445,7 +445,7 @@
           </div>
         </section>
         <section id="tools-workspace" class="tools-workspace" aria-label="Security toolbox" hidden>
-          <header class="tools-workspace-header"><div class="tools-workspace-title"><span class="codicon codicon-tools"></span><strong>Toolbox</strong><small>Configure authorized security workflows without leaving Pointer.</small></div><div class="tools-workspace-actions"><button type="button" id="tool-register-action" class="secondary-button"><span class="codicon codicon-add"></span><span>Register custom tool</span></button><button type="button" id="tool-health-action" class="secondary-button"><span class="codicon codicon-pulse"></span><span>Check tool health</span></button></div></header>
+          <header class="tools-workspace-header"><div class="tools-workspace-title"><span class="codicon codicon-tools"></span><strong>Toolbox</strong><small>Configure authorized security workflows without leaving XEKUTE.</small></div><div class="tools-workspace-actions"><button type="button" id="tool-register-action" class="secondary-button"><span class="codicon codicon-add"></span><span>Register custom tool</span></button><button type="button" id="tool-health-action" class="secondary-button"><span class="codicon codicon-pulse"></span><span>Check tool health</span></button></div></header>
           <div id="tool-health-results" class="tool-health-results" hidden></div>
           <div id="tool-catalog" class="tool-catalog"></div>
         </section>
@@ -512,7 +512,7 @@
             <div class="webclone-heading"><span class="codicon codicon-globe"></span><div><strong>WebClone</strong><small>Build a local, reviewable copy of authorized public pages and their text assets.</small></div></div>
             <div class="webclone-actions"><input id="webclone-target" class="webclone-target" type="url" placeholder="https://authorized-target" aria-label="Authorized WebClone target"><span id="webclone-status" class="webclone-status">No clone built</span><button type="button" id="webclone-build-action" class="primary-button"><span class="codicon codicon-cloud-download"></span>Build</button><button type="button" id="webclone-preview-action" class="secondary-button" disabled><span class="codicon codicon-play"></span>Preview</button></div>
           </header>
-          <div id="webclone-empty" class="webclone-empty"><span class="codicon codicon-globe"></span><strong>No WebClone yet</strong><p>Build from an in-scope HTTPS target. Pointer downloads bounded text assets for review and keeps the original assessment untouched.</p></div>
+          <div id="webclone-empty" class="webclone-empty"><span class="codicon codicon-globe"></span><strong>No WebClone yet</strong><p>Build from an in-scope HTTPS target. XEKUTE downloads bounded text assets for review and keeps the original assessment untouched.</p></div>
           <div id="webclone-content" class="webclone-content" hidden>
             <section class="webclone-editor-pane"><header><span id="webclone-file-title">index.html</span><span id="webclone-file-meta"></span></header><pre id="webclone-file-content" tabindex="0" aria-label="WebClone file contents"></pre></section>
             <section class="webclone-preview-pane" hidden><header><strong>Website preview</strong><button type="button" id="webclone-preview-close" class="icon-btn" title="Show file" aria-label="Show file"><span class="codicon codicon-close"></span></button></header><div id="webclone-preview-frame" class="webclone-preview-surface" aria-label="WebClone preview"></div></section>
@@ -815,16 +815,16 @@
   <div id="tool-register-overlay" class="tool-config-overlay" hidden>
     <form id="tool-register-dialog" class="tool-config-dialog tool-register-dialog">
       <header><div><span class="codicon codicon-tools"></span><div><strong>Register custom tool</strong><small>Store a local tool adapter or importable command manifest.</small></div></div><button type="button" id="tool-register-close" class="icon-btn" title="Close"><span class="codicon codicon-close"></span></button></header>
-      <div class="tool-register-body"><div class="tool-register-grid"><label>Tool ID<input id="tool-register-id" required pattern="[a-z0-9][a-z0-9_-]{1,40}" placeholder="my-scanner"></label><label>Display name<input id="tool-register-name" required placeholder="My Scanner"></label><label>Category<input id="tool-register-category" required value="Custom Tools" placeholder="Custom Tools"></label><label>Executable<input id="tool-register-executable" required placeholder="my-scanner"></label></div><label>Description<textarea id="tool-register-description" required placeholder="What this tool does and when to use it."></textarea></label><label>Command template<textarea id="tool-register-command" required spellcheck="false" placeholder="my-scanner --target {target} --output {output}"></textarea></label><p class="tool-register-note">Pointer stores the manifest locally. It does not download or execute third-party code automatically; review and install tools yourself, then use Check tool health.</p></div>
+      <div class="tool-register-body"><div class="tool-register-grid"><label>Tool ID<input id="tool-register-id" required pattern="[a-z0-9][a-z0-9_-]{1,40}" placeholder="my-scanner"></label><label>Display name<input id="tool-register-name" required placeholder="My Scanner"></label><label>Category<input id="tool-register-category" required value="Custom Tools" placeholder="Custom Tools"></label><label>Executable<input id="tool-register-executable" required placeholder="my-scanner"></label></div><label>Description<textarea id="tool-register-description" required placeholder="What this tool does and when to use it."></textarea></label><label>Command template<textarea id="tool-register-command" required spellcheck="false" placeholder="my-scanner --target {target} --output {output}"></textarea></label><p class="tool-register-note">XEKUTE stores the manifest locally. It does not download or execute third-party code automatically; review and install tools yourself, then use Check tool health.</p></div>
       <footer><button type="button" id="tool-register-import" class="secondary-button">Import JSON</button><input id="tool-register-file" type="file" accept="application/json,.json" hidden><button type="button" id="tool-register-cancel" class="secondary-button">Cancel</button><button type="submit" class="primary-button">Register tool</button></footer>
     </form>
   </div>
   <div id="app-settings-overlay" class="tool-config-overlay" hidden>
-    <form id="app-settings-dialog" class="tool-config-dialog app-settings-dialog"><header><div><span class="codicon codicon-settings-gear"></span><div><strong>Pointer Settings</strong><small>Custom slash commands and static command roles are stored for this app profile.</small></div></div><button type="button" id="app-settings-close" class="icon-btn"><span class="codicon codicon-close"></span></button></header><div class="app-settings-body"><label>Custom slash commands <small>One per line: /name = prompt or terminal command</small></label><textarea id="custom-commands-input" placeholder="/myrecon = Perform my recon workflow"></textarea><label>Command registry JSON <small>Set role to <code>static</code> for Python-only execution or <code>ai</code> to send the command to the Agent. Active ffuf also accepts <code>wordlist</code>, <code>rate</code>, and <code>threads</code>.</small></label><textarea id="command-registry-input" class="command-registry-input" spellcheck="false" placeholder='{"/active":{"role":"static","wordlist":"C:/wordlists/common.txt","rate":2,"threads":10},"/pentest":{"role":"ai"}}'></textarea></div><footer><button type="submit" class="primary-button">Save Settings</button></footer></form>
+    <form id="app-settings-dialog" class="tool-config-dialog app-settings-dialog"><header><div><span class="codicon codicon-settings-gear"></span><div><strong>XEKUTE Settings</strong><small>Custom slash commands and static command roles are stored for this app profile.</small></div></div><button type="button" id="app-settings-close" class="icon-btn"><span class="codicon codicon-close"></span></button></header><div class="app-settings-body"><label>Custom slash commands <small>One per line: /name = prompt or terminal command</small></label><textarea id="custom-commands-input" placeholder="/myrecon = Perform my recon workflow"></textarea><label>Command registry JSON <small>Set role to <code>static</code> for Python-only execution or <code>ai</code> to send the command to the Agent. Active ffuf also accepts <code>wordlist</code>, <code>rate</code>, and <code>threads</code>.</small></label><textarea id="command-registry-input" class="command-registry-input" spellcheck="false" placeholder='{"/active":{"role":"static","wordlist":"C:/wordlists/common.txt","rate":2,"threads":10},"/pentest":{"role":"ai"}}'></textarea></div><footer><button type="submit" class="primary-button">Save Settings</button></footer></form>
   </div>
   <div id="help-guide-overlay" class="help-guide-overlay" hidden>
     <section class="help-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="help-guide-title">
-      <header><div><span class="codicon codicon-book"></span><div><strong id="help-guide-title">Pointer Guide</strong><small>Quick orientation for the local-first pentesting workspace.</small></div></div><button type="button" id="help-guide-close" class="icon-btn" title="Close guide" aria-label="Close guide"><span class="codicon codicon-close"></span></button></header>
+      <header><div><span class="codicon codicon-book"></span><div><strong id="help-guide-title">XEKUTE Guide</strong><small>Quick orientation for the local-first pentesting workspace.</small></div></div><button type="button" id="help-guide-close" class="icon-btn" title="Close guide" aria-label="Close guide"><span class="codicon codicon-close"></span></button></header>
       <div class="help-guide-body">
         <section><h3>Start with a project</h3><p>Use <strong>Files → Create New Project</strong> to create a workspace, or <strong>Open Project</strong> to open an existing folder. The Target sidebar holds assessment files and custom files.</p></section>
         <section><h3>Workspaces</h3><p><strong>Search</strong> finds evidence, <strong>Target</strong> organizes scope and findings, <strong>Security Tools</strong> handles request/response work, <strong>Toolbox</strong> configures recon tools, and <strong>Map</strong> visualizes application behavior.</p></section>
@@ -986,7 +986,7 @@
         </button>
       </header>
       <div class="assessment-repair-body">
-        <p id="assessment-repair-description">Pointer found missing or incomplete assessment items. Existing files are never overwritten.</p>
+        <p id="assessment-repair-description">XEKUTE found missing or incomplete assessment items. Existing files are never overwritten.</p>
         <div id="assessment-repair-summary" class="assessment-repair-summary"></div>
         <div id="assessment-repair-list" class="assessment-repair-list" role="list"></div>
       </div>

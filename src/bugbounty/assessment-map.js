@@ -441,7 +441,7 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
     try {
       const settings = JSON.parse(fs.readFileSync(path.join(verification.root, "settings.config"), "utf8"));
       if (settings.authority?.superMode !== "full" && settings.authority?.permissions?.mapBuild === false) {
-        return { error: "Application Map access is disabled in Pointer Authority settings", code: "AUTHORITY_PERMISSION_DISABLED" };
+        return { error: "Application Map access is disabled in XEKUTE Authority settings", code: "AUTHORITY_PERMISSION_DISABLED" };
       }
     } catch { /* specific Map readers report malformed inputs when needed */ }
     return { ok: true, root: verification.root, notice: verification.valid ? null : verification };

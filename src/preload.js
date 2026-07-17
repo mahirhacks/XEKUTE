@@ -3,13 +3,13 @@ const { contextBridge, ipcRenderer } = require("electron");
 // Sandboxed Electron preload scripts may only require a small allowlist of
 // built-in modules. Keep the result envelope helpers self-contained so a
 // failed local import can never prevent the entire renderer bridge loading.
-function fail(input, fallbackCode = "POINTER_OPERATION_FAILED") {
+function fail(input, fallbackCode = "XEKUTE_OPERATION_FAILED") {
   const source = input && typeof input === "object" ? input : {};
   return {
     ok: false,
     error: {
       code: String(source.code || fallbackCode),
-      message: String(source.error || source.message || input || "Pointer operation failed"),
+      message: String(source.error || source.message || input || "XEKUTE operation failed"),
       retryable: Boolean(source.retryable),
       ...(source.details === undefined ? {} : { details: source.details }),
     },
@@ -162,7 +162,7 @@ function subscribe(channel, callback, fallback = {}) {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
-const pointerApi = Object.freeze({
+const xekuteApi = Object.freeze({
   workspace: Object.freeze({
     open: resultCall(legacyApi.openFolder),
     create: resultCall(legacyApi.createProject),
@@ -288,6 +288,7 @@ const pointerApi = Object.freeze({
   }),
 });
 
-// Compatibility facade used while feature controllers migrate to window.pointer.
+// Compatibility facade used while feature controllers migrate to window.xekute.
 contextBridge.exposeInMainWorld("api", legacyApi);
-contextBridge.exposeInMainWorld("pointer", pointerApi);
+contextBridge.exposeInMainWorld("xekute", xekuteApi);
+contextBridge.exposeInMainWorld("pointer", xekuteApi);

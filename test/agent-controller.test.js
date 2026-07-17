@@ -69,7 +69,7 @@ test("runAgentTurn keeps calling tools until multi-file web requests are complet
   ];
 
   const result = await runAgentTurn({
-    workspace: "G:/Pointer/tmp",
+    workspace: "G:/Xekute/tmp",
     model: "huihui_ai/deepseek-r1-abliterated:8b",
     numCtx: 4096,
     thinking: false,
@@ -141,7 +141,7 @@ test("analysis runs request a final synthesis when a model goes silent after a r
   ];
   let round = 0;
   const result = await runAgentTurn({
-    workspace: "G:/Pointer/tmp",
+    workspace: "G:/Xekute/tmp",
     model: "reasoning-model",
     numCtx: 4096,
     thinking: true,
@@ -193,7 +193,7 @@ test("mode prompts and tool lists are distinct and read-only modes are enforced"
   let round = 0;
   const roundPayloads = [];
   const result = await runAgentTurn({
-    workspace: "G:/Pointer/tmp",
+    workspace: "G:/Xekute/tmp",
     model: "local:9b",
     numCtx: 4096,
     contextBudget: 4096,
@@ -250,7 +250,7 @@ test("plan mode requires one grounded workspace inspection before finalizing", a
   ];
 
   const result = await runAgentTurn({
-    workspace: "G:/Pointer/tmp",
+    workspace: "G:/Xekute/tmp",
     model: "local:9b",
     numCtx: 4096,
     contextBudget: 4096,
@@ -294,7 +294,7 @@ test("failed verification triggers a repair reminder and successful rerun", asyn
   let commandRuns = 0;
 
   const result = await runAgentTurn({
-    workspace: "G:/Pointer/tmp",
+    workspace: "G:/Xekute/tmp",
     model: "local:14b",
     numCtx: 8192,
     contextBudget: 8192,

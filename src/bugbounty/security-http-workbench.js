@@ -157,7 +157,7 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
     const authority = settings.authority || {};
     const permissions = authority.permissions || {};
     if (authority.superMode !== "full" && permissions.outboundHttp === false) {
-      return { error: "Outbound HTTP requests are disabled in Pointer Authority settings", code: "AUTHORITY_PERMISSION_DISABLED" };
+      return { error: "Outbound HTTP requests are disabled in XEKUTE Authority settings", code: "AUTHORITY_PERMISSION_DISABLED" };
     }
 
     const gate = configuration.authorizationGate || {};

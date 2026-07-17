@@ -19,7 +19,7 @@ const ToolParser = (() => {
   });
   const LEGACY_PROFILE_KEYS = { ask: "assist:observer", plan: "assist:planner", agent: "assist:executor" };
   function normalizeProfile(familyOrMode = "assist", mode = "executor") {
-    if (globalThis.PointerPromptCompiler) return globalThis.PointerPromptCompiler.normalizeProfile(familyOrMode, mode);
+    if (globalThis.XekutePromptCompiler) return globalThis.XekutePromptCompiler.normalizeProfile(familyOrMode, mode);
     const family = String(familyOrMode || "").toLowerCase();
     const selected = String(mode || "").toLowerCase();
     const key = family.includes(":") ? family : selected.includes(":") ? selected : `${family}:${selected}`;
@@ -215,7 +215,7 @@ const ToolParser = (() => {
      old saved renderer sessions have been upgraded. The compiler below is the
      only runtime prompt source.
 
-  const SYSTEM_PROMPT = `You are Pointer, a local AI penetration-testing workbench for authorized security assessments. Think like a careful pentester: curious, adversarial, evidence-driven, scope-aware, and skeptical of assumptions and scanner output. Your goal is defensible evidence and useful remediation, not maximum traffic or exploitation depth. Read authorization, scope, settings.config, pen_context.md, and existing evidence before active work. Honor technique restrictions, rate limits, testing windows, data-handling rules, and stop conditions. Treat automated results as leads until manually validated. Preserve reproducible evidence and redact secrets and unnecessary production data. When an application Map exists, query it with bounded Map tools instead of loading the complete graph; treat AI summaries and hypotheses as leads, verify against redacted evidence, and preserve agent-asserted provenance when annotating results.
+  const SYSTEM_PROMPT = `You are XEKUTE, a local AI penetration-testing workbench for authorized security assessments. Think like a careful pentester: curious, adversarial, evidence-driven, scope-aware, and skeptical of assumptions and scanner output. Your goal is defensible evidence and useful remediation, not maximum traffic or exploitation depth. Read authorization, scope, settings.config, pen_context.md, and existing evidence before active work. Honor technique restrictions, rate limits, testing windows, data-handling rules, and stop conditions. Treat automated results as leads until manually validated. Preserve reproducible evidence and redact secrets and unnecessary production data. When an application Map exists, query it with bounded Map tools instead of loading the complete graph; treat AI summaries and hypotheses as leads, verify against redacted evidence, and preserve agent-asserted provenance when annotating results.
 
 Follow this loop silently and in order:
 1. Define the exact objective, constraints, selected mode, and completion conditions.
@@ -247,9 +247,9 @@ Use only native function calls. Never print fake tool calls or tool JSON. Curren
     ask: `ASK MODE - pentest analyst, read-only. Correlate scope, Context, traffic, enumeration, findings, tool results, and source evidence. Separate observations, hypotheses, confirmed vulnerabilities, impact, and remediation. Do not send traffic, run tools, edit files, or imply unperformed validation. State missing evidence and cite exact local paths or primary-source URLs.`,
   };
   */
-  if (!globalThis.PointerPromptCompiler) throw new Error("Pointer prompt compiler must load before tools.js");
-  const SHARED_SYSTEM_PROMPT = globalThis.PointerPromptCompiler.compile({ family: "assist", mode: "ask" });
-  const SHARED_MODE_PROMPTS = Object.fromEntries(Object.entries(globalThis.PointerPromptCompiler.MODE_OVERLAYS).map(([key, value]) => [key, value]));
+  if (!globalThis.XekutePromptCompiler) throw new Error("XEKUTE prompt compiler must load before tools.js");
+  const SHARED_SYSTEM_PROMPT = globalThis.XekutePromptCompiler.compile({ family: "assist", mode: "ask" });
+  const SHARED_MODE_PROMPTS = Object.fromEntries(Object.entries(globalThis.XekutePromptCompiler.MODE_OVERLAYS).map(([key, value]) => [key, value]));
 
   const FENCE_PATTERNS = [
     /```(?:[\w-]+(?:\s+)?)?(?:file:|path:)([^\n`]+)\s*\n([\s\S]*?)```/gi,
@@ -760,8 +760,8 @@ Use only native function calls. Never print fake tool calls or tool JSON. Curren
     const fileLimit = contextBudget <= 4096 ? 32 : contextBudget <= 8192 ? 56 : contextBudget <= 16384 ? 100 : 180;
     const embeddedLimit = contextBudget <= 4096 ? 4200 : contextBudget <= 8192 ? 8000 : contextBudget <= 16384 ? 16000 : 28000;
     const parts = [
-      globalThis.PointerPromptCompiler
-        ? globalThis.PointerPromptCompiler.compile({ family: profile.family, mode: profile.key })
+      globalThis.XekutePromptCompiler
+        ? globalThis.XekutePromptCompiler.compile({ family: profile.family, mode: profile.key })
         : SHARED_SYSTEM_PROMPT,
     ];
 

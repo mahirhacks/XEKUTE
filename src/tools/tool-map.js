@@ -1,4 +1,4 @@
-/* Canonical Ollama tool schemas and UI metadata for Pointer. */
+/* Canonical Ollama tool schemas and UI metadata for XEKUTE. */
 
 const ToolMap = (() => {
   const TOOL_DEFS = [
@@ -295,7 +295,7 @@ const ToolMap = (() => {
     },
     {
       name: "ingest_assessment_records",
-      description: "Submit structured tool or AI observations to Pointer's schema-managed Python parser. The parser validates fields, deduplicates records, recomputes statistics, and atomically updates only an approved Core dataset. Never edit Core JSON/JSONL files directly.",
+      description: "Submit structured tool or AI observations to XEKUTE's schema-managed Python parser. The parser validates fields, deduplicates records, recomputes statistics, and atomically updates only an approved Core dataset. Never edit Core JSON/JSONL files directly.",
       parameters: {
         type: "object",
         properties: {
@@ -336,7 +336,7 @@ const ToolMap = (() => {
     },
     {
       name: "record_finding_candidate",
-      description: "Persist one structured finding candidate through Pointer's evidence, scope, reproduction, impact, false-positive, and hybrid-verifier promotion gate. Never edit findings JSON directly.",
+      description: "Persist one structured finding candidate through XEKUTE's evidence, scope, reproduction, impact, false-positive, and hybrid-verifier promotion gate. Never edit findings JSON directly.",
       parameters: {
         type: "object",
         properties: { finding: { type: "object", description: "Structured finding candidate including target, status, severity, reproduction, impact, evidence IDs, and verification." } },
@@ -346,7 +346,7 @@ const ToolMap = (() => {
     },
     {
       name: "verify_finding_candidate",
-      description: "Submit one structured finding candidate and its referenced evidence to Pointer's separate temperature-zero no-tools verifier. An invalid response is inconclusive.",
+      description: "Submit one structured finding candidate and its referenced evidence to XEKUTE's separate temperature-zero no-tools verifier. An invalid response is inconclusive.",
       parameters: { type: "object", properties: { finding: { type: "object" } }, required: ["finding"] },
       meta: { label: "Verifying", badge: "hybrid verifier", target: "finding", mutates: true, capability: "evidence", risk: "evidence" },
     },

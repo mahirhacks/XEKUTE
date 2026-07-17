@@ -25,11 +25,11 @@ jobs:
         env:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\pointer-signing.pfx", [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}"))
-          $env:WINDOWS_CERTIFICATE_FILE = "$env:RUNNER_TEMP\pointer-signing.pfx"
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\xekute-signing.pfx", [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}"))
+          $env:WINDOWS_CERTIFICATE_FILE = "$env:RUNNER_TEMP\xekute-signing.pfx"
           npm run make
           npm run release:metadata
       - uses: actions/upload-artifact@v4
         with:
-          name: pointer-windows-package
-          path: out/Pointer-win32-x64
+          name: xekute-windows-package
+          path: out/XEKUTE-win32-x64

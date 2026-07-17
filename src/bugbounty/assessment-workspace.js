@@ -682,7 +682,7 @@ const JSON_TEMPLATES = {
     network: {
       sourceIpAddresses: [],
       proxyUrl: "",
-      userAgent: "Pointer Security Assessment",
+      userAgent: "XEKUTE Security Assessment",
       dnsResolvers: [],
       verifyTlsCertificates: true,
     },
@@ -1282,7 +1282,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
       type: String(record.type || "request-response"),
       title: String(record.title || record.url || "Captured evidence").slice(0, 300),
       capturedAt,
-      capturedBy: String(record.capturedBy || record.tool || "Pointer").slice(0, 160),
+      capturedBy: String(record.capturedBy || record.tool || "XEKUTE").slice(0, 160),
       source: String(record.source || record.tool || "unknown").slice(0, 120),
       requestId: String(record.requestId || ""),
       targetId: String(record.targetId || ""),

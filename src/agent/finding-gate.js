@@ -71,7 +71,7 @@ function validateFindingCandidate(finding, { evidenceRecords = [], scope = {}, r
   const verifierEvidenceId = String(candidate?.verification?.verifierEvidenceId || "");
   const verifierEvidence = verifierEvidenceId ? evidenceById.get(verifierEvidenceId) : null;
   const verifierAuthentic = Boolean(verifierEvidence && evidenceIds.includes(verifierEvidenceId) && verifierEvidence.type === "verification-verdict" && verifierEvidence.source === "pointer-hybrid-verifier" && /^[a-f0-9]{64}$/i.test(String(candidate?.verification?.packetSha256 || "")));
-  if (confirmed && requiresIndependentVerifier(candidate) && (candidate?.verification?.verdict !== "accept" || !verifierAuthentic)) errors.push({ code: "VERIFIER_REQUIRED", message: "This candidate requires an accepting Pointer hybrid-verifier record linked as evidence." });
+  if (confirmed && requiresIndependentVerifier(candidate) && (candidate?.verification?.verdict !== "accept" || !verifierAuthentic)) errors.push({ code: "VERIFIER_REQUIRED", message: "This candidate requires an accepting XEKUTE hybrid-verifier record linked as evidence." });
   if (candidate?.verification?.verdict === "inconclusive" || candidate?.verification?.verdict === "reject") errors.push({ code: "VERIFIER_REJECTED", message: "An inconclusive or rejected verifier verdict cannot be promoted." });
   if (!confirmed && missingEvidenceIds.length) warnings.push(`Unresolved evidence IDs: ${missingEvidenceIds.join(", ")}`);
 

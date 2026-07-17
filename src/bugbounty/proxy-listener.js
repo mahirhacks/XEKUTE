@@ -343,7 +343,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, getCaDirect
     records.delete(String(id));
     try {
       entry.ctx.proxyToClientResponse.writeHead(403, { "content-type": "text/plain; charset=utf-8", connection: "close" });
-      entry.ctx.proxyToClientResponse.end("Request dropped by Pointer Interceptor");
+      entry.ctx.proxyToClientResponse.end("Request dropped by XEKUTE Interceptor");
       entry.ctx.clientToProxyRequest.destroy();
     } catch { /* ignore */ }
     return { ok: true, id: String(id) };

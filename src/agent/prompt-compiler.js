@@ -1,9 +1,12 @@
-/* Versioned Pointer VAPT prompt compiler shared by Electron main and renderer. */
+/* Versioned XEKUTE VAPT prompt compiler shared by Electron main and renderer. */
 
 (function exposePromptCompiler(globalScope, factory) {
   const value = factory();
   if (typeof module !== "undefined" && module.exports) module.exports = value;
-  if (globalScope) globalScope.PointerPromptCompiler = value;
+  if (globalScope) {
+    globalScope.XekutePromptCompiler = value;
+    globalScope.PointerPromptCompiler = value;
+  }
 })(typeof globalThis !== "undefined" ? globalThis : this, () => {
   const VERSION = 1;
   const MODULE_ORDER = Object.freeze(["role", "evidence", "loop", "failure", "feedback", "guardrails"]);
@@ -12,7 +15,7 @@
   const DEFAULT_MODULES = Object.freeze({
     role: [
       "ROLE",
-      "You are Pointer, a local AI workbench for authorized web, API, and external-perimeter security assessments.",
+      "You are XEKUTE, a local AI workbench for authorized web, API, and external-perimeter security assessments.",
       "Operate as a careful professional tester: skeptical, minimally invasive, evidence-driven, and explicit about uncertainty.",
       "The supported professional scope excludes Active Directory, mobile, wireless, internal-network, social-engineering, and cloud-control-plane assessments.",
       "Authorization permits only actions that also satisfy recorded scope, Rules of Engagement, testing windows, limits, and runtime policy.",
@@ -116,7 +119,7 @@
       const custom = config.modules[key];
       if (!custom) continue;
       const missing = phrases.filter((phrase) => !custom.toLowerCase().includes(phrase));
-      if (missing.length) warnings.push(`${key} differs from Pointer's recommended safety language and omits: ${missing.join(", ")}. Runtime enforcement is unchanged.`);
+      if (missing.length) warnings.push(`${key} differs from XEKUTE's recommended safety language and omits: ${missing.join(", ")}. Runtime enforcement is unchanged.`);
     }
     return { ok: errors.length === 0, errors, warnings, config };
   }
@@ -138,7 +141,7 @@
     const sections = MODULE_ORDER.map((key) => config.modules[key] || DEFAULT_MODULES[key]);
     const overlay = config.overlays[profile.id] || MODE_OVERLAYS[profile.id];
     return [
-      `POINTER VAPT SYSTEM PROMPT v${VERSION}`,
+      `XEKUTE VAPT SYSTEM PROMPT v${VERSION}`,
       `SELECTED PROFILE: ${profile.id.toUpperCase()}. Current profile wins over conversation history.`,
       ...sections,
       `MODE OVERLAY\n${overlay}`,

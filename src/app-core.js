@@ -1,4 +1,4 @@
-(function installPointerCore(global) {
+(function installXekuteCore(global) {
   "use strict";
 
   class LifecycleCollection {
@@ -23,7 +23,7 @@
     }
   }
 
-  class PointerStore {
+  class XekuteStore {
     constructor(initialState = {}) {
       this.state = Object.freeze({ ...initialState });
       this.listeners = new Set();
@@ -64,11 +64,13 @@
   }
 
   function createAppStore() {
-    return new PointerStore({
+    return new XekuteStore({
       workspace: { identity: "", epoch: 0 }, layout: {}, resource: {}, assessment: {},
       security: {}, map: {}, toolbox: {}, settings: {}, chat: {}, terminal: {},
     });
   }
 
-  global.PointerCore = Object.freeze({ LifecycleCollection, PointerStore, AppController, createAppStore });
+  const core = Object.freeze({ LifecycleCollection, XekuteStore, AppController, createAppStore });
+  global.XekuteCore = core;
+  global.PointerCore = core;
 })(globalThis);

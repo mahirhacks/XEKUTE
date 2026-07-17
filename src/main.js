@@ -293,7 +293,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     backgroundColor: "#181818",
-    title: "Pointer",
+    title: "XEKUTE",
     frame: false,
     autoHideMenuBar: true,
     show: false,
@@ -315,7 +315,7 @@ function createWindow() {
   });
   mainWindow.webContents.on("will-attach-webview", (event) => event.preventDefault());
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
-    console.error("Pointer renderer exited unexpectedly:", details?.reason || "unknown");
+    console.error("XEKUTE renderer exited unexpectedly:", details?.reason || "unknown");
   });
   mainWindow.once("ready-to-show", () => {
     if (!mainWindow?.isDestroyed()) mainWindow.show();
@@ -886,7 +886,7 @@ ipcMain.handle("settings:certificatesGet", async () => certificateSettingsSnapsh
 ipcMain.handle("settings:certificatesChoose", async (_event, { assessmentPath = "" } = {}) => {
   const current = configuredCentralCaDirectory();
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: "Choose Pointer CA storage folder",
+    title: "Choose XEKUTE CA storage folder",
     defaultPath: current,
     properties: ["openDirectory", "createDirectory"],
     buttonLabel: "Use this folder",
@@ -2360,7 +2360,7 @@ ipcMain.handle("agent:run", async (event, payload) => {
       }
       sendAgentEvent({ type: "model_qualification", qualification });
       if (!qualification.qualified && !modelPolicy.allowUnqualifiedTestAgentDeveloperOverride) {
-        const result = { error: "The selected model did not pass Pointer's JSON, failure-state, evidence-state, and prompt-injection qualification check. Use Safe Ask or enable the explicit developer override.", code: "MODEL_UNQUALIFIED", qualification };
+        const result = { error: "The selected model did not pass XEKUTE's JSON, failure-state, evidence-state, and prompt-injection qualification check. Use Safe Ask or enable the explicit developer override.", code: "MODEL_UNQUALIFIED", qualification };
         if (assessmentRun?.id) assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, { status: "failed", completedAt: new Date().toISOString(), stopReason: result.error });
         if (payload.workspace) appendAgentAction(payload.workspace, { runId: assessmentRun?.id || "", type: "run_terminal", timestamp: new Date().toISOString(), profile: `${requestedProfile.family}:${requestedProfile.key}`, status: "failed", ok: false, errorCode: result.code, output: result.error, model: payload.model });
         return result;

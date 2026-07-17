@@ -6,7 +6,7 @@ const MAX_SEARCH_BYTES = 750000;
 const MAX_PAGE_BYTES = 1000000;
 const MAX_RAW_ASSET_BYTES = 3000000;
 const MAX_REDIRECTS = 4;
-const USER_AGENT = "Pointer/0.1 local research assistant";
+const USER_AGENT = "XEKUTE/0.1 local research assistant";
 
 function decodeHtmlEntities(value) {
   const named = {

@@ -22,7 +22,7 @@ const checksums = artifacts.map((file) => {
   return `${hash} *${path.relative(output, file).replace(/\\/g, "/")}`;
 });
 fs.writeFileSync(path.join(output, "SHA256SUMS.txt"), `${checksums.join("\n")}\n`, "utf8");
-const sbomPath = path.join(output, "pointer-sbom.cdx.json");
+const sbomPath = path.join(output, "xekute-sbom.cdx.json");
 const descriptor = fs.openSync(sbomPath, "w");
 try {
   execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["sbom", "--sbom-format", "cyclonedx"], {
