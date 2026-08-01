@@ -83,6 +83,5 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-tmp
-version_tracking
-test
+/tmp/
+/version_tracking/

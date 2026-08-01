@@ -26,6 +26,8 @@ const legacyApi = {
   // File system
   openFolder: () => ipcRenderer.invoke("fs:openFolder"),
   createProject: (payload = {}) => ipcRenderer.invoke("project:create", payload),
+  projectProfileGet: (payload) => ipcRenderer.invoke("project-profile:get", payload),
+  projectProfileSave: (payload) => ipcRenderer.invoke("project-profile:save", payload),
   openFile: () => ipcRenderer.invoke("fs:openFile"),
   readdir: (dirPath) => ipcRenderer.invoke("fs:readdir", dirPath),
   readFile: (filePath) => ipcRenderer.invoke("fs:readFile", filePath),
@@ -79,6 +81,12 @@ const legacyApi = {
   assessmentCustomEntries: (payload) => ipcRenderer.invoke("assessment:customEntries", payload),
   assessmentCreateEntry: (payload) => ipcRenderer.invoke("assessment:createEntry", payload),
   assessmentDeleteEntries: (payload) => ipcRenderer.invoke("assessment:deleteEntries", payload),
+  guidanceEntries: (payload) => ipcRenderer.invoke("guidance:entries", payload),
+  guidanceRead: (payload) => ipcRenderer.invoke("guidance:read", payload),
+  guidanceContext: (payload) => ipcRenderer.invoke("guidance:context", payload),
+  guidanceSave: (payload) => ipcRenderer.invoke("guidance:save", payload),
+  guidanceImport: (payload) => ipcRenderer.invoke("guidance:import", payload),
+  guidanceDelete: (payload) => ipcRenderer.invoke("guidance:delete", payload),
   securityHttpRequest: (payload) => ipcRenderer.invoke("security:httpRequest", payload),
   securityBuildIntruder: (payload) => ipcRenderer.invoke("security:buildIntruder", payload),
   proxyConfigure: (payload) => ipcRenderer.invoke("proxy:configure", payload),
@@ -90,6 +98,12 @@ const legacyApi = {
   chooseCertificateDirectory: (payload = {}) => ipcRenderer.invoke("settings:certificatesChoose", payload),
   resetCertificateDirectory: (payload = {}) => ipcRenderer.invoke("settings:certificatesReset", payload),
   showCertificateDirectory: () => ipcRenderer.invoke("settings:certificatesShow"),
+  ollamaSettings: () => ipcRenderer.invoke("settings:ollamaGet"),
+  setOllamaHost: (payload = {}) => ipcRenderer.invoke("settings:ollamaSet", payload),
+  testOllamaConnection: () => ipcRenderer.invoke("settings:ollamaTest"),
+  llmSettings: () => ipcRenderer.invoke("settings:llmGet"),
+  setLlmSettings: (payload = {}) => ipcRenderer.invoke("settings:llmSet", payload),
+  testLlmConnection: () => ipcRenderer.invoke("settings:llmTest"),
   onProxyCapture: (cb) => ipcRenderer.on("proxy:capture", (_event, payload) => cb(payload)),
   onProxyStatus: (cb) => ipcRenderer.on("proxy:status", (_event, payload) => cb(payload)),
 
@@ -113,6 +127,7 @@ const legacyApi = {
   stopProcess: (payload) => ipcRenderer.invoke("tools:stopProcess", payload),
 
   // Terminal
+  terminalShells: () => ipcRenderer.invoke("terminal:shells"),
   terminalCreate: (opts) => ipcRenderer.invoke("terminal:create", opts),
   terminalWrite: (id, data) => ipcRenderer.invoke("terminal:write", { id, data }),
   terminalResize: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", { id, cols, rows }),
@@ -163,6 +178,12 @@ function subscribe(channel, callback, fallback = {}) {
 }
 
 const xekuteApi = Object.freeze({
+  project: Object.freeze({
+    create: resultCall(legacyApi.createProject),
+    open: resultCall(legacyApi.openFolder),
+    profile: resultCall(legacyApi.projectProfileGet),
+    saveProfile: resultCall(legacyApi.projectProfileSave),
+  }),
   workspace: Object.freeze({
     open: resultCall(legacyApi.openFolder),
     create: resultCall(legacyApi.createProject),
@@ -193,6 +214,12 @@ const xekuteApi = Object.freeze({
     customEntries: resultCall(legacyApi.assessmentCustomEntries),
     createEntry: resultCall(legacyApi.assessmentCreateEntry),
     deleteEntries: resultCall(legacyApi.assessmentDeleteEntries),
+    guidanceEntries: resultCall(legacyApi.guidanceEntries),
+    guidanceRead: resultCall(legacyApi.guidanceRead),
+    guidanceContext: resultCall(legacyApi.guidanceContext),
+    guidanceSave: resultCall(legacyApi.guidanceSave),
+    guidanceImport: resultCall(legacyApi.guidanceImport),
+    guidanceDelete: resultCall(legacyApi.guidanceDelete),
     trafficLog: resultCall(legacyApi.assessmentTrafficLog),
     trafficHistory: resultCall(legacyApi.assessmentTrafficHistory),
     deleteTrafficRecords: resultCall(legacyApi.assessmentDeleteTrafficRecords),
@@ -235,6 +262,7 @@ const xekuteApi = Object.freeze({
     onStatus: (callback) => subscribe("proxy:status", callback),
   }),
   terminal: Object.freeze({
+    shells: resultCall(legacyApi.terminalShells),
     create: resultCall(legacyApi.terminalCreate),
     write: resultCall(legacyApi.terminalWrite),
     resize: resultCall(legacyApi.terminalResize),
@@ -277,6 +305,12 @@ const xekuteApi = Object.freeze({
     chooseCertificateDirectory: resultCall(legacyApi.chooseCertificateDirectory),
     resetCertificateDirectory: resultCall(legacyApi.resetCertificateDirectory),
     showCertificateDirectory: resultCall(legacyApi.showCertificateDirectory),
+    ollama: resultCall(legacyApi.ollamaSettings),
+    setOllamaHost: resultCall(legacyApi.setOllamaHost),
+    testOllamaConnection: resultCall(legacyApi.testOllamaConnection),
+    llm: resultCall(legacyApi.llmSettings),
+    setLlm: resultCall(legacyApi.setLlmSettings),
+    testLlm: resultCall(legacyApi.testLlmConnection),
     loadChatSessions: resultCall(legacyApi.loadChatSessions),
     saveChatSessions: resultCall(legacyApi.saveChatSessions),
   }),
@@ -291,4 +325,3 @@ const xekuteApi = Object.freeze({
 // Compatibility facade used while feature controllers migrate to window.xekute.
 contextBridge.exposeInMainWorld("api", legacyApi);
 contextBridge.exposeInMainWorld("xekute", xekuteApi);
-contextBridge.exposeInMainWorld("pointer", xekuteApi);

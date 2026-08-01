@@ -8,25 +8,25 @@ XEKUTE brings assessment scope, HTTP traffic, evidence, security tools, an appli
 
 ## Why XEKUTE?
 
-Security work is often split across terminals, proxy tools, notes, JSON files, browser tabs, and AI chats. XEKUTE organizes those parts around a persistent assessment workspace so that traffic, tool output, hypotheses, findings, and reports remain connected to their evidence.
+Security work is often split across terminals, proxy tools, notes, JSON files, browser tabs, and AI chats. XEKUTE organizes those parts around a project folder so that traffic, tool output, hypotheses, findings, and reports remain connected to their evidence.
 
 XEKUTE is designed to provide:
 
 - A compact, VS Code-inspired interface for security assessments.
-- Local AI through Ollama instead of a mandatory cloud service.
+- Local AI through Ollama or an OpenRouter provider, with exactly one active at a time.
 - Explicit scope, Rules of Engagement, safety modes, and granular authority controls.
 - Transparent agent actions, approvals, hypotheses, run history, and tool output.
-- Structured assessment files that remain accessible outside the application.
+- A plain project folder that remains fully usable outside the application.
 
 ## Current Capabilities
 
-### Assessment workspace
+### Project workspace
 
-- Create or open a structured assessment folder.
-- Define in-scope and out-of-scope assets, authorization, testing windows, rate limits, and restricted techniques.
-- Edit assessment files through either a visual form or raw JSON view where supported.
+- Create a blank project folder or open any existing project folder.
+- Leave new project folders untouched: XEKUTE does not scaffold assessment files or phase directories.
+- Configure the professional engagement, authorization, contacts, scope, Rules of Engagement, application context, and data handling in **Settings > Project**.
+- Keep the project profile in protected XEKUTE app data rather than adding configuration files to the project.
 - Create, edit, organize, and delete custom files and folders.
-- Import context files and generate a combined `pen_context.md`.
 - Track evidence, services, findings, reports, WSTG coverage, ASVS coverage, and MITRE ATT&CK coverage.
 
 ### Security Workbench
@@ -61,6 +61,7 @@ WebClone is a review aid, not a guaranteed offline reproduction. Applications th
 - Choose **Planner**, **Agent**, or **Ask** according to the task.
 - Use **Safe** mode for analysis and workspace-safe operations.
 - Opt into **Test** mode for policy-controlled active testing within an authorized assessment.
+- Route a compact tool set by profile: read-only context for Ask and Planner, workspace operations for Safe Agent, and typed security adapters only for Testing Agent.
 - Configure authority for file access, commands, processes, terminal use, network requests, proxy actions, traffic capture, Map operations, reconnaissance, scanning, and exploit validation.
 - Review agent runs, actions, approvals, hypotheses, and tool output.
 - Keep chat sessions per workspace until they are explicitly deleted.
@@ -100,8 +101,9 @@ XEKUTE does **not** bundle most third-party security binaries. Install only the 
 
 ### Required for AI features
 
-- [Ollama](https://ollama.com/) running locally.
-- At least one Ollama model installed.
+- Either [Ollama](https://ollama.com/) running locally with at least one model installed, or an OpenRouter API key and configured model ID.
+- Configure both providers in **Settings > LLM**; switching providers preserves each configuration but only the selected provider is used.
+- OpenRouter keys are encrypted with Electron safeStorage when available. If secure storage is unavailable, use `OPENROUTER_API_KEY` for the current session; keys are never shown in snapshots or logs.
 
 ### Optional
 
@@ -191,20 +193,24 @@ Do not commit signing certificates or passwords.
 ```text
 Xekute/
 |-- src/
-|   |-- agent/          # Agent loop, prompts, operating modes, and policy engine
-|   |-- bugbounty/      # Assessment, Map, proxy, traffic, and Inspector services
-|   |-- commands/       # Static slash-command parser and orchestration
-|   |-- context/        # Context import and Markdown preparation
+|   |-- README.md       # Source architecture and change-location guide
+|   |-- app/            # Electron lifecycle, IPC registration, and app services
+|   |-- ui/             # Browser shell, feature controllers, templates, and styles
+|   |-- agent/          # Runtime orchestration, policy, memory, and verification
+|   |-- domain/         # Assessment and project data rules
+|   |-- harness/        # Canonical OS and cybersecurity tool capabilities
+|   |-- llm/            # Provider normalization and streaming transports
+|   |-- prompts/        # Human-maintained agent behavior architecture
+|   |   |-- instructs/  # System, initial-context, and triage prompts
+|   |   |-- skills/     # Bug-bounty, triage, loop, and decision knowledge
+|   |   |-- rules/      # Mode capabilities, policy defaults, and evidence states
+|   |   `-- guardrail/  # Command/path enforcement and deterministic redaction
+|   |-- automation/    # Static slash-command parser and context ingestion
 |   |-- shared/         # IPC contracts and shared runtime utilities
-|   |-- tools/          # Tool adapters, web research, Toolbox, and WebClone
-|   |-- main.js         # Electron lifecycle and privileged services
-|   |-- preload.js      # Context-isolated renderer bridge
-|   |-- renderer.js     # Application workspace behavior
-|   |-- terminal.js     # Integrated terminal presentation
-|   |-- index.html      # Desktop application shell
-|   `-- style.css       # XEKUTE design system and feature styling
+|   `-- preload.js      # Context-isolated renderer bridge
 |-- test/               # Node test suite
 |-- scripts/            # Production verification and release helpers
+|-- docs/               # Architecture, audit, and release documentation
 |-- forge.config.js     # Electron Forge packaging and security fuses
 `-- package.json
 ```

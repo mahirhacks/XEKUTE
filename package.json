@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
-  "main": "src/main.js",
+  "main": "src/app/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electronmon --inspect=5858 . --dev",
@@ -40,6 +40,7 @@
     "http-mitm-proxy": "^1.1.0",
     "marked": "^18.0.5",
     "mermaid": "^11.16.0",
+    "monaco-editor": "0.52.2",
     "node-pty": "^1.1.0",
     "tldts": "^7.4.8"
   },

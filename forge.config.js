@@ -7,7 +7,7 @@ module.exports = {
     executableName: "XEKUTE",
     appBundleId: "com.xekute.securityworkspace",
     asar: true,
-    asarUnpack: ["**/node_modules/node-pty/**", "**/src/commands/**", "**/src/context/**"],
+    asarUnpack: ["**/node_modules/node-pty/**", "**/src/automation/commands/**", "**/src/automation/context/**"],
     win32metadata: {
       CompanyName: "XEKUTE",
       FileDescription: "XEKUTE Security Workspace",
