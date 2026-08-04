@@ -80,6 +80,7 @@ __pycache__/
 /.idea/
 /.commandcode/
 CLAUDE.md
+AGENTS.md
 *.swp
 *.swo
 *~
