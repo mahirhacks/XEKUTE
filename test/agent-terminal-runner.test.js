@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
-const { createAgentTerminalRunner } = require("../src/harness/os/terminal-runner");
+const { createAgentTerminalRunner } = require("../src/adapters/tools/os/terminal-runner");
 
 class FakePty extends EventEmitter {
   constructor() {

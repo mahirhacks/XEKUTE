@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { captureOllamaStream } = require("../src/llm/streams/ollama-stream");
+const { captureOllamaStream } = require("../src/adapters/llm/ollama/ollama-stream");
 
 function fragmentedStream(text, cuts = []) {
   const bytes = new TextEncoder().encode(text);

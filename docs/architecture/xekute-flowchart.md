@@ -13,7 +13,7 @@ flowchart TD
     SCOPE --> ORCH[Xekute Orchestrator]
     ORCH --> APPROVAL{Human approval required?}
     APPROVAL -->|Yes| U
-    APPROVAL -->|Approved / Not required| PLAN[Investigation Planner]
+    APPROVAL -->|Approved / Not required| PLAN[Investigation Hypothesis]
 
     %% =========================
     %% CORE HARNESSES

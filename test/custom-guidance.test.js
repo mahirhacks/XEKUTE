@@ -3,7 +3,12 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { formatWorkspaceGuidance, listWorkspaceGuidance } = require("../src/agent/instructions/custom-guidance");
+const {
+  formatWorkspaceGuidance,
+  listGuidanceEntries,
+  listWorkspaceGuidance,
+  writeGuidanceFile,
+} = require("../src/application/planning/custom-guidance");
 
 test("project guidance loads only supported custom skill, rule, and instruction files", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-guidance-"));
@@ -29,5 +34,54 @@ test("project guidance loads only supported custom skill, rule, and instruction 
     assert.doesNotMatch(context, /not guidance/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test(".xekute guidance supports project and global scopes without overwriting files", () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-project-guidance-"));
+  const globalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-global-guidance-"));
+  try {
+    const projectWrite = writeGuidanceFile({
+      workspace: project,
+      globalRoot,
+      scope: "project",
+      kind: "rules",
+      name: "review-quality",
+      content: "# Review quality\nPrefer focused, evidence-backed changes.",
+    });
+    const globalWrite = writeGuidanceFile({
+      workspace: project,
+      globalRoot,
+      scope: "global",
+      kind: "subagents",
+      name: "documentation-helper.md",
+      content: "# Documentation helper\nKeep explanations concise.",
+    });
+    const duplicate = writeGuidanceFile({
+      workspace: project,
+      globalRoot,
+      scope: "project",
+      kind: "rules",
+      name: "review-quality.md",
+      content: "replacement",
+    });
+
+    assert.equal(projectWrite.ok, true);
+    assert.equal(globalWrite.ok, true);
+    assert.equal(duplicate.code, "GUIDANCE_EXISTS");
+    assert.equal(fs.existsSync(path.join(project, ".xekute", "rules", "review-quality.md")), true);
+    assert.equal(fs.existsSync(path.join(globalRoot, ".xekute", "subagents", "documentation-helper.md")), true);
+
+    const entries = listGuidanceEntries({ workspace: project, globalRoot, scope: "all" });
+    assert.deepEqual(entries.map((entry) => `${entry.scope}:${entry.relativePath}`), [
+      "global:.xekute/subagents/documentation-helper.md",
+      "project:.xekute/rules/review-quality.md",
+    ]);
+    const context = formatWorkspaceGuidance(project, undefined, { globalRoot });
+    assert.match(context, /GLOBAL/);
+    assert.match(context, /PROJECT/);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(globalRoot, { recursive: true, force: true });
   }
 });

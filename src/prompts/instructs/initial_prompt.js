@@ -25,11 +25,19 @@
   ].join("\n");
 
   function runtimeAuthority({ approvalMode = "ask", permissions = {} } = {}) {
+    const modeNote = approvalMode === "unrestricted"
+      ? "Mode is UNRESTRICTED: no restrictions, no approval prompts, and actions may go out of scope. Exercise extreme caution."
+      : approvalMode === "full"
+        ? "Mode is FULL AUTHORITY: no restriction, no approval prompts, but engagement scope still applies."
+        : approvalMode === "ask"
+          ? "Mode is ASK FOR APPROVAL: full authority within scope, but sensitive actions always prompt for approval before they run."
+          : "Mode is APPROVE FOR ME: enabled permissions auto-approve; disabled permissions and policy gates still block.";
     const enabled = Object.entries(permissions).filter(([, value]) => value).map(([name]) => name).join(", ") || "none";
     const disabled = Object.entries(permissions).filter(([, value]) => !value).map(([name]) => name).join(", ") || "none";
     return [
       "XEKUTE AUTHORITY (enforced by the runtime):",
       `- Approval mode: ${approvalMode}`,
+      modeNote,
       `- Enabled permissions: ${enabled}`,
       `- Disabled permissions: ${disabled}`,
       "Choose actions that fit these permissions. If an action is blocked, explain the exact permission or engagement gate instead of repeatedly retrying it.",
@@ -64,16 +72,40 @@
     if (!Array.isArray(tools) || !tools.length) return "";
     const groups = { os: [], cyber: [] };
     for (const tool of tools) {
-      const name = String(tool?.function?.name || "");
+      const name = String(tool?.function?.name || tool?.name || "");
       const category = toolMeta[name]?.category;
       if (!name || !groups[category]) continue;
-      const description = String(tool.function.description || "").replace(/\s+/g, " ").trim();
+      const description = String(tool.function?.description || tool.purpose || "").replace(/\s+/g, " ").trim();
       groups[category].push(`- ${name}: ${description}`);
     }
     const lines = ["TOOLS AVAILABLE FOR THIS REQUEST ONLY"];
     if (groups.os.length) lines.push("Workspace & OS", ...groups.os);
     if (groups.cyber.length) lines.push("Cybersecurity", ...groups.cyber);
     lines.push("Use no tool when the request can be answered directly. This list is authoritative: do not ask for, simulate, or serialize tools outside it. A prior assistant suggestion or a user confirmation does not add permissions.");
+    return lines.join("\n");
+  }
+
+  function toolCatalog(entries = [], { packs = [] } = {}) {
+    const items = Array.isArray(entries) ? entries : [];
+    if (!items.length) return "";
+    const hot = items.filter((entry) => entry.schema === "hot");
+    const catalog = items.filter((entry) => entry.schema !== "hot");
+    const lines = [
+      "TOOL CATALOG (Mode-granted; Authority still gates execution)",
+      `Hot schemas (${hot.length}) are callable now. Catalog-only tools (${catalog.length}) require load_tool_schemas before use.`,
+    ];
+    if (Array.isArray(packs) && packs.length) {
+      lines.push(`Loadable packs: ${packs.join(", ")}.`);
+    }
+    lines.push("All granted tools:");
+    for (const entry of items) {
+      const mark = entry.schema === "hot" ? "hot" : `catalog/${entry.pack || "other"}`;
+      lines.push(`- ${entry.name} [${mark}]: ${entry.purpose}`);
+    }
+    lines.push(
+      "If a needed tool is catalog-only, call load_tool_schemas with packs and/or names, then call the tool on the next turn.",
+      "This catalog is authoritative for names. Do not invent tools outside it.",
+    );
     return lines.join("\n");
   }
 
@@ -88,5 +120,16 @@
     ].join("\n");
   }
 
-  return { CONTEXT_MEMORY_SYSTEM_PROMPT, runtimeAuthority, projectSettings, untrustedContextHeader, boundedMemory, toolMenu, workspaceAction };
+  function responseRequirements({ evidenceRequired = false } = {}) {
+    return [
+      "RESPONSE EVIDENCE CLASSIFICATION",
+      "Classify the final response internally before writing it:",
+      "- EVIDENCE_REQUIRED: use this for observed security findings, test or scan results, verification claims, hypotheses, retests, coverage, or evidence-backed reports.",
+      "- EVIDENCE_NOT_REQUIRED: use this for ordinary explanations, recommendations, plans, and workspace edits where the action summary is enough.",
+      `Runtime routing hint: ${evidenceRequired ? "EVIDENCE_REQUIRED" : "EVIDENCE_NOT_REQUIRED"}.`,
+      "Never invent evidence. A runtime action, file change, or verification claim must only be described as completed when its result is available.",
+    ].join("\n");
+  }
+
+  return { CONTEXT_MEMORY_SYSTEM_PROMPT, runtimeAuthority, projectSettings, untrustedContextHeader, boundedMemory, toolMenu, toolCatalog, workspaceAction, responseRequirements };
 });

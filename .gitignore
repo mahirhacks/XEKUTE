@@ -54,6 +54,13 @@ pnpm-debug.log*
 *.temp
 *.bak
 
+# Stray local/editor artifacts
+entry.type
+m[1])
+
+# Runtime subagent output (e.g. traffsucker run dirs)
+/runtime/
+
 # Python caches and virtual environments
 __pycache__/
 *.py[cod]
@@ -71,6 +78,7 @@ __pycache__/
 /.codex/
 /.vscode/
 /.idea/
+/.commandcode/
 CLAUDE.md
 *.swp
 *.swo

@@ -7,7 +7,7 @@ const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
 const { createProjectProfileStore } = require("../src/domain/project/project-profile-store");
-const { loadPolicy } = require("../src/agent/policy/policy-engine");
+const { loadPolicy } = require("../src/application/policies/policy-engine");
 
 test("project profiles are app-managed and do not scaffold the project folder", (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-project-profile-"));

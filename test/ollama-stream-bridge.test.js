@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const mainSource = fs.readFileSync(path.join(__dirname, "..", "src", "app", "main.js"), "utf8");
+const mainSource = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "electron", "main.js"), "utf8");
 
 test("agent round forwards the controller's live callbacks into the Ollama transport", () => {
   assert.match(mainSource, /runModelRound:\s*\(roundPayload\)\s*=>\s*runOllamaAgentRound\([\s\S]*?onThinking:\s*roundPayload\.onThinking,[\s\S]*?onToken:\s*roundPayload\.onToken,[\s\S]*?onToolCalls:\s*roundPayload\.onToolCalls/);

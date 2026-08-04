@@ -4,9 +4,10 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const ToolMap = require("../src/harness/core/tool-map");
-const { createToolHandlers } = require("../src/harness/core/tool-handlers");
-const { createWorkspaceSearch } = require("../src/harness/os/workspace-search");
+const ToolMap = require("../src/adapters/tools/core/tool-catalog");
+const { createToolHandlers } = require("../src/adapters/tools/core/tool-handlers");
+const { createWorkspaceSearch } = require("../src/adapters/tools/os/workspace-search");
+const { resolveSecurityExecutable } = require("../src/adapters/tools/cyber/executable-resolver");
 
 test("ToolMap.validateToolCall sanitizes paths and normalizes patch args", () => {
   const result = ToolMap.validateToolCall("patch_file", {
@@ -20,6 +21,26 @@ test("ToolMap.validateToolCall sanitizes paths and normalizes patch args", () =>
   assert.deepEqual(result.args.patches, [
     { search: "oldValue", replace: "newValue" },
   ]);
+});
+
+test("security executable resolution avoids PATH collisions with app-managed binaries", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-tool-bin-"));
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const expected = path.join(bin, "httpx.exe");
+  fs.writeFileSync(expected, "placeholder", "utf8");
+
+  const resolved = resolveSecurityExecutable("httpx", {
+    env: { XEKUTE_TOOLS_BIN: bin },
+    homeDir: root,
+    resourcesPath: "",
+    cwd: root,
+    platform: "win32",
+    fsImpl: fs,
+  });
+
+  assert.equal(resolved, expected);
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test("ToolMap.validateToolCall normalizes batch read paths", () => {
@@ -177,8 +198,71 @@ test("ToolMap accepts only approved schema-managed ingestion resources", () => {
   assert.equal(traffic.code, "RESOURCE_NOT_ALLOWED");
 });
 
+function makeHandlers(extra = {}) {
+  return createToolHandlers({
+    fs,
+    path,
+    resolveWorkspaceTarget: () => ({ ok: false, error: "unused" }),
+    editWorkspaceFile: async () => ({ error: "not used" }),
+    deleteWorkspaceFile: () => ({ error: "not used" }),
+    buildWorkspaceIndex: async () => ({}),
+    searchWorkspaceIndex: async () => ({ count: 0, results: [] }),
+    findWorkspaceFiles: async () => ({ files: [] }),
+    runWorkspaceCommand: async () => ({ error: "not used" }),
+    startWorkspaceProcess: () => ({ error: "not used" }),
+    readToolProcess: () => ({ error: "not used" }),
+    stopToolProcess: () => ({ error: "not used" }),
+    listProjectFiles: async () => ({ files: [] }),
+    searchWeb: async () => ({ ok: true, provider: "test", count: 0, results: [] }),
+    fetchWebPage: async () => ({ ok: true, url: "", title: "", contentType: "text/html", content: "" }),
+    listDatasets: (w) => ({
+      ok: true,
+      datasets: [
+        { resource: "passive-recon", path: "recon/passive-recon.json", collection: "discoveredAssets", keyFields: ["type", "value"], exists: true },
+        { resource: "endpoints", path: "enumeration/endpoints.json", collection: "endpoints", keyFields: ["method", "url"], exists: false },
+      ],
+      provisioned: ["passive-recon"],
+      unprovisioned: ["endpoints"],
+    }),
+    ...extra,
+  });
+}
+
+test("list_datasets exposes canonical names and provision state at runtime", async () => {
+  const handlers = makeHandlers();
+  const listed = await handlers.executeToolCall({
+    workspace: { detectedRootId: "proj" },
+    toolCall: { function: { name: "list_datasets", arguments: {} } },
+  });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.mode, "dataset_list");
+  assert.equal(listed.datasets.length, 2);
+  assert.ok(listed.provisioned.includes("passive-recon"), "passive sink reported provisioned");
+  assert.ok(listed.unprovisioned.includes("endpoints"));
+});
+
+test("failure results carry an errorClass the agent can adapt to", async () => {
+  const handlers = makeHandlers({
+    ingestAssessmentRecords: async () => ({ ok: false, error: "Canonical dataset does not exist yet", code: "DATASET_NOT_FOUND" }),
+  });
+  const denied = await handlers.executeToolCall({
+    workspace: { detectedRootId: "proj" },
+    toolCall: { function: { name: "ingest_assessment_records", arguments: { resource: "in-scope", records: [{ value: "x" }], source: "t" } } },
+  });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.errorClass, "not_authorized");
+
+  const missing = await handlers.executeToolCall({
+    workspace: { detectedRootId: "proj" },
+    toolCall: { function: { name: "ingest_assessment_records", arguments: { resource: "endpoints", records: [{ method: "GET", url: "https://x.test/a" }], source: "t" } } },
+  });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.errorClass, "not_found_or_schema");
+  assert.match(missing.content, /class: not_found_or_schema/);
+});
+
 test("Toolbox uses a bundled Codicon for Nmap", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
   const codicons = fs.readFileSync(path.join(__dirname, "..", "node_modules", "@vscode", "codicons", "dist", "codicon.css"), "utf8");
   assert.match(renderer, /nmap:\s*"codicon-server-process"/);
   assert.match(codicons, /\.codicon-server-process:before/);
@@ -186,7 +270,7 @@ test("Toolbox uses a bundled Codicon for Nmap", () => {
 });
 
 test("Toolbox exposes the Firewall and WAF Analysis set with bundled icons", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
   const codicons = fs.readFileSync(path.join(__dirname, "..", "node_modules", "@vscode", "codicons", "dist", "codicon.css"), "utf8");
   assert.match(renderer, /category:\s*"Firewall & WAF Analysis"/);
   for (const [tool, icon] of [["wafw00f", "shield"], ["nmap-firewall", "server-process"], ["hping3", "pulse"], ["traceroute", "git-merge"]]) {

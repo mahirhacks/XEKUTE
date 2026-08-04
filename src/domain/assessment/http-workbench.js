@@ -179,7 +179,7 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
 
     const authority = settings.authority || {};
     const permissions = authority.permissions || {};
-    if (authority.superMode !== "full" && permissions.outboundHttp === false) {
+    if (!["unrestricted", "full", "ask"].includes(authority.superMode) && permissions.outboundHttp === false) {
       return { error: "Outbound HTTP requests are disabled in XEKUTE Authority settings", code: "AUTHORITY_PERMISSION_DISABLED" };
     }
 
@@ -250,7 +250,7 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
         request: parsed.raw,
         response: responseRaw,
       };
-      const trafficAllowed = authority.superMode === "full" || permissions.trafficCapture !== false;
+      const trafficAllowed = ["unrestricted", "full", "ask"].includes(authority.superMode) || permissions.trafficCapture !== false;
       const logged = settings.logging?.logRawTraffic === false || !trafficAllowed
         ? { ok: true, disabled: true }
         : assessmentWorkspace.appendTrafficRecord(verification.root, trafficRecord);

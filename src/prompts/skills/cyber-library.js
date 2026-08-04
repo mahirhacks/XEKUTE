@@ -1,13 +1,15 @@
 /* Small specialist overlays loaded only when the current cyber intent needs them. */
 
 const LIBRARIES = Object.freeze({
-  scope: "SCOPE: Confirm the canonical target, authorization, exclusions, testing window, rate limits, and stop conditions before active work.",
-  recon: "RECON: Begin passive, form a specific inventory question, then use the narrowest approved probe that can resolve it. Preserve raw output as evidence.",
-  web: "WEB/API: Map trust boundaries, identity and session state, input sources, server-side decisions, and expected control behavior before testing a hypothesis.",
-  authorization: "AUTHORIZATION: Compare the same operation across controlled identities and object ownership. A status code alone does not prove or disprove access control.",
-  injection: "INJECTION: Identify the input source, parser or sink, expected safe behavior, benign test signal, and false-positive control before proposing a payload.",
-  evidence: "EVIDENCE: Scanner output is a lead. Promotion requires reproducible admissible evidence, false-positive checks, affected scope, limitations, and confidence.",
-  reporting: "REPORTING: Separate observation, hypothesis, verified behavior, impact, remediation, coverage, and retest criteria. Never turn missing coverage into a security claim.",
+  scope: "SCOPE: Confirm canonical targets, written authorization, exclusions, testing window, rate limits, and stop conditions before active work. Cross-check scope-engine rules and ROE fields.",
+  recon: "RECON (WSTG-INFO): Passive first — search metadata, DNS, certificates, technology fingerprint. Then the narrowest approved probe that resolves a specific inventory question. Preserve raw output as evidence with source URLs.",
+  web: "WEB/API (WSTG-INFO, ATHN, SESS, ATHZ, INPV, APIT): Map trust boundaries, session model, input sources, server-side decisions, and object ownership before testing injection or IDOR.",
+  authorization: "AUTHORIZATION (WSTG-ATHZ, WSTG-APIT, A01:2025): Compare the same operation across identities and object ownership. Status code alone does not prove access control. Test horizontal and vertical cases.",
+  injection: "INJECTION (WSTG-INPV, A05:2025): Identify input source, parser/sink, expected safe behavior, benign differential signal, and false-positive control before payloads.",
+  evidence: "EVIDENCE: Scanner output is a lead. Promotion requires reproducible admissible evidence, false-positive checks, affected scope, WSTG check ID, Top 10 mapping, limitations, and confidence.",
+  reporting: "REPORTING: Separate observation, hypothesis, verified behavior, impact, remediation, WSTG/Top 10 coverage matrix, and retest criteria. Missing coverage is a limitation, not a security claim.",
+  wstg: "WSTG: Tag hypotheses and findings with check IDs (INFO, CONF, IDNT, ATHN, ATHZ, SESS, INPV, ERRH, CRYP, BUSL, CLNT, APIT). Skipped categories must appear in coverage limitations.",
+  top10: "OWASP Top 10:2025: Classify when evidence supports A01–A10 themes. Do not assign Top 10 labels from scanner titles alone.",
 });
 
 function selectLibraries(text = "", { active = false } = {}) {
@@ -20,6 +22,8 @@ function selectLibraries(text = "", { active = false } = {}) {
   if (/\b(?:injection|xss|sql|command\s+injection|template|payload)\b/i.test(value)) selected.push("injection");
   if (/\b(?:evidence|finding|verify|validate|false\s+positive|scanner|nuclei)\b/i.test(value)) selected.push("evidence");
   if (/\b(?:report|remediation|retest|coverage)\b/i.test(value)) selected.push("reporting");
+  if (/\b(?:wstg|checklist|methodology)\b/i.test(value)) selected.push("wstg");
+  if (/\b(?:top\s*10|owasp\s*a\d{2}|a01|a02|a03|a04|a05|a06|a07|a08|a09|a10)\b/i.test(value)) selected.push("top10");
   if (!selected.length) selected.push("web");
   return [...new Set(selected)].slice(0, 3);
 }

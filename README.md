@@ -58,10 +58,10 @@ WebClone is a review aid, not a guaranteed offline reproduction. Applications th
 ### AI-assisted workflow
 
 - Use locally installed Ollama models.
-- Choose **Planner**, **Agent**, or **Ask** according to the task.
+- Choose **Hypothesis**, **Agent**, or **Ask** according to the task.
 - Use **Safe** mode for analysis and workspace-safe operations.
 - Opt into **Test** mode for policy-controlled active testing within an authorized assessment.
-- Route a compact tool set by profile: read-only context for Ask and Planner, workspace operations for Safe Agent, and typed security adapters only for Testing Agent.
+- Route a compact tool set by profile: read-only context for Ask and Hypothesis, workspace operations for Safe Agent, and typed security adapters only for Testing Agent.
 - Configure authority for file access, commands, processes, terminal use, network requests, proxy actions, traffic capture, Map operations, reconnaissance, scanning, and exploit validation.
 - Review agent runs, actions, approvals, hypotheses, and tool output.
 - Keep chat sessions per workspace until they are explicitly deleted.
@@ -95,15 +95,13 @@ XEKUTE does **not** bundle most third-party security binaries. Install only the 
 ### Required for development
 
 - Windows 10 or Windows 11, x64.
-- [Node.js](https://nodejs.org/) 22 or newer.
+- Node.js 22 or newer (see `engines` in `package.json`).
 - npm 10 or newer.
-- Python 3 for command and context parsers.
 
 ### Required for AI features
 
 - Either [Ollama](https://ollama.com/) running locally with at least one model installed, or an OpenRouter API key and configured model ID.
-- Configure both providers in **Settings > LLM**; switching providers preserves each configuration but only the selected provider is used.
-- OpenRouter keys are encrypted with Electron safeStorage when available. If secure storage is unavailable, use `OPENROUTER_API_KEY` for the current session; keys are never shown in snapshots or logs.
+- Configure the provider and model in XEKUTE Chat or Settings. `OPENROUTER_API_KEY` remains a compatible headless-development fallback.
 
 ### Optional
 
@@ -132,17 +130,18 @@ Start XEKUTE:
 npm start
 ```
 
-Ollama is optional when using XEKUTE without AI features.
+This launches the XEKUTE desktop workbench. It includes the chat interface,
+project workspace, security workbench, behavior Map, terminal, editor, and
+Toolbox. Ollama is optional when using XEKUTE without AI features.
 
 ## Development Mode
-
-Run XEKUTE with automatic application restarts when source files change:
 
 ```powershell
 npm run dev
 ```
 
-The development command starts Electron through `electronmon` and opens detached DevTools. Main-process changes require an Electron restart; `electronmon` handles this automatically for watched project files.
+`npm run dev` launches the app through `electronmon` with an inspector on port
+5858 for debugging.
 
 ## Testing and Verification
 
@@ -162,6 +161,12 @@ Check the packaged native terminal dependency:
 
 ```powershell
 npm run verify:native
+```
+
+Regenerate prompt modules from the Markdown sources in `src/content/prompts/`:
+
+```powershell
+npm run build:prompts
 ```
 
 ## Packaging for Windows
@@ -194,30 +199,29 @@ Do not commit signing certificates or passwords.
 Xekute/
 |-- src/
 |   |-- README.md       # Source architecture and change-location guide
-|   |-- app/            # Electron lifecycle, IPC registration, and app services
-|   |-- ui/             # Browser shell, feature controllers, templates, and styles
-|   |-- agent/          # Runtime orchestration, policy, memory, and verification
-|   |-- domain/         # Assessment and project data rules
-|   |-- harness/        # Canonical OS and cybersecurity tool capabilities
-|   |-- llm/            # Provider normalization and streaming transports
-|   |-- prompts/        # Human-maintained agent behavior architecture
-|   |   |-- instructs/  # System, initial-context, and triage prompts
-|   |   |-- skills/     # Bug-bounty, triage, loop, and decision knowledge
-|   |   |-- rules/      # Mode capabilities, policy defaults, and evidence states
-|   |   `-- guardrail/  # Command/path enforcement and deterministic redaction
-|   |-- automation/    # Static slash-command parser and context ingestion
-|   |-- shared/         # IPC contracts and shared runtime utilities
+|   |-- contracts/      # Dependency-free port contracts (tool, llm, assessment, ipc)
+|   |-- domain/         # Pure domain rules (scope, assessment, project)
+|   |-- application/    # Orchestration, policies, planning, clarification, prompt
+|   |-- adapters/       # Concrete implementations (tools, llm)
+|   |-- infrastructure/ # DI composition root + config/logging/errors
+|   |-- presentation/   # Electron shell + renderer (ui)
+|   |-- content/        # Prompt Markdown sources + generated content-addressed build
+|   |-- automation/     # Slash-command adapters and context ingestion
+|   |-- app/            # Compatibility launcher + app services
 |   `-- preload.js      # Context-isolated renderer bridge
 |-- test/               # Node test suite
 |-- scripts/            # Production verification and release helpers
-|-- docs/               # Architecture, audit, and release documentation
+|-- docs/               # Architecture, audit, release, and migration docs
 |-- forge.config.js     # Electron Forge packaging and security fuses
 `-- package.json
 ```
 
 ## Security Model
 
-XEKUTE uses Electron context isolation, renderer sandboxing, disabled Node integration, validated IPC payloads, workspace-confined file operations, process ownership checks, permission denial by default, and hardened Electron fuses.
+XEKUTE runs a sandboxed Electron renderer (`sandbox: true`, `contextIsolation:
+true`, `nodeIntegration: false`) talking to the privileged main process only
+through the preload bridge and validated IPC contracts. AI and operator actions
+are mode-scoped and policy-gated.
 
 Additional safeguards include:
 

@@ -1,4 +1,3 @@
-const { Proxy } = require("http-mitm-proxy");
 const { parseRawHttpRequest, urlMatchesTarget } = require("./http-workbench");
 const {
   decodeHttpBody,
@@ -49,7 +48,29 @@ function appendBounded(chunks, chunk, state, key) {
   state[key] = previousSize + value.length;
 }
 
-function createProxyListenerService({ fs, path, assessmentWorkspace, getCaDirectory, sendEvent = () => {} } = {}) {
+function defaultProxyAdapter() {
+  const { Proxy } = require("http-mitm-proxy");
+  let instance = null;
+  return {
+    create() {
+      instance = new Proxy();
+      return instance;
+    },
+    listen(options) {
+      return new Promise((resolve) => {
+        instance.listen(options, (error) => resolve({ error: error ? error.message || String(error) : "" }));
+      });
+    },
+    close() {
+      if (!instance) return;
+      try { instance.close(); } catch { /* ignore */ }
+      instance = null;
+    },
+  };
+}
+
+function createProxyListenerService({ fs, path, assessmentWorkspace, getCaDirectory, sendEvent = () => {}, proxyAdapter = null } = {}) {
+  const adapter = proxyAdapter || defaultProxyAdapter();
   let proxy = null;
   let root = "";
   let settings = null;
@@ -95,7 +116,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, getCaDirect
     pending.clear();
     records.clear();
     if (proxy) {
-      try { proxy.close(); } catch { /* ignore */ }
+      try { adapter.close(); } catch { /* ignore */ }
       proxy = null;
     }
     emitStatus({ running: false, host: "", port: null });
@@ -207,7 +228,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, getCaDirect
 
       decodeHttpBody(rawBuffer, encoding).then((bodyText) => {
         record.response = rawResponse(ctx, bodyText);
-        const trafficAllowed = settings.authority?.superMode === "full" || settings.authority?.permissions?.trafficCapture !== false;
+        const trafficAllowed = ["unrestricted", "full", "ask"].includes(settings.authority?.superMode) || settings.authority?.permissions?.trafficCapture !== false;
         const logged = trafficAllowed ? assessmentWorkspace.appendTrafficRecord(root, {
           tool: "interceptor",
           requestId: record.id,
@@ -246,15 +267,15 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, getCaDirect
     }
     fs.mkdirSync(sslCaDir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(sslCaDir, 0o700); } catch { /* Windows ACLs are inherited from protected user data. */ }
-    const instance = new Proxy();
+    const instance = adapter.create();
     attachHandlers(instance);
 
     return new Promise((resolve) => {
-      instance.listen({ host, port, sslCaDir, keepAlive: true, timeout: 30000 }, (error) => {
+      adapter.listen({ host, port, sslCaDir, keepAlive: true, timeout: 30000 }).then(({ error }) => {
         if (error) {
-          try { instance.close(); } catch { /* ignore */ }
-          emitStatus({ running: false, error: error.message || String(error) });
-          resolve({ error: error.message || String(error), code: "PROXY_START_FAILED" });
+          try { adapter.close(); } catch { /* ignore */ }
+          emitStatus({ running: false, error });
+          resolve({ error, code: "PROXY_START_FAILED" });
           return;
         }
         proxy = instance;
@@ -291,7 +312,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, getCaDirect
       settings = read.settings;
     }
     configuredTargets = Array.isArray(overrides?.targets) ? overrides.targets : null;
-    if (settings.authority?.superMode !== "full" && settings.authority?.permissions?.proxyInterception === false) { await stop(); return { ok: true, running: false, authorityDisabled: true }; }
+    if (!["unrestricted", "full", "ask"].includes(settings.authority?.superMode) && settings.authority?.permissions?.proxyInterception === false) { await stop(); return { ok: true, running: false, authorityDisabled: true }; }
     if (!settings.listener?.enabled) { await stop(); return { ok: true, running: false }; }
     const host = String(settings.listener.bindAddress || "127.0.0.1");
     const port = Number(settings.listener.port);

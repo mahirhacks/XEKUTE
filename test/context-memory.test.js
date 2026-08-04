@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const ContextMemory = require("../src/agent/memory/context-memory");
+const ContextMemory = require("../src/application/agent/memory/context-memory");
 
 test("context transcript is bounded and prioritizes recent exact workspace facts", () => {
   const messages = [];
@@ -28,13 +28,13 @@ test("context transcript is bounded and prioritizes recent exact workspace facts
   });
 
   const transcript = ContextMemory.buildMemoryTranscript(
-    "Prior decision: preserve src/ui/bootstrap.js behavior.",
+    "Prior decision: preserve src/presentation/ui/bootstrap.js behavior.",
     messages,
     { contextTokens: 4096 },
   );
 
   assert.ok(transcript.length <= ContextMemory.transcriptCharLimit(4096) + 50);
-  assert.match(transcript, /preserve src\/ui\/bootstrap\.js behavior/);
+  assert.match(transcript, /preserve src\/presentation\/ui\/bootstrap\.js behavior/);
   assert.match(transcript, /npm test -- context-memory/);
   assert.match(transcript, /Exit: 0/);
   assert.doesNotMatch(transcript, /old turn 0/);

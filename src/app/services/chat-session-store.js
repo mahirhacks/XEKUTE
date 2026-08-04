@@ -1,5 +1,7 @@
 "use strict";
 
+const FailureMemory = require("../../application/agent/memory/failure-memory");
+
 function createChatSessionStore({ fs, path, crypto, baseDir, protector = null }) {
   if (!fs || !path || !crypto || !baseDir) throw new Error("Chat session store dependencies are required.");
 
@@ -12,7 +14,7 @@ function createChatSessionStore({ fs, path, crypto, baseDir, protector = null })
   }
 
   function emptyState(scope, exists = false) {
-    return { version: 2, scope: String(scope || "global"), exists, activeSessionId: "", sessions: [] };
+    return { version: 2, schemaVersion: 3, scope: String(scope || "global"), exists, activeSessionId: "", sessions: [] };
   }
 
   function decodeDocument(document) {
@@ -70,18 +72,58 @@ function createChatSessionStore({ fs, path, crypto, baseDir, protector = null })
       id: String(session.id || ""),
       title: String(session.title || "New Agent"),
       model: String(session.model || session.selectedModel || ""),
-      mode: String(session.mode || session.chatMode || "assist:agent"),
-      safetyFamily: String(session.safetyFamily || session.chatFamily || "assist"),
-      contextSummary: String(session.contextSummary || ""),
+      mode: String(session.mode || session.chatMode || "agent").includes(":")
+        ? String(session.mode || session.chatMode).split(":").pop()
+        : String(session.mode || session.chatMode || "agent"),
+      safetyFamily: "xekute",
+      memory: session.memory && typeof session.memory === "object"
+        ? {
+            version: 2,
+            summary: String(session.memory.summary || session.contextSummary || "").slice(0, 12000),
+            source: session.memory.source ? String(session.memory.source).slice(0, 30) : null,
+            status: ["empty", "ready", "error"].includes(session.memory.status) ? session.memory.status : (session.memory.summary ? "ready" : "empty"),
+            archivedThroughMessageId: session.memory.archivedThroughMessageId ? String(session.memory.archivedThroughMessageId).slice(0, 240) : null,
+            archivedMessageCount: Math.max(0, Number(session.memory.archivedMessageCount) || 0),
+            summaryTokens: Math.max(0, Number(session.memory.summaryTokens) || 0),
+            updatedAt: session.memory.updatedAt || null,
+            warning: String(session.memory.warning || "").slice(0, 1000),
+            failureRecords: Array.isArray(session.memory.failureRecords)
+              ? session.memory.failureRecords.slice(0, FailureMemory.MAX_RECORDS).map((record) => FailureMemory.normalizeRecord(record)).filter(Boolean)
+              : [],
+          }
+        : {
+            version: 2,
+            summary: String(session.contextSummary || "").slice(0, 12000),
+            source: session.contextSummaryMeta?.source ? String(session.contextSummaryMeta.source).slice(0, 30) : null,
+            status: session.contextSummary ? "ready" : "empty",
+            archivedThroughMessageId: session.contextSummaryMeta?.archivedThroughMessageId ? String(session.contextSummaryMeta.archivedThroughMessageId).slice(0, 240) : null,
+            archivedMessageCount: Math.max(0, Number(session.contextSummaryMeta?.archivedMessageCount || session.contextSummaryMeta?.summarizedMessages) || 0),
+            summaryTokens: Math.max(0, Number(session.contextSummaryMeta?.summaryTokens) || 0),
+            updatedAt: session.contextSummaryMeta?.updatedAt || null,
+            warning: String(session.contextSummaryMeta?.warning || "").slice(0, 1000),
+            failureRecords: [],
+          },
+      contextSummary: String(session.contextSummary || session.memory?.summary || "").slice(0, 12000),
       contextSummaryMeta: session.contextSummaryMeta && typeof session.contextSummaryMeta === "object" ? session.contextSummaryMeta : null,
       lastContextUsage: session.lastContextUsage && typeof session.lastContextUsage === "object" ? {
-        version: 1,
-        source: session.lastContextUsage.source === "ollama" ? "ollama" : "estimate",
+        version: 2,
+        source: ["ollama", "openrouter", "estimate"].includes(session.lastContextUsage.source) ? session.lastContextUsage.source : "estimate",
+        provider: ["ollama", "openrouter"].includes(session.lastContextUsage.provider) ? session.lastContextUsage.provider : null,
+        model: String(session.lastContextUsage.model || "").slice(0, 240),
         promptTokens: Math.max(0, Number(session.lastContextUsage.promptTokens) || 0),
         completionTokens: Number.isFinite(Number(session.lastContextUsage.completionTokens)) ? Math.max(0, Number(session.lastContextUsage.completionTokens)) : null,
         contextWindow: Number.isFinite(Number(session.lastContextUsage.contextWindow)) ? Math.max(0, Number(session.lastContextUsage.contextWindow)) : null,
+        modelMaxTokens: Number.isFinite(Number(session.lastContextUsage.modelMaxTokens)) ? Math.max(0, Number(session.lastContextUsage.modelMaxTokens)) : null,
+        effectiveLimitTokens: Number.isFinite(Number(session.lastContextUsage.effectiveLimitTokens)) ? Math.max(0, Number(session.lastContextUsage.effectiveLimitTokens)) : null,
+        promptBudgetTokens: Number.isFinite(Number(session.lastContextUsage.promptBudgetTokens)) ? Math.max(0, Number(session.lastContextUsage.promptBudgetTokens)) : null,
+        responseReserveTokens: Number.isFinite(Number(session.lastContextUsage.responseReserveTokens)) ? Math.max(0, Number(session.lastContextUsage.responseReserveTokens)) : null,
+        safetyMarginTokens: Number.isFinite(Number(session.lastContextUsage.safetyMarginTokens)) ? Math.max(0, Number(session.lastContextUsage.safetyMarginTokens)) : null,
+        approximate: Boolean(session.lastContextUsage.approximate),
         contextWindowSource: String(session.lastContextUsage.contextWindowSource || "fallback").slice(0, 20),
         estimatedTokens: Math.max(0, Number(session.lastContextUsage.estimatedTokens) || 0),
+        reasoningTokens: Number.isFinite(Number(session.lastContextUsage.reasoningTokens)) ? Math.max(0, Number(session.lastContextUsage.reasoningTokens)) : null,
+        cachedTokens: Number.isFinite(Number(session.lastContextUsage.cachedTokens)) ? Math.max(0, Number(session.lastContextUsage.cachedTokens)) : null,
+        cost: Number.isFinite(Number(session.lastContextUsage.cost)) ? Math.max(0, Number(session.lastContextUsage.cost)) : null,
         sections: (Array.isArray(session.lastContextUsage.sections) ? session.lastContextUsage.sections : []).slice(0, 8).map((section) => ({
           key: String(section?.key || "context").slice(0, 40),
           label: String(section?.label || "Context").slice(0, 80),
@@ -108,6 +150,7 @@ function createChatSessionStore({ fs, path, crypto, baseDir, protector = null })
     const file = sessionFile(scope);
     const payload = {
       version: 2,
+      schemaVersion: 3,
       scope: String(scope || "global"),
       savedAt: new Date().toISOString(),
       activeSessionId: typeof state.activeSessionId === "string" ? state.activeSessionId : "",

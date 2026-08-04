@@ -34,6 +34,8 @@ const legacyApi = {
   writeFile: (filePath, content) => ipcRenderer.invoke("fs:writeFile", filePath, content),
   mkdir: (dirPath) => ipcRenderer.invoke("fs:mkdir", dirPath),
   deletePath: (payload) => ipcRenderer.invoke("fs:deletePath", payload),
+  copyPath: (payload) => ipcRenderer.invoke("fs:copyPath", payload),
+  movePath: (payload) => ipcRenderer.invoke("fs:movePath", payload),
   loadChatSessions: (payload) => ipcRenderer.invoke("chat-sessions:load", payload),
   saveChatSessions: (payload) => ipcRenderer.invoke("chat-sessions:save", payload),
   saveChatSessionsBeforeClose: (payload) => ipcRenderer.sendSync("chat-sessions:save-before-close", payload),
@@ -139,6 +141,7 @@ const legacyApi = {
 
   // Ollama
   listModels: () => ipcRenderer.invoke("ollama:list"),
+  openRouterModelContexts: (payload) => ipcRenderer.invoke("openrouter:modelContexts", payload),
   runtimeModel: (payload) => ipcRenderer.invoke("ollama:runtime", payload),
   countTokens: (payload) => ipcRenderer.invoke("ollama:countTokens", payload),
   summarizeContext: (payload) => ipcRenderer.invoke("ollama:summarizeContext", payload),
@@ -147,6 +150,7 @@ const legacyApi = {
   agentQualifyModel: (payload) => ipcRenderer.invoke("agent:qualifyModel", payload),
   agentVerifyFinding: (payload) => ipcRenderer.invoke("agent:verifyFinding", payload),
   agentResolveApproval: (payload) => ipcRenderer.invoke("agent:resolveApproval", payload),
+  agentResolveQuestions: (payload) => ipcRenderer.invoke("agent:resolveQuestions", payload),
   abortChat: () => ipcRenderer.invoke("ollama:abort"),
   onToken: (cb) => ipcRenderer.on("ollama:token", (_e, token) => cb(token)),
   onThinking: (cb) => ipcRenderer.on("ollama:thinking", (_e, token) => cb(token)),
@@ -193,6 +197,8 @@ const xekuteApi = Object.freeze({
     writeFile: resultCall(legacyApi.writeFile),
     createDirectory: resultCall(legacyApi.mkdir),
     deletePath: resultCall(legacyApi.deletePath),
+    copyPath: resultCall(legacyApi.copyPath),
+    movePath: resultCall(legacyApi.movePath),
     watch: resultCall(legacyApi.watchWorkspace),
     unwatch: resultCall(legacyApi.unwatchWorkspace),
     directoryMap: resultCall(legacyApi.dirMap),
@@ -298,6 +304,7 @@ const xekuteApi = Object.freeze({
     qualifyModel: resultCall(legacyApi.agentQualifyModel),
     verifyFinding: resultCall(legacyApi.agentVerifyFinding),
     resolveApproval: resultCall(legacyApi.agentResolveApproval),
+    resolveQuestions: resultCall(legacyApi.agentResolveQuestions),
     onEvent: (callback) => subscribe("agent:event", callback),
   }),
   settings: Object.freeze({

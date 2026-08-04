@@ -40,7 +40,7 @@ assessment resources directly.
 ## What is already strong
 
 - Local-first data and local Ollama execution.
-- Explicit Safe and Testing families with Planner, Agent, and Ask roles.
+- Explicit Safe and Testing families with Hypothesis, Agent, and Ask roles.
 - Scope, authorization, Rules of Engagement, rate, approval, and stop gates.
 - Typed security adapters instead of model-constructed scanner shell commands.
 - Evidence provenance, action logs, hypotheses, candidate finding gates, and an
@@ -129,7 +129,7 @@ assessment resources directly.
     several overlapping edit verbs. Build the search index lazily through
     `search_code` instead of asking the model to call `index_workspace`.
 
-11. **Route tools by profile and domain.** Ask and Planner should receive only
+11. **Route tools by profile and domain.** Ask and Hypothesis should receive only
     read-only workspace/research/Map tools. Safe Agent should receive workspace
     actions plus evidence operations. Only Testing Agent should receive active
     adapters. This is now centralized in `src/harness/core/tool-map.js`.

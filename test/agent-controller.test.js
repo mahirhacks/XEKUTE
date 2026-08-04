@@ -4,17 +4,24 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const ToolMap = require("../src/harness/core/tool-map");
+const ToolMap = require("../src/adapters/tools/core/tool-catalog");
 const {
   commandGuardReason,
+  classifyEvidenceRequirement,
   buildEngagementPromptContext,
   filterToolsForMode,
   filterToolsForRoute,
   runAgentTurn,
   trimHistoryForContext,
-} = require("../src/agent/controller");
+  selectHistoryGroups,
+  fitMessagesToContext,
+  isAnchorHistoryGroup,
+  advanceTowardPhase,
+  toolCallSignature,
+} = require("../src/application/agent/controller");
+const PlanDocument = require("../src/application/planning/plan-document");
 const ContextRouter = require("../src/prompts/skills/context-router");
-const { buildSystemContext } = require("../src/agent/prompt");
+const { buildSystemContext } = require("../src/application/agent/prompt");
 const { createAssessmentWorkspace } = require("../src/domain/assessment/assessment-workspace");
 
 function toolCall(name, args) {
@@ -28,15 +35,16 @@ function toolCall(name, args) {
   };
 }
 
-test("simple conversation uses compact context, no discovery, no tools, no evidence chrome, and no workspace writes", async (t) => {
+test("simple conversation uses compact context, no discovery, no evidence chrome, and no workspace writes", async (t) => {
   let roundPayload = null;
   let discoveryCalls = 0;
+  const events = [];
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-greeting-"));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const result = await runAgentTurn({
     workspace,
     model: "local:small",
-    numCtx: 4096,
+    numCtx: 32768,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "agent",
@@ -47,7 +55,7 @@ test("simple conversation uses compact context, no discovery, no tools, no evide
     activeFile: { path: "app.js", content: "console.log('hello')" },
     extraFiles: [],
     userMessage: "hi",
-    sendEvent() {},
+    sendEvent(event) { events.push(event); },
     async runModelRound(payload) {
       roundPayload = payload;
       return { error: null, fullText: "Hey! How can I help?", toolCalls: [], usage: { promptTokens: 321, completionTokens: 7 } };
@@ -58,36 +66,202 @@ test("simple conversation uses compact context, no discovery, no tools, no evide
   });
 
   assert.equal(discoveryCalls, 0);
-  assert.equal(roundPayload.tools.length, 0);
+  // Agent starts with hot schemas only; traffsucker remains catalog-granted.
+  assert.ok(roundPayload.tools.some((tool) => tool.function.name === "load_tool_schemas"));
+  assert.equal(roundPayload.tools.some((tool) => tool.function.name === "run_traffsucker"), false);
+  assert.match(roundPayload.messages.map((message) => message.content).join("\n"), /run_traffsucker/);
   assert.equal(roundPayload.messages.filter((message) => message.role === "user" && message.content === "hi").length, 1);
   assert.doesNotMatch(roundPayload.messages.map((message) => message.content).join("\n"), /OPERATING LOOP|XEKUTE AUTHORITY|UNTRUSTED CONTEXT DATA|previous assessment summary/);
-  assert.match(roundPayload.messages[0].content, /Ordinary conversation is not an assessment request/i);
+  assert.match(roundPayload.messages[0].content, /A casual message does not start execution or preflight/i);
   assert.equal(result.contextRoute.kind, "conversation");
   assert.deepEqual(result.claims, []);
   assert.equal(result.operatorFeedback, null);
   assert.equal(result.finalText, "Hey! How can I help?");
   assert.equal(result.contextUsage.source, "ollama");
   assert.equal(result.contextUsage.promptTokens, 321);
-  assert.deepEqual(result.contextUsage.toolNames, []);
+  assert.ok(result.contextUsage.toolNames.includes("load_tool_schemas"));
+  assert.equal(result.contextUsage.toolNames.includes("run_traffsucker"), false);
   assert.equal(result.contextUsage.route.promptDepth, "compact");
   assert.deepEqual(fs.readdirSync(workspace), []);
 });
 
-test("progressive routing exposes only the relevant compact tool group", () => {
-  const osRoute = ContextRouter.routeRequest({ text: "Fix src/app.js and run the tests", hasWorkspace: true, family: "assist", mode: "agent" });
-  const osTools = ToolMap.compactTools(filterToolsForRoute(filterToolsForMode(ToolMap.TOOLS, "agent", "assist"), osRoute));
-  assert.deepEqual(osRoute.toolCategories, ["os"]);
-  assert.ok(osTools.some((tool) => tool.function.name === "patch_file"));
-  assert.ok(osTools.some((tool) => tool.function.name === "run_command"));
-  assert.ok(osTools.every((tool) => ToolMap.TOOL_META[tool.function.name].category === "os"));
-  assert.ok(osTools.every((tool) => !tool.function.description.includes("\n")));
+test("mode owns tool exposure; request classification does not shrink agent tools", () => {
+  const agentTools = ToolMap.compactTools(filterToolsForMode(ToolMap.TOOLS, "agent"));
+  assert.ok(agentTools.some((tool) => tool.function.name === "patch_file"));
+  assert.ok(agentTools.some((tool) => tool.function.name === "run_command"));
+  assert.ok(agentTools.some((tool) => tool.function.name === "search_web"));
+  assert.ok(agentTools.some((tool) => tool.function.name === "fetch_url"));
+  assert.ok(agentTools.some((tool) => tool.function.name === "run_security_tool"));
+  assert.ok(agentTools.some((tool) => tool.function.name === "run_traffsucker"));
+  assert.ok(agentTools.some((tool) => tool.function.name === "load_tool_schemas"));
+  assert.ok(agentTools.some((tool) => tool.function.name === "record_hypothesis"));
+  assert.ok(agentTools.every((tool) => !tool.function.description.includes("\n")));
 
-  const cyberRoute = ContextRouter.routeRequest({ text: "Run nmap against the authorized target", hasWorkspace: true, family: "testing", mode: "agent" });
-  const cyberTools = filterToolsForRoute(filterToolsForMode(ToolMap.TOOLS, "agent", "testing"), cyberRoute);
-  assert.deepEqual(cyberRoute.toolCategories, ["cyber"]);
-  assert.ok(cyberTools.some((tool) => tool.function.name === "run_security_tool"));
-  assert.ok(cyberTools.some((tool) => tool.function.name === "record_hypothesis"));
-  assert.ok(cyberTools.every((tool) => ToolMap.TOOL_META[tool.function.name].category === "cyber"));
+  // Legacy route helper is a passthrough and must not filter by wording.
+  const osRoute = ContextRouter.routeRequest({ text: "Fix src/app.js and run the tests", hasWorkspace: true, mode: "agent" });
+  const passedThrough = filterToolsForRoute(agentTools, osRoute);
+  assert.equal(passedThrough.length, agentTools.length);
+  assert.ok(passedThrough.some((tool) => tool.function.name === "run_traffsucker"));
+
+  const hot = new Set(ToolMap.hotToolNamesForProfile("agent"));
+  assert.ok(hot.has("load_tool_schemas"));
+  assert.equal(hot.has("run_traffsucker"), false);
+});
+
+test("planner mode exposes its full mode tool surface including operator questions", () => {
+  const plannerTools = ToolMap.compactTools(filterToolsForMode(ToolMap.TOOLS, "planner"));
+  assert.ok(plannerTools.some((tool) => tool.function.name === "request_operator_questions"));
+  assert.ok(plannerTools.some((tool) => tool.function.name === "create_file"));
+  assert.ok(plannerTools.some((tool) => tool.function.name === "write_file"));
+  assert.equal(plannerTools.some((tool) => tool.function.name === "run_security_tool"), false);
+});
+
+test("request classification selects workflow, hypothesis, or ordinary conversation", () => {
+  const workflow = ContextRouter.routeRequest({
+    text: "fix this",
+    hasWorkspace: true,
+    family: "assist",
+    mode: "agent",
+    activeFile: { path: "src/app.js" },
+  });
+  assert.equal(workflow.interactionType, "workflow");
+  assert.equal(workflow.classification.taskBrief, true);
+  assert.equal(workflow.osMode, "write");
+
+  const calculatorUpgrade = ContextRouter.routeRequest({
+    text: "can you make the calculator better?",
+    hasWorkspace: true,
+    family: "assist",
+    mode: "agent",
+  });
+  assert.equal(calculatorUpgrade.interactionType, "workflow");
+  assert.deepEqual(calculatorUpgrade.toolCategories, ["os"]);
+  assert.equal(calculatorUpgrade.osMode, "write");
+
+  const delegatedUpgrade = ContextRouter.routeRequest({
+    text: "idk just make it better",
+    hasWorkspace: true,
+    family: "assist",
+    mode: "agent",
+    history: [
+      { role: "user", content: "can you make the calculator better?" },
+      { role: "assistant", content: "Which improvements would you like, or should I apply a sensible general upgrade to the calculator?" },
+    ],
+  });
+  assert.equal(delegatedUpgrade.interactionType, "workflow");
+  assert.equal(delegatedUpgrade.inheritedIntent, true);
+  assert.equal(delegatedUpgrade.osMode, "write");
+
+  const retryUpgrade = ContextRouter.routeRequest({
+    text: "try again",
+    hasWorkspace: true,
+    family: "assist",
+    mode: "agent",
+    history: [
+      { role: "user", content: "can you make the calculator better?" },
+      { role: "assistant", content: "I can improve the calculator without changing unrelated files." },
+    ],
+  });
+  assert.equal(retryUpgrade.inheritedIntent, true);
+  assert.equal(retryUpgrade.osMode, "write");
+  assert.equal(retryUpgrade.osMutates, true);
+
+  const hypothesis = ContextRouter.routeRequest({
+    text: "run a passive scan and report findings",
+    hasWorkspace: true,
+    family: "testing",
+    mode: "agent",
+  });
+  assert.equal(hypothesis.interactionType, "hypothesis");
+  assert.equal(hypothesis.classification.evidence, true);
+  assert.equal(hypothesis.responseRequirements.evidence, true);
+
+  const conversation = ContextRouter.routeRequest({ text: "what is XSS?", hasWorkspace: true, family: "testing", mode: "ask" });
+  assert.equal(conversation.interactionType, "conversation");
+  assert.equal(conversation.classification.taskBrief, false);
+});
+
+test("assist Agent routes an edit of the active file to write-capable tools", async () => {
+  let firstRound = null;
+  let round = 0;
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [],
+    contextSummary: "",
+    dirMap: "ROOT/\n  src/\n    app.js\n",
+    activeFile: { path: "src/app.js", content: "const value = 1;\n" },
+    extraFiles: [],
+    userMessage: "fix this",
+    sendEvent() {},
+    async runModelRound(payload) {
+      if (!firstRound) firstRound = payload;
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [toolCall("patch_file", { path: "src/app.js", patches: [{ find: "const value = 1;", replace: "const value = 2;" }] })] };
+      return { fullText: "Updated the active file.", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall: call }) {
+      return { ok: true, mutated: true, mode: "patch", file: call.function.arguments.path, summary: "Updated src/app.js." };
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+
+  assert.equal(result.contextRoute.interactionType, "workflow");
+  assert.ok(firstRound.tools.some((tool) => tool.function.name === "patch_file"));
+  assert.equal(result.completedEdit, true);
+});
+
+test("assist Agent inherits a retried calculator upgrade and enforces a file mutation", async () => {
+  let firstRound = null;
+  let round = 0;
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [
+      { role: "user", content: "can you make the calculator better?" },
+      { role: "assistant", content: "I can improve the calculator without changing unrelated files." },
+      { role: "user", content: "try again" },
+    ],
+    contextSummary: "",
+    dirMap: "ROOT/\n  calculator/\n    index.html\n    script.js\n    styles.css\n",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "try again",
+    sendEvent() {},
+    async runModelRound(payload) {
+      if (!firstRound) firstRound = payload;
+      round += 1;
+      if (round === 1) {
+        return {
+          fullText: "",
+          toolCalls: [toolCall("patch_file", { path: "calculator/script.js", patches: [{ find: "const value = 1;", replace: "const value = 2;" }] })],
+        };
+      }
+      return { fullText: "Improved the calculator.", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall: call }) {
+      return { ok: true, mutated: true, mode: "patch", file: call.function.arguments.path, summary: "Edited files." };
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+
+  assert.equal(result.contextRoute.inheritedIntent, true);
+  assert.equal(result.contextRoute.osMode, "write");
+  assert.ok(firstRound.tools.some((tool) => tool.function.name === "read_file"));
+  assert.ok(firstRound.tools.some((tool) => tool.function.name === "patch_file"));
+  assert.equal(result.completedEdit, true);
 });
 
 test("open project always includes scope, authority, and workspace context", () => {
@@ -113,12 +287,11 @@ test("passive scan requests route cyber tools in testing mode", () => {
   assert.ok(route.cyberCapabilities.includes("active"));
 });
 
-test("passive scan in assist mode warns via routing without security runner tools", () => {
+test("passive scan in read-only modes routes cyber research without active capability", () => {
   const route = ContextRouter.routeRequest({
     text: "can you run a basic passive scan?",
     hasWorkspace: true,
-    family: "assist",
-    mode: "agent",
+    mode: "ask",
   });
   assert.deepEqual(route.toolCategories, ["cyber"]);
   assert.ok(!route.cyberCapabilities.includes("active"));
@@ -144,7 +317,7 @@ test("project prompt context merges workspace scope files with app-managed profi
   });
 
   assert.equal(context.project.name, "Example App");
-  assert.equal(context.context.applicationOverview, "Customer portal");
+  assert.equal(context.application.applicationOverview, "Customer portal");
   assert.equal(context.scope.inScopeTargets[0].value, "app.example.com");
   assert.equal(context.scope.notes, "profile note");
   fs.rmSync(parent, { recursive: true, force: true });
@@ -194,7 +367,7 @@ test("scope questions in an open project inject project settings and authority",
   assert.equal(result.contextRoute.includeProjectContext, true);
 });
 
-test("text-only mutation output is withheld, retried, and fails without claiming a file change", async () => {
+test("text-only mutation answer completes gracefully without claiming a file change", async () => {
   const events = [];
   const roundPayloads = [];
   let rounds = 0;
@@ -202,7 +375,7 @@ test("text-only mutation output is withheld, retried, and fails without claiming
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:no-thinking",
-    numCtx: 4096,
+    numCtx: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "agent",
@@ -217,7 +390,7 @@ test("text-only mutation output is withheld, retried, and fails without claiming
     async runModelRound(payload) {
       rounds += 1;
       roundPayloads.push(payload);
-      payload.onToken("Sure! Here's a basic index.html file:\n```html\n<!doctype html>");
+      payload.onToken("Sure! Here's a basic index.html file:");
       return { error: null, aborted: true, fullText: "Sure! Here's a basic index.html file:", toolCalls: [] };
     },
     async executeToolCall() { executions += 1; return { ok: true }; },
@@ -227,11 +400,39 @@ test("text-only mutation output is withheld, retried, and fails without claiming
 
   assert.equal(rounds, 2);
   assert.equal(executions, 0);
-  assert.equal(result.ok, false);
-  assert.match(result.error, /answered with text instead of calling a workspace tool/i);
-  assert.ok(events.every((event) => event.type !== "content"));
+  // No longer a hard failure: the turn completes with the model's prose.
+  assert.equal(result.ok, true);
+  assert.match(result.finalText, /index\.html file/i);
   assert.match(roundPayloads[0].messages.map((message) => message.content).join("\n"), /WORKSPACE ACTION CONTRACT/);
   assert.match(roundPayloads[1].messages.map((message) => message.content).join("\n"), /requires real workspace actions/i);
+});
+
+test("inherited confirmations can complete with a normal text answer when no tool is selected", async () => {
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [{ role: "assistant", content: "Would you like me to inspect the workspace and update the file?" }],
+    contextSummary: "",
+    dirMap: "ROOT/\n",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "yes",
+    sendEvent() {},
+    async runModelRound() {
+      return { error: null, fullText: "Yes — I can help with that.", toolCalls: [], usage: { promptTokens: 120, completionTokens: 8 } };
+    },
+    async executeToolCall() { throw new Error("No tool should be required for a plain answer."); },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.finalText, "Yes — I can help with that.");
 });
 
 test("a no-thinking model can recover through the strict structured tool fallback", async () => {
@@ -246,7 +447,7 @@ test("a no-thinking model can recover through the strict structured tool fallbac
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:no-thinking",
-    numCtx: 4096,
+    numCtx: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "agent",
@@ -331,7 +532,7 @@ test("runAgentTurn keeps calling tools until multi-file web requests are complet
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "huihui_ai/deepseek-r1-abliterated:8b",
-    numCtx: 4096,
+    numCtx: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     chatHistory: [{ role: "user", content: "hello" }],
@@ -397,7 +598,7 @@ test("runAgentTurn keeps calling tools until multi-file web requests are complet
 
 test("analysis runs request a final synthesis when a model goes silent after a read tool", async () => {
   const responses = [
-    { fullText: "", toolCalls: [toolCall("read_file", { path: "Map/application-map.json" })] },
+    { fullText: "", toolCalls: [toolCall("search_web", { query: "application map" })] },
     { fullText: "", toolCalls: [] },
     { fullText: "Evidence-backed Map analysis.", toolCalls: [] },
   ];
@@ -405,7 +606,7 @@ test("analysis runs request a final synthesis when a model goes silent after a r
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "reasoning-model",
-    numCtx: 4096,
+    numCtx: 32768,
     thinking: true,
     tools: ToolMap.TOOLS,
     mode: "agent",
@@ -419,7 +620,7 @@ test("analysis runs request a final synthesis when a model goes silent after a r
     sendEvent() {},
     async runModelRound() { return responses[round++]; },
     async executeToolCall() {
-      return { ok: true, mode: "read", file: "Map/application-map.json", content: "{}", summary: "Read Map" };
+      return { ok: true, mode: "web_search", query: "application map", content: "{}", summary: "Read Map" };
     },
     findWorkspaceFiles() { return { ok: true, results: [] }; },
     searchWorkspaceIndex() { return { ok: true, results: [] }; },
@@ -432,27 +633,36 @@ test("mode prompts and tool lists are distinct and read-only modes are enforced"
   const agentPrompt = buildSystemContext({ mode: "agent", numCtx: 4096, userMessage: "Fix it" });
   const planPrompt = buildSystemContext({ mode: "plan", numCtx: 4096, userMessage: "Plan it" });
   const askPrompt = buildSystemContext({ mode: "ask", numCtx: 4096, userMessage: "Explain it" });
-  assert.match(agentPrompt, /SAFE AGENT/);
-  assert.match(planPrompt, /SAFE PLANNER/);
-  assert.match(askPrompt, /SAFE ASK/);
+  const hypothesisPrompt = buildSystemContext({ mode: "hypothesis", numCtx: 4096, userMessage: "Hypothesize" });
+  assert.match(agentPrompt, /PROFILE — Agent/);
+  assert.match(planPrompt, /PROFILE — Plan/);
+  assert.match(hypothesisPrompt, /PROFILE — Hypothesis/);
+  assert.match(askPrompt, /PROFILE — Ask/);
   assert.match(agentPrompt, /authorized web, API, and external-perimeter/i);
   assert.match(agentPrompt, /scanner signature/i);
   assert.match(agentPrompt, /unexpected impact/i);
-  assert.match(planPrompt, /hypothesis-driven plan/i);
+  assert.match(planPrompt, /MODE SKILL|hypothesis plan/i);
   assert.match(planPrompt, /completion gate/i);
-  assert.match(askPrompt, /verified claims/i);
-  assert.match(askPrompt, /missing evidence/i);
+  assert.match(askPrompt, /Read-only analysis|MODE SKILL/i);
+  assert.match(askPrompt, /missing evidence|inconclusive/i);
 
-  const planTools = filterToolsForMode(ToolMap.TOOLS, "plan");
-  assert.deepEqual(planTools.map((tool) => tool.function.name), ["create_file"]);
-  const askTools = filterToolsForMode(ToolMap.TOOLS, "ask");
+  const planTools = filterToolsForMode(ToolMap.TOOLS, "planner", "xekute");
+  assert.deepEqual(
+    planTools.map((tool) => tool.function.name).sort(),
+    [...ToolMap.MODE_TOOL_GROUPS.planner].sort(),
+  );
+  const hypothesisTools = filterToolsForMode(ToolMap.TOOLS, "hypothesis", "xekute");
+  assert.ok(hypothesisTools.some((tool) => tool.function.name === "read_file"));
+  assert.equal(hypothesisTools.some((tool) => tool.function.name === "create_file"), false);
+  const askTools = filterToolsForMode(ToolMap.TOOLS, "ask", "xekute");
   assert.ok(askTools.length > 0);
-  assert.ok(askTools.every((tool) => !ToolMap.isMutating(tool.function.name)));
-  assert.ok(askTools.every((tool) => !["run_command", "start_process", "stop_process", "read_process", "run_security_tool"].includes(tool.function.name)));
-  assert.match(planPrompt, /only allowed tool is create_file/i);
-  assert.match(askPrompt, /read-only discovery, research, and Map tools/i);
+  assert.ok(askTools.every((tool) => !ToolMap.isMutating(tool.function.name) || tool.function.name === "request_operator_questions"));
+  assert.ok(askTools.some((tool) => tool.function.name === "read_process"));
+  assert.ok(askTools.every((tool) => !["run_command", "start_process", "stop_process", "run_security_tool"].includes(tool.function.name)));
+  assert.match(planPrompt, /Create or revise plans/i);
+  assert.match(hypothesisPrompt, /Read-only hypothesis formation/i);
+  assert.match(askPrompt, /Never execute, mutate records, or emit action JSON/i);
   assert.match(askPrompt, /exact source URLs/i);
-  assert.match(askPrompt, /Do not offer to start an active scan/i);
 
   let executed = 0;
   let round = 0;
@@ -460,11 +670,12 @@ test("mode prompts and tool lists are distinct and read-only modes are enforced"
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:9b",
-    numCtx: 4096,
-    contextBudget: 4096,
+    numCtx: 16384,
+    contextBudget: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "ask",
+    modeFamily: "xekute",
     chatHistory: [{ role: "user", content: "Can you create app.js?" }],
     contextSummary: "",
     dirMap: "ROOT/\n",
@@ -489,10 +700,39 @@ test("mode prompts and tool lists are distinct and read-only modes are enforced"
 
   assert.equal(result.ok, true);
   assert.equal(executed, 0);
-  assert.match(roundPayloads[0].messages[0].content, /SAFE ASK/);
+  assert.match(roundPayloads[0].messages[0].content, /PROFILE — Ask/);
   assert.ok(roundPayloads[0].tools.length > 0);
   assert.ok(roundPayloads[0].tools.every((tool) => !ToolMap.isMutating(tool.function.name)));
-  assert.ok(roundPayloads[0].tools.every((tool) => !["run_command", "start_process", "stop_process", "read_process", "run_security_tool"].includes(tool.function.name)));
+  assert.ok(askTools.every((tool) => !["run_command", "start_process", "stop_process", "run_security_tool"].includes(tool.function.name)));
+});
+
+test("response evidence classification stays quiet for workspace work and escalates for evidence runs", () => {
+  const workspaceRoute = ContextRouter.routeRequest({ text: "Create .xekute/skills/basic-test.md", hasWorkspace: true, family: "assist", mode: "agent" });
+  const workspaceRequirement = classifyEvidenceRequirement({
+    profile: { key: "agent" },
+    contextRoute: workspaceRoute,
+    userMessage: "Create .xekute/skills/basic-test.md",
+  });
+  assert.equal(workspaceRequirement.required, false);
+  assert.equal(workspaceRequirement.mode, "evidence_not_required");
+
+  const testingRoute = ContextRouter.routeRequest({ text: "Run a passive scan and report findings", hasWorkspace: true, family: "testing", mode: "agent" });
+  const testingRequirement = classifyEvidenceRequirement({
+    profile: { key: "agent" },
+    contextRoute: testingRoute,
+    userMessage: "Run a passive scan and report findings",
+    assessmentRequested: true,
+  });
+  assert.equal(testingRequirement.required, true);
+  assert.equal(testingRequirement.mode, "evidence_required");
+
+  const producedRequirement = classifyEvidenceRequirement({
+    profile: { key: "agent" },
+    contextRoute: workspaceRoute,
+    userMessage: "Inspect this file",
+    actionResults: [{ ok: true, evidenceIds: ["ev-1"] }],
+  });
+  assert.equal(producedRequirement.reason, "evidence-produced");
 });
 
 test("ask mode blocks confirmation-shaped command output and keeps it out of the chat", async () => {
@@ -503,8 +743,8 @@ test("ask mode blocks confirmation-shaped command output and keeps it out of the
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:9b",
-    numCtx: 4096,
-    contextBudget: 4096,
+    numCtx: 16384,
+    contextBudget: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "ask",
@@ -536,7 +776,7 @@ test("ask mode blocks confirmation-shaped command output and keeps it out of the
 
   assert.ok(roundPayload.tools.length > 0);
   assert.ok(roundPayload.tools.every((tool) => !ToolMap.isMutating(tool.function.name)));
-  assert.ok(roundPayload.tools.every((tool) => !["run_command", "start_process", "stop_process", "read_process", "run_security_tool"].includes(tool.function.name)));
+  assert.ok(roundPayload.tools.every((tool) => !["run_command", "start_process", "stop_process", "run_security_tool"].includes(tool.function.name)));
   assert.equal(executed, 0);
   assert.match(result.finalText, /Ask mode is read-only/i);
   assert.doesNotMatch(result.finalText, /curl|timeout_seconds|\"command\"/i);
@@ -551,8 +791,8 @@ test("ask mode does not display or execute a forbidden native tool call", async 
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:9b",
-    numCtx: 4096,
-    contextBudget: 4096,
+    numCtx: 16384,
+    contextBudget: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "ask",
@@ -589,8 +829,8 @@ test("agent mode carries an affirmative action follow-up into routing and blocks
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:9b",
-    numCtx: 4096,
-    contextBudget: 4096,
+    numCtx: 16384,
+    contextBudget: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "agent",
@@ -621,8 +861,11 @@ test("agent mode carries an affirmative action follow-up into routing and blocks
 
   assert.equal(result.contextRoute.inheritedIntent, true);
   assert.equal(result.contextRoute.kind, "cyber");
-  assert.ok(roundPayload.tools.length > 0);
-  assert.ok(roundPayload.tools.every((tool) => tool.function.name !== "run_command"));
+  assert.ok(roundPayload.tools.some((tool) => tool.function.name === "load_tool_schemas"));
+  // Active cyber tools start catalog-only until load_tool_schemas expands them.
+  assert.equal(roundPayload.tools.some((tool) => tool.function.name === "run_security_tool"), false);
+  assert.ok(roundPayload.tools.some((tool) => tool.function.name === "run_command"));
+  assert.match(roundPayload.messages.map((message) => message.content).join("\n"), /run_security_tool|run_traffsucker/);
   assert.equal(executed, 0);
   assert.match(result.finalText, /No command was run/i);
   assert.doesNotMatch(result.finalText, /curl|timeout_seconds|\"command\"/i);
@@ -642,17 +885,21 @@ test("context and command guardrails bound history and block destructive command
   assert.equal(commandGuardReason("npm test"), "");
 });
 
-test("plan mode does not inspect automatically and exposes no tools for a normal plan", async () => {
+test("plan mode saves the plan to a dated file instead of dumping it in chat", async () => {
+  const planPath = PlanDocument.buildPlanDocumentPath("Plan a refactor");
   let round = 0;
   let executed = 0;
-  const responses = [{ error: null, fullText: "1. Update src/app.js. 2. Run npm test later.", toolCalls: [] }];
+  const responses = [
+    { error: null, fullText: "", toolCalls: [toolCall("create_file", { path: planPath, content: "# Plan\n" })] },
+    { error: null, fullText: "Saved the plan document.", toolCalls: [] },
+  ];
   const roundPayloads = [];
 
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:9b",
-    numCtx: 4096,
-    contextBudget: 4096,
+    numCtx: 16384,
+    contextBudget: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "plan",
@@ -666,20 +913,19 @@ test("plan mode does not inspect automatically and exposes no tools for a normal
     async runModelRound(payload) { roundPayloads.push(payload); return responses[round++]; },
     async executeToolCall() {
       executed += 1;
-      return { ok: true, mode: "create", summary: "Created plan" };
+      return { ok: true, mode: "create", file: planPath, mutated: true, summary: "Created plan" };
     },
     findWorkspaceFiles() { return { results: [] }; },
     searchWorkspaceIndex() { return { results: [] }; },
   });
 
   assert.equal(result.ok, true);
-  assert.equal(executed, 0);
-  assert.equal(roundPayloads.length, 1);
-  assert.equal(roundPayloads[0].tools.length, 0);
-  assert.match(result.finalText, /src\/app\.js/);
+  assert.equal(executed, 1);
+  assert.ok(roundPayloads[0].tools.some((tool) => tool.function.name === "create_file"));
+  assert.match(result.finalText, /Saved the plan document/i);
 });
 
-test("plan mode can create a plan document but not arbitrary source files", async () => {
+test("planner mode exposes the full planner tool surface", async () => {
   const responses = [
     { error: null, fullText: "", toolCalls: [toolCall("create_file", { path: "plans/refactor-plan.md", content: "# Plan\n" })] },
     { error: null, fullText: "Saved the plan.", toolCalls: [] },
@@ -690,8 +936,8 @@ test("plan mode can create a plan document but not arbitrary source files", asyn
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:9b",
-    numCtx: 4096,
-    contextBudget: 4096,
+    numCtx: 16384,
+    contextBudget: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "plan",
@@ -714,7 +960,54 @@ test("plan mode can create a plan document but not arbitrary source files", asyn
 
   assert.equal(result.ok, true);
   assert.equal(executed, 1);
-  assert.deepEqual(roundPayloads[0].tools.map((tool) => tool.function.name), ["create_file"]);
+  assert.deepEqual(
+    [...roundPayloads[0].tools.map((tool) => tool.function.name)].sort(),
+    [...ToolMap.MODE_TOOL_GROUPS.planner].sort(),
+  );
+});
+
+test("plan mode reads and updates an existing plan in place", async () => {
+  const planPath = "plans/refactor-plan.md";
+  const responses = [
+    { error: null, fullText: "", toolCalls: [toolCall("read_file", { path: planPath })] },
+    { error: null, fullText: "", toolCalls: [toolCall("patch_file", { path: planPath, search: "Old priority", replace: "New priority" })] },
+    { error: null, fullText: "Updated the existing plan.", toolCalls: [] },
+  ];
+  const executed = [];
+  const roundPayloads = [];
+  let round = 0;
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:9b",
+    numCtx: 16384,
+    contextBudget: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "plan",
+    chatHistory: [{ role: "user", content: `Update ${planPath} with the new priority` }],
+    contextSummary: "",
+    dirMap: "ROOT/\n  plans/\n    refactor-plan.md",
+    activeFile: { path: planPath, content: "# Plan\n\nOld priority\n" },
+    extraFiles: [],
+    userMessage: `Update ${planPath} with the new priority`,
+    sendEvent() {},
+    async runModelRound(payload) { roundPayloads.push(payload); return responses[round++]; },
+    async executeToolCall({ toolCall: call }) {
+      executed.push(call.function.name);
+      if (call.function.name === "read_file") {
+        return { ok: true, mode: "read", file: planPath, content: "# Plan\n\nOld priority\n", mutated: false, summary: "Read plan" };
+      }
+      return { ok: true, mode: "patch", file: planPath, mutated: true, summary: "Updated plan" };
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(executed, ["read_file", "patch_file"]);
+  assert.equal(executed.includes("create_file"), false);
+  assert.match(roundPayloads[0].messages.map((message) => message.content).join("\n"), /Update the existing hypothesis plan in place/);
+  assert.match(result.finalText, /Updated the existing plan/);
 });
 
 test("failed verification triggers a repair reminder and successful rerun", async () => {
@@ -733,8 +1026,8 @@ test("failed verification triggers a repair reminder and successful rerun", asyn
   const result = await runAgentTurn({
     workspace: "G:/Xekute/tmp",
     model: "local:14b",
-    numCtx: 8192,
-    contextBudget: 8192,
+    numCtx: 16384,
+    contextBudget: 16384,
     thinking: false,
     tools: ToolMap.TOOLS,
     mode: "agent",
@@ -773,4 +1066,389 @@ test("failed verification triggers a repair reminder and successful rerun", asyn
   assert.equal(commandRuns, 2);
   assert.match(result.finalText, /passed/i);
   assert.ok(result.appendedMessages.some((message) => /latest verification failed/i.test(message.content || "")));
+});
+
+test("selectHistoryGroups restores chronological order after anchor pinning", () => {
+  const objective = "scan the target";
+  const groups = [
+    [{ role: "user", content: objective }],
+    [{ role: "assistant", content: "older reply" }],
+    [{ role: "user", content: "recent follow-up" }],
+  ];
+  const selection = selectHistoryGroups(groups, {
+    budget: 10_000,
+    anchorOptions: { objectiveMessage: objective },
+  });
+  assert.equal(selection.ok, true);
+  assert.deepEqual(selection.selected.map((group) => group[0].content), [
+    objective,
+    "older reply",
+    "recent follow-up",
+  ]);
+});
+
+test("fitMessagesToContext fails closed when mandatory anchors exceed the budget", () => {
+  const objective = Array.from({ length: 3000 }, (_, index) => `word${index}`).join(" ");
+  const fitted = fitMessagesToContext({
+    baseMessages: [{ role: "system", content: "fixed prompt" }],
+    history: [{ role: "user", content: objective }],
+    promptBudget: 512,
+    anchorOptions: { objectiveMessage: objective },
+  });
+  assert.equal(fitted.ok, false);
+  assert.equal(fitted.overflow, true);
+});
+
+test("measured prompt tokens use a multi-round ceiling before disabling tools", async () => {
+  let round = 0;
+  let secondRoundHadTools = false;
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    contextBudget: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [],
+    contextSummary: "",
+    dirMap: "ROOT/\n  app.js",
+    activeFile: { path: "app.js", content: "console.log('x')" },
+    extraFiles: [],
+    userMessage: "Patch app.js to log hello",
+    sendEvent() {},
+    async runModelRound(payload) {
+      round += 1;
+      if (round === 1) {
+        return {
+          error: null,
+          fullText: "",
+          toolCalls: [toolCall("read_file", { path: "app.js" })],
+          usage: { promptTokens: 1200, completionTokens: 1 },
+        };
+      }
+      if (round === 2) secondRoundHadTools = payload.tools.length > 0;
+      return { error: null, fullText: "Done.", toolCalls: [], usage: { promptTokens: 1300, completionTokens: 2 } };
+    },
+    async executeToolCall({ toolCall }) {
+      return { ok: true, content: "console.log('x')", summary: "read app.js" };
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+  assert.equal(result.ok, true);
+  assert.ok(round >= 2);
+  assert.equal(secondRoundHadTools, true);
+});
+
+test("agent profile blocks unjustified multi-phase jumps without operator approval when cyber actions run", () => {
+  const AgentRuntime = require("../src/application/agent/runtime");
+  const runState = AgentRuntime.createRunState({ runId: "run-phase", profile: "agent" });
+  const step = advanceTowardPhase(runState, "execution", {
+    reason: "Skip inventory",
+    profile: { key: "agent" },
+    operatorApproved: false,
+    cyberAction: true,
+  });
+  assert.equal(step.ok, false);
+  assert.equal(step.blocked, true);
+  assert.equal(step.code, "PHASE_TRANSITION_BLOCKED");
+});
+
+test("parallel read-only tools finalize results in call order and suppress post-stop events", async () => {
+  const events = [];
+  const executionOrder = [];
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 32768,
+    contextBudget: 32768,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [],
+    contextSummary: "",
+    dirMap: "ROOT/\n  a.js\n  b.js",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "Read a.js and b.js",
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      return {
+        error: null,
+        fullText: "",
+        toolCalls: [
+          toolCall("read_file", { path: "a.js" }),
+          toolCall("read_file", { path: "b.js" }),
+        ],
+      };
+    },
+    async executeToolCall({ toolCall }) {
+      const path = toolCall.function.arguments.path;
+      executionOrder.push(path);
+      if (path === "a.js") {
+        return { ok: true, sensitiveDataExposure: true, content: "alpha", summary: "alpha" };
+      }
+      return { ok: true, content: "beta", summary: "beta" };
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(executionOrder, ["a.js", "b.js"]);
+  const toolResults = events.filter((event) => event.type === "tool_result");
+  assert.equal(toolResults.length, 1);
+  assert.equal(toolResults[0].result.summary, "alpha");
+});
+
+test("tool signatures canonicalize argument key order", () => {
+  const first = toolCallSignature({
+    toolName: "search_web",
+    args: { query: "xekute", limit: 4, options: { language: "en", safe: true } },
+  });
+  const second = toolCallSignature({
+    toolName: "search_web",
+    args: { options: { safe: true, language: "en" }, limit: 4, query: "xekute" },
+  });
+  assert.equal(first, second);
+});
+
+test("fitMessagesToContext rejects fixed-only overflow", () => {
+  const fixed = Array.from({ length: 3000 }, (_, index) => `fixed${index}`).join(" ");
+  const fitted = fitMessagesToContext({
+    baseMessages: [{ role: "system", content: fixed }],
+    history: [],
+    promptBudget: 512,
+  });
+  assert.equal(fitted.ok, false);
+  assert.equal(fitted.overflow, true);
+});
+
+test("testing tools progress through inventory, hypothesis, execution, and observation", async () => {
+  let round = 0;
+  const phases = [];
+  const executed = [];
+  const responses = [
+    { error: null, fullText: "", toolCalls: [toolCall("search_web", { query: "example.com inventory" })] },
+    { error: null, fullText: "", toolCalls: [toolCall("load_tool_schemas", { packs: ["evidence"] })] },
+    { error: null, fullText: "", toolCalls: [toolCall("record_hypothesis", { id: "hyp-1", question: "Is the documented behavior exposed?", expected_signal: "Public documentation" })] },
+    { error: null, fullText: "", toolCalls: [toolCall("search_web", { query: "example.com documented behavior" })] },
+    { error: null, fullText: "The hypothesis remains inconclusive.", toolCalls: [] },
+  ];
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    contextBudget: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    authority: { superMode: "full", permissions: { evidenceManagement: true, webResearch: true } },
+    chatHistory: [{ role: "user", content: "Research example.com and test a hypothesis" }],
+    contextSummary: "",
+    dirMap: "ROOT/\n",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "Research example.com and test a hypothesis",
+    sendEvent(event) {
+      if (event.type === "run_state") phases.push(event.state.phase);
+    },
+    async runModelRound() { return responses[round++]; },
+    async executeToolCall({ toolCall: call }) {
+      executed.push(call.function.name);
+      if (call.function.name === "load_tool_schemas") {
+        return {
+          ok: true,
+          mode: "schema_load",
+          loaded: ["record_hypothesis", "list_datasets", "ingest_assessment_records", "record_finding_candidate", "verify_finding_candidate", "annotate_map_finding"],
+          summary: "Loaded evidence schemas",
+        };
+      }
+      return { ok: true, summary: `${call.function.name} completed` };
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(executed, ["search_web", "load_tool_schemas", "record_hypothesis", "search_web"]);
+  assert.ok(phases.includes("inventory"));
+  assert.ok(phases.includes("hypothesis"));
+  assert.ok(phases.includes("execution"));
+  assert.ok(phases.includes("observation"));
+});
+
+test("rejected tool execution becomes an ordered tool result", async () => {
+  let round = 0;
+  let executions = 0;
+  const events = [];
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    contextBudget: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [{ role: "user", content: "Create broken.txt" }],
+    contextSummary: "",
+    dirMap: "ROOT/\n",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "Create broken.txt",
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      round += 1;
+      if (round === 1) return { error: null, fullText: "", toolCalls: [toolCall("create_file", { path: "broken.txt", content: "x" })] };
+      return { error: null, fullText: "The file could not be created.", toolCalls: [] };
+    },
+    async executeToolCall() {
+      executions += 1;
+      throw new Error("disk unavailable");
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+  assert.equal(executions, 1);
+  assert.equal(result.ok, true);
+  assert.ok(events.some((event) => event.type === "tool_result" && event.result?.errorCode === "TOOL_EXECUTION_FAILED"));
+  assert.ok(result.appendedMessages.some((message) => message.role === "tool" && /disk unavailable/i.test(message.content)));
+});
+
+test("a serial repeated failure is persisted for the exact signature", async () => {
+  let round = 0;
+  let executions = 0;
+  const repeated = toolCall("read_file", { path: "missing.js" });
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    contextBudget: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [{ role: "user", content: "Read missing.js" }],
+    contextSummary: "",
+    dirMap: "ROOT/\n",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "Read missing.js",
+    sendEvent() {},
+    async runModelRound() {
+      round += 1;
+      if (round <= 2) {
+        return {
+          error: null,
+          fullText: "",
+          toolCalls: [{ ...repeated, id: `read-${round}` }],
+        };
+      }
+      return { error: null, fullText: "The file is unavailable.", toolCalls: [] };
+    },
+    async executeToolCall() {
+      executions += 1;
+      return { ok: false, error: "File not found", errorCode: "DATASET_NOT_FOUND", errorClass: "not_found_or_schema" };
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+  assert.equal(executions, 1);
+  assert.equal(result.failureRecords.length, 1);
+  assert.equal(result.failureRecords[0].toolName, "read_file");
+  assert.match(result.failureRecords[0].signature, /missing\.js/);
+});
+
+test("duplicate reads in one batch execute only once", async () => {
+  let round = 0;
+  let executions = 0;
+  const events = [];
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    contextBudget: 16384,
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [{ role: "user", content: "Read a.js twice" }],
+    contextSummary: "",
+    dirMap: "ROOT/\n  a.js",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "Read a.js twice",
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      round += 1;
+      if (round === 1) {
+        return {
+          error: null,
+          fullText: "",
+          toolCalls: [
+            toolCall("read_file", { path: "a.js" }),
+            toolCall("read_file", { path: "a.js" }),
+          ],
+        };
+      }
+      return { error: null, fullText: "Read completed.", toolCalls: [] };
+    },
+    async executeToolCall() {
+      executions += 1;
+      return { ok: true, content: "a", summary: "a" };
+    },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(executions, 1);
+  const results = events.filter((event) => event.type === "tool_result");
+  assert.equal(results.length, 2);
+  assert.equal(results[1].result.errorCode, "REDUNDANT_READ");
+});
+
+test("the strict cumulative ceiling prevents an extra summary round", async () => {
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "G:/Xekute/tmp",
+    model: "local:small",
+    numCtx: 16384,
+    contextBudget: 16384,
+    contextPlan: {
+      provider: "ollama",
+      model: "local:small",
+      effectiveLimitTokens: 16384,
+      promptBudgetTokens: 16384,
+      responseReserveTokens: 0,
+      safetyMarginTokens: 0,
+    },
+    thinking: false,
+    tools: ToolMap.TOOLS,
+    mode: "agent",
+    modeFamily: "assist",
+    chatHistory: [{ role: "user", content: "Read a.js" }],
+    contextSummary: "",
+    dirMap: "ROOT/\n  a.js",
+    activeFile: null,
+    extraFiles: [],
+    userMessage: "Read a.js",
+    sendEvent() {},
+    async runModelRound() {
+      rounds += 1;
+      return {
+        error: null,
+        fullText: "",
+        toolCalls: [toolCall("read_file", { path: "a.js" })],
+        usage: { promptTokens: 200_000, completionTokens: 1 },
+      };
+    },
+    async executeToolCall() { return { ok: true, content: "a", summary: "a" }; },
+    findWorkspaceFiles() { return { results: [] }; },
+    searchWorkspaceIndex() { return { results: [] }; },
+  });
+  assert.equal(rounds, 1);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /token budget exceeded/i);
 });

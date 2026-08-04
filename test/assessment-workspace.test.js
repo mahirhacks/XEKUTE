@@ -14,7 +14,7 @@ const {
 } = require("../src/domain/assessment/assessment-workspace");
 
 test("every assessment sidebar item maps to its required backing file", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
   for (const [item, relativePath] of Object.entries(ASSESSMENT_ITEM_FILES)) {
     assert.ok(
       html.includes(`data-bounty-item="${item}" data-bounty-file="${relativePath}"`),
@@ -56,8 +56,8 @@ test("multi-delete removes only selected Custom roots and never assessment files
 });
 
 test("security workspace exposes Traffic Raw history with request and response details", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
   assert.ok(html.includes('id="security-history-toggle"'));
   assert.ok(html.includes('id="security-history-rows"'));
   for (const key of ["number", "host", "method", "path", "params", "status", "length", "mime", "tool", "time"]) {
@@ -81,9 +81,9 @@ test("security workspace exposes Traffic Raw history with request and response d
 });
 
 test("workspace editor renders synchronized logical line numbers", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('id="resource-editor-shell"'));
   assert.ok(html.includes('id="resource-line-numbers"'));
   assert.ok(html.indexOf('id="resource-line-numbers"') < html.indexOf('id="resource-viewer-content"'));
@@ -93,7 +93,7 @@ test("workspace editor renders synchronized logical line numbers", () => {
 });
 
 test("chat markdown wraps long security values without horizontal expansion", () => {
-  const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
   assert.match(css, /#messages\s*\{[^}]*overflow-x:\s*hidden/s);
   assert.match(css, /\.assistant-reply\s*\{[^}]*overflow-wrap:\s*anywhere/s);
   assert.match(css, /\.assistant-reply\s+:not\(pre\)\s*>\s*code[\s\S]*?word-break:\s*break-all/);
@@ -101,7 +101,7 @@ test("chat markdown wraps long security values without horizontal expansion", ()
 });
 
 test("chat sessions are restored per workspace and saved after explicit lifecycle changes", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
   const preload = fs.readFileSync(path.join(__dirname, "..", "src", "preload.js"), "utf8");
   assert.match(preload, /loadChatSessions/);
   assert.match(preload, /saveChatSessions/);
@@ -114,9 +114,9 @@ test("chat sessions are restored per workspace and saved after explicit lifecycl
 });
 
 test("terminal sash resizing is frame-synchronized and deduplicates PTY dimensions", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
-  const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
+  const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
   assert.match(renderer, /addEventListener\("pointerdown"/);
   assert.match(renderer, /requestAnimationFrame\(flush\)/);
   assert.match(renderer, /availableH = Math\.max\(0, rect\.height - sashH\)/);
@@ -127,10 +127,10 @@ test("terminal sash resizing is frame-synchronized and deduplicates PTY dimensio
 });
 
 test("terminal stays collapsed without a session and creates one when expanded", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
-  const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "main.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
+  const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "electron", "main.js"), "utf8");
   assert.match(terminal, /function hasSessions\(\)/);
   assert.match(terminal, /async function ensureTerminal\(\)/);
   assert.doesNotMatch(terminal, /async function openWithProject\(path\)\s*\{[^}]*createTerminal\(/s);
@@ -151,8 +151,11 @@ test("terminal stays collapsed without a session and creates one when expanded",
 });
 
 test("project workspace exposes a plain folder flow and professional project settings", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
+  const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
+  const settingsStyles = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "settings.css"), "utf8");
+  const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "chat.css"), "utf8");
   assert.ok(html.includes(">Core<"));
   assert.ok(html.includes(">Scoute<"));
   assert.ok(html.includes('id="btn-context-add"'));
@@ -176,15 +179,25 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.ok(html.includes('data-app-settings-section="certificates"'));
   assert.ok(html.includes('id="app-settings-authority-panel"'));
   assert.ok(html.includes('id="app-settings-certificates-panel"'));
+  assert.ok(html.includes("<strong>Security Workbench</strong>"));
+  assert.ok(!html.includes("Intercept, replay, and test authorized HTTP traffic."));
+  assert.match(html, /id="llm-settings-save"[^>]*>Save provider settings<\/button>/);
+  assert.match(html, /id="llm-settings-test"[^>]*>Test provider<\/button>/);
+  assert.ok(html.includes('id="models-settings-search"'));
+  assert.ok(html.includes('id="models-settings-list"'));
+  assert.ok(html.includes('id="models-explore-subagent"'));
+  assert.ok(html.includes('class="resource-viewer-empty-logo codicon codicon-target"'));
+  assert.doesNotMatch(html, /Do something to get started/);
+  assert.match(baseStyles, /\.resource-viewer-empty-logo\.codicon \{[\s\S]*color: #d0d0d0;[\s\S]*font-size: 72px !important;[\s\S]*line-height: 1 !important;[\s\S]*opacity: 0\.25;/);
   assert.ok(html.includes('id="custom-commands-list"'));
-  assert.ok(html.includes("Custom Commands"));
-  assert.ok(html.includes('data-chat-mode="testing:planner"'));
-  assert.ok(html.includes('data-chat-mode="testing:agent"'));
-  assert.ok(html.includes('data-chat-mode="testing:ask"'));
-  assert.ok(html.includes('data-chat-mode="assist:agent"'));
-  assert.ok(html.includes('data-chat-mode="assist:ask"'));
+  assert.ok(html.includes("Custom commands"));
+  assert.ok(html.includes('data-chat-mode="hypothesis"'));
+  assert.ok(html.includes('data-chat-mode="planner"'));
+  assert.ok(html.includes('data-chat-mode="agent"'));
+  assert.ok(html.includes('data-chat-mode="ask"'));
+  assert.doesNotMatch(html, /data-chat-mode="(?:assist|testing):/);
   assert.doesNotMatch(html, /chat-safety-toggle|chat-safety-button|chat-safety-tooltip|chat-mode-policy-note/);
-  assert.ok(html.includes('<option value="planner">Planner</option><option value="agent">Agent</option><option value="ask">Ask</option>'));
+  assert.ok(html.includes('<option value="hypothesis">Hypothesis</option><option value="planner">Plan</option><option value="agent">Agent</option><option value="ask">Ask</option>'));
   assert.doesNotMatch(html, /assessment-run-profile[^>]*>[\s\S]*?testing:execution/);
   assert.ok(html.includes('data-bounty-item="agent-actions" data-bounty-file="logs/agent-actions.jsonl"'));
   assert.ok(html.includes('data-bounty-item="agent-hypotheses" data-bounty-file="logs/agent-hypotheses.jsonl"'));
@@ -195,6 +208,8 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.doesNotMatch(html, /data-action="create-assessment"/);
   assert.doesNotMatch(html, /data-action="open-assessment"/);
   assert.ok(html.includes('id="project-settings-form"'));
+  assert.ok(html.includes('data-project-settings-target="project-settings-overview"'));
+  assert.ok(html.includes('data-project-settings-target="project-settings-data"'));
   assert.ok(html.includes('data-project-field="authorization.confirmed"'));
   assert.ok(html.includes('data-project-field="scope.inScopeTargets"'));
   assert.ok(html.includes('data-project-field="rulesOfEngagement.stopConditions"'));
@@ -207,13 +222,43 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.doesNotMatch(html, /custom-scripts-list/);
   assert.ok(html.includes('id="slash-command-suggestions"'));
   assert.match(renderer, /Passive Recon Tools/);
+  assert.match(renderer, /COMMAND_TOOL_GROUPS/);
+  assert.match(renderer, /command-tool-groups/);
+  assert.match(renderer, /command-settings-advanced/);
   assert.match(renderer, /\/passive/);
   assert.match(renderer, /\/endpoint/);
   assert.match(renderer, /slice\(0, 3\)/);
   assert.match(renderer, /availableSlashCommands/);
   assert.match(renderer, /runStaticSlashCommand/);
   assert.match(renderer, /slashCommandOverrides/);
-  assert.match(renderer, /showAppSettingsWorkspace/);
+  assert.match(renderer, /appSettingsWorkspace\.hidden = false/);
+  assert.match(renderer, /openChatPane\(\{ createIfEmpty: true \}\)/);
+  assert.match(renderer, /setTerminalCollapsed\(false\)/);
+  assert.doesNotMatch(renderer, /settings-mode/);
+  assert.doesNotMatch(html, /data-settings-placeholder|data-general-settings-action/);
+  assert.doesNotMatch(html, /data-general-layout|general-conversation-density/);
+  assert.doesNotMatch(renderer, /generalLayoutButtons|generalConversationDensity|xekuteLayoutPreference|xekuteConversationDensity/);
+  assert.match(renderer, /function setProjectSettingsTarget/);
+  assert.match(renderer, /section\.hidden = section\.id !== resolvedTarget/);
+  assert.match(renderer, /setAttribute\("aria-pressed", String\(active\)\)/);
+  assert.match(settingsStyles, /\.project-settings-section\[hidden\]\s*\{\s*display:none !important;/);
+  assert.doesNotMatch(settingsStyles, /#layout\.settings-mode/);
+  assert.match(settingsStyles, /\.app-settings-tabs \{[\s\S]*align-items:stretch;[\s\S]*justify-content:flex-start;[\s\S]*gap:0;/);
+  assert.match(settingsStyles, /\.app-settings-nav-group \{[\s\S]*flex:0 0 auto;[\s\S]*width:100%;/);
+  assert.match(settingsStyles, /\.app-settings-tabs button \{[\s\S]*height:auto;[\s\S]*min-height:31px;/);
+  assert.match(settingsStyles, /\.project-toggle-grid > label::before[\s\S]*width:30px[\s\S]*height:18px/);
+  assert.match(settingsStyles, /\.project-toggle-grid > label:has\(input:checked\)::before[\s\S]*background:#45a86b/);
+  assert.match(settingsStyles, /\.project-toggle-grid > label:has\(input:checked\)::after[\s\S]*transform:translateX\(12px\)/);
+  assert.match(settingsStyles, /\.authority-super-option\.selected[\s\S]*background:#242a2c/);
+  assert.match(settingsStyles, /#app-settings-prompts-panel[\s\S]*grid-template-columns:240px/);
+  assert.match(settingsStyles, /@container app-settings \(max-width: 780px\)[\s\S]*\.app-settings-sidebar \{[\s\S]*width:64px/);
+  assert.match(settingsStyles, /grid-template-columns:auto minmax\(0,1fr\)/);
+  assert.match(settingsStyles, /\.llm-provider-actions button[\s\S]*border:0[\s\S]*border-radius:999px/);
+  assert.match(settingsStyles, /#llm-settings-save \{[\s\S]*background:#0e639c/);
+  assert.match(settingsStyles, /#llm-settings-test \{[\s\S]*background:#6a541d/);
+  assert.match(settingsStyles, /\.certificate-security-note \{[\s\S]*display:block[\s\S]*border:0[\s\S]*background:transparent/);
+  assert.match(chatStyles, /\.model-pill \{[\s\S]*border-radius: 999px[\s\S]*background: transparent/);
+  assert.equal((settingsStyles.match(/^\.app-settings-workspace \{/gm) || []).length, 1);
   assert.match(renderer, /renderCommandSettings/);
   assert.match(renderer, /listCustomScripts/);
   assert.match(renderer, /beginCreateCommand/);
@@ -232,10 +277,10 @@ test("project workspace exposes a plain folder flow and professional project set
 });
 
 test("Scout Map is a dedicated buildable behavior-graph workspace", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
-  const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "main.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "electron", "main.js"), "utf8");
   const preload = fs.readFileSync(path.join(__dirname, "..", "src", "preload.js"), "utf8");
   assert.ok(html.includes('data-bounty-folder="Map"'));
   assert.ok(html.includes('id="map-workspace"'));
@@ -333,7 +378,7 @@ test("professional assessment schemas cover scope, evidence, services, findings,
 });
 
 test("settings UI controls map to real settings.config fields", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
   const settings = JSON_TEMPLATES["settings.config"];
   const paths = [...html.matchAll(/data-setting-path="([^"]+)"/g)].map((match) => match[1]);
   assert.ok(paths.length >= 20);
@@ -344,9 +389,9 @@ test("settings UI controls map to real settings.config fields", () => {
 });
 
 test("all Scope files use the visual JSON editor and Custom actions are hover-revealed", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('id="scope-ui-view"'));
   assert.ok(html.includes('id="scope-ui-form"'));
   assert.ok(html.includes('class="bounty-subsection-label bounty-custom-label"'));
@@ -375,9 +420,9 @@ test("all Scope files use the visual JSON editor and Custom actions are hover-re
 });
 
 test("incomplete assessments keep the tree visible and expose a repair review dialog", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('id="assessment-repair-overlay"'));
   assert.ok(html.includes('id="assessment-repair-list"'));
   assert.ok(html.includes('id="assessment-repair-confirm"'));
@@ -389,8 +434,8 @@ test("incomplete assessments keep the tree visible and expose a repair review di
 });
 
 test("WSTG and MITRE files expose distinct current framework checklists and UI mode", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "index.html"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
   const wstg = JSON_TEMPLATES["penetration-testing/wstg-checklist.json"];
   const mitre = JSON_TEMPLATES["penetration-testing/mitre-checklist.json"];
 
@@ -490,7 +535,7 @@ test("professional assessment records preserve evidence hashes, findings, assets
   assert.equal(finding.finding.evidence[0], "ev-1");
   assert.equal(workspace.appendFinding(root, { id: "finding-confirmed", title: "Needs evidence", status: "confirmed" }).code, "EVIDENCE_REQUIRED");
 
-  const run = workspace.createRun(root, { profile: "testing:agent", status: "running" });
+  const run = workspace.createRun(root, { profile: "agent", status: "running" });
   assert.equal(run.ok, true);
   assert.equal(run.run.scopeSnapshotSha256.length, 64);
   const stopped = workspace.updateRun(root, run.run.id, { status: "stopped", stopReason: "operator stop" });

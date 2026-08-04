@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
 
 test("Toolbox built-ins expose tool-specific fields, presets, and command templates", () => {
   assert.match(renderer, /const TOOL_PROFILES = Object\.freeze/);

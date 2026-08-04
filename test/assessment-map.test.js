@@ -310,6 +310,35 @@ test("Map exposes bounded AI queries, summaries, hypotheses, and provenance-safe
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
+test("Map builds from passive-recon observations when no traffic exists (passive seed)", () => {
+  const { parent, root, assessmentWorkspace, map } = fixture();
+  // Seed passive-recon discovered assets but no Traffic/Raw.
+  const passiveTarget = path.join(root, "recon", "passive-recon.json");
+  const passiveDoc = JSON.parse(fs.readFileSync(passiveTarget, "utf8"));
+  passiveDoc.discoveredAssets = [
+    { type: "domain", value: "shop.example.com", source: "dns-crt-sh", confidence: "medium" },
+    { type: "url", value: "https://shop.example.com/api/login", source: "robots-parse", confidence: "high" },
+    { type: "domain", value: "cdn.shop.example.com", source: "dns-crt-sh", confidence: "low" },
+  ];
+  fs.writeFileSync(passiveTarget, JSON.stringify(passiveDoc, null, 2));
+
+  const built = map.build(root);
+  assert.equal(built.ok, true, built.error);
+  assert.equal(built.graph.source.origin, "passive-seed");
+  assert.equal(built.graph.source.seededFromPassive, 3);
+  assert.equal(built.graph.source.path, "recon/passive-recon.json");
+  assert.equal(built.graph.stats.hosts, 2);
+  assert.equal(built.graph.stats.routes, 1);
+  assert.ok(built.graph.nodes.filter((n) => n.type === "Route").every((n) => n.discoveredBy.length > 0));
+
+  // After seeding, annotation no longer dead-ends on MAP_NOT_BUILT.
+  const route = built.graph.nodes.find((n) => n.type === "Route");
+  const annotation = map.annotateFinding(root, { hypothesis: "passive_route", routes: [route.id], result: "untested" });
+  assert.equal(annotation.ok, true);
+
+  fs.rmSync(parent, { recursive: true, force: true });
+});
+
 test("redirect semantics and Public Suffix List topology remain precise", () => {
   const { parent, root, assessmentWorkspace, map } = fixture();
   assessmentWorkspace.appendTrafficRecord(root, exchange("preserve", "https://app.example.co.uk/submit", {

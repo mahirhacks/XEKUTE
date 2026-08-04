@@ -3,21 +3,18 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
 const { createAssessmentWorkspace } = require("../src/domain/assessment/assessment-workspace");
+const { ingest, listDatasets } = require("../src/automation/commands/assessment-ingest");
 
 function runIngest(payload) {
-  const executable = process.env.POINTER_PYTHON || (process.platform === "win32" ? "python" : "python3");
-  const result = spawnSync(
-    executable,
-    [path.join(__dirname, "..", "src", "automation", "commands", "assessment_ingest.py"), "--payload", "-"],
-    { input: JSON.stringify(payload), encoding: "utf8" },
-  );
-  const parsed = JSON.parse(result.stdout.trim());
-  return { ...parsed, status: result.status, stderr: result.stderr };
+  try {
+    return { ...ingest(payload), status: 0, stderr: "" };
+  } catch (error) {
+    return { ok: false, error: error.message, code: error.code || "INGEST_FAILED", status: 1, stderr: "" };
+  }
 }
 
-test("typed Python ingestion preserves schemas, drops unknown fields, and deduplicates", () => {
+test("typed assessment ingestion preserves schemas, drops unknown fields, and deduplicates", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-ingest-"));
   const root = path.join(parent, "assessment");
   createAssessmentWorkspace({ fs, path }).repair(root, { createRoot: true });
@@ -49,10 +46,32 @@ test("typed Python ingestion preserves schemas, drops unknown fields, and dedupl
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
-test("typed Python ingestion refuses scope, traffic, and finding buckets", () => {
+test("typed assessment ingestion refuses scope, traffic, and finding buckets", () => {
   for (const resource of ["in-scope", "raw-traffic", "critical-findings"]) {
     const result = runIngest({ workspace: process.cwd(), resource, source: "agent", records: [{ value: "x" }] });
     assert.notEqual(result.status, 0);
     assert.equal(result.code, "RESOURCE_NOT_ALLOWED");
   }
+});
+
+test("list_datasets exposes canonical names, schemas, and provision state before ingest", () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-list-"));
+  const root = path.join(parent, "assessment");
+  createAssessmentWorkspace({ fs, path }).repair(root, { createRoot: true });
+
+  const before = listDatasets(root);
+  assert.equal(before.ok, true);
+  assert.ok(Array.isArray(before.datasets) && before.datasets.length > 0);
+  const passiveBefore = before.datasets.find((d) => d.resource === "passive-recon");
+  assert.ok(passiveBefore, "passive sink is listed up front");
+  assert.equal(passiveBefore.exists, true, "repair provisions the passive sink so it is always writable");
+  assert.deepEqual(passiveBefore.keyFields, ["type", "value"]);
+
+  // Ingesting more records keeps it provisioned (and dedup is preserved).
+  ingest({ workspace: root, resource: "passive-recon", source: "manual:test", records: [{ type: "domain", value: "example.test" }] });
+  const after = listDatasets(root);
+  const passive = after.datasets.find((d) => d.resource === "passive-recon");
+  assert.equal(passive.exists, true);
+
+  fs.rmSync(parent, { recursive: true, force: true });
 });

@@ -5,46 +5,76 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
-const controller = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "controller.js"), "utf8");
-const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "main.js"), "utf8");
+const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
+const styles = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
+const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "chat.css"), "utf8");
+const controller = fs.readFileSync(path.join(__dirname, "..", "src", "application", "agent", "controller.js"), "utf8");
+const main = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "electron", "main.js"), "utf8");
 
-test("thinking disclosure shows only a private status and never model reasoning", () => {
+test("thinking uses one private status line and never exposes model reasoning", () => {
   assert.match(renderer, /thinking:\s*null,\s*\n\s*thinkingConfigured:\s*false/);
   assert.match(renderer, /return settings\?\.thinking !== false/);
   assert.doesNotMatch(renderer, /createAssistantTurn\(modelThinkingEnabled\(settings\)\)/);
   assert.match(renderer, /function createAssistantTurn\(\)/);
   assert.match(renderer, /showPrivateReasoning\(\)/);
-  assert.match(renderer, /block\.className = "thinking-block collapsed is-thinking"/);
-  assert.match(renderer, /<span class="thinking-title">Thinking\.\.\.<\/span>/);
-  assert.match(renderer, /Raw chain-of-thought and system instructions stay hidden/);
+  assert.doesNotMatch(renderer, /assistant\.setStatus\("Thinking…"\)/);
+  assert.match(renderer, /block\.className = "agent-status-line"/);
+  assert.match(renderer, /assistant\.setLiveState\(\{ kind: "thinking", detail: "Thinking" \}\)/);
   assert.doesNotMatch(renderer, /appendThinking|rawThinking|const completedThinking/);
-  assert.doesNotMatch(renderer, /renderMarkdown\(phase\.body|animateStreamDelta\(activeThinkingPhase\.body/);
+  assert.doesNotMatch(renderer, /thinking-block collapsed is-thinking/);
+  assert.doesNotMatch(renderer, /renderMarkdown\(phase\.body|activeThinkingPhase/);
 });
 
-test("content and tool events close a phase while a later reasoning delta can start another", () => {
-  assert.match(renderer, /activeThinkingPhase = null/);
+test("content and tool events replace thinking and completion settles to elapsed time", () => {
   assert.match(renderer, /if \(payload\.type === "content"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
   assert.match(renderer, /if \(payload\.type === "tool_call"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
-  assert.match(renderer, /phase\.title\.textContent = completedThinkingLabel\(phase\.startedAt\)/);
+  assert.match(renderer, /this\.setLiveState\(\{ kind: "working", detail: "Writing response" \}\)/);
   assert.match(renderer, /completeReasoningActivity\(\)/);
-  assert.match(renderer, /message\.textContent = "Reasoning complete"/);
-  assert.match(renderer, /return "Thought for a moment"/);
-  assert.match(renderer, /Thought for \$\{seconds\}/);
+  assert.match(renderer, /finishLiveState\(outcome = "complete"\)/);
+  assert.match(renderer, /`Worked for \$\{duration\}`/);
+  assert.match(renderer, /`Stopped after \$\{duration\}`/);
+  assert.doesNotMatch(renderer, /message\.textContent = "Reasoning complete"|completedThinkingLabel/);
 });
 
-test("thinking disclosure has one click owner so expand and collapse do not cancel out", () => {
-  assert.doesNotMatch(renderer, /header\.addEventListener\("click", \(\) => \{\s*thinkingBlock\.classList\.toggle/);
-  assert.match(renderer, /messages\.addEventListener\("click"[\s\S]*?closest\("\.thinking-header"\)/);
-  assert.match(renderer, /block\.dataset\.userInteracted = "true"/);
-  assert.match(renderer, /thinkingHeader\.setAttribute\("aria-expanded", String\(!collapsed\)\)/);
+test("status renderer owns one node and updates it in place", () => {
+  assert.match(renderer, /if \(this\.liveStateEl\) return this\.liveStateEl/);
+  assert.match(renderer, /this\.turn\.insertBefore\(block, this\.contentEl\)/);
+  assert.match(renderer, /block\.dataset\.stateKey === stateKey/);
+  assert.match(renderer, /block\.classList\.add\("status-updated"\)/);
+  assert.doesNotMatch(renderer, /list\.className = "agent-activity-lines"/);
 });
 
-test("collapse state always hides the body, including while thinking is active", () => {
-  assert.match(styles, /\.thinking-block\.collapsed \.thinking-body\s*\{\s*display: none/);
-  assert.doesNotMatch(styles, /\.thinking-block\.is-thinking\.collapsed \.thinking-body/);
-  assert.match(renderer, /phase\.block\.dataset\.userInteracted !== "true"/);
+test("tool-free responses do not render a warning or routing notice", () => {
+  assert.match(renderer, /function isSilentToolRoutingActivity\(text = ""\)/);
+  assert.match(renderer, /if \(isSilentToolRoutingActivity\(payload\.text\)\) return/);
+  assert.doesNotMatch(controller, /No tools were routed for this request\./);
+});
+
+test("clarification UI is compact, hides internal metadata, and pages questions", () => {
+  assert.match(renderer, /class="agent-questions-title"/);
+  assert.match(renderer, /data-question-prompt=/);
+  assert.match(renderer, /field\.hidden = index !== activeQuestionIndex/);
+  assert.match(renderer, /stepLabel\.textContent = `\$\{activeQuestionIndex \+ 1\}\/\$\{questionFields\.length\}`/);
+  assert.match(renderer, /codicon-chevron-left/);
+  assert.match(renderer, /codicon-chevron-right/);
+  assert.doesNotMatch(renderer, /Clarification needed|RUN PAUSED|agent-questions-reason|agent-questions-expiry/);
+    assert.match(renderer, /class="agent-questions-recommended">\(recommended\)<\/span>/);
+    assert.match(chatStyles, /\.agent-questions-card \{[\s\S]*?background: var\(--bg-0\)/);
+    assert.match(chatStyles, /\.agent-questions-option \{[\s\S]*?grid-template-columns: 14px minmax\(0, 1fr\) auto/);
+    assert.match(chatStyles, /\.agent-questions-option\.is-selected \{ background: #575757; color: #f0f0f0; \}/);
+    assert.match(chatStyles, /\.agent-questions-field\[hidden\] \{ display: none !important; \}/);
+    assert.match(chatStyles, /\.composer-questions \{[\s\S]*?z-index: 1;[\s\S]*?margin-bottom: -25px/);
+    assert.match(chatStyles, /\.composer-questions:not\(\[hidden\]\) \+ \.composer \{[\s\S]*?z-index: 2/);
+    assert.match(chatStyles, /\.composer-questions-card \{[\s\S]*?padding-bottom: 24px/);
+    assert.match(chatStyles, /#input-bar\.has-composer-questions \.composer \{[\s\S]*?box-shadow: none/);
+  assert.doesNotMatch(chatStyles, /\.agent-questions-(?:card|option|button)[^{]*\{[^}]*#(?:75beff|7fbd91|2d5a7a)/);
+});
+
+test("status styling is chrome-free, neutral, animated, and motion-safe", () => {
+  assert.match(chatStyles, /#messages \.agent-status-line \{[\s\S]*?border: 0[\s\S]*?background: transparent/);
+  assert.match(chatStyles, /#messages \.agent-status-line\[data-final="true"\]/);
+  assert.match(chatStyles, /@keyframes agent-status-update/);
+  assert.match(chatStyles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?agent-status-line\.status-updated/);
 });
 
 test("raw reasoning never crosses into the renderer or stored agent history", () => {

@@ -14,20 +14,28 @@ function actionRetry({ targetFile = "", userMessage = "" } = {}) {
 }
 
 function postToolSummary({ mode = "agent", lastVerification = null } = {}) {
-  if (mode === "plan") return "Return the grounded pentest plan now. Do not call tools. Include ordered hypotheses, targets, prerequisites, techniques, conservative configurations, evidence to capture, output paths, success criteria, stop conditions, risks, and assumptions.";
-  if (mode === "ask") return "Answer as a pentest analyst using the gathered evidence. Do not call tools. Cite relevant assessment paths, separate observation from hypothesis and confirmed finding, state missing evidence, and never imply validation that did not occur.";
+  if (mode === "plan") {
+    return [
+      "The plan file was saved. Do not call tools.",
+      "Reply with a brief chat summary only: file path, hypothesis count, top priorities, blocked items, and next step.",
+      "Do not paste the full plan body into chat.",
+    ].join(" ");
+  }
+  if (mode === "ask") {
+    return "Answer as a VAPT analyst using gathered evidence. Do not call tools. Use Known/Unknown sections, cite evidence IDs, map to WSTG/Top 10 where supported, separate observation from hypothesis and verified finding, state false-positive checks, and never imply validation that did not occur.";
+  }
   return [
     "The authorized workspace actions are complete. Do not call tools in this response.",
-    "Reply with an operator summary: actions executed, targets touched, evidence/output paths, hypotheses confirmed or rejected, assessment records changed, safety limits honored, verification performed, coverage gaps, and safe next steps.",
+    "Reply with a concise operator summary: describe routine workspace actions only as read, created, edited, or deleted; do not repeat local file names or workspace paths unless the user asks or a failure cannot be understood without one. Include evidence status, hypotheses, safety limits, verification, coverage gaps, and safe next steps when relevant.",
     lastVerification && !lastVerification.ok ? `The latest verification failed (${lastVerification.command}). State that failure accurately and do not claim full success.` : "",
   ].filter(Boolean).join(" ");
 }
 
 function planGrounding(userMessage = "") {
   return [
-    "This is Plan mode and the plan must use only the supplied workspace context.",
-    "Do not inspect, search, read, edit, send traffic, or run commands. If the user explicitly asks to save the plan, use create_file only for a plan document.",
-    "Return the plan only after it names concrete targets, hypotheses, evidence requirements, conservative limits, and stop conditions.",
+    "Hypothesis mode — create or update the full plan with native plan-file tools, not in chat.",
+    "Use the exact path and create/update operation in the PLAN DOCUMENT CONTRACT; never modify a non-plan file.",
+    "Walk the full loop for each hypothesis. Map work to OWASP WSTG and Top 10:2025.",
     `Original user request: ${userMessage}`,
   ].join(" ");
 }

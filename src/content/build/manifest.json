@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "buildVersion": 1,
+  "generatedAt": null,
+  "modules": [
+    {
+      "kind": "system",
+      "logicalName": "system_prompt",
+      "source": "instructs/system_prompt.md",
+      "hash": "116851a16e52c2e2",
+      "file": "instructs/system_prompt-116851a16e52c2e2.js",
+      "exportKind": "global+XekuteSystemPrompt"
+    },
+    {
+      "kind": "mode",
+      "logicalName": "agent-skill",
+      "source": "skills/modes/agent-skill.md",
+      "hash": "83961ad37d0f083f",
+      "file": "skills/modes/agent-skill-83961ad37d0f083f.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "mode",
+      "logicalName": "hypothesis-skill",
+      "source": "skills/modes/hypothesis-skill.md",
+      "hash": "a4e2bda028de9768",
+      "file": "skills/modes/hypothesis-skill-a4e2bda028de9768.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "mode",
+      "logicalName": "plan-skill",
+      "source": "skills/modes/plan-skill.md",
+      "hash": "1ed267546af6a7dc",
+      "file": "skills/modes/plan-skill-1ed267546af6a7dc.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "mode",
+      "logicalName": "ask-skill",
+      "source": "skills/modes/ask-skill.md",
+      "hash": "f1816d65eb611b52",
+      "file": "skills/modes/ask-skill-f1816d65eb611b52.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "preflight",
+      "source": "skills/libraries/preflight.md",
+      "hash": "d450813c901b770b",
+      "file": "skills/libraries/preflight-d450813c901b770b.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "recon-passive",
+      "source": "skills/libraries/recon-passive.md",
+      "hash": "eb7a30d9f40976dc",
+      "file": "skills/libraries/recon-passive-eb7a30d9f40976dc.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "recon-active",
+      "source": "skills/libraries/recon-active.md",
+      "hash": "e2e0d892f05e9c4e",
+      "file": "skills/libraries/recon-active-e2e0d892f05e9c4e.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "automated-security-scan",
+      "source": "skills/libraries/automated-security-scan.md",
+      "hash": "49e142236cd5757d",
+      "file": "skills/libraries/automated-security-scan-49e142236cd5757d.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "header-check",
+      "source": "skills/libraries/header-check.md",
+      "hash": "f899331234f9bf92",
+      "file": "skills/libraries/header-check-f899331234f9bf92.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "soft-vuln-probing",
+      "source": "skills/libraries/soft-vuln-probing.md",
+      "hash": "f183579350b9a6fc",
+      "file": "skills/libraries/soft-vuln-probing-f183579350b9a6fc.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "normal-vuln-probing",
+      "source": "skills/libraries/normal-vuln-probing.md",
+      "hash": "84989acff76432b7",
+      "file": "skills/libraries/normal-vuln-probing-84989acff76432b7.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "deep-vuln-probing",
+      "source": "skills/libraries/deep-vuln-probing.md",
+      "hash": "c7da2d8ac92f0696",
+      "file": "skills/libraries/deep-vuln-probing-c7da2d8ac92f0696.js",
+      "exportKind": "module.exports"
+    },
+    {
+      "kind": "library",
+      "logicalName": "post-vuln-probing",
+      "source": "skills/libraries/post-vuln-probing.md",
+      "hash": "984001859cc45437",
+      "file": "skills/libraries/post-vuln-probing-984001859cc45437.js",
+      "exportKind": "module.exports"
+    }
+  ]
+}

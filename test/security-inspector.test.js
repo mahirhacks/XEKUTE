@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const Inspector = require("../src/ui/features/security/security-inspector");
+const Inspector = require("../src/presentation/ui/features/security/security-inspector");
 
 test("Inspector round-trips URL, Base64, Base64URL, HTML, and hex transforms", () => {
   const value = "hello world ✓ & <tag>";

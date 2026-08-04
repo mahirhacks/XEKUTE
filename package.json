@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
-  "main": "src/app/main.js",
+  "main": "src/presentation/electron/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electronmon --inspect=5858 . --dev",
     "test": "node --test",
+    "build:prompts": "node src/content/prompt_builder.js",
     "verify:production": "node scripts/verify-production.js",
     "package": "electron-forge package",
     "make": "electron-forge make --platform=win32 --arch=x64",

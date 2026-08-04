@@ -1,5 +1,15 @@
 const { getDomain } = require("tldts");
 
+// Domain extraction seam: `tldts` is the default adapter; callers/tests may
+// inject a deterministic extractor to keep domain rules pure and testable.
+function defaultDomainExtractor() {
+  return function registrableDomain(hostname = "") {
+    const host = String(hostname).toLowerCase().replace(/^\.+|\.+$/g, "");
+    if (!host || host === "localhost" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(":")) return host;
+    return getDomain(host, { allowPrivateDomains: true }) || host;
+  };
+}
+
 const DEFAULT_LIMITS = Object.freeze({ maxBytes: 100 * 1024 * 1024, maxRecords: 50000 });
 const MAP_SCHEMA_VERSION = 3;
 const MAP_BUILDER_VERSION = "0.4.0";
@@ -253,12 +263,6 @@ function bodyIdentifierValues(body, contentType, namespace) {
   return output;
 }
 
-function registrableDomain(hostname = "") {
-  const host = String(hostname).toLowerCase().replace(/^\.+|\.+$/g, "");
-  if (!host || host === "localhost" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(":")) return host;
-  return getDomain(host, { allowPrivateDomains: true }) || host;
-}
-
 function graphVerification(nodes, edges, { evidenceIds = new Set(), stableNodeId = null, secretValues = [] } = {}) {
   const ids = new Set();
   let duplicateNodes = 0;
@@ -408,8 +412,9 @@ function decorateGraphForAgent(graph) {
   return graph;
 }
 
-function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () => new Date() }) {
+function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () => new Date(), domainExtractor } = {}) {
   if (!crypto?.createHash || !crypto?.createHmac || !crypto?.randomBytes) throw new TypeError("crypto hashing, HMAC, and random bytes are required");
+  const registrableDomain = typeof domainExtractor === "function" ? domainExtractor : defaultDomainExtractor();
   const hash = (value, length = 20) => crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, length);
   const nodeId = (type, key) => `${type}:${hash(`${type}|${key}`)}`;
   const mapRelativePath = "Map/application-map.json";
@@ -440,7 +445,7 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
     if (verification.error) return verification;
     try {
       const settings = JSON.parse(fs.readFileSync(path.join(verification.root, "settings.config"), "utf8"));
-      if (!operatorInitiated && settings.authority?.superMode !== "full" && settings.authority?.permissions?.mapBuild === false) {
+      if (!operatorInitiated && !["unrestricted", "full", "ask"].includes(settings.authority?.superMode) && settings.authority?.permissions?.mapBuild === false) {
         return { error: "Application Map access is disabled in XEKUTE Authority settings", code: "AUTHORITY_PERMISSION_DISABLED" };
       }
     } catch { /* specific Map readers report malformed inputs when needed */ }
@@ -834,6 +839,7 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
       const hostMap = new Map();
       const edgeMap = new Map();
       let droppedReferenceRoutes = 0;
+      let passiveSeededAssets = 0;
 
       const addEdge = (source, target, type, confidence, evidenceId = "", details = {}) => {
         if (!source || !target || source === target) return;
@@ -1129,6 +1135,32 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
         if (/^\/(?:login|signin|app|dashboard|oauth\/callback|api|graphql|index\.html)(?:\/|$)/i.test(route.template)) addEntryPoint(route, "known-start-path", "inferred", 0.55);
       }
 
+      // Supplement the Map from passive-recon even when Traffic/Raw exists so
+      // passive discoveries are not dropped once live traffic is present. Each
+      // asset yields a Host node (and a Route node when the value is a URL),
+      // preserving per-asset discoveredBy provenance.
+      const passiveRef = path.join(verified.root, "recon", "passive-recon.json");
+      let passiveAssets = [];
+      try {
+        const passiveDoc = JSON.parse(fs.readFileSync(passiveRef, "utf8"));
+        passiveAssets = Array.isArray(passiveDoc?.discoveredAssets) ? passiveDoc.discoveredAssets : [];
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      let passiveSeeded = 0;
+      for (const asset of passiveAssets) {
+        const value = String(asset?.value || asset?.host || "").trim();
+        if (!value) continue;
+        const source = String(asset?.source || asset?.discoveredBy || "passive-recon").slice(0, 160);
+        const routeNode = ensureRoute(value, "GET", { discoveredBy: source, confidence: 0.6, methodConfidence: 0.4 });
+        if (!routeNode) {
+          const hostNode = ensureHost(value, { discoveredBy: source, confidence: 0.6 });
+          if (hostNode && !hostNode.discoveredBy.includes(source)) hostNode.discoveredBy.push(source);
+        }
+        passiveSeeded += 1;
+      }
+      passiveSeededAssets = passiveSeeded;
+
       for (const route of routeMap.values()) {
         const tags = [];
         let score = 0;
@@ -1203,7 +1235,12 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
         builtAt,
         project: { name: path.basename(verified.root), rootHash: hash(verified.root, 32), namespace: projectNamespace },
         source: {
-          path: "traffic/raw.jsonl", totalRecords: traffic.totalRecords, recordsConsidered: traffic.records.length,
+          path: traffic.records.length ? "traffic/raw.jsonl" : "recon/passive-recon.json",
+          origin: traffic.records.length
+            ? (passiveSeededAssets ? "traffic+passive" : "traffic")
+            : (passiveSeededAssets ? "passive-seed" : "empty"),
+          seededFromPassive: passiveSeededAssets,
+          totalRecords: traffic.totalRecords, recordsConsidered: traffic.records.length,
           processedCount: observations.length, failedCount: traffic.invalidCount + (traffic.records.length - observations.length),
           invalidRecords: traffic.invalidCount, truncated: traffic.truncated, completeSourceProcessed: !traffic.truncated,
           bytesConsidered: traffic.bytesConsidered, snapshotHash: traffic.snapshotHash, warnings,
@@ -1263,6 +1300,7 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
 module.exports = {
   canonicalJson,
   createAssessmentMap,
+  defaultDomainExtractor,
   normalizeRoutePath,
   parseRawMessage,
 };

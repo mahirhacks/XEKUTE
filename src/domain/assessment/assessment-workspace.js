@@ -1,9 +1,27 @@
 const crypto = require("crypto");
 const FindingGate = require("./finding-gate");
-const PromptCompiler = require("../../agent/instructions/prompt-compiler");
 
 const ASSESSMENT_VERSION = 4;
 const SECRET_NAME_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-auth-token|password|passwd|secret|token|access_token|refresh_token|api[_-]?key|client_secret)$/i;
+
+// Prompt defaults are pure data. They are injected from the composition root
+// so the domain layer never statically imports application orchestration. The
+// lazy fallback keeps the existing template behavior for callers that have not
+// yet wired an explicit promptDefaults provider (e.g. existing tests).
+function defaultPromptDefaults() {
+  try {
+    // Lazy require: only loads the application compiler when a caller needs the
+    // real prompt defaults. Keeps the static import graph domain->application
+    // absent while preserving the exact prior template output.
+    return require("../../application/prompt/prompt-compiler").defaults();
+  } catch {
+    return { version: 1, modules: {}, overlays: {} };
+  }
+}
+
+// Module-scope resolver used by the static JSON_TEMPLATES. The factory may
+// override this with an injected provider for runtime settings.
+let resolvePromptDefaults = defaultPromptDefaults;
 
 function redactStructuredSecrets(value) {
   if (Array.isArray(value)) return value.map(redactStructuredSecrets);
@@ -531,7 +549,7 @@ const JSON_TEMPLATES = {
       qualification: {},
       temperatures: { planner: 0.1, agent: 0.1, ask: 0.2, verifier: 0, reporter: 0 },
     },
-    aiPrompts: PromptCompiler.defaults(),
+    aiPrompts: resolvePromptDefaults(),
     authorization: {
       confirmed: false,
       authorizedBy: "",
@@ -554,7 +572,7 @@ const JSON_TEMPLATES = {
       permissions: {
         workspaceRead: true,
         workspaceWrite: true,
-        workspaceDelete: false,
+        workspaceDelete: true,
         commandExecution: true,
         backgroundProcesses: true,
         terminalAccess: true,
@@ -995,7 +1013,13 @@ function mergeMissingFields(actual, expected, prefix = "") {
   return { changed, blocked };
 }
 
-function createAssessmentWorkspace({ fs, path, now = () => new Date() }) {
+function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDefaults = null }) {
+  // Prompt defaults are pure data. They are injected so the domain layer never
+  // imports application orchestration; the composition root supplies the
+  // application compiler's defaults, and tests may pass a deterministic stub.
+  if (promptDefaults && typeof promptDefaults === "function") {
+    resolvePromptDefaults = promptDefaults;
+  }
   function atomicWriteJson(target, value) {
     const temporary = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
     const backup = `${target}.bak`;
