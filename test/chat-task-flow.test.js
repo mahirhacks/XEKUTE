@@ -41,8 +41,6 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(styles, /\.chat-empty-state/);
   assert.match(styles, /#chat-pane[\s\S]*max-width: max\(300px, 50vw\)/);
   assert.match(chatStyles, /#messages \.tool-card/);
-  assert.match(renderer, /className = "tool-catalog-card"/);
-  assert.match(styles, /\.tool-catalog-card \{ min-height:66px/);
   assert.doesNotMatch(styles, /\.tool-card \{ min-height:66px/);
   assert.match(chatStyles, /#messages \.tool-card,[\s\S]*?display: block !important[\s\S]*?min-height: 0 !important/);
   assert.match(chatStyles, /#messages \.tool-card-file \{[\s\S]*?max-width: none !important[\s\S]*?text-overflow: clip !important/);
@@ -83,6 +81,34 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(chatStyles, /transition: background-color 160ms ease, opacity 160ms ease/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*margin: 0[\s\S]*padding: 0/);
   assert.doesNotMatch(chatStyles, /\.chat-sticky-user/);
+});
+
+test("assistant messages render a relative-time label beside the copy button", () => {
+  const renderer = read("src/presentation/ui/bootstrap.js");
+  const styles = read("src/presentation/ui/styles/base.css");
+
+  // The formatter follows the documented compact tiers:
+  // <1m → "Nm ago", <1d → "Hh Mm ago", <7d → "Nd ago",
+  // <1yr → "Nw ago", then "Nyr ago" (final).
+  assert.match(renderer, /function formatRelativeMessageTime\(iso\)/);
+  assert.match(renderer, /Math\.max\(1, Math\.floor\(diffMs \/ minuteMs\)\)\}m ago/);
+  assert.match(renderer, /\$\{h\}h \$\{m\}m ago/);
+  assert.match(renderer, /Math\.floor\(diffMs \/ dayMs\)\}d ago/);
+  assert.match(renderer, /Math\.floor\(diffMs \/ weekMs\)\}w ago/);
+  assert.match(renderer, /Math\.floor\(diffMs \/ yearMs\)\}yr ago/);
+
+  // The copy button is placed inside a footer that also carries the time label.
+  assert.match(renderer, /assistant-reply-footer/);
+  assert.match(renderer, /function attachAssistantCopyButton/);
+  assert.match(renderer, /formatRelativeMessageTime\(createdIso\)/);
+  assert.match(renderer, /firstAssistantTurn\?\.dataset\?\.createdAt/);
+
+  // Assistant turns in new and restored sessions carry a timestamp.
+  assert.match(renderer, /turn\.dataset\.createdAt = new Date\(\)\.toISOString\(\)/);
+  assert.match(renderer, /if \(message\.createdAt\) turn\.dataset\.createdAt = message\.createdAt/);
+
+  assert.match(styles, /\.assistant-reply-footer\s*\{[\s\S]*?justify-content/);
+  assert.match(styles, /\.assistant-reply-time\s*\{/);
 });
 
 test("long user prompts clamp to two lines and expand only on demand", () => {

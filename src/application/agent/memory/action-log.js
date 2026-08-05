@@ -3,7 +3,7 @@ const path = require("path");
 const { redactStructuredValue } = require("../../policies/data-guardrails");
 
 function logRoot(workspace) {
-  return path.join(path.resolve(String(workspace || ".")), "logs");
+  return path.join(path.resolve(String(workspace || ".")), ".xekute", "logs");
 }
 
 function appendJsonl(workspace, fileName, entry) {
@@ -39,4 +39,12 @@ function appendToolOutput(workspace, entry) {
   return appendJsonl(workspace, "tool-output.jsonl", entry);
 }
 
-module.exports = { appendAgentAction, appendHypothesis, appendAgentRun, appendAgentApproval, appendToolOutput };
+function appendToolAudit(workspace, entry) {
+  return appendJsonl(workspace, "tool-audit.jsonl", entry);
+}
+
+function appendOperationState(workspace, entry) {
+  return appendJsonl(workspace, "tool-operations.jsonl", entry);
+}
+
+module.exports = { appendAgentAction, appendHypothesis, appendAgentRun, appendAgentApproval, appendToolOutput, appendToolAudit, appendOperationState };

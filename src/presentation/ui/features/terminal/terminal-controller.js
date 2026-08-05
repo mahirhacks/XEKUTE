@@ -270,7 +270,7 @@ const TerminalManager = (() => {
 
       const term = new globalThis.Terminal({
         theme: xtermTheme,
-        fontFamily: "Arial, Helvetica, sans-serif",
+        fontFamily: "Consolas, 'Cascadia Code', monospace",
         fontSize: 14,
         fontWeight: "400",
         lineHeight: 1.15,
@@ -452,7 +452,7 @@ const TerminalManager = (() => {
 
     const term = new globalThis.Terminal({
       theme: xtermTheme,
-      fontFamily: "Arial, Helvetica, sans-serif",
+      fontFamily: "Consolas, 'Cascadia Code', monospace",
       fontSize: 14,
       fontWeight: "400",
       lineHeight: 1.15,

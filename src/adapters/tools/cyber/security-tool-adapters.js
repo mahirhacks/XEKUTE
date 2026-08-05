@@ -60,7 +60,15 @@ function normalizeConfiguration(input = {}, policy = {}) {
   return {
     rateLimit: Math.max(1, Math.min(Number(input.rateLimit || input.rate_limit) || Number(policy.maxRequestsPerSecond) || 2, Number(policy.maxRequestsPerSecond) || 100)),
     concurrency: Math.max(1, Math.min(Number(input.concurrency) || Number(policy.maxConcurrency) || 1, Number(policy.maxConcurrency) || 20)),
+    // Request timeout: bounds a single request/HTTP interaction.
     timeoutMs: Math.max(1000, Math.min(Number(input.timeoutMs || input.timeout_ms) || Number(policy.requestTimeoutSeconds) * 1000 || 15000, 120000)),
+    // Monitor interval: when a managed process emits a checkpoint.
+    monitorMs: Math.max(1000, Math.min(Number(input.monitorMs || input.monitor_ms) || Number(policy.monitorIntervalSeconds) * 1000 || 30000, 600000)),
+    // Absolute deadline: host-enforced outer process limit. Excludes
+    // shutdown/cancellation, which are independent async host events.
+    absoluteDeadlineMs: Math.max(1000, Math.min(Number(input.absoluteDeadlineMs || input.absolute_deadline_ms) || Number(policy.maximumOperationSeconds) * 1000 || Number(policy.absoluteDeadlineMs) || 900000, 86400000)),
+    maxManagedContinuationTurns: Number(input.maxManagedContinuationTurns ?? input.max_managed_continuation_turns ?? policy.maxManagedContinuationTurns ?? null),
+    maxManagedContinuationTokens: Number(input.maxManagedContinuationTokens ?? input.max_managed_continuation_tokens ?? policy.maxManagedContinuationTokens ?? null),
     depth: Math.max(1, Math.min(Number(input.depth) || 2, 5)),
     risk: Math.max(1, Math.min(Number(input.risk) || 1, 3)),
     level: Math.max(1, Math.min(Number(input.level) || 1, 5)),

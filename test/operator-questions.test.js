@@ -9,7 +9,7 @@ test("buildQuestionsDocumentPath uses topic date and time slug", () => {
     "API auth scope",
     new Date("2026-08-03T07:31:00"),
   );
-  assert.match(path, /^questions\/clarification-api-auth-scope_2026-08-03_0731\.json$/);
+  assert.match(path, /^\.xekute\/questions\/clarification-api-auth-scope_2026-08-03_0731\.json$/);
 });
 
 test("normalizeQuestions appends free-write option and keeps one recommended", () => {
@@ -74,7 +74,7 @@ test("applyAnswers and formatAnswersForModel render operator choices", () => {
 
 test("isOperatorQuestionsFilePath matches clarification json files", () => {
   assert.equal(
-    OperatorQuestions.isOperatorQuestionsFilePath("questions/clarification-api_2026-08-03_0731.json"),
+    OperatorQuestions.isOperatorQuestionsFilePath(".xekute/questions/clarification-api_2026-08-03_0731.json"),
     true,
   );
   assert.equal(OperatorQuestions.isOperatorQuestionsFilePath("plans/plan-api.md"), false);

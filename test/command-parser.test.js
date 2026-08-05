@@ -38,7 +38,7 @@ test("slash command parser separates static and AI roles", () => {
 test("targetless passive and active commands derive the reviewed in-scope target", async () => {
   const assessment = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-slash-target-"));
   try {
-    for (const folder of ["scope", "recon", "logs", "enumeration", "tools"]) fs.mkdirSync(path.join(assessment, folder), { recursive: true });
+    for (const folder of ["scope", "recon", ".xekute/logs", "enumeration", "tools"]) fs.mkdirSync(path.join(assessment, folder), { recursive: true });
     fs.writeFileSync(path.join(assessment, "scope", "in-scope.json"), JSON.stringify({
       authorization: { confirmed: true },
       rulesOfEngagement: { allowActiveRecon: true },

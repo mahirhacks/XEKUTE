@@ -41,6 +41,7 @@ function createChatSessionStore({ fs, path, crypto, baseDir, protector = null })
         exists: true,
         activeSessionId: typeof parsed.activeSessionId === "string" ? parsed.activeSessionId : "",
         sessions: parsed.sessions,
+        closedSessions: Array.isArray(parsed.closedSessions) ? parsed.closedSessions : [],
       };
     } catch (error) {
       const backup = `${file}.bak`;
@@ -55,6 +56,7 @@ function createChatSessionStore({ fs, path, crypto, baseDir, protector = null })
               recovered: true,
               activeSessionId: typeof parsed.activeSessionId === "string" ? parsed.activeSessionId : "",
               sessions: parsed.sessions,
+              closedSessions: Array.isArray(parsed.closedSessions) ? parsed.closedSessions : [],
               warning: `Primary chat storage was damaged; XEKUTE recovered the backup: ${error.message}`,
             };
           }
@@ -71,6 +73,8 @@ function createChatSessionStore({ fs, path, crypto, baseDir, protector = null })
     return {
       id: String(session.id || ""),
       title: String(session.title || "New Agent"),
+      createdAt: session.createdAt || session.updatedAt || null,
+      updatedAt: session.updatedAt || session.createdAt || null,
       model: String(session.model || session.selectedModel || ""),
       mode: String(session.mode || session.chatMode || "agent").includes(":")
         ? String(session.mode || session.chatMode).split(":").pop()
@@ -155,6 +159,7 @@ function createChatSessionStore({ fs, path, crypto, baseDir, protector = null })
       savedAt: new Date().toISOString(),
       activeSessionId: typeof state.activeSessionId === "string" ? state.activeSessionId : "",
       sessions: Array.isArray(state.sessions) ? state.sessions.map(canonicalSession).filter((session) => session.id) : [],
+      closedSessions: Array.isArray(state.closedSessions) ? state.closedSessions.map(canonicalSession).filter((session) => session.id) : [],
     };
     const document = protector?.available?.()
       ? { version: 2, encrypted: true, payload: protector.encrypt(JSON.stringify(payload)) }

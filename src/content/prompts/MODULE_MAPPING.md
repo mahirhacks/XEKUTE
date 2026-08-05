@@ -60,8 +60,7 @@ These are generated from Markdown by `src/content/prompt_builder.js` into
   prose from deterministic policy.
 - `src/prompts/instructs/triage_prompt.js` — mixed; hand-authored prose plus
   helper logic (`actionRetry`, `postToolSummary`, `planGrounding`,
-  `verification`, `failedVerification`, `VERIFIER_SYSTEM_PROMPT`,
-  `QUALIFICATION_MESSAGES`). Keep at the current path until Stage 5.
+  `verification`, `failedVerification`, `VERIFIER_SYSTEM_PROMPT`). Keep at the current path until Stage 5.
 - `src/prompts/skills/context-router.js` — compat; browser global
   `XekuteContextRouter` and Node export. Kept in place to preserve renderer
   script-load order until Stage 7 updates HTML paths.

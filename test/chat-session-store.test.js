@@ -66,3 +66,24 @@ test("a damaged chat store fails open without blocking the application", (t) => 
   assert.deepEqual(result.sessions, []);
   assert.match(result.warning, /could not be read/i);
 });
+
+test("closed sessions and timestamps survive the persistence round-trip", (t) => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-chats-"));
+  t.after(() => fs.rmSync(baseDir, { recursive: true, force: true }));
+  const store = createChatSessionStore({ fs, path, crypto, baseDir });
+
+  store.save("assessment-a", {
+    activeSessionId: "chat-open",
+    sessions: [{ id: "chat-open", title: "Open chat", createdAt: "2026-08-04T08:00:00.000Z", updatedAt: "2026-08-04T09:00:00.000Z", history: [{ role: "user", content: "hello" }] }],
+    closedSessions: [{ id: "chat-closed", title: "Archived chat", createdAt: "2026-08-03T10:00:00.000Z", updatedAt: "2026-08-03T11:00:00.000Z", history: [{ role: "user", content: "archived" }] }],
+  });
+
+  const restored = store.load("assessment-a");
+  assert.equal(restored.sessions[0].title, "Open chat");
+  assert.equal(restored.sessions[0].createdAt, "2026-08-04T08:00:00.000Z");
+  assert.equal(restored.sessions[0].updatedAt, "2026-08-04T09:00:00.000Z");
+  assert.equal(restored.closedSessions.length, 1);
+  assert.equal(restored.closedSessions[0].id, "chat-closed");
+  assert.equal(restored.closedSessions[0].messages[0].content, "archived");
+  assert.equal(restored.closedSessions[0].createdAt, "2026-08-03T10:00:00.000Z");
+});

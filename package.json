@@ -10,6 +10,7 @@
     "test": "node --test",
     "build:prompts": "node src/content/prompt_builder.js",
     "verify:production": "node scripts/verify-production.js",
+    "verify:unified-harness": "node scripts/verify-unified-harness.js",
     "package": "electron-forge package",
     "make": "electron-forge make --platform=win32 --arch=x64",
     "release:metadata": "node scripts/release-metadata.js",

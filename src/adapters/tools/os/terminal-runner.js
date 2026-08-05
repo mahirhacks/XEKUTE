@@ -1,5 +1,14 @@
 "use strict";
 
+const { spawn } = require("node:child_process");
+
+const ANSI_RE = /[\u001B\u009B][[\]()#;?]*(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?[?-??-??-??-?a-zA-Z\d])|\u001B\][^\x07]*(?:\x07|\u001B\\)/g;
+
+function sanitizeOutput(value) {
+  const raw = String(value || "");
+  return { value: raw.replace(ANSI_RE, ""), hadAnsi: raw !== raw.replace(ANSI_RE, "") };
+}
+
 function createAgentTerminalRunner({
   terminals,
   pty,
@@ -176,9 +185,16 @@ function createAgentTerminalRunner({
     }
 
     const command = displayCommand || [executable, ...args].join(" ");
+    const resolvedExecutable = typeof resolveSecurityExecutable === "function"
+      ? resolveSecurityExecutable(executable)
+      : executable;
 
     return new Promise((resolve) => {
+      const startedAt = Date.now();
+      let timedOut = false;
       let settled = false;
+      let stdout = "";
+      let stderr = "";
       const finish = (value) => {
         if (settled) return;
         settled = true;
@@ -186,55 +202,56 @@ function createAgentTerminalRunner({
       };
 
       try {
+        const child = spawn(resolvedExecutable, args, {
+          cwd: resolved.root,
+          env: { ...process.env, TERM: "dumb", NO_COLOR: "1", FORCE_COLOR: "0" },
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
         const id = nextAgentTerminalId();
-        const resolvedExecutable = typeof resolveSecurityExecutable === "function"
-          ? resolveSecurityExecutable(executable)
-          : executable;
-        const term = pty.spawn(resolvedExecutable, args, {
-          name: "xterm-color",
-          cwd: resolved.root,
-          env: { ...process.env, TERM: "xterm-256color" },
-          cols: 120,
-          rows: 24,
-          useConpty: process.platform === "win32",
-        });
-        const record = { buffer: "", command, toolName, cwd: resolved.root, running: true };
-        registerTerminal(webContents, id, term, record);
-        attachBuffer(term, webContents, id, record);
-
         announceAgentTerminal(webContents, sendAgentEvent, {
-          phase: "start",
-          id,
-          command,
-          toolName,
-          cwd: resolved.root,
+          phase: "start", id, command, toolName, cwd: resolved.root, headless: true,
         });
-
-        let timedOut = false;
+        const append = (current, chunk) => takeLimited(`${current}${chunk.toString()}`, 50000);
+        child.stdout?.on("data", (chunk) => { stdout = append(stdout, chunk); });
+        child.stderr?.on("data", (chunk) => { stderr = append(stderr, chunk); });
         const timer = setTimeout(() => {
           timedOut = true;
-          try { term.kill(); } catch { /* ignore */ }
+          try { child.kill(); } catch { /* process may already have exited */ }
         }, Math.max(1000, Math.min(Number(timeoutMs) || 20000, 120000)));
-
-        term.onExit(({ exitCode, signal }) => {
+        child.on("error", (error) => {
           clearTimeout(timer);
+          finish({ ok: false, mode: "typed-process", executable, args, error: error.message, code: error.code || "PROCESS_START_FAILED", elapsedMs: Date.now() - startedAt });
+        });
+        child.on("close", (exitCode, signal) => {
+          clearTimeout(timer);
+          const cleanStdout = sanitizeOutput(stdout);
+          const cleanStderr = sanitizeOutput(stderr);
+          const terminationReason = timedOut ? "timeout" : exitCode === 0 ? "completed" : signal ? "signaled" : "exit_code";
+          sendTerminalExit(webContents, id, exitCode, signal);
+          announceAgentTerminal(webContents, sendAgentEvent, {
+            phase: "end", id, exitCode, signal, timedOut, terminationReason,
+          });
           finish({
-            ...finishCommandSession(webContents, sendAgentEvent, {
-              id,
-              term,
-              record,
-              command,
-              timedOut,
-              exitCode,
-              signal,
-            }),
+            ok: !timedOut && exitCode === 0,
             mode: "typed-process",
             executable,
             args,
+            exitCode,
+            signal,
+            timedOut,
+            status: timedOut ? "timeout" : exitCode === 0 ? "complete" : "failed",
+            terminationReason,
+            elapsedMs: Date.now() - startedAt,
+            stdout: cleanStdout.value.trimEnd(),
+            stderr: cleanStderr.value.trimEnd(),
+            hadAnsi: cleanStdout.hadAnsi || cleanStderr.hadAnsi,
+            outputCompleteness: timedOut ? "partial" : "complete",
+            terminalId: id,
           });
         });
       } catch (error) {
-        finish({ ok: false, error: error.message, code: error.code || "PROCESS_START_FAILED", executable, args });
+        finish({ ok: false, error: error.message, code: error.code || "PROCESS_START_FAILED", executable, args, elapsedMs: Date.now() - startedAt });
       }
     });
   }

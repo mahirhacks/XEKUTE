@@ -25,7 +25,6 @@ const activitySearch   = $("activity-search");
 const activityRun      = $("activity-run");
 const activityBugBounty = $("activity-bugbounty");
 const activitySecurity = $("activity-security");
-const activityToolbox = $("activity-toolbox");
 const activityTerminal = $("activity-terminal");
 const activityChat     = $("activity-chat");
 const activitySettings = $("activity-settings");
@@ -108,6 +107,10 @@ const chatSessionSelect = $("chat-session-select");
 const btnChatNew      = $("btn-chat-new");
 const btnChatDelete   = $("btn-chat-delete");
 const btnChatHistory  = $("btn-chat-history");
+const chatHistoryPopover = $("chat-history-popover");
+const chatHistoryBody = $("chat-history-body");
+const chatHistoryEmpty = $("chat-history-empty");
+const chatHistoryClose = $("chat-history-close");
 const btnChatMore     = $("btn-chat-more");
 const btnChatCollapse = $("btn-chat-collapse");
 const contextUsageBtn  = $("context-usage-btn");
@@ -281,9 +284,6 @@ const assessmentRunProfile = $("assessment-run-profile");
 const assessmentRunStart = $("assessment-run-start");
 const assessmentRunStop = $("assessment-run-stop");
 const securityWorkspace = $("security-workspace");
-const toolsWorkspace = $("tools-workspace");
-const toolHealthAction = $("tool-health-action");
-const toolHealthResults = $("tool-health-results");
 const mapWorkspace = $("map-workspace");
 const mapWorkspaceSubtitle = $("map-workspace-subtitle");
 const mapBuildAction = $("map-build-action");
@@ -320,21 +320,6 @@ const webcloneFileContent = $("webclone-file-content");
 const webcloneEditorPane = document.querySelector(".webclone-editor-pane");
 const webclonePreviewPane = document.querySelector(".webclone-preview-pane");
 const webclonePreviewFrame = $("webclone-preview-frame");
-const toolCatalog = $("tool-catalog");
-const toolConfigOverlay = $("tool-config-overlay");
-const toolConfigDialog = $("tool-config-dialog");
-const toolConfigTitle = $("tool-config-title");
-const toolConfigDescription = $("tool-config-description");
-const toolConfigUi = $("tool-config-ui");
-const toolConfigJson = $("tool-config-json");
-const toolRegisterAction = $("tool-register-action");
-const toolRegisterOverlay = $("tool-register-overlay");
-const toolRegisterDialog = $("tool-register-dialog");
-const toolRegisterClose = $("tool-register-close");
-const toolRegisterCancel = $("tool-register-cancel");
-const toolRegisterImport = $("tool-register-import");
-const toolRegisterFile = $("tool-register-file");
-const toolCommandPreview = $("tool-command-preview");
 const customTreeItems = $("custom-tree-items");
 const customContextMenu = $("custom-context-menu");
 const customContextDelete = $("custom-context-delete");
@@ -489,6 +474,7 @@ let contextFilesCache = [];
 let chatSessionCounter = 0;
 let activeChatSessionId = "";
 const chatSessions = [];
+const closedChatSessions = [];
 let activeChatPersistenceScope = "";
 let chatPersistenceTimer = null;
 let chatPersistenceQueue = Promise.resolve();
@@ -644,11 +630,14 @@ let uiZoom = Number(localStorage.getItem(UI_ZOOM_KEY)) || 1;
 
 function createChatSession(title = "New Agent") {
   const id = `chat-${Date.now()}-${++chatSessionCounter}`;
+  const now = new Date().toISOString();
   return {
     id,
     title,
     history: [],
     contextFilesCache: [],
+    createdAt: now,
+    updatedAt: now,
     memory: {
       version: 2,
       summary: "",
@@ -857,26 +846,35 @@ function normalizePersistedChatSession(value) {
     chatFamily: family,
     chatMode: canonicalChatMode(value.mode || value.chatMode),
     selectedModel: typeof (value.model || value.selectedModel) === "string" ? (value.model || value.selectedModel) : "",
+    createdAt: value.createdAt || null,
+    updatedAt: value.updatedAt || value.createdAt || null,
     status: ["complete", "stopped", "interrupted"].includes(value.status) ? value.status : "complete",
+  };
+}
+
+function serializeChatSession(session) {
+  return {
+    id: session.id,
+    title: session.title,
+    messages: session.history,
+    memory: memoryRecord(session),
+    contextSummary: memoryRecord(session)?.summary || session.contextSummary,
+    contextSummaryMeta: memoryRecord(session),
+    lastContextUsage: session.lastContextUsage,
+    mode: session.chatMode || chatMode,
+    safetyFamily: session.chatFamily || chatFamily,
+    model: session.selectedModel || selectedModel,
+    createdAt: session.createdAt || null,
+    updatedAt: session.updatedAt || null,
+    status: streaming && session.id === activeChatSessionId ? "interrupted" : "complete",
   };
 }
 
 function chatPersistenceState() {
   return {
     activeSessionId: activeChatSessionId,
-    sessions: chatSessions.map((session) => ({
-      id: session.id,
-      title: session.title,
-      messages: session.history,
-      memory: memoryRecord(session),
-      contextSummary: memoryRecord(session)?.summary || session.contextSummary,
-      contextSummaryMeta: memoryRecord(session),
-      lastContextUsage: session.lastContextUsage,
-      mode: session.chatMode || chatMode,
-      safetyFamily: session.chatFamily || chatFamily,
-      model: session.selectedModel || selectedModel,
-      status: streaming && session.id === activeChatSessionId ? "interrupted" : "complete",
-    })),
+    sessions: chatSessions.map(serializeChatSession),
+    closedSessions: closedChatSessions.map(serializeChatSession),
   };
 }
 
@@ -1047,6 +1045,7 @@ function renderCanonicalChatHistory(history = []) {
     } else if (message.role === "assistant") {
       const turn = document.createElement("div");
       turn.className = "chat-turn assistant";
+      if (message.createdAt) turn.dataset.createdAt = message.createdAt;
       const body = document.createElement("div");
       body.className = "assistant-reply";
       renderMarkdown(body, content);
@@ -1109,6 +1108,7 @@ function applyActiveChatSession(session) {
   requestAnimationFrame(() => {
     messages.querySelectorAll(".assistant-reply[data-raw-md]").forEach((element) => {
       globalThis.MarkdownRenderer?.renderToElement(element, element.dataset.rawMd || "");
+      attachAssistantCopyButton(element);
     });
     scrollMessages({ force: true });
   });
@@ -1136,6 +1136,15 @@ async function restoreChatSessionsForCurrentWorkspace() {
   if (!restored.length) restored.push(createChatSession("New Agent"));
   const unique = new Map(restored.map((session) => [session.id, session]));
   chatSessions.splice(0, chatSessions.length, ...unique.values());
+  const restoredClosed = (saved?.closedSessions || [])
+    .map(normalizePersistedChatSession)
+    .filter(Boolean);
+  const existingIds = new Set(chatSessions.map((session) => session.id));
+  closedChatSessions.splice(
+    0,
+    closedChatSessions.length,
+    ...restoredClosed.filter((session) => !existingIds.has(session.id)),
+  );
   const active = chatSessions.find((session) => session.id === saved?.activeSessionId) || chatSessions[0] || null;
   applyActiveChatSession(active);
   renderChatSessionSelect();
@@ -1186,12 +1195,9 @@ function openChatPane({ createIfEmpty = true } = {}) {
 
 function syncWorkspaceActivity() {
   const securityActive = currentWorkspaceMode === "security";
-  const toolsActive = currentWorkspaceMode === "tools";
   const settingsActive = currentWorkspaceMode === "settings";
   activitySecurity?.classList.toggle("active", securityActive);
   activitySecurity?.setAttribute("aria-pressed", String(securityActive));
-  activityToolbox?.classList.toggle("active", toolsActive);
-  activityToolbox?.setAttribute("aria-pressed", String(toolsActive));
   activitySettings?.classList.toggle("active", settingsActive);
   activitySettings?.setAttribute("aria-pressed", String(settingsActive));
   syncSidebarActivity();
@@ -1210,7 +1216,6 @@ function showCodeEditorWorkspace() {
   assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = true;
-  if (toolsWorkspace) toolsWorkspace.hidden = true;
   if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
@@ -1228,7 +1233,6 @@ function showResourceWorkspace({ focus = false } = {}) {
   assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = false;
   if (securityWorkspace) securityWorkspace.hidden = true;
-  if (toolsWorkspace) toolsWorkspace.hidden = true;
   if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
@@ -1244,7 +1248,6 @@ function showSecurityWorkspace(tool = "") {
   setCodeEditorVisible(false);
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = false;
-  if (toolsWorkspace) toolsWorkspace.hidden = true;
   if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
@@ -1255,234 +1258,6 @@ function showSecurityWorkspace(tool = "") {
   syncWorkspaceActivity();
   refreshSecurityHistoryIfVisible();
   requestAnimationFrame(() => securityRequestEditor?.focus());
-}
-
-const TOOL_CATALOG = [
-  { category: "Passive Recon Tools", tools: [
-    ["amass", "Amass", "Discover external assets and subdomains", "amass enum -passive -d {target}"],
-    ["subfinder", "Subfinder", "Passive subdomain discovery", "subfinder -d {target}"],
-    ["theharvester", "theHarvester", "Collect public hosts, emails, and names", "theHarvester -d {target} -b all"],
-    ["google-dorking", "Google Dorking", "Prepare targeted search operators", "site:{target} inurl:admin"],
-  ]},
-  { category: "Active Recon Tools", tools: [
-    ["nmap", "Nmap", "Service and port discovery", "nmap {ports} {target}"],
-    ["naabu", "Naabu", "Fast port enumeration", "naabu -host {target} {ports}"],
-    ["masscan", "Masscan", "High-speed authorized network discovery", "masscan {target} {ports}"],
-  ]},
-  { category: "Web & Endpoint Discovery", tools: [
-    ["httpx", "httpx", "Probe HTTP services and metadata", "httpx -u {target}"],
-    ["katana", "Katana", "Crawl pages and endpoints", "katana -u {target} -d {depth}"],
-    ["ffuf", "ffuf", "Content and parameter discovery", "ffuf -u {target}/FUZZ -w {wordlist}"],
-    ["gobuster", "Gobuster", "Directory and DNS enumeration", "gobuster dir -u {target} -w {wordlist}"],
-  ]},
-  { category: "Firewall & WAF Analysis", tools: [
-    ["wafw00f", "WAFW00F", "Fingerprint an authorized web application firewall", "wafw00f {target}", { fields: ["target", "timeout", "rate", "outputFormat", "outputPath"] }],
-    ["nmap-firewall", "Nmap ACK Analysis", "Classify filtered and unfiltered TCP ports with bounded ACK probes", "nmap -Pn -sA --reason -p {port} --max-rate {rate} {target}", { fields: ["target", "port", "timeout", "rate", "outputFormat", "outputPath"] }],
-    ["hping3", "Hping3", "Send a small bounded TCP probe set for filtering-response analysis", "hping3 -S -c {packetCount} -p {port} -i u500000 {target}", { fields: ["target", "port", "packetCount", "timeout", "rate", "outputFormat", "outputPath"] }],
-    ["traceroute", "Traceroute", "Trace network hops and possible filtering boundaries", "traceroute -n -m {maxHops} {target}", { fields: ["target", "maxHops", "timeout", "outputFormat", "outputPath"] }],
-  ]},
-  { category: "Vulnerability & TLS Analysis", tools: [
-    ["nuclei", "Nuclei", "Template-based vulnerability checks", "nuclei -u {target} -severity {severity}"],
-    ["nikto", "Nikto", "Web server checks", "nikto -h {target}"],
-    ["testssl", "testssl.sh", "TLS configuration analysis", "testssl.sh {target}"],
-    ["sqlmap", "SQLmap", "Authorized SQL injection validation", "sqlmap -u {target} --risk={risk} --level={level}"],
-  ]},
-];
-const TOOL_PRESETS = {
-  easy: { target: "", timeout: 15, threads: 2, rate: 2, ports: "--top-ports 100", port: 443, packetCount: 3, maxHops: 15, depth: 2, severity: "high,critical", risk: 1, level: 1, wordlist: "", outputFormat: "json" },
-  medium: { target: "", timeout: 30, threads: 5, rate: 5, ports: "--top-ports 1000", port: 443, packetCount: 5, maxHops: 20, depth: 3, severity: "medium,high,critical", risk: 2, level: 3, wordlist: "", outputFormat: "json" },
-  high: { target: "", timeout: 60, threads: 10, rate: 10, ports: "-p-", port: 443, packetCount: 10, maxHops: 30, depth: 5, severity: "info,low,medium,high,critical", risk: 3, level: 5, wordlist: "", outputFormat: "json" },
-};
-const TOOL_FIELD_DEFINITIONS = Object.freeze({
-  target: { label: "Target", type: "text" }, timeout: { label: "Timeout (seconds)", type: "number", min: 1, max: 3600 },
-  threads: { label: "Concurrency / threads", type: "number", min: 1, max: 200 }, rate: { label: "Rate / second", type: "number", min: 1, max: 100000 },
-  ports: { label: "Ports", type: "text" }, port: { label: "Destination port", type: "number", min: 1, max: 65535 },
-  packetCount: { label: "Packet count", type: "number", min: 1, max: 100 }, maxHops: { label: "Maximum hops", type: "number", min: 1, max: 64 },
-  depth: { label: "Crawl depth", type: "number", min: 1, max: 10 }, severity: { label: "Severities", type: "text" },
-  risk: { label: "Risk", type: "number", min: 1, max: 3 }, level: { label: "Level", type: "number", min: 1, max: 5 },
-  wordlist: { label: "Wordlist path", type: "text" }, sources: { label: "Data sources", type: "text" }, limit: { label: "Result limit", type: "number", min: 1, max: 10000 },
-  query: { label: "Search operators", type: "text" }, extensions: { label: "Extensions", type: "text" }, matchCodes: { label: "Match status codes", type: "text" },
-  tags: { label: "Template tags", type: "text" }, templates: { label: "Template path", type: "text" }, tuning: { label: "Nikto tuning", type: "text" },
-  parameter: { label: "Test parameter", type: "text" }, techniques: { label: "SQLi techniques", type: "text" }, excludePorts: { label: "Excluded ports", type: "text" },
-  scanType: { label: "Scan type", type: "select", options: [["TCP connect", "-sT"], ["SYN", "-sS"], ["ACK", "-sA"], ["UDP", "-sU"]] },
-  timing: { label: "Timing profile", type: "select", options: [["Polite (T2)", "-T2"], ["Normal (T3)", "-T3"], ["Aggressive (T4)", "-T4"]] },
-  serviceFlags: { label: "Service detection", type: "select", options: [["Version light", "-sV --version-light"], ["Standard version scan", "-sV"], ["Disabled", ""]] },
-  mode: { label: "Discovery mode", type: "select", options: [["Directory", "dir"], ["Virtual host", "vhost"], ["DNS", "dns"]] },
-  redirects: { label: "Redirect behavior", type: "select", options: [["Follow redirects", "-fr"], ["Do not follow", ""]] },
-  scopeMode: { label: "Crawler scope", type: "select", options: [["Exact FQDN", "fqdn"], ["Registered domain", "rdn"], ["No scope restriction", ""]] },
-  protocol: { label: "TLS focus", type: "select", options: [["Complete TLS review", ""], ["Protocols only", "--protocols"], ["TLS 1.3", "--tls13"]] },
-  outputFormat: { label: "Output format", type: "select", options: [["JSON", "json"], ["XML", "xml"], ["Text", "txt"], ["CSV", "csv"], ["HTML", "html"]] },
-  outputPath: { label: "Output path", type: "text" },
-});
-const TOOL_PROFILES = Object.freeze({
-  amass: { fields: ["target", "sources", "timeout", "outputFormat", "outputPath"], command: "amass enum -passive -d {target} -src {sources}", presets: { easy: { sources: "", timeout: 15 }, medium: { sources: "", timeout: 30 }, high: { sources: "", timeout: 60 } } },
-  subfinder: { fields: ["target", "threads", "timeout", "outputFormat", "outputPath"], command: "subfinder -d {target} -silent -t {threads} -timeout {timeout}", presets: { easy: { threads: 5 }, medium: { threads: 10 }, high: { threads: 25 } } },
-  theharvester: { fields: ["target", "sources", "limit", "outputFormat", "outputPath"], command: "theHarvester -d {target} -b {sources} -l {limit}", presets: { easy: { sources: "crtsh,duckduckgo", limit: 200 }, medium: { sources: "crtsh,duckduckgo,otx,urlscan", limit: 500 }, high: { sources: "all", limit: 1000 } } },
-  "google-dorking": { fields: ["target", "query", "outputFormat", "outputPath"], command: "site:{target} {query}", presets: { easy: { query: "inurl:login" }, medium: { query: "(inurl:admin OR inurl:api)" }, high: { query: "(ext:json OR ext:xml OR ext:env OR inurl:debug)" } } },
-  nmap: { fields: ["target", "scanType", "ports", "timing", "serviceFlags", "rate", "timeout", "outputFormat", "outputPath"], command: "nmap {scanType} {timing} {serviceFlags} -p {ports} --max-rate {rate} {target}", presets: { easy: { scanType: "-sT", ports: "80,443,8080,8443", timing: "-T2", serviceFlags: "-sV --version-light", rate: 50 }, medium: { scanType: "-sT", ports: "1-1000", timing: "-T3", serviceFlags: "-sV", rate: 200 }, high: { scanType: "-sS", ports: "1-65535", timing: "-T3", serviceFlags: "-sV", rate: 500 } } },
-  naabu: { fields: ["target", "ports", "rate", "threads", "timeout", "outputFormat", "outputPath"], command: "naabu -host {target} -p {ports} -rate {rate} -c {threads} -json", presets: { easy: { ports: "80,443,8080,8443", rate: 50, threads: 10 }, medium: { ports: "top-1000", rate: 200, threads: 25 }, high: { ports: "-", rate: 500, threads: 50 } } },
-  masscan: { fields: ["target", "ports", "rate", "excludePorts", "outputFormat", "outputPath"], command: "masscan {target} -p {ports} --rate {rate} --exclude-ports {excludePorts}", presets: { easy: { ports: "80,443,8080,8443", rate: 50, excludePorts: "" }, medium: { ports: "1-1000", rate: 200, excludePorts: "" }, high: { ports: "1-65535", rate: 500, excludePorts: "" } } },
-  httpx: { fields: ["target", "threads", "rate", "timeout", "redirects", "outputFormat", "outputPath"], command: "httpx -u {target} -threads {threads} -rl {rate} -timeout {timeout} {redirects} -json", presets: { easy: { threads: 5, rate: 5, redirects: "" }, medium: { threads: 15, rate: 20, redirects: "-fr" }, high: { threads: 30, rate: 50, redirects: "-fr" } } },
-  katana: { fields: ["target", "depth", "threads", "rate", "scopeMode", "timeout", "outputFormat", "outputPath"], command: "katana -u {target} -d {depth} -c {threads} -rl {rate} -fs {scopeMode} -jsonl", presets: { easy: { depth: 2, threads: 2, rate: 2, scopeMode: "fqdn" }, medium: { depth: 3, threads: 5, rate: 5, scopeMode: "fqdn" }, high: { depth: 5, threads: 10, rate: 10, scopeMode: "rdn" } } },
-  ffuf: { fields: ["target", "wordlist", "extensions", "matchCodes", "threads", "rate", "timeout", "outputFormat", "outputPath"], command: "ffuf -u {target}/FUZZ -w {wordlist} -e {extensions} -mc {matchCodes} -t {threads} -rate {rate}", presets: { easy: { extensions: "", matchCodes: "200,204,301,302,307,401,403", threads: 5, rate: 5 }, medium: { extensions: ".html,.js,.json,.php", matchCodes: "all", threads: 15, rate: 20 }, high: { extensions: ".html,.js,.json,.php,.txt,.xml,.bak", matchCodes: "all", threads: 30, rate: 50 } } },
-  gobuster: { fields: ["target", "mode", "wordlist", "extensions", "threads", "timeout", "outputFormat", "outputPath"], command: "gobuster {mode} -u {target} -w {wordlist} -x {extensions} -t {threads}", presets: { easy: { mode: "dir", extensions: "", threads: 5 }, medium: { mode: "dir", extensions: "html,js,json,php", threads: 15 }, high: { mode: "vhost", extensions: "", threads: 30 } } },
-  wafw00f: { fields: ["target", "timeout", "outputFormat", "outputPath"], presets: { easy: { timeout: 15 }, medium: { timeout: 30 }, high: { timeout: 60 } } },
-  "nmap-firewall": { fields: ["target", "port", "rate", "timing", "timeout", "outputFormat", "outputPath"], presets: { easy: { port: 443, rate: 2, timing: "-T2" }, medium: { port: 443, rate: 5, timing: "-T3" }, high: { port: 443, rate: 10, timing: "-T3" } } },
-  hping3: { fields: ["target", "port", "packetCount", "rate", "timeout", "outputFormat", "outputPath"], presets: { easy: { packetCount: 3, rate: 2 }, medium: { packetCount: 5, rate: 5 }, high: { packetCount: 10, rate: 10 } } },
-  traceroute: { fields: ["target", "maxHops", "timeout", "outputFormat", "outputPath"], presets: { easy: { maxHops: 15 }, medium: { maxHops: 20 }, high: { maxHops: 30 } } },
-  nuclei: { fields: ["target", "severity", "tags", "templates", "threads", "rate", "timeout", "outputFormat", "outputPath"], command: "nuclei -u {target} -severity {severity} -tags {tags} -t {templates} -c {threads} -rl {rate} -jsonl", presets: { easy: { severity: "high,critical", tags: "", templates: "", threads: 2, rate: 2 }, medium: { severity: "medium,high,critical", tags: "", templates: "", threads: 5, rate: 5 }, high: { severity: "info,low,medium,high,critical", tags: "", templates: "", threads: 10, rate: 10 } } },
-  nikto: { fields: ["target", "tuning", "timeout", "outputFormat", "outputPath"], command: "nikto -host {target} -Tuning {tuning} -maxtime {timeout}s -nointeractive", presets: { easy: { tuning: "2,3", timeout: 60 }, medium: { tuning: "1,2,3,6", timeout: 180 }, high: { tuning: "x", timeout: 600 } } },
-  testssl: { fields: ["target", "protocol", "timeout", "outputFormat", "outputPath"], command: "testssl {protocol} --warnings batch {target}", presets: { easy: { protocol: "--protocols", timeout: 60 }, medium: { protocol: "", timeout: 180 }, high: { protocol: "", timeout: 600 } } },
-  sqlmap: { fields: ["target", "parameter", "techniques", "risk", "level", "threads", "timeout", "outputFormat", "outputPath"], command: "sqlmap -u {target} -p {parameter} --technique={techniques} --risk={risk} --level={level} --threads={threads} --batch", presets: { easy: { parameter: "", techniques: "BE", risk: 1, level: 1, threads: 1 }, medium: { parameter: "", techniques: "BEUSTQ", risk: 2, level: 3, threads: 3 }, high: { parameter: "", techniques: "BEUSTQ", risk: 3, level: 5, threads: 5 } } },
-});
-let selectedCatalogTool = null;
-let selectedToolPreset = "easy";
-let selectedToolView = "ui";
-let selectedToolConfig = {};
-const CUSTOM_TOOLS_KEY = "pointer:customToolManifests";
-let customToolManifests = [];
-
-const TOOL_ICONS = {
-  amass: "codicon-globe", subfinder: "codicon-search", theharvester: "codicon-list-tree", "google-dorking": "codicon-search-fuzzy",
-  nmap: "codicon-server-process", naabu: "codicon-radio-tower", masscan: "codicon-broadcast",
-  httpx: "codicon-globe", katana: "codicon-git-branch", ffuf: "codicon-symbol-key", gobuster: "codicon-folder",
-  wafw00f: "codicon-shield", "nmap-firewall": "codicon-server-process", hping3: "codicon-pulse", traceroute: "codicon-git-merge",
-  nuclei: "codicon-bug", nikto: "codicon-shield", testssl: "codicon-lock", sqlmap: "codicon-database",
-};
-
-function renderToolCatalog() {
-  if (!toolCatalog) return;
-  toolCatalog.innerHTML = "";
-  const groups = [...TOOL_CATALOG];
-  const customGroups = new Map();
-  customToolManifests.forEach((tool) => {
-    const category = tool.category || "Custom Tools";
-    if (!customGroups.has(category)) customGroups.set(category, []);
-    customGroups.get(category).push([tool.id, tool.name, tool.description, tool.command, tool]);
-  });
-  customGroups.forEach((tools, category) => groups.push({ category, tools }));
-  groups.forEach((group) => {
-    const section = document.createElement("section");
-    section.className = "tool-category";
-    section.innerHTML = `<header><strong>${group.category}</strong><span>${group.tools.length} tools</span></header>`;
-    const grid = document.createElement("div"); grid.className = "tool-card-grid";
-    group.tools.forEach(([id, name, description, command, manifest]) => {
-      const button = document.createElement("button"); button.type = "button"; button.className = "tool-catalog-card";
-      button.innerHTML = `<span class="codicon ${TOOL_ICONS[id] || "codicon-tools"} tool-card-icon"></span><span><strong>${name}</strong><small>${description}</small></span><span class="codicon codicon-chevron-right"></span>`;
-      button.addEventListener("click", () => openToolConfig({ id, name, description, command, ...(TOOL_PROFILES[id] || {}), ...(manifest || {}) })); grid.appendChild(button);
-    }); section.appendChild(grid); toolCatalog.appendChild(section);
-  });
-}
-
-function loadCustomToolManifests() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || "[]");
-    customToolManifests = Array.isArray(parsed) ? parsed.filter((tool) => tool && /^[a-z0-9][a-z0-9_-]{1,40}$/.test(tool.id) && tool.name && tool.command) : [];
-  } catch { customToolManifests = []; }
-}
-
-function saveCustomToolManifests() {
-  localStorage.setItem(CUSTOM_TOOLS_KEY, JSON.stringify(customToolManifests, null, 2));
-}
-
-function openToolRegister() {
-  toolRegisterOverlay.hidden = false;
-  toolRegisterDialog?.querySelector("input")?.focus();
-}
-
-function closeToolRegister() {
-  if (toolRegisterOverlay) toolRegisterOverlay.hidden = true;
-}
-
-function registerCustomTool(manifest) {
-  const tool = {
-    id: String(manifest.id || "").trim().toLowerCase(),
-    name: String(manifest.name || "").trim().slice(0, 100),
-    category: String(manifest.category || "Custom Tools").trim().slice(0, 80),
-    executable: String(manifest.executable || "").trim().slice(0, 160),
-    description: String(manifest.description || "").trim().slice(0, 300),
-    command: String(manifest.command || "").trim().slice(0, 1000),
-  };
-  if (!/^[a-z0-9][a-z0-9_-]{1,40}$/.test(tool.id) || !tool.name || !tool.executable || !tool.description || !tool.command) {
-    addErrorMessage("Custom tool requires a valid ID, name, executable, description, and command template.");
-    return false;
-  }
-  const builtIn = TOOL_CATALOG.some((group) => group.tools.some(([id]) => id === tool.id));
-  if (builtIn || customToolManifests.some((entry) => entry.id === tool.id)) {
-    addErrorMessage(`A tool with ID ${tool.id} is already registered.`);
-    return false;
-  }
-  customToolManifests.push(tool);
-  saveCustomToolManifests();
-  renderToolCatalog();
-  return true;
-}
-
-async function refreshToolHealth() {
-  if (!toolHealthResults || !window.api?.toolHealth) return;
-  toolHealthResults.hidden = false;
-  toolHealthResults.innerHTML = '<span class="codicon codicon-loading codicon-modifier-spin"></span><span>Checking configured tool adapters...</span>';
-  const result = await window.api.toolHealth({ customTools: customToolManifests });
-  if (result?.error) { toolHealthResults.textContent = result.error; return; }
-  const tools = result?.tools || [];
-  const installed = tools.filter((tool) => tool.installed).length;
-  toolHealthResults.innerHTML = `<strong>${installed}/${tools.length} available</strong>${tools.map((tool) => `<span class="tool-health-chip ${tool.installed ? "ok" : "missing"}" title="${escapeHtml(tool.version || tool.error || "")}"><i class="codicon ${tool.installed ? "codicon-check" : "codicon-error"}"></i>${escapeHtml(tool.executable)}</span>`).join("")}`;
-}
-
-function toolOutputPath(tool, config) { return `tools/${tool.id}/results.${config.outputFormat || "json"}`; }
-function syncToolCommand() {
-  if (!selectedCatalogTool) return;
-  const config = selectedToolConfig;
-  const command = selectedCatalogTool.command.replace(/\{(\w+)\}/g, (_, key) => String(config[key] ?? ""));
-  toolCommandPreview.textContent = command;
-  if (selectedToolView === "json") toolConfigJson.value = JSON.stringify(config, null, 2);
-}
-function renderToolFields() {
-  toolConfigUi.innerHTML = "";
-  const fieldKeys = selectedCatalogTool?.fields || ["target", "timeout", "threads", "rate", "outputFormat", "outputPath"];
-  fieldKeys.forEach((key) => {
-    const definition = TOOL_FIELD_DEFINITIONS[key];
-    if (!definition) return;
-    const row = document.createElement("label"); row.innerHTML = `<span>${definition.label}</span>`;
-    const input = definition.type === "select" ? document.createElement("select") : document.createElement("input");
-    if (definition.type === "select") {
-      (definition.options || []).forEach(([label, value]) => input.add(new Option(label, value)));
-    } else {
-      input.type = definition.type;
-      if (definition.min != null) input.min = String(definition.min);
-      if (definition.max != null) input.max = String(definition.max);
-    }
-    input.value = selectedToolConfig[key] ?? ""; input.addEventListener("input", () => { selectedToolConfig[key] = definition.type === "number" ? Number(input.value) : input.value; if (key === "outputFormat") { selectedToolConfig.outputPath = toolOutputPath(selectedCatalogTool, selectedToolConfig); renderToolFields(); } syncToolCommand(); });
-    row.appendChild(input); toolConfigUi.appendChild(row);
-  });
-}
-function applyToolPreset(preset) {
-  selectedToolPreset = preset;
-  if (preset !== "custom") {
-    const base = { ...TOOL_PRESETS[preset], ...(selectedCatalogTool?.presets?.[preset] || {}) };
-    const allowedFields = new Set(selectedCatalogTool?.fields || Object.keys(base));
-    selectedToolConfig = Object.fromEntries(Object.entries(base).filter(([key]) => allowedFields.has(key)));
-    if (allowedFields.has("outputPath")) selectedToolConfig.outputPath = toolOutputPath(selectedCatalogTool, selectedToolConfig);
-  }
-  document.querySelectorAll("[data-tool-preset]").forEach((button) => button.classList.toggle("active", button.dataset.toolPreset === preset));
-  renderToolFields(); syncToolCommand();
-}
-function setToolView(view) {
-  if (view === "ui" && selectedToolView === "json") { try { selectedToolConfig = JSON.parse(toolConfigJson.value); } catch { return; } }
-  selectedToolView = view; toolConfigUi.hidden = view !== "ui"; toolConfigJson.hidden = view !== "json";
-  document.querySelectorAll("[data-tool-view]").forEach((button) => button.classList.toggle("active", button.dataset.toolView === view));
-  if (view === "ui") renderToolFields(); syncToolCommand();
-}
-function openToolConfig(tool) {
-  selectedCatalogTool = tool; toolConfigTitle.textContent = tool.name; toolConfigDescription.textContent = tool.description;
-  const icon = $("tool-config-icon"); if (icon) icon.className = `codicon ${TOOL_ICONS[tool.id] || "codicon-tools"}`;
-  toolConfigOverlay.hidden = false; applyToolPreset("easy"); setToolView("ui");
-}
-function showToolsWorkspace() {
-  if (terminalMaximized) setTerminalMaximized(false); currentWorkspaceMode = "tools";
-  setCodeEditorVisible(false);
-  resourceViewer.hidden = true; securityWorkspace.hidden = true; toolsWorkspace.hidden = false; mapWorkspace.hidden = true; appSettingsWorkspace.hidden = true; webcloneWorkspace.hidden = true; window.api.webCloneHidePreview?.();
-  editorPane?.setAttribute("aria-label", "Security toolbox"); loadCustomToolManifests(); renderToolCatalog(); syncWorkspaceActivity();
 }
 
 const AUTHORITY_DEFAULTS = Object.freeze({
@@ -3158,7 +2933,6 @@ async function showMapWorkspace() {
   setCodeEditorVisible(false);
   resourceViewer.hidden = true;
   securityWorkspace.hidden = true;
-  toolsWorkspace.hidden = true;
   mapWorkspace.hidden = false;
   appSettingsWorkspace.hidden = true;
   webcloneWorkspace.hidden = true;
@@ -3327,7 +3101,7 @@ async function showWebCloneWorkspace() {
   if (terminalMaximized) setTerminalMaximized(false);
   currentWorkspaceMode = "webclone";
   setCodeEditorVisible(false);
-  resourceViewer.hidden = true; securityWorkspace.hidden = true; toolsWorkspace.hidden = true; mapWorkspace.hidden = true; appSettingsWorkspace.hidden = true; webcloneWorkspace.hidden = false;
+  resourceViewer.hidden = true; securityWorkspace.hidden = true; mapWorkspace.hidden = true; appSettingsWorkspace.hidden = true; webcloneWorkspace.hidden = false;
   editorPane?.setAttribute("aria-label", "WebClone workspace");
   toggleWebClonePreview(false);
   setWebCloneFilesCollapsed(false);
@@ -4285,11 +4059,11 @@ const ASSESSMENT_MODULE_META = {
   "traffic/filtered.jsonl": ["Filtered Traffic", "Curated HTTP exchanges linked to parameters, findings, notes, and evidence.", "codicon-filter"],
   "penetration-testing/coverage.json": ["Coverage Matrix", "Tested, passed, failed, blocked, and not-applicable coverage across security frameworks.", "codicon-checklist"],
   "report/report.md": ["Assessment Report", "Evidence-linked reporting with executive summary, findings, remediation, retest state, and limitations.", "codicon-file-text"],
-  "logs/agent-runs.jsonl": ["Agent Runs", "Transparent run lifecycle records generated by the autonomous agent loop.", "codicon-history"],
-  "logs/agent-actions.jsonl": ["Agent Actions", "Every proposed and completed tool action with policy decision and outcome.", "codicon-list-tree"],
-  "logs/agent-approvals.jsonl": ["Agent Approvals", "Human approvals and policy gates for active or sensitive actions.", "codicon-shield"],
-  "logs/agent-hypotheses.jsonl": ["Hypotheses", "Explicit security questions, expected signals, evidence, and test status.", "codicon-lightbulb"],
-  "logs/tool-output.jsonl": ["Tool Output", "Normalized tool-output provenance, hashes, truncation state, and saved artifact paths.", "codicon-terminal"],
+  ".xekute/logs/agent-runs.jsonl": ["Agent Runs", "Transparent run lifecycle records generated by the autonomous agent loop.", "codicon-history"],
+  ".xekute/logs/agent-actions.jsonl": ["Agent Actions", "Every proposed and completed tool action with policy decision and outcome.", "codicon-list-tree"],
+  ".xekute/logs/agent-approvals.jsonl": ["Agent Approvals", "Human approvals and policy gates for active or sensitive actions.", "codicon-shield"],
+  ".xekute/logs/agent-hypotheses.jsonl": ["Hypotheses", "Explicit security questions, expected signals, evidence, and test status.", "codicon-lightbulb"],
+  ".xekute/logs/tool-output.jsonl": ["Tool Output", "Normalized tool-output provenance, hashes, truncation state, and saved artifact paths.", "codicon-terminal"],
 };
 
 function moduleValue(value) {
@@ -5568,6 +5342,7 @@ function syncActiveChatSession({ persist = true } = {}) {
   session.chatMode = chatMode;
   session.chatFamily = chatFamily;
   session.selectedModel = selectedModel;
+  session.updatedAt = session.updatedAt || session.createdAt || new Date().toISOString();
   if (persist) schedulePersistChatSessions();
 }
 
@@ -5593,7 +5368,7 @@ function renderChatSessionSelect() {
     const close = document.createElement("span");
     close.className = "codicon codicon-close chat-tab-close";
     close.dataset.closeSession = session.id;
-    close.title = "Delete chat";
+    close.title = "Close chat";
 
     tab.appendChild(icon);
     tab.appendChild(label);
@@ -5649,12 +5424,17 @@ function newChatSession() {
   chatInput.focus();
 }
 
-function deleteChatSession(id = activeChatSessionId) {
+// Closes a chat session: it is removed from the open tab strip but kept in
+// storage so it still appears in chat history and can be reopened.
+function closeChatSession(id = activeChatSessionId) {
   if (streaming) return;
   const idx = chatSessions.findIndex((session) => session.id === id);
-  if (idx >= 0) {
-    clearChatSessionState(chatSessions[idx]);
-    chatSessions.splice(idx, 1);
+  if (idx < 0) return;
+  const [session] = chatSessions.splice(idx, 1);
+  session.updatedAt = new Date().toISOString();
+  // Avoid duplicate entries if the session somehow already exists as closed.
+  if (!closedChatSessions.some((item) => item.id === session.id)) {
+    closedChatSessions.push(session);
   }
   if (!chatSessions.length) {
     activeChatSessionId = "";
@@ -5677,17 +5457,211 @@ function deleteChatSession(id = activeChatSessionId) {
   chatInput.focus();
 }
 
+// Permanently deletes a chat session from both open tabs and history.
+function destroyChatSession(id) {
+  if (streaming) return;
+  const openIdx = chatSessions.findIndex((session) => session.id === id);
+  if (openIdx >= 0) {
+    clearChatSessionState(chatSessions[openIdx]);
+    chatSessions.splice(openIdx, 1);
+  } else {
+    const closedIdx = closedChatSessions.findIndex((session) => session.id === id);
+    if (closedIdx >= 0) {
+      clearChatSessionState(closedChatSessions[closedIdx]);
+      closedChatSessions.splice(closedIdx, 1);
+    }
+  }
+  if (id === activeChatSessionId || !activeChatSession()) {
+    if (!chatSessions.length) {
+      activeChatSessionId = "";
+      chatHistory = [];
+      contextFilesCache = [];
+      activeStreamContent = "";
+      messages.innerHTML = "";
+      syncChatEmptyState();
+      setChatCollapsed(true);
+    } else {
+      const next = chatSessions[Math.max(0, Math.min(openIdx, chatSessions.length - 1))] || chatSessions[0];
+      applyActiveChatSession(next);
+    }
+  }
+  renderChatSessionSelect();
+  updateContextUsage();
+  schedulePersistChatSessions();
+  if (chatSessions.length) chatInput.focus();
+}
+
 function deleteActiveChatSession() {
-  deleteChatSession(activeChatSessionId);
+  destroyChatSession(activeChatSessionId);
 }
 
 function openChatHistoryPicker() {
-  if (streaming || !chatSessionSelect) return;
+  if (streaming) return;
   setChatCollapsed(false);
-  if (chatSessions.length <= 1) return;
-  const idx = chatSessions.findIndex((session) => session.id === activeChatSessionId);
-  const next = chatSessions[(idx + 1) % chatSessions.length];
-  if (next) loadChatSession(next.id);
+  openChatHistoryPopover();
+}
+
+// Opens (reopens) a previously closed chat session, moving it back to the tab
+// strip, then focuses it.
+function reopenChatSession(id) {
+  if (streaming) return;
+  if (chatSessions.some((session) => session.id === id)) {
+    loadChatSession(id);
+    closeChatHistoryPopover();
+    return;
+  }
+  const closedIdx = closedChatSessions.findIndex((session) => session.id === id);
+  if (closedIdx < 0) return;
+  const [session] = closedChatSessions.splice(closedIdx, 1);
+  chatSessions.push(session);
+  activeChatSessionId = session.id;
+  chatHistory = session.history;
+  contextFilesCache = session.contextFilesCache || [];
+  activeStreamContent = "";
+  applyActiveChatSession(session);
+  renderChatSessionSelect();
+  updateContextUsage();
+  schedulePersistChatSessions();
+  closeChatHistoryPopover();
+  chatInput.focus();
+}
+
+// --- Chat history popover -----------------------------------------------
+
+function chatHistoryGroupLabel(date) {
+  if (!date) return "Earlier";
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayDiff = Math.round((startOfToday - startOfDay) / 86400000);
+  if (dayDiff <= 0) return "Today";
+  if (dayDiff === 1) return "Yesterday";
+  if (dayDiff <= 7) return "Previous 7 days";
+  return "Earlier";
+}
+
+function chatHistorySessionTime(session) {
+  const stamp = session.updatedAt || session.createdAt;
+  if (!stamp) return "";
+  const date = new Date(stamp);
+  if (Number.isNaN(date.getTime())) return "Just now";
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayDiff = Math.round((startOfToday - startOfDay) / 86400000);
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  if (dayDiff <= 0 && startOfToday.getTime() === startOfDay.getTime()) return `${hh}:${mm}`;
+  if (dayDiff === 1) return `Yesterday ${hh}:${mm}`;
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mo = String(date.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mo}/${date.getFullYear()} ${hh}:${mm}`;
+}
+
+function allChatHistorySessions() {
+  return [...chatSessions, ...closedChatSessions].filter((session) => {
+    const hasMessages = Array.isArray(session.history) && session.history.length > 0;
+    return session.title || hasMessages || session.messagesHtml;
+  });
+}
+
+function renderChatHistory() {
+  if (!chatHistoryBody) return;
+  const sessions = allChatHistorySessions();
+  chatHistoryBody.innerHTML = "";
+  if (!chatHistoryEmpty) return;
+  chatHistoryEmpty.hidden = sessions.length !== 0;
+  if (!sessions.length) return;
+
+  const groups = new Map();
+  for (const session of sessions.slice().reverse()) {
+    const date = new Date(session.updatedAt || session.createdAt || Date.now());
+    const label = chatHistoryGroupLabel(Number.isNaN(date.getTime()) ? null : date);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(session);
+  }
+
+  const order = ["Today", "Yesterday", "Previous 7 days", "Earlier"];
+  for (const label of order) {
+    if (!groups.has(label)) continue;
+    const header = document.createElement("div");
+    header.className = "chat-history-group";
+    header.textContent = label;
+    chatHistoryBody.appendChild(header);
+
+    for (const session of groups.get(label)) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = `chat-history-session${session.id === activeChatSessionId ? " active" : ""}`;
+      row.dataset.sessionId = session.id;
+      row.title = session.title || "Untitled chat";
+
+      const info = document.createElement("span");
+      info.className = "chat-history-session-info";
+
+      const title = document.createElement("span");
+      title.className = "chat-history-session-title";
+      title.textContent = session.title || "Untitled chat";
+
+      const meta = document.createElement("span");
+      meta.className = "chat-history-session-time";
+      meta.textContent = chatHistorySessionTime(session);
+
+      info.appendChild(title);
+      info.appendChild(meta);
+      row.appendChild(info);
+
+      const trash = document.createElement("span");
+      trash.className = "codicon codicon-trash chat-history-trash";
+      trash.title = "Delete chat permanently";
+      trash.dataset.destroySession = session.id;
+      row.appendChild(trash);
+
+      chatHistoryBody.appendChild(row);
+    }
+  }
+}
+
+function positionChatHistoryPopover() {
+  if (!chatHistoryPopover || !btnChatHistory || !chatPane) return;
+  chatHistoryPopover.style.width = "";
+  const buttonRect = btnChatHistory.getBoundingClientRect();
+  const paneRect = chatPane.getBoundingClientRect();
+  const popH = chatHistoryPopover.offsetHeight || 300;
+  const popW = Math.min(340, Math.max(280, paneRect.width - 24));
+  chatHistoryPopover.style.width = `${popW}px`;
+
+  let left = buttonRect.right - popW;
+  if (left < paneRect.left + 6) left = paneRect.left + 6;
+  let top = buttonRect.bottom + 6;
+  if (top + popH > paneRect.bottom - 6) {
+    top = Math.max(paneRect.top + 6, buttonRect.top - popH - 6);
+  }
+  chatHistoryPopover.style.left = `${left}px`;
+  chatHistoryPopover.style.top = `${top}px`;
+}
+
+function openChatHistoryPopover() {
+  if (!chatHistoryPopover) return;
+  closeModelMenu();
+  closeContextPopover();
+  renderChatHistory();
+  chatHistoryPopover.hidden = false;
+  btnChatHistory?.classList.add("active");
+  btnChatHistory?.setAttribute("aria-expanded", "true");
+  positionChatHistoryPopover();
+}
+
+function closeChatHistoryPopover() {
+  if (!chatHistoryPopover) return;
+  chatHistoryPopover.hidden = true;
+  btnChatHistory?.classList.remove("active");
+  btnChatHistory?.setAttribute("aria-expanded", "false");
+}
+
+function toggleChatHistoryPopover() {
+  if (!chatHistoryPopover || chatHistoryPopover.hidden) openChatHistoryPopover();
+  else closeChatHistoryPopover();
 }
 
 function showChatOptions() {
@@ -6550,6 +6524,7 @@ function closeContextPopover() {
 
 function openContextPopover() {
   closeModelMenu();
+  closeChatHistoryPopover();
   updateContextUsage();
   contextUsagePopover.hidden = false;
   contextUsageBtn.classList.add("active");
@@ -6873,8 +6848,6 @@ activityBugBounty?.addEventListener("click", () => {
   }
 });
 activitySecurity?.addEventListener("click", () => showSecurityWorkspace());
-activityToolbox?.addEventListener("click", showToolsWorkspace);
-toolHealthAction?.addEventListener("click", refreshToolHealth);
 activityTerminal?.addEventListener("click", () => {
   setTerminalCollapsed(!terminalCollapsed);
   if (!terminalCollapsed) TerminalManager.focusActive();
@@ -7371,48 +7344,6 @@ bugBountyTree?.addEventListener("click", async (event) => {
   await openAssessmentItem(item);
 });
 
-document.querySelectorAll("[data-tool-preset]").forEach((button) => button.addEventListener("click", () => applyToolPreset(button.dataset.toolPreset)));
-document.querySelectorAll("[data-tool-view]").forEach((button) => button.addEventListener("click", () => setToolView(button.dataset.toolView)));
-$("tool-config-close")?.addEventListener("click", () => { toolConfigOverlay.hidden = true; });
-toolConfigOverlay?.addEventListener("click", (event) => { if (event.target === toolConfigOverlay) toolConfigOverlay.hidden = true; });
-toolConfigJson?.addEventListener("input", () => { try { selectedToolConfig = JSON.parse(toolConfigJson.value); toolConfigJson.classList.remove("error"); syncToolCommand(); } catch { toolConfigJson.classList.add("error"); } });
-$("tool-copy-command")?.addEventListener("click", () => navigator.clipboard.writeText(toolCommandPreview.textContent || ""));
-toolConfigDialog?.addEventListener("submit", async (event) => {
-  event.preventDefault(); if (!assessmentPath || !selectedCatalogTool) return addErrorMessage("Open an assessment before saving a tool configuration.");
-  if (selectedToolView === "json") { try { selectedToolConfig = JSON.parse(toolConfigJson.value); } catch { return; } }
-  const folder = assessmentDiskPath(`tools/${selectedCatalogTool.id}`); await window.api.mkdir(folder);
-  const file = `${folder}${folder.includes("\\") ? "\\" : "/"}config.json`;
-  const result = await window.api.writeFile(file, `${JSON.stringify({ tool: selectedCatalogTool.id, preset: selectedToolPreset, ...selectedToolConfig }, null, 2)}\n`);
-  if (result?.error) addErrorMessage(result.error); else { toolConfigOverlay.hidden = true; refreshCustomEntries(); }
-});
-toolRegisterAction?.addEventListener("click", openToolRegister);
-toolRegisterClose?.addEventListener("click", closeToolRegister);
-toolRegisterCancel?.addEventListener("click", closeToolRegister);
-toolRegisterOverlay?.addEventListener("click", (event) => { if (event.target === toolRegisterOverlay) closeToolRegister(); });
-toolRegisterDialog?.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const value = {
-    id: $("tool-register-id")?.value,
-    name: $("tool-register-name")?.value,
-    category: $("tool-register-category")?.value,
-    executable: $("tool-register-executable")?.value,
-    description: $("tool-register-description")?.value,
-    command: $("tool-register-command")?.value,
-  };
-  if (registerCustomTool(value)) { toolRegisterDialog.reset(); closeToolRegister(); }
-});
-toolRegisterImport?.addEventListener("click", () => toolRegisterFile?.click());
-toolRegisterFile?.addEventListener("change", async () => {
-  const file = toolRegisterFile.files?.[0];
-  if (!file) return;
-  try {
-    const parsed = JSON.parse(await file.text());
-    const manifests = Array.isArray(parsed) ? parsed : [parsed];
-    manifests.forEach((manifest) => registerCustomTool(manifest));
-    closeToolRegister();
-  } catch { addErrorMessage("Custom tool manifest is not valid JSON."); }
-  toolRegisterFile.value = "";
-});
 webcloneBuildAction?.addEventListener("click", buildWebClone);
 webclonePreviewAction?.addEventListener("click", () => toggleWebClonePreview(webclonePreviewPane?.hidden !== false));
 webclonePreviewClose?.addEventListener("click", () => toggleWebClonePreview(false));
@@ -7650,7 +7581,6 @@ async function runMenuAction(action) {
     "toggle-minimap",
     "show-project",
     "show-security",
-    "show-toolbox",
     "show-settings",
     "help-guide",
     "new-chat",
@@ -7746,9 +7676,6 @@ async function runMenuAction(action) {
       break;
     case "show-security":
       showSecurityWorkspace();
-      break;
-    case "show-toolbox":
-      showToolsWorkspace();
       break;
     case "show-settings":
       openAppSettings();
@@ -8337,11 +8264,62 @@ async function renderTree(dirPath, container, depth) {
     container.appendChild(item);
     item.addEventListener("contextmenu", (event) => openWorkspaceContextMenu(event, entry, item));
 
+    // Drag-and-drop: move a file or folder into another folder (or the root).
+    item.draggable = true;
+    item.addEventListener("dragstart", (event) => {
+      const rel = relativePathFromRoot(entry.path);
+      if (!rel) return;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/xekute-tree-path", rel);
+      event.dataTransfer.setData("text/xekute-tree-isdir", entry.isDir ? "1" : "0");
+      item.classList.add("tree-dragging");
+    });
+    item.addEventListener("dragend", () => {
+      item.classList.remove("tree-dragging");
+      fileTree?.classList.remove("tree-drop-root");
+      clearTreeDropTargets();
+    });
     if (entry.isDir) {
-      const children = document.createElement("div");
-      children.className = "tree-children";
-      children.style.display = "none";
-      container.appendChild(children);
+      item.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+        item.classList.add("tree-drop-target");
+      });
+      item.addEventListener("dragleave", () => {
+        item.classList.remove("tree-drop-target");
+      });
+      item.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        item.classList.remove("tree-drop-target");
+        await moveDroppedTreeItem(event, { isDir: true, relativePath: relativePathFromRoot(entry.path), path: entry.path });
+      });
+
+      // Also allow dropping into the folder's expanded children area (blank
+      // space inside the folder subtree) — moves the item into this folder.
+      const childrenContainer = document.createElement("div");
+      childrenContainer.className = "tree-children";
+      childrenContainer.style.display = "none";
+      container.appendChild(childrenContainer);
+      childrenContainer.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+        childrenContainer.classList.add("tree-drop-target");
+        item.classList.add("tree-drop-target");
+      });
+      childrenContainer.addEventListener("dragleave", () => {
+        childrenContainer.classList.remove("tree-drop-target");
+        item.classList.remove("tree-drop-target");
+      });
+      childrenContainer.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        childrenContainer.classList.remove("tree-drop-target");
+        item.classList.remove("tree-drop-target");
+        await moveDroppedTreeItem(event, { isDir: true, relativePath: relativePathFromRoot(entry.path), path: entry.path });
+      });
 
       let expanded = isExpandedTreePath(entry.path);
 
@@ -8353,18 +8331,18 @@ async function renderTree(dirPath, container, depth) {
         item.setAttribute("aria-expanded", String(expanded));
         setTreeChevronExpanded(chevron, expanded);
         icon.className = `tree-icon codicon ${expanded ? "codicon-folder-opened" : "codicon-folder"}`;
-        children.style.display = expanded ? "block" : "none";
-        if (expanded && children.childElementCount === 0) {
-          children.innerHTML = `<div class="tree-item dimmed" style="padding-left:${(depth + 1) * 8 + 24}px">Loading…</div>`;
-          await renderTree(entry.path, children, depth + 1);
+        childrenContainer.style.display = expanded ? "block" : "none";
+        if (expanded && childrenContainer.childElementCount === 0) {
+          childrenContainer.innerHTML = `<div class="tree-item dimmed" style="padding-left:${(depth + 1) * 8 + 24}px">Loading…</div>`;
+          await renderTree(entry.path, childrenContainer, depth + 1);
         }
       });
 
       if (expanded) {
         setTreeChevronExpanded(chevron, true);
         icon.className = "tree-icon codicon codicon-folder-opened";
-        children.style.display = "block";
-        await renderTree(entry.path, children, depth + 1);
+        childrenContainer.style.display = "block";
+        await renderTree(entry.path, childrenContainer, depth + 1);
       }
     } else {
       item.addEventListener("click", async (e) => {
@@ -8390,6 +8368,39 @@ async function renderTree(dirPath, container, depth) {
   }
 }
 
+function clearTreeDropTargets() {
+  fileTree?.querySelectorAll(".tree-drop-target").forEach((el) => el.classList.remove("tree-drop-target"));
+}
+
+async function moveDroppedTreeItem(event, { isDir = false, relativePath = "", path = "" } = {}) {
+  const sourceRel = event.dataTransfer?.getData("text/xekute-tree-path");
+  if (!sourceRel) return;
+  const sourceIsDir = event.dataTransfer.getData("text/xekute-tree-isdir") === "1";
+  if (sourceRel === relativePath) return; // dropping onto itself
+  if (sourceIsDir && relativePath && relativePath.startsWith(`${sourceRel}/`)) {
+    // cannot drop a folder into its own descendant
+    await AppDialog.alert("A folder cannot be moved into itself.", { title: "Cannot move" });
+    return;
+  }
+  const transfer = window.api?.movePath;
+  if (typeof transfer !== "function") {
+    await AppDialog.alert("Workspace move is unavailable. Restart XEKUTE and try again.", { title: "Move unavailable" });
+    return;
+  }
+  const sourceName = sourceRel.split("/").pop();
+  const destination = relativePath ? `${relativePath}/${sourceName}` : sourceName;
+  const result = await transfer({ workspace: rootPath, source: sourceRel, destination });
+  if (result?.error) {
+    await AppDialog.alert(`Could not move ${sourceName}: ${result.error}`, { title: "Move failed" });
+    return;
+  }
+  const sourceAbsolute = joinWorkspacePath(sourceRel);
+  closeTabsUnderWorkspacePath(sourceAbsolute, { force: true });
+  clearExpandedTreePathsUnder(sourceAbsolute);
+  await refreshWorkspaceUi({ preserveSelectionPath: joinWorkspacePath(result.destination || destination) });
+  restoreChatComposerAfterUiAction();
+}
+
 function selectItem(el, { focus = true } = {}) {
   if (selectedItem) {
     selectedItem.classList.remove("selected");
@@ -8409,6 +8420,28 @@ async function rerenderExplorer({ preserveSelectionPath = selectedItem?.dataset.
   if (!rootPath) return;
   closeWorkspaceContextMenu();
   await renderTree(rootPath, fileTree, 0);
+  // Allow dropping a dragged item onto the tree root (empty area) to move it to the project root.
+  if (!fileTree.dataset.treeDropBound) {
+    fileTree.dataset.treeDropBound = "1";
+    fileTree?.addEventListener("dragover", (event) => {
+      if (!event.dataTransfer?.types?.includes("text/xekute-tree-path")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      fileTree.classList.add("tree-drop-root");
+    });
+    fileTree?.addEventListener("dragleave", (event) => {
+      if (event.relatedTarget && fileTree.contains(event.relatedTarget)) return;
+      fileTree.classList.remove("tree-drop-root");
+    });
+    fileTree?.addEventListener("drop", async (event) => {
+      if (!event.dataTransfer?.types?.includes("text/xekute-tree-path")) return;
+      event.preventDefault();
+      fileTree.classList.remove("tree-drop-root");
+      const droppedOnItem = event.target?.closest?.(".tree-item");
+      if (droppedOnItem) return; // folder-item drop handlers already fired (they stopPropagation)
+      await moveDroppedTreeItem(event, { relativePath: "" });
+    });
+  }
   const selectedPath = preserveSelectionPath ? normPath(preserveSelectionPath) : null;
   if (!selectedPath) {
     selectItem(null);
@@ -9062,7 +9095,6 @@ async function renderEditor({ focusEditor = true } = {}) {
     if (editorBody) editorBody.hidden = true;
     if (resourceViewer) resourceViewer.hidden = true;
     if (securityWorkspace) securityWorkspace.hidden = true;
-    if (toolsWorkspace) toolsWorkspace.hidden = true;
     if (mapWorkspace) mapWorkspace.hidden = true;
     if (webcloneWorkspace) webcloneWorkspace.hidden = true;
     if (assessmentModuleView) { assessmentModuleView.hidden = true; assessmentModuleActive = false; }
@@ -10016,6 +10048,103 @@ function renderMarkdown(el, md, { streaming = false } = {}) {
   }
 }
 
+// Formats an ISO timestamp as a compact relative label:
+//   <1m → "1m ago", then "30m ago", "23h 2m ago"
+//   ≥24h → "1d ago"/"2d ago"
+//   ≥7d → "1w ago"/"2w ago" (weeks, no months)
+//   ≥1yr → "1yr ago"/"2yr ago" (final tier)
+function formatRelativeMessageTime(iso) {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffMs = Math.max(0, Date.now() - then);
+
+  const minuteMs = 60000;
+  const hourMs = 3600000;
+  const dayMs = 86400000;
+  const weekMs = 7 * dayMs;
+  const yearMs = 52 * weekMs;
+
+  if (diffMs < hourMs) {
+    return `${Math.max(1, Math.floor(diffMs / minuteMs))}m ago`;
+  }
+  if (diffMs < dayMs) {
+    const h = Math.floor(diffMs / hourMs);
+    const m = Math.floor((diffMs % hourMs) / minuteMs);
+    return m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
+  }
+  if (diffMs < weekMs) return `${Math.floor(diffMs / dayMs)}d ago`;
+  if (diffMs < yearMs) return `${Math.floor(diffMs / weekMs)}w ago`;
+  return `${Math.floor(diffMs / yearMs)}yr ago`;
+}
+
+// Adds a single "Copy" button at the end of an AI response's exchange so the
+// exact raw response can be copied. One button per user⇄assistant exchange
+// (a "session"), not per individual message segment. Idempotent across
+// re-renders: never adds more than one button per exchange.
+function attachAssistantCopyButton(contentEl) {
+  if (!contentEl || contentEl.className !== "assistant-reply") return;
+  const turn = contentEl.closest(".chat-turn.assistant");
+  if (!turn) return;
+  const exchange = turn.closest(".chat-exchange") || turn;
+  if (exchange.querySelector(".assistant-reply-copy")) return;
+
+  // One timestamp per exchange, taken from the first assistant reply in it.
+  const firstAssistantTurn = exchange.querySelector(".chat-turn.assistant");
+  const createdIso = firstAssistantTurn?.dataset?.createdAt || turn.dataset.createdAt || "";
+  const timeLabel = document.createElement("span");
+  timeLabel.className = "assistant-reply-time";
+  timeLabel.textContent = formatRelativeMessageTime(createdIso);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "assistant-reply-copy";
+  button.setAttribute("aria-label", "Copy AI response");
+  button.title = "Copy";
+
+  const swapIcon = (icon) => {
+    button.querySelector(".codicon").className = `codicon ${icon}`;
+  };
+  button.innerHTML = `<span class="codicon codicon-copy" aria-hidden="true"></span>`;
+  button.addEventListener("click", () => {
+    const replies = [...exchange.querySelectorAll(".assistant-reply[data-raw-md], .assistant-reply")];
+    const parts = replies
+      .map((reply) => String(reply.dataset.rawMd || reply.textContent || "").trim())
+      .filter(Boolean);
+    const text = parts.join("\n\n");
+    if (!text) return;
+    const done = () => {
+      swapIcon("codicon-check");
+      button.title = "Copied";
+      button.setAttribute("aria-label", "Copied");
+      setTimeout(() => {
+        swapIcon("codicon-copy");
+        button.title = "Copy";
+        button.setAttribute("aria-label", "Copy AI response");
+      }, 1500);
+    };
+    const fail = () => button.classList.add("copy-failed");
+    // Prefer Electron's native clipboard (reliable in renderers); fall back to
+    // the browser Clipboard API only when the IPC bridge is unavailable.
+    if (window.api?.copyText) {
+      Promise.resolve(window.api.copyText(text)).then((res) => {
+        if (res?.ok === false) fail();
+        else done();
+      }).catch(fail);
+    } else if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(fail);
+    } else {
+      fail();
+    }
+  });
+
+  const footer = document.createElement("div");
+  footer.className = "assistant-reply-footer";
+  footer.appendChild(timeLabel);
+  footer.appendChild(button);
+  exchange.appendChild(footer);
+}
+
 function toolIconClass(tool = {}) {
   const name = String(tool.toolName || tool.action || "").toLowerCase();
   if (/terminal|command|process|security/.test(name)) return "codicon-terminal";
@@ -10764,6 +10893,7 @@ function createAssistantTurn() {
   const turn = document.createElement("div");
   turn.className = "chat-turn assistant";
   turn.setAttribute("aria-busy", "true");
+  turn.dataset.createdAt = new Date().toISOString();
 
   const contentEl = document.createElement("div");
   contentEl.className = "assistant-reply";
@@ -10987,6 +11117,7 @@ function createAssistantTurn() {
       } else {
         this.contentEl.hidden = true;
       }
+      attachAssistantCopyButton(this.contentEl);
       this.finishLiveState(this.finalOutcome || "complete");
       this.contentEl.classList.remove("streaming");
       this.pruneIfEmpty();
@@ -11168,7 +11299,7 @@ async function sendMessageWithAgentRuntime() {
   chatInput.value = "";
   resetChatInput();
   addUserMessage(text);
-  chatHistory.push({ role: "user", content: text });
+  chatHistory.push({ role: "user", content: text, createdAt: new Date().toISOString() });
   if (activeChatSession()) activeChatSession().lastContextUsage = null;
   maybeNameActiveChat(text);
   syncActiveChatSession();
@@ -11261,11 +11392,7 @@ async function sendMessageWithAgentRuntime() {
       return;
     }
 
-    if (payload.type === "model_qualification") {
-      const qualification = payload.qualification || {};
-      assistant.setStatus(qualification.qualified ? `Model qualified (${Math.round((qualification.score || 0) * 100)}%)` : "Model is unqualified for Test Agent");
-      return;
-    }
+
 
     if (payload.type === "action_policy") {
       const decision = payload.decision || {};
@@ -11416,7 +11543,11 @@ async function sendMessageWithAgentRuntime() {
       const appended = ContextMemory?.ensureMessageIdentity
         ? ContextMemory.ensureMessageIdentity(result.appendedMessages, `${activeChatSessionId}-agent`)
         : result.appendedMessages;
-      chatHistory.push(...appended);
+      const appendedWithTime = (Array.isArray(appended) ? appended : []).map((message) => ({
+        ...message,
+        createdAt: message.createdAt || new Date().toISOString(),
+      }));
+      chatHistory.push(...appendedWithTime);
     }
 
     const finalText = String(result?.finalText || "").trim();
@@ -11732,7 +11863,7 @@ btnChatDelete?.addEventListener("click", (e) => {
 });
 btnChatHistory?.addEventListener("click", (e) => {
   e.stopPropagation();
-  openChatHistoryPicker();
+  toggleChatHistoryPopover();
 });
 btnChatMore?.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -11746,7 +11877,7 @@ chatSessionSelect?.addEventListener("click", (e) => {
   const close = e.target.closest("[data-close-session]");
   if (close) {
     e.stopPropagation();
-    deleteChatSession(close.dataset.closeSession);
+    closeChatSession(close.dataset.closeSession);
     return;
   }
 
@@ -11951,6 +12082,32 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// Chat history popover wiring
+chatHistoryClose?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeChatHistoryPopover();
+});
+chatHistoryBody?.addEventListener("click", (e) => {
+  const destroy = e.target.closest("[data-destroy-session]");
+  if (destroy) {
+    e.stopPropagation();
+    if (streaming) return;
+    destroyChatSession(destroy.dataset.destroySession);
+    renderChatHistory();
+    positionChatHistoryPopover();
+    return;
+  }
+  const row = e.target.closest(".chat-history-session");
+  if (!row || streaming) return;
+  reopenChatSession(row.dataset.sessionId);
+});
+document.addEventListener("click", (e) => {
+  if (chatHistoryPopover && !chatHistoryPopover.hidden) {
+    const inPopover = chatHistoryPopover.contains(e.target) || btnChatHistory?.contains(e.target);
+    if (!inPopover) closeChatHistoryPopover();
+  }
+});
+
 chatPane?.addEventListener("click", (e) => {
   const promptBox = e.target.closest(".chat-turn.user .chat-box.user-prompt-expandable");
   if (promptBox) {
@@ -12001,15 +12158,21 @@ messages.addEventListener("click", (e) => {
   const block = btn.closest(".md-code-block");
   if (!block) return;
   const code = decodeURIComponent(block.dataset.code || "");
-  navigator.clipboard.writeText(code).then(() => {
+  const copyDone = () => {
     btn.textContent = "Copied!";
     setTimeout(() => { btn.textContent = "Copy"; }, 1500);
-  });
+  };
+  if (window.api?.copyText) {
+    Promise.resolve(window.api.copyText(code)).then((res) => { res?.ok === false ? btn.textContent = "Copy failed" : copyDone(); }).catch(() => { btn.textContent = "Copy failed"; });
+  } else if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(code).then(copyDone);
+  }
 });
 
 globalThis.addEventListener("markdown-ready", () => {
   document.querySelectorAll(".assistant-reply[data-raw-md]").forEach((el) => {
     globalThis.MarkdownRenderer.renderToElement(el, el.dataset.rawMd);
+    attachAssistantCopyButton(el);
   });
   const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
   if (activeTab && isMarkdownFileName(activeTab.name) && markdownViewMode === "md") {

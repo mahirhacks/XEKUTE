@@ -2,7 +2,7 @@
 
 const { slugifyTopic } = require("../planning/plan-document");
 
-const QUESTIONS_DIR = "questions";
+const QUESTIONS_DIR = ".xekute/questions";
 const FREE_WRITE_ID = "free_write";
 const FREE_WRITE_LABEL = "Other (write your own answer)";
 const DOCUMENT_VERSION = 1;
@@ -20,7 +20,7 @@ function buildQuestionsDocumentPath(topic = "", now = new Date()) {
 
 function isOperatorQuestionsFilePath(value) {
   const normalized = String(value || "").replace(/\\/g, "/").replace(/^\/+/, "");
-  return Boolean(normalized && /^questions\/clarification-[^/]+\.json$/i.test(normalized));
+  return Boolean(normalized && /^\.xekute\/questions\/clarification-[^/]+\.json$/i.test(normalized));
 }
 
 function normalizeOption(raw = {}, index = 0) {

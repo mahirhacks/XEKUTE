@@ -35,6 +35,9 @@ const ContextMemory = require("./memory/context-memory");
 const FailureMemory = require("./memory/failure-memory");
 const Tunables = require("./tunables");
 const { estimateTokenCount } = require("./tool-port");
+const { projectToolResult } = require("../tools/result-projector");
+const { PUBLIC_TOOL_NAMES } = require("../../contracts/tool/unified-catalog");
+const { validateInput: validateUnifiedInput } = require("../tools/unified-tool-router");
 
 function buildEngagementPromptContext({ workspace = null, projectProfile = null } = {}) {
   return EngagementContext.mergeEngagementContext({ workspace, projectProfile });
@@ -59,6 +62,7 @@ const { PROTECTED_ASSESSMENT_PATH_RE } = CommandGuardrails;
 const FILE_COUNT_WORDS = new Map(Object.entries(RequestIntentRules.FILE_COUNT_WORDS));
 const READ_ONLY_TOOL_NAMES = new Set(ToolMap.MODE_TOOL_GROUPS.ask);
 const NEVER_PARALLEL_TOOL_NAMES = new Set([
+  "load_tool_schemas",
   "run_command",
   "start_process",
   "run_security_tool",
@@ -634,27 +638,33 @@ function commandGuardReason(command) {
 }
 
 function toolResultContentForModel(result, numCtx) {
-  const raw = redactSecrets(result?.content || result?.summary || result?.error || "");
   const tokens = Number.isFinite(Number(numCtx)) ? Number(numCtx) : 8192;
   const maxChars = tokens <= 4096 ? 6000 : tokens <= 8192 ? 12000 : tokens <= 16384 ? 24000 : 40000;
-  const highlights = extractToolResultHighlights(raw);
-  let payload = raw;
+  const projected = result?.status && result?.operation_id
+    ? result
+    : projectToolResult(result, {
+      operationId: result?.operation_id || result?.operationId || `operation-${String(result?.toolName || "tool")}`,
+      auditId: result?.audit_id || result?.auditId || `audit-${String(result?.toolName || "tool")}`,
+      evidenceRefs: AgentRuntime.evidenceIdsFromResults([result]),
+      maxDataBytes: Math.max(1000, maxChars * 4),
+      artifactRef: result?.outputPath || result?.artifact_id || "",
+    });
+  const data = projected.data && typeof projected.data === "object" ? projected.data : {};
+  const raw = redactSecrets(JSON.stringify(data));
   const clipped = raw.length > maxChars;
-  if (clipped) {
-    const headSize = Math.floor(maxChars * 0.7);
-    payload = `${raw.slice(0, headSize)}\n... tool output truncated; retrieve the evidence artifact or use a narrower query ...\n${raw.slice(-(maxChars - headSize))}`;
-  }
+  const payload = clipped
+    ? `${raw.slice(0, Math.floor(maxChars * 0.7))}\n... tool output truncated; retrieve the evidence artifact or use a narrower query ...\n${raw.slice(-Math.floor(maxChars * 0.3))}`
+    : raw;
   return JSON.stringify({
-    ok: Boolean(result?.ok && !result?.error),
-    status: result?.status || (result?.timedOut ? "timeout" : result?.error ? "failed" : "complete"),
-    errorCode: result?.errorCode || result?.code || "",
+    ok: projected.status === "success" || projected.status === "partial",
+    status: projected.status,
+    errorCode: projected.code,
     errorClass: result?.errorClass || (result?.error ? deriveErrorClass(result) : ""),
-    parserConfidence: Number.isFinite(Number(result?.parserConfidence)) ? Number(result.parserConfidence) : null,
-    truncated: Boolean(result?.truncated || clipped),
-    evidenceIds: AgentRuntime.evidenceIdsFromResults([result]),
-    artifactPath: result?.outputPath || result?.file || "",
+    truncated: Boolean(data.truncated || clipped),
+    evidenceIds: projected.evidence_refs,
+    artifactPath: data.artifact_refs?.[0] || "",
     sha256: result?.sha256 || result?.evidence?.record?.sha256 || "",
-    highlights,
+    highlights: extractToolResultHighlights(raw),
     payload,
   });
 }
@@ -830,6 +840,42 @@ function buildIncompleteMultiFileRetry({
   return "";
 }
 
+function normalizeUnifiedToolCall(call) {
+  const fn = call?.function || {};
+  const toolName = String(fn.name || call?.toolName || call?.action || "").trim();
+  if (!PUBLIC_TOOL_NAMES.includes(toolName)) return null;
+  let args = fn.arguments != null ? fn.arguments : (call.args || call);
+  if (typeof args === "string") {
+    try { args = JSON.parse(args); } catch { return null; }
+  }
+  const validation = validateUnifiedInput(toolName, args || {});
+  if (!validation.ok) return { toolName, action: validation.action || args?.action || "", callId: call.id, args: args || {}, raw: call, validation };
+  return {
+    toolName,
+    action: validation.action,
+    callId: call.id,
+    args: args || {},
+    raw: call,
+    unified: true,
+    risk: "contextual",
+    capability: "unified",
+    requiresApproval: false,
+  };
+}
+
+function adaptUnifiedToolResult(result, toolName) {
+  const success = result?.status === "success" || result?.status === "partial";
+  return {
+    ...(result || {}),
+    ok: success,
+    toolName,
+    mode: toolName,
+    summary: result?.summary || result?.code || toolName,
+    ...(success ? {} : { error: result?.summary || result?.code || "Unified operation failed", errorCode: result?.code || "UNIFIED_OPERATION_FAILED" }),
+    mutated: false,
+  };
+}
+
 function buildToolCallForExecution(tool) {
   const name = tool.toolName || tool.action;
   const args = { ...(tool.args || {}) };
@@ -935,10 +981,13 @@ async function runAgentTurn({
   executeToolCall,
   requestApproval = null,
   requestQuestions = null,
+  executeUnifiedToolCall = null,
   findWorkspaceFiles,
   searchWorkspaceIndex,
+  catalogMode = "legacy",
 }) {
   const profile = normalizeProfile(modeFamily, mode);
+  const unifiedEnabled = catalogMode === "unified_enabled";
   const selectedMode = profile.legacyMode;
   const resolvedContextPlan = contextPlan?.effectiveLimitTokens
     ? {
@@ -963,18 +1012,22 @@ async function runAgentTurn({
   const promptBudgetTokens = Number(resolvedContextPlan.promptBudgetTokens) || effectiveContextBudget;
   const contextRoute = ContextRouter.routeRequest({ text: userMessage, hasWorkspace: Boolean(workspace), family: profile.family, mode: profile.key, history: chatHistory, activeFile });
   const guidanceCreateRequested = /^\/create-(?:skill|rule|subagent)(?:\s|$)/i.test(String(userMessage || "").trim());
-  // Mode owns which tools are granted. Agent uses a two-layer catalog: full name
-  // list always, hot JSON schemas first, load_tool_schemas expands the rest.
-  let profileTools = filterToolsForMode(tools, profile.key, profile.family);
-  if (!guidanceCreateRequested) profileTools = profileTools.filter((tool) => tool?.function?.name !== "create_guidance");
+  // Mode owns which tools are granted. Legacy mode retains the existing lazy
+  // catalog; unified mode receives only the versioned profile catalog.
+  let profileTools = unifiedEnabled
+    ? (Array.isArray(tools) ? tools : []).filter((tool) => PUBLIC_TOOL_NAMES.includes(tool?.function?.name))
+    : filterToolsForMode(tools, profile.key, profile.family);
+  if (!unifiedEnabled && !guidanceCreateRequested) profileTools = profileTools.filter((tool) => tool?.function?.name !== "create_guidance");
   const allowedToolNames = new Set(profileTools.map((tool) => tool.function.name));
-  const loadedSchemaNames = new Set(ToolMap.hotToolNamesForProfile(profile));
-  if (guidanceCreateRequested && allowedToolNames.has("create_guidance")) loadedSchemaNames.add("create_guidance");
-  const refreshAvailableTools = () => ToolMap.compactTools(
-    profileTools.filter((tool) => loadedSchemaNames.has(tool.function.name)),
-  );
+  const loadedSchemaNames = new Set(unifiedEnabled ? [...allowedToolNames] : ToolMap.hotToolNamesForProfile(profile));
+  if (!unifiedEnabled && guidanceCreateRequested && allowedToolNames.has("create_guidance")) loadedSchemaNames.add("create_guidance");
+  const refreshAvailableTools = () => unifiedEnabled
+    ? profileTools
+    : ToolMap.compactTools(profileTools.filter((tool) => loadedSchemaNames.has(tool.function.name)));
   let availableTools = refreshAvailableTools();
-  const catalogEntries = ToolMap.buildToolCatalog(profile, undefined, loadedSchemaNames);
+  const catalogEntries = unifiedEnabled
+    ? []
+    : ToolMap.buildToolCatalog(profile, undefined, loadedSchemaNames);
   if (allowedToolNames.size) {
     sendEvent({
       type: "activity",
@@ -1459,7 +1512,7 @@ async function runAgentTurn({
     const rawRoundText = usedStructuredFallback ? "" : cleanAssistantText(result.fullText);
     const resolvedToolCalls = resolveTools(
       effectiveToolCalls
-        .map((call) => ToolMap.normalizeToolCall(call))
+        .map((call) => unifiedEnabled ? normalizeUnifiedToolCall(call) : ToolMap.normalizeToolCall(call))
         .filter(Boolean),
       editContext,
     );
@@ -1654,7 +1707,14 @@ async function runAgentTurn({
     const toolBatches = [];
     let pendingParallelTools = [];
     for (const tool of normalizedToolCalls) {
-      if (isParallelSafeTool(tool)) pendingParallelTools.push(tool);
+      const toolName = tool?.toolName || tool?.action || "";
+      // Schema loading is an initialization barrier. Keep it in its own batch
+      // so its result can update the hot schema set before dependent calls run.
+      if (toolName === "load_tool_schemas") {
+        if (pendingParallelTools.length) toolBatches.push(pendingParallelTools);
+        pendingParallelTools = [];
+        toolBatches.push([tool]);
+      } else if (isParallelSafeTool(tool)) pendingParallelTools.push(tool);
       else {
         if (pendingParallelTools.length) toolBatches.push(pendingParallelTools);
         pendingParallelTools = [];
@@ -1750,6 +1810,23 @@ async function runAgentTurn({
           } else if (runState.phase === "inventory" && readOnly) {
             phaseManagedTool = true;
             observeResult = false;
+          } else if (toolName === "run_security_tool") {
+            // A typed security action carries its own hypothesis fields and the
+            // handler records a ready hypothesis when none exists yet. Advance
+            // through the assessment phases step-by-step (inventory -> hypothesis
+            // -> test-design -> approval) instead of treating it as a multi-phase
+            // jump, so a direct "run <tool> against <target>" request works the
+            // same way the operator slash-command path does.
+            phaseManagedTool = true;
+            observeResult = true;
+            for (const nextPhase of ["hypothesis", "test-design"]) {
+              if (AgentRuntime.PHASES.indexOf(runState.phase) >= AgentRuntime.PHASES.indexOf(nextPhase)) continue;
+              phaseStep = advanceTowardPhase(runState, nextPhase, {
+                reason: `Typed security action ${toolName} advances the assessment cycle.`,
+                ...phaseOpts,
+              });
+              if (!phaseStep.ok) break;
+            }
           } else {
             if (runState.phase === "hypothesis") {
               phaseStep = advanceTowardPhase(runState, "test-design", {
@@ -2042,11 +2119,20 @@ async function runAgentTurn({
             __allowedNames: [...allowedToolNames],
           };
         }
-        const result = await executeToolCall({
-          workspace,
-          toolCall: executionTool,
-          signal: abortController?.signal,
-        });
+        const result = unifiedEnabled && entry.tool?.unified && typeof executeUnifiedToolCall === "function"
+          ? adaptUnifiedToolResult(await executeUnifiedToolCall({
+            workspace,
+            toolName: entry.tool.toolName,
+            input: entry.tool.args,
+            profile: profile.key,
+            runId,
+            signal: abortController?.signal,
+          }), entry.tool.toolName)
+          : await executeToolCall({
+            workspace,
+            toolCall: executionTool,
+            signal: abortController?.signal,
+          });
         if (evaluateStopConditions(result, policy).stop) abortController?.abort();
         return result;
       }));

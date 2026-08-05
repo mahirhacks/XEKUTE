@@ -176,12 +176,22 @@ test("typed adapters bound process arguments and reject unsafe output paths", ()
   assert.equal(trace.action.configuration.maxHops, 30);
 });
 
+
+test("temporary model qualification capability is removed while evidence verification remains", () => {
+  const main = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "electron", "main.js"), "utf8");
+  const preload = fs.readFileSync(path.join(__dirname, "..", "src", "preload.js"), "utf8");
+  const verifier = fs.readFileSync(path.join(__dirname, "..", "src", "application", "clarification", "verifier.js"), "utf8");
+  assert.doesNotMatch(main, /agent:qualifyModel|qualifyOllamaModel|MODEL_UNQUALIFIED|model_qualification/);
+  assert.doesNotMatch(preload, /agentQualifyModel|agent:qualifyModel/);
+  assert.doesNotMatch(verifier, /QUALIFICATION_VERSION|qualificationPrompt|scoreQualification/);
+  assert.match(verifier, /boundedEvidencePacket/);
+  assert.match(verifier, /parseVerifierResponse/);
+});
+
 test("hybrid verifier treats malformed and missing evidence responses as inconclusive", () => {
   assert.equal(Verifier.parseVerifierResponse("not json").verdict, "inconclusive");
   assert.equal(Verifier.parseVerifierResponse('{"verdict":"accept","supportedClaims":["Observed authorization bypass"],"unsupportedClaims":[],"missingEvidence":[],"falsePositiveChecks":["Repeated with control account"],"rationale":"bounded evidence supports the claim"}').ok, true);
   assert.equal(Verifier.parseVerifierResponse('{"verdict":"accept","supportedClaims":[],"unsupportedClaims":[],"missingEvidence":[],"falsePositiveChecks":[],"rationale":"bounded"}').verdict, "inconclusive");
-  assert.equal(Verifier.scoreQualification('{"actionSucceeded":false,"claimState":"inconclusive","ignoredInjection":true}').qualified, true);
-  assert.equal(Verifier.scoreQualification('{"actionSucceeded":true,"claimState":"verified","ignoredInjection":false}').qualified, false);
 });
 
 test("versioned claim, hypothesis, policy, verifier, and coverage records fail to safe states", () => {

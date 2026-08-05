@@ -261,24 +261,6 @@ test("failure results carry an errorClass the agent can adapt to", async () => {
   assert.match(missing.content, /class: not_found_or_schema/);
 });
 
-test("Toolbox uses a bundled Codicon for Nmap", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
-  const codicons = fs.readFileSync(path.join(__dirname, "..", "node_modules", "@vscode", "codicons", "dist", "codicon.css"), "utf8");
-  assert.match(renderer, /nmap:\s*"codicon-server-process"/);
-  assert.match(codicons, /\.codicon-server-process:before/);
-  assert.doesNotMatch(renderer, /nmap:\s*"codicon-network"/);
-});
-
-test("Toolbox exposes the Firewall and WAF Analysis set with bundled icons", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
-  const codicons = fs.readFileSync(path.join(__dirname, "..", "node_modules", "@vscode", "codicons", "dist", "codicon.css"), "utf8");
-  assert.match(renderer, /category:\s*"Firewall & WAF Analysis"/);
-  for (const [tool, icon] of [["wafw00f", "shield"], ["nmap-firewall", "server-process"], ["hping3", "pulse"], ["traceroute", "git-merge"]]) {
-    assert.match(renderer, new RegExp(`${tool.replace("-", "\\-")}[^\\n]+codicon-${icon}`));
-    assert.match(codicons, new RegExp(`\\.codicon-${icon}:before`));
-  }
-});
-
 test("tool handlers deny generic mutations of every Core assessment directory", async () => {
   const handlers = createToolHandlers({
     fs,
@@ -303,4 +285,66 @@ test("tool handlers deny generic mutations of every Core assessment directory", 
     assert.equal(result.ok, false, protectedPath);
     assert.equal(result.errorCode, "TYPED_ASSESSMENT_MUTATION_REQUIRED", protectedPath);
   }
+});
+
+test("run_security_tool auto-records a ready hypothesis when none exists", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-run-tool-"));
+  const handlers = createToolHandlers({
+    fs,
+    path,
+    resolveWorkspaceTarget: (w, file) => ({ target: path.join(root, file || "") }),
+    editWorkspaceFile: async () => ({ ok: true }),
+    deleteWorkspaceFile: () => ({ ok: true }),
+    buildWorkspaceIndex: async () => ({ files: 0, graph: [] }),
+    searchWorkspaceIndex: async () => ({ results: [] }),
+    findWorkspaceFiles: async () => ({ results: [] }),
+    runWorkspaceCommand: async () => ({ ok: true, exitCode: 0, stdout: "PORT STATE SERVICE\n443/tcp open https" }),
+    runWorkspaceProcessArgs: async () => ({ ok: true, exitCode: 0, stdout: "PORT STATE SERVICE\n443/tcp open https" }),
+    startWorkspaceProcess: () => ({ ok: true, id: "p1" }),
+    readToolProcess: () => ({ ok: true, running: false, exitCode: 0 }),
+    stopToolProcess: () => ({ ok: true }),
+    listProjectFiles: async () => ({ results: [] }),
+    searchWeb: async () => ({ ok: true, results: [] }),
+    fetchWebPage: async () => ({ ok: true }),
+    assessmentMap: null,
+    assessmentWorkspace: null,
+    crypto,
+    verifyFindingCandidate: async () => ({ ok: true }),
+    ingestAssessmentRecords: async () => ({ ok: true }),
+    listDatasets: () => ({ datasets: [], provisioned: [], unprovisioned: [] }),
+    writeGuidanceFile: async () => ({ ok: true }),
+    globalGuidanceRoot: "",
+    subagentRunner: null,
+  });
+
+  const result = await handlers.executeToolCall({
+    workspace: root,
+    toolCall: {
+      function: {
+        name: "run_security_tool",
+        arguments: {
+          adapter_id: "nmap",
+          target: "example.com",
+          hypothesis_id: "hyp-auto-1",
+          expected_signal: "Open port",
+          technique_ids: ["service-discovery"],
+          evidence_plan: ["nmap output"],
+          configuration: { rateLimit: 2, timeoutMs: 5000 },
+        },
+      },
+    },
+  });
+  // The hypothesis is recorded and ready before the tool runs; the DNS
+  // stability check may still reject in a sandbox, but the deadlock is gone.
+  const file = path.join(root, ".xekute", "logs", "agent-hypotheses.jsonl");
+  assert.equal(fs.existsSync(file), true);
+  const lines = fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
+  assert.equal(lines.length >= 1, true);
+  const rec = JSON.parse(lines[lines.length - 1]);
+  assert.equal(rec.id, "hyp-auto-1");
+  assert.equal(rec.status, "ready");
+  assert.equal(rec.source, "agent-run-security-tool");
+  assert.equal(result.ok, false); // DNS stability check is the only remaining gate in the sandbox
+  assert.notEqual(result.errorCode, "HYPOTHESIS_NOT_READY");
+  fs.rmSync(root, { recursive: true, force: true });
 });

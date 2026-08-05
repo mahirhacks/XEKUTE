@@ -114,10 +114,12 @@ const legacyApi = {
   windowToggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),
   windowClose: () => ipcRenderer.invoke("window:close"),
 
+  // Clipboard (native, reliable in Electron renderers)
+  copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
+
   // Tools
   dirMap: (workspace) => ipcRenderer.invoke("tools:dirMap", workspace),
   executeTool: (payload) => ipcRenderer.invoke("tools:execute", payload),
-  toolHealth: (payload = {}) => ipcRenderer.invoke("tools:health", payload),
   editFile: (payload) => ipcRenderer.invoke("tools:editFile", payload),
   deleteFile: (payload) => ipcRenderer.invoke("tools:deleteFile", payload),
   indexWorkspace: (payload) => ipcRenderer.invoke("tools:indexWorkspace", payload),
@@ -147,7 +149,6 @@ const legacyApi = {
   summarizeContext: (payload) => ipcRenderer.invoke("ollama:summarizeContext", payload),
   chat: (payload) => ipcRenderer.invoke("ollama:chat", payload),
   agentRun: (payload) => ipcRenderer.invoke("agent:run", payload),
-  agentQualifyModel: (payload) => ipcRenderer.invoke("agent:qualifyModel", payload),
   agentVerifyFinding: (payload) => ipcRenderer.invoke("agent:verifyFinding", payload),
   agentResolveApproval: (payload) => ipcRenderer.invoke("agent:resolveApproval", payload),
   agentResolveQuestions: (payload) => ipcRenderer.invoke("agent:resolveQuestions", payload),
@@ -282,7 +283,6 @@ const xekuteApi = Object.freeze({
     read: resultCall(legacyApi.readProcess),
     stop: resultCall(legacyApi.stopProcess),
     executeTool: resultCall(legacyApi.executeTool),
-    toolHealth: resultCall(legacyApi.toolHealth),
     parseCommand: resultCall(legacyApi.parseSlashCommand),
     runCommand: resultCall(legacyApi.runSlashCommand),
     customScripts: resultCall(legacyApi.listCustomScripts),
@@ -301,7 +301,6 @@ const xekuteApi = Object.freeze({
   }),
   agent: Object.freeze({
     run: resultCall(legacyApi.agentRun),
-    qualifyModel: resultCall(legacyApi.agentQualifyModel),
     verifyFinding: resultCall(legacyApi.agentVerifyFinding),
     resolveApproval: resultCall(legacyApi.agentResolveApproval),
     resolveQuestions: resultCall(legacyApi.agentResolveQuestions),

@@ -172,7 +172,7 @@ test("typed hypothesis adapter and action log preserve transparent metadata", ()
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-agent-modes-"));
   const result = appendAgentAction(root, { runId: "run-1", type: "action_result", tool: "record_hypothesis", ok: true, output: '{"token":"top-secret"}', authorization: "Bearer secret" });
   assert.equal(result.ok, true);
-  const log = fs.readFileSync(path.join(root, "logs", "agent-actions.jsonl"), "utf8");
+  const log = fs.readFileSync(path.join(root, ".xekute", "logs", "agent-actions.jsonl"), "utf8");
   assert.match(log, /run-1/);
   assert.doesNotMatch(log, /top-secret|Bearer secret/);
   assert.match(log, /REDACTED/);

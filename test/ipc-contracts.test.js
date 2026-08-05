@@ -46,8 +46,9 @@ test("model tool schemas stay canonical in the main process instead of crossing 
   assert.ok(agentRunPayload);
   assert.doesNotMatch(agentRunPayload, /tools\s*:/);
   assert.doesNotMatch(renderer, /window\.api\.chat\(/);
-  assert.match(main, /const tools = ToolMap\.toolsForProfile\(mode \|\| "ask"\)/);
-  assert.match(main, /tools: ToolMap\.TOOLS/);
+  assert.match(main, /const requestedProfile = normalizeProfile\(modeFamily \|\| "xekute", mode \|\| "ask"\)/);
+  assert.match(main, /const selectedCatalog = providerCatalogFor\(requestedProfile\.key, legacyTools\)/);
+  assert.match(main, /tools: selectedCatalog\.tools/);
 });
 
 test("main IPC registration manifest is stable and matches the preload bridge surface", () => {
@@ -96,7 +97,7 @@ test("preload bridge surface snapshot: API methods and renderer global order are
   );
 
   // Renderer logical global order must stay stable: OS tools before cyber
-  // tools before ToolMap before toolbox before bootstrap.
+  // tools before ToolMap before the tool parser before bootstrap.
   const order = [
     /adapters\/tools\/os\/tool-registry\.js/,
     /adapters\/tools\/cyber\/tool-registry\.js/,

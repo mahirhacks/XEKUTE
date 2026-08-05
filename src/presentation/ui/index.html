@@ -57,7 +57,6 @@
           <button type="button" data-action="toggle-chat" role="menuitem">Toggle Chat</button>
           <button type="button" data-action="show-project" role="menuitem">Project Workspace</button>
           <button type="button" data-action="show-security" role="menuitem">Security Tools</button>
-          <button type="button" data-action="show-toolbox" role="menuitem">Toolbox</button>
           <button type="button" data-action="show-settings" role="menuitem">XEKUTE Settings</button>
         </div>
       </div>
@@ -111,9 +110,6 @@
         </button>
         <button type="button" id="activity-security" class="activity-item" title="Security Tools" aria-label="Security Tools" aria-pressed="false">
           <span class="codicon codicon-shield"></span>
-        </button>
-        <button type="button" id="activity-toolbox" class="activity-item" title="Toolbox" aria-label="Toolbox" aria-pressed="false">
-          <span class="codicon codicon-tools"></span>
         </button>
       </div>
     </nav>
@@ -195,11 +191,11 @@
           <div class="bounty-subsection-label"><span>Context</span><button type="button" id="btn-context-add" class="icon-btn" title="Add files and rebuild pen_context.md"><span class="codicon codicon-add"></span></button></div>
           <button type="button" class="bounty-report-item" data-bounty-item="pen-context" data-bounty-file="pen_context.md" role="treeitem"><span class="codicon codicon-markdown"></span><span>pen_context.md</span></button>
           <div class="bounty-subsection-label"><span>Agent Logs</span></div>
-          <button type="button" class="bounty-report-item" data-bounty-item="agent-runs" data-bounty-file="logs/agent-runs.jsonl" role="treeitem"><span class="codicon codicon-history"></span><span>Runs</span></button>
-          <button type="button" class="bounty-report-item" data-bounty-item="agent-actions" data-bounty-file="logs/agent-actions.jsonl" role="treeitem"><span class="codicon codicon-history"></span><span>Agent Actions</span></button>
-          <button type="button" class="bounty-report-item" data-bounty-item="agent-approvals" data-bounty-file="logs/agent-approvals.jsonl" role="treeitem"><span class="codicon codicon-shield"></span><span>Approvals</span></button>
-          <button type="button" class="bounty-report-item" data-bounty-item="agent-hypotheses" data-bounty-file="logs/agent-hypotheses.jsonl" role="treeitem"><span class="codicon codicon-lightbulb"></span><span>Hypotheses</span></button>
-          <button type="button" class="bounty-report-item" data-bounty-item="tool-output" data-bounty-file="logs/tool-output.jsonl" role="treeitem"><span class="codicon codicon-terminal"></span><span>Tool Output</span></button>
+          <button type="button" class="bounty-report-item" data-bounty-item="agent-runs" data-bounty-file=".xekute/logs/agent-runs.jsonl" role="treeitem"><span class="codicon codicon-history"></span><span>Runs</span></button>
+          <button type="button" class="bounty-report-item" data-bounty-item="agent-actions" data-bounty-file=".xekute/logs/agent-actions.jsonl" role="treeitem"><span class="codicon codicon-history"></span><span>Agent Actions</span></button>
+          <button type="button" class="bounty-report-item" data-bounty-item="agent-approvals" data-bounty-file=".xekute/logs/agent-approvals.jsonl" role="treeitem"><span class="codicon codicon-shield"></span><span>Approvals</span></button>
+          <button type="button" class="bounty-report-item" data-bounty-item="agent-hypotheses" data-bounty-file=".xekute/logs/agent-hypotheses.jsonl" role="treeitem"><span class="codicon codicon-lightbulb"></span><span>Hypotheses</span></button>
+          <button type="button" class="bounty-report-item" data-bounty-item="tool-output" data-bounty-file=".xekute/logs/tool-output.jsonl" role="treeitem"><span class="codicon codicon-terminal"></span><span>Tool Output</span></button>
           <div class="bounty-subsection-label"><span>Core</span></div>
           <section class="bounty-phase expanded" data-bounty-section="scope">
             <button type="button" class="bounty-phase-toggle" aria-expanded="true">
@@ -795,11 +791,6 @@
             <div id="security-workbench-resize" class="sash-h security-workbench-resize" role="separator" tabindex="0" aria-label="Resize HTTP history" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="800" aria-valuenow="280" title="Drag or use arrow keys to resize"></div>
           </div>
         </section>
-        <section id="tools-workspace" class="tools-workspace" aria-label="Security toolbox" hidden>
-          <header class="tools-workspace-header"><div class="tools-workspace-title"><span class="codicon codicon-tools"></span><strong>Toolbox</strong><small>Configure authorized security workflows without leaving XEKUTE.</small></div><div class="tools-workspace-actions"><button type="button" id="tool-register-action" class="secondary-button"><span class="codicon codicon-add"></span><span>Register custom tool</span></button><button type="button" id="tool-health-action" class="secondary-button"><span class="codicon codicon-pulse"></span><span>Check tool health</span></button></div></header>
-          <div id="tool-health-results" class="tool-health-results" hidden></div>
-          <div id="tool-catalog" class="tool-catalog"></div>
-        </section>
         <section id="map-workspace" class="map-workspace" aria-label="Xekute application behavior map" hidden>
           <header class="map-workspace-header">
             <div class="map-workspace-heading">
@@ -1168,21 +1159,6 @@
       </div>
     </aside>
   </div>
-  <div id="tool-config-overlay" class="tool-config-overlay" hidden>
-    <form id="tool-config-dialog" class="tool-config-dialog">
-      <header><div><span id="tool-config-icon" class="codicon codicon-tools"></span><div><strong id="tool-config-title">Tool</strong><small id="tool-config-description"></small></div></div><button type="button" id="tool-config-close" class="icon-btn"><span class="codicon codicon-close"></span></button></header>
-      <div class="tool-config-toolbar"><div id="tool-preset-switch" class="tool-segmented"><button type="button" data-tool-preset="easy">Easy</button><button type="button" data-tool-preset="medium">Medium</button><button type="button" data-tool-preset="high">High</button><button type="button" data-tool-preset="custom">Custom</button></div><div id="tool-view-switch" class="tool-segmented"><button type="button" data-tool-view="ui">Visual</button><button type="button" data-tool-view="json">JSON</button></div></div>
-      <div id="tool-config-ui" class="tool-config-ui"></div><textarea id="tool-config-json" class="tool-config-json" spellcheck="false" hidden></textarea>
-      <footer><span id="tool-command-preview" class="tool-command-preview"></span><button type="button" id="tool-copy-command" class="secondary-button">Copy Command</button><button type="submit" class="primary-button">Save Configuration</button></footer>
-    </form>
-  </div>
-  <div id="tool-register-overlay" class="tool-config-overlay" hidden>
-    <form id="tool-register-dialog" class="tool-config-dialog tool-register-dialog">
-      <header><div><span class="codicon codicon-tools"></span><div><strong>Register custom tool</strong><small>Store a local tool adapter or importable command manifest.</small></div></div><button type="button" id="tool-register-close" class="icon-btn" title="Close"><span class="codicon codicon-close"></span></button></header>
-      <div class="tool-register-body"><div class="tool-register-grid"><label>Tool ID<input id="tool-register-id" required pattern="[a-z0-9][a-z0-9_-]{1,40}" placeholder="my-scanner"></label><label>Display name<input id="tool-register-name" required placeholder="My Scanner"></label><label>Category<input id="tool-register-category" required value="Custom Tools" placeholder="Custom Tools"></label><label>Executable<input id="tool-register-executable" required placeholder="my-scanner"></label></div><label>Description<textarea id="tool-register-description" required placeholder="What this tool does and when to use it."></textarea></label><label>Command template<textarea id="tool-register-command" required spellcheck="false" placeholder="my-scanner --target {target} --output {output}"></textarea></label><p class="tool-register-note">XEKUTE stores the manifest locally. It does not download or execute third-party code automatically; review and install tools yourself, then use Check tool health.</p></div>
-      <footer><button type="button" id="tool-register-import" class="secondary-button">Import JSON</button><input id="tool-register-file" type="file" accept="application/json,.json" hidden><button type="button" id="tool-register-cancel" class="secondary-button">Cancel</button><button type="submit" class="primary-button">Register tool</button></footer>
-    </form>
-  </div>
   <div id="app-settings-overlay" class="tool-config-overlay" hidden>
     <form id="app-settings-dialog" class="tool-config-dialog app-settings-dialog"><header><div><span class="codicon codicon-settings-gear"></span><div><strong>XEKUTE Settings</strong><small>Custom slash commands and static command roles are stored for this app profile.</small></div></div><button type="button" id="app-settings-close" class="icon-btn"><span class="codicon codicon-close"></span></button></header><div class="app-settings-body"><label>Custom slash commands <small>One per line: /name = prompt or terminal command</small></label><textarea id="custom-commands-input" placeholder="/myrecon = Perform my recon workflow"></textarea><label>Command registry JSON <small>Set role to <code>static</code> for Python-only execution or <code>ai</code> to send the command to the Agent. Active ffuf also accepts <code>wordlist</code>, <code>rate</code>, and <code>threads</code>.</small></label><textarea id="command-registry-input" class="command-registry-input" spellcheck="false" placeholder='{"/active":{"role":"static","wordlist":"C:/wordlists/common.txt","rate":2,"threads":10},"/pentest":{"role":"ai"}}'></textarea></div><footer><button type="submit" class="primary-button">Save Settings</button></footer></form>
   </div>
@@ -1191,7 +1167,7 @@
       <header><div><span class="codicon codicon-book"></span><div><strong id="help-guide-title">XEKUTE Guide</strong><small>Quick orientation for the local-first pentesting workspace.</small></div></div><button type="button" id="help-guide-close" class="icon-btn" title="Close guide" aria-label="Close guide"><span class="codicon codicon-close"></span></button></header>
       <div class="help-guide-body">
         <section><h3>Start with a project</h3><p>Use <strong>Files → Create New Project</strong> to create a workspace, or <strong>Open Project</strong> to open an existing folder. The Target sidebar holds assessment files and custom files.</p></section>
-        <section><h3>Workspaces</h3><p><strong>Search</strong> finds evidence, <strong>Target</strong> organizes scope and findings, <strong>Security Tools</strong> handles request/response work, <strong>Toolbox</strong> configures recon tools, and <strong>Map</strong> visualizes application behavior.</p></section>
+        <section><h3>Workspaces</h3><p><strong>Search</strong> finds evidence, <strong>Target</strong> organizes scope and findings, <strong>Security Tools</strong> handles request/response work, and <strong>Map</strong> visualizes application behavior.</p></section>
         <section><h3>Chat commands</h3><p>Type <code>/</code> in Chat to see the three best command matches. Static commands run through the local Python runner; AI commands are expanded into the Agent workflow using their configured aim, prompt, and constraints.</p></section>
         <section><h3>Authority and modes</h3><p><strong>Modes</strong> (Hypothesis, Plan, Agent, Ask) set which tools the model can call. <strong>Authority</strong> (Unrestricted, Full Authority, Ask for Approval, Approve for me) controls scope and whether sensitive actions auto-run or need your approval. Switch both from the Chat composer.</p></section>
         <section><h3>Terminal and safety</h3><p>Use Terminal for local commands and keep testing within the authorization and scope recorded in the assessment. Tool configurations and results stay inside the current project.</p></section>
@@ -1272,6 +1248,17 @@
     </div>
     <div id="context-usage-breakdown" class="context-usage-list"></div>
     <div id="context-usage-measure-note" hidden>Waiting for the first model request.</div>
+  </div>
+
+  <div id="chat-history-popover" class="chat-history-popover" hidden>
+    <div class="chat-history-header">
+      <div class="chat-history-heading">Chat History</div>
+      <button type="button" id="chat-history-close" class="chat-history-close" title="Close chat history">
+        <span class="codicon codicon-close"></span>
+      </button>
+    </div>
+    <div id="chat-history-body" class="chat-history-body"></div>
+    <div id="chat-history-empty" class="chat-history-empty" hidden>No chat sessions yet.</div>
   </div>
 
   <div id="security-history-menu" class="security-history-menu" role="menu" hidden>
@@ -1414,7 +1401,6 @@
   <script src="../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../../node_modules/monaco-editor/min/vs/loader.js"></script>
   <script src="core/dom.js"></script>
-  <script src="features/editor/editor-controller.js"></script>
   <script src="features/terminal/terminal-controller.js"></script>
   <script src="features/security/security-inspector.js"></script>
   <script src="../../adapters/tools/os/tool-registry.js"></script>
@@ -1427,6 +1413,7 @@
   <script src="../../prompts/instructs/initial_prompt.js"></script>
   <script src="../../application/prompt/prompt-compiler.js"></script>
   <script src="../../adapters/llm/context-budget.js"></script>
+  <script src="features/editor/editor-controller.js"></script>
   <script src="features/toolbox/toolbox-controller.js"></script>
   <script src="../../application/agent/tunables.js"></script>
   <script src="../../application/agent/memory/failure-memory.js"></script>

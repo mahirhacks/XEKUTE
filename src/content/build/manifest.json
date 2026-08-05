@@ -15,8 +15,8 @@
       "kind": "mode",
       "logicalName": "agent-skill",
       "source": "skills/modes/agent-skill.md",
-      "hash": "83961ad37d0f083f",
-      "file": "skills/modes/agent-skill-83961ad37d0f083f.js",
+      "hash": "4a544fd2e5e98a0b",
+      "file": "skills/modes/agent-skill-4a544fd2e5e98a0b.js",
       "exportKind": "module.exports"
     },
     {

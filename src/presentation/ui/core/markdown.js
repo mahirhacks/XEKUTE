@@ -155,12 +155,7 @@
     const text = md ?? "";
     el.dataset.rawMd = text;
     el.innerHTML = render(text);
-    if (streaming) {
-      const cursor = document.createElement("span");
-      cursor.className = "stream-cursor";
-      cursor.setAttribute("aria-hidden", "true");
-      el.appendChild(cursor);
-    } else {
+    if (!streaming) {
       renderMermaidBlocks(el);
     }
   }

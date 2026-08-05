@@ -222,7 +222,7 @@ function summarizeNotTestedByCategory(checks = []) {
 
 function readHypothesisLog(workspace) {
   if (!workspace) return [];
-  const filePath = path.join(path.resolve(workspace), "logs", "agent-hypotheses.jsonl");
+  const filePath = path.join(path.resolve(workspace), ".xekute", "logs", "agent-hypotheses.jsonl");
   try {
     const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean);
     return lines.slice(-MAX_HYPOTHESIS_LOG).map((line) => {

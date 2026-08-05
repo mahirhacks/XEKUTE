@@ -196,7 +196,7 @@ function parseLines(tool, text) {
 }
 
 function appendToolOutputLog(assessment, runId, command, target, results) {
-  const logPath = path.join(assessment, "logs", "tool-output.jsonl");
+  const logPath = path.join(assessment, ".xekute", "logs", "tool-output.jsonl");
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const stamp = new Date().toISOString();
   const lines = results.map((result) => {

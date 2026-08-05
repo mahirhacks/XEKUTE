@@ -68,7 +68,7 @@ WebClone is a review aid, not a guaranteed offline reproduction. Applications th
 
 Safety modes and policy checks are defense-in-depth controls; they do not replace written authorization or professional judgment.
 
-### Commands and Toolbox
+### Commands
 
 XEKUTE currently includes configurable workflows for:
 
@@ -77,16 +77,7 @@ XEKUTE currently includes configurable workflows for:
 - `/endpoint` - page and endpoint discovery.
 - `/webclone` - authorized public-site inventory and cloning.
 
-Commands can use static Python orchestration or an AI-assisted role. Tool selection, output locations, rate limits, threads, wordlists, advanced JSON options, and custom commands can be configured in XEKUTE Settings.
-
-The Toolbox provides presets and configuration surfaces for tools including:
-
-| Category | Tools |
-| --- | --- |
-| Passive reconnaissance | Amass, Subfinder, theHarvester, Google Dorking |
-| Active reconnaissance | Nmap, Naabu, Masscan |
-| Web and endpoint discovery | httpx, Katana, ffuf, Gobuster |
-| Vulnerability and TLS analysis | Nuclei, Nikto, testssl.sh, SQLmap |
+Commands can use static Python orchestration or an AI-assisted role. Output locations, rate limits, threads, wordlists, advanced JSON options, and custom commands can be configured in XEKUTE Settings. The AI assistant can also run any of the supported security tools directly through `run_security_tool` with typed, policy-controlled adapters — including Amass, Subfinder, theHarvester, Nmap, Naabu, Masscan, httpx, Katana, ffuf, Gobuster, WAFW00F, Hping3, Nuclei, Nikto, testssl.sh, and SQLmap — gated by the enabled authority capabilities (passive recon, active recon, automated scanning, exploit validation).
 
 XEKUTE does **not** bundle most third-party security binaries. Install only the tools you need and ensure their executables are available on `PATH`. On Windows, some tools may be easier to run through WSL. Each third-party tool remains subject to its own license and installation requirements.
 
@@ -105,7 +96,7 @@ XEKUTE does **not** bundle most third-party security binaries. Install only the 
 
 ### Optional
 
-- Any external security tools that you enable in Commands or the Toolbox.
+- Any external security tools that you enable in Commands or run through the AI assistant.
 - WSL for Linux-first security tooling on Windows.
 - A Windows code-signing certificate when producing signed release installers.
 
@@ -131,8 +122,8 @@ npm start
 ```
 
 This launches the XEKUTE desktop workbench. It includes the chat interface,
-project workspace, security workbench, behavior Map, terminal, editor, and
-Toolbox. Ollama is optional when using XEKUTE without AI features.
+project workspace, security workbench, behavior Map, terminal, and editor.
+Ollama is optional when using XEKUTE without AI features.
 
 ## Development Mode
 

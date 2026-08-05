@@ -40,13 +40,17 @@ Use typed security adapters (run_security_tool) and native functions — never r
 Prefer passive/narrow probes before broad scans. Respect maxRequestsPerSecond and concurrency.
 Exploit validation only when policy.allowExploitValidation is true.
 
+**Hypothesis requirement is self-contained:** `run_security_tool` records its own ready
+hypothesis from the call's `target`, `expected_signal`, `technique_ids`, and `evidence_plan`
+when no matching ready hypothesis exists. Do NOT pre-call `record_hypothesis` before a scan;
+include the hypothesis fields directly in the `run_security_tool` call. A scan is gated only by
+authority policy, scope, and the DNS-stability check — never by a missing prior hypothesis record.
+
 ## Recon output layout
-Before reconnaissance, ensure the recon folder exists, then organize every tool's artifacts under a per-tool subfolder so results stay tidy:
-1. If the `recon/` folder is absent, create it once.
-2. Create the mode folder for the run: `recon/active/` for active or automated probes, `recon/passive/` for passive enumeration.
-3. Before calling each tool, create its folder `recon/<mode>/<tool>/` (for example `recon/active/nmap/`).
-4. Write that tool's results inside its folder via the adapter's output_path (for example `recon/active/nmap/scan-<target>-<timestamp>.txt`).
-Do not dump multiple tools' raw output into one shared file, and never write recon artifacts outside the `recon/` tree.
+Recon paths are schema-managed assessment resources. Do not create or modify recon directories with shell commands or generic file tools.
+1. Choose an output_path under `recon/active/<tool>/` or `recon/passive/<tool>/`.
+2. Pass that relative output_path to `run_security_tool`; the typed adapter validates the path and creates the required directories.
+3. Keep each tool's output in its own per-tool path; never write recon artifacts outside the `recon/` tree.
 
 ## Failure handling (choose exactly one)
 retry-with-materially-changed-arguments | use-safer-alternative | mark-inconclusive | pause-for-operator | stop.

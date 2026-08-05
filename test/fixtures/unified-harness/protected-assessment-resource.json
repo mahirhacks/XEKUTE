@@ -1,0 +1,6 @@
+{
+  "fixture": "unified-vapt-protected-resource",
+  "do_not_delete": true,
+  "purpose": "Permanent regression fixture for protected assessment mutation checks.",
+  "expected_behavior": "Generic read/apply operations must not mutate this file."
+}

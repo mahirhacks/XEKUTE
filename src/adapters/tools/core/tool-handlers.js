@@ -4,8 +4,8 @@ const CyberTools = require("../cyber/tool-registry");
 const ScopeEngine = require("../../../domain/assessment/scope-engine");
 const OperatorQuestions = require("../../../application/clarification/operator-questions");
 const { classifyErrorCode } = require("./error-class");
-const PROTECTED_ASSESSMENT_PATH_RE = /^(?:scope|recon|enumeration|traffic|vulnerability-scans|findings|penetration-testing|evidence|runs|logs|map|report)(?:\/|$)|^settings\.config$/i;
-const PROTECTED_ASSESSMENT_COMMAND_RE = /(?:^|[\s"'`])(?:\.\/?|\.\\)?(?:scope|recon|enumeration|traffic|vulnerability-scans|findings|penetration-testing|evidence|runs|logs|map|report)[\\/]|settings\.config/i;
+const PROTECTED_ASSESSMENT_PATH_RE = /^(?:scope|recon|enumeration|traffic|vulnerability-scans|findings|penetration-testing|evidence|runs|logs|map|report|\.xekute\/logs|\.xekute\/questions)(?:\/|$)|^settings\.config$/i;
+const PROTECTED_ASSESSMENT_COMMAND_RE = /(?:^|[\s"'`])(?:\.\/?|\.\\)?(?:scope|recon|enumeration|traffic|vulnerability-scans|findings|penetration-testing|evidence|runs|logs|map|report|\.xekute\/logs|\.xekute\/questions)[\\/]|settings\.config/i;
 const COMMAND_CHAIN_RE = /&&|\|\||[;\r\n]|(?:^|\s)\|(?:\s|$)/;
 
 function workspaceRoot(workspace) {
@@ -203,7 +203,7 @@ function createToolHandlers(deps) {
     async run_security_tool({ workspace, args, terminalHost }) {
       const missing = requireWorkspace(workspace, "run_security_tool");
       if (missing) return missing;
-      const hypothesisFile = path.join(workspace, "logs", "agent-hypotheses.jsonl");
+      const hypothesisFile = path.join(workspace, ".xekute", "logs", "agent-hypotheses.jsonl");
       let hypothesis = null;
       try {
         if (fs.existsSync(hypothesisFile)) {
@@ -213,7 +213,38 @@ function createToolHandlers(deps) {
           }
         }
       } catch { /* handled as an unresolved hypothesis below */ }
-      if (!hypothesis || hypothesis.status !== "ready") return fail("run_security_tool", "Typed security actions require an existing ready hypothesis record.", {}, "HYPOTHESIS_NOT_READY", false);
+      if (!hypothesis || hypothesis.status !== "ready") {
+        // The caller supplied an explicit, in-scope request (target + hypothesis
+        // fields) but no ready hypothesis record exists. Mirror the operator
+        // slash-command path and record a ready hypothesis from the call itself,
+        // so "run <tool> against <target>" works without a separate round trip.
+        // The ready-hypothesis gate still applies: a scan never runs without a
+        // ready hypothesis record on disk.
+        const question = String(args.hypothesis_id || "Verify the security hypothesis for this target").slice(0, 1200);
+        const id = String(args.hypothesis_id || `hyp-${Date.now()}`).slice(0, 120);
+        const entry = {
+          id,
+          title: String(args.adapter_id ? `${args.adapter_id} scan of ${args.target || "target"}` : "Security hypothesis").slice(0, 240),
+          question,
+          target: String(args.target || "").slice(0, 500),
+          expectedSignal: String(args.expected_signal || "Tool output matching the stated hypothesis").slice(0, 1200),
+          rejectingSignal: "Tool output that contradicts the stated hypothesis",
+          proposedTechnique: String(args.adapter_id || "").slice(0, 300),
+          evidencePlan: Array.isArray(args.evidence_plan) ? args.evidence_plan.map((value) => String(value).slice(0, 500)).slice(0, 20) : [],
+          stopConditions: ["Out-of-scope resolution or redirect", "Unexpected impact", "Policy revocation"],
+          evidenceIds: [],
+          status: "ready",
+          source: "agent-run-security-tool",
+          recordedAt: new Date().toISOString(),
+        };
+        try {
+          fs.mkdirSync(path.dirname(hypothesisFile), { recursive: true });
+          fs.appendFileSync(hypothesisFile, `${JSON.stringify(entry)}\n`, "utf8");
+          hypothesis = entry;
+        } catch (error) {
+          return fail("run_security_tool", `Unable to record the required ready hypothesis: ${error.message}`, {}, "HYPOTHESIS_LOG_FAILED", false);
+        }
+      }
       const built = SecurityToolAdapters.buildAction(args);
       if (!built.ok) return fail("run_security_tool", built.error, { adapter: built.action }, built.code, false);
       const currentResolution = await ScopeEngine.resolveTargetAddresses(built.action.target);
@@ -247,7 +278,11 @@ function createToolHandlers(deps) {
           schemaVersion: 1,
           adapterId: built.action.adapterId,
           target: built.action.target,
-          status: result.timedOut ? "timeout" : result.ok ? "complete" : "failed",
+          status: result.status || (result.timedOut ? "timeout" : result.ok ? "complete" : "failed"),
+          terminationReason: result.terminationReason || "",
+          elapsedMs: Number(result.elapsedMs) || 0,
+          outputCompleteness: result.outputCompleteness || (result.timedOut ? "partial" : "complete"),
+          hadAnsi: Boolean(result.hadAnsi),
           exitCode: result.exitCode,
           signal: result.signal,
           capturedAt: new Date().toISOString(),
@@ -286,7 +321,11 @@ function createToolHandlers(deps) {
         evidencePlan: built.action.evidencePlan,
         evidence,
         evidenceId: evidence?.record?.id || "",
-        status: result.timedOut ? "timeout" : result.ok ? "complete" : "failed",
+        status: result.status || (result.timedOut ? "timeout" : result.ok ? "complete" : "failed"),
+        terminationReason: result.terminationReason || "",
+        elapsedMs: Number(result.elapsedMs) || 0,
+        outputCompleteness: result.outputCompleteness || (result.timedOut ? "partial" : "complete"),
+        hadAnsi: Boolean(result.hadAnsi),
       });
     },
     async run_traffsucker({ workspace, args, terminalHost }) {
@@ -384,10 +423,10 @@ function createToolHandlers(deps) {
         recordedAt: new Date().toISOString(),
       };
       try {
-        const file = path.join(workspace, "logs", "agent-hypotheses.jsonl");
+        const file = path.join(workspace, ".xekute", "logs", "agent-hypotheses.jsonl");
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
-        return ok("record_hypothesis", "hypothesis", { hypothesis: entry, file: "logs/agent-hypotheses.jsonl", content: `Recorded hypothesis ${entry.id}: ${entry.question}` });
+        return ok("record_hypothesis", "hypothesis", { hypothesis: entry, file: ".xekute/logs/agent-hypotheses.jsonl", content: `Recorded hypothesis ${entry.id}: ${entry.question}` });
       } catch (error) {
         return fail("record_hypothesis", error.message, {}, "HYPOTHESIS_LOG_FAILED", false);
       }
@@ -723,7 +762,7 @@ function createToolHandlers(deps) {
         denied: resolved.denied,
         missing: resolved.missing,
         unknownPacks: resolved.unknownPacks,
-        summary: `Loaded schemas for ${resolved.loaded.length} tool(s): ${resolved.loaded.join(", ")}. Call them on the next turn.`,
+        summary: `Loaded schemas for ${resolved.loaded.length} tool(s): ${resolved.loaded.join(", ")}. They are available for subsequent calls in this turn.`,
         content: JSON.stringify(payload, null, 2),
         mutated: false,
       });

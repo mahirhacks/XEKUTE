@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -46,6 +46,8 @@ const {
   writeGuidanceFile,
 } = require("../../application/planning/custom-guidance");
 const { createContainer } = require("../../infrastructure/di/container");
+const { buildProviderCatalog, normalizeRollout } = require("../../application/tools/provider-catalog");
+const { PUBLIC_TOOL_NAMES } = require("../../contracts/tool/unified-catalog");
 
 const APP_ROOT = path.join(__dirname, "..", "..");
 const IS_DEV = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
@@ -59,6 +61,7 @@ const container = createContainer({
   app,
   safeStorage,
   getMainWindow: () => mainWindow,
+  verifyFindingCandidate,
 });
 const terminals = container.terminals;
 const toolProcesses = container.toolProcesses;
@@ -169,6 +172,16 @@ function readApplicationPreferences() {
 }
 
 function llmPreferences() { return readApplicationPreferences()?.llm || {}; }
+function toolCatalogRollout() {
+  return normalizeRollout(process.env.XEKUTE_TOOL_CATALOG || readApplicationPreferences()?.toolCatalog?.rollout || "legacy");
+}
+function providerCatalogFor(profile, legacyTools) {
+  const catalog = buildProviderCatalog({ profile, rollout: toolCatalogRollout(), legacyTools });
+  if (catalog.shadow) {
+    console.info(`[xekute] unified tool catalog shadow: ${catalog.shadow.names.length} names, ${catalog.shadow.catalogBytes} bytes`);
+  }
+  return catalog;
+}
 function getActiveProvider() { return normalizeProvider(llmPreferences().provider); }
 function getOpenRouterBaseUrl() { try { return normalizeBaseUrl(llmPreferences().openrouter?.baseUrl || process.env.OPENROUTER_BASE_URL || DEFAULT_OPENROUTER_BASE_URL); } catch { return DEFAULT_OPENROUTER_BASE_URL; } }
 function getOpenRouterApiKey() { const env = String(process.env.OPENROUTER_API_KEY || "").trim(); if (env) return env; const value = llmPreferences().openrouter?.apiKey; if (!value || !safeStorage.isEncryptionAvailable()) return ""; try { return safeStorage.decryptString(Buffer.from(value, "base64")); } catch { return ""; } }
@@ -811,7 +824,7 @@ ipcMain.handle("assessment:generateReport", async (_event, { path: assessmentPat
   return assessmentWorkspace.generateReport(assessmentPath);
 });
 ipcMain.handle("assessment:runHistory", async (_event, { path: assessmentPath, limit = 500 } = {}) => {
-  const result = assessmentWorkspace.readJsonl(assessmentPath, "logs/agent-runs.jsonl", { limit });
+  const result = assessmentWorkspace.readJsonl(assessmentPath, ".xekute/logs/agent-runs.jsonl", { limit });
   return result;
 });
 
@@ -1267,6 +1280,11 @@ ipcMain.handle("window:close", () => {
   mainWindow?.close();
 });
 
+ipcMain.handle("clipboard:writeText", (_event, text) => {
+  clipboard.writeText(String(text ?? ""));
+  return { ok: true };
+});
+
 function takeLimited(text, max = 12000) {
   if (!text) return "";
   return text.length > max ? `${text.slice(0, max)}\n...(truncated)` : text;
@@ -1658,23 +1676,6 @@ ipcMain.handle("tools:stopProcess", async (_event, { id }) => {
 
 ipcMain.handle("tools:execute", async (_event, { workspace, toolCall }) => {
   return toolExecutor.executeToolCall({ workspace, toolCall });
-});
-
-ipcMain.handle("tools:health", async (_event, { customTools = [] } = {}) => {
-  const executables = ["subfinder", "amass", "theHarvester", "httpx", "nmap", "naabu", "masscan", "ffuf", "katana", "gowitness", "gobuster", "nuclei", "nikto", "testssl", "sqlmap", "wafw00f", "hping3", process.platform === "win32" ? "tracert" : "traceroute"];
-  const check = (executable) => new Promise((resolve) => {
-    const resolvedExecutable = resolveSecurityExecutable(executable);
-    const child = spawn(resolvedExecutable, ["--version"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    const timer = setTimeout(() => { try { child.kill(); } catch { /* ignore */ } resolve({ executable, installed: true, version: "version check timed out" }); }, 2500);
-    child.stdout.on("data", (chunk) => { output += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { output += chunk.toString(); });
-    child.on("error", (error) => { clearTimeout(timer); resolve({ executable, installed: false, error: error.code === "ENOENT" ? "Not found on PATH" : error.message }); });
-    child.on("close", () => { clearTimeout(timer); resolve({ executable, installed: true, version: output.trim().split(/\r?\n/)[0].slice(0, 160) || "Installed" }); });
-  });
-  const custom = Array.isArray(customTools) ? customTools.filter((tool) => tool && /^[a-z0-9][a-z0-9_-]{1,40}$/.test(String(tool.id || "")) && String(tool.executable || "").trim()).slice(0, 100) : [];
-  const customResults = await Promise.all(custom.map(async (tool) => ({ ...(await check(String(tool.executable).trim())), id: String(tool.id), custom: true })));
-  return { ok: true, tools: [...await Promise.all(executables.map(check)), ...customResults] };
 });
 
 ipcMain.handle("commands:parse", async (_event, payload = {}) => dispatchSlashCommand("parse", payload));
@@ -2505,7 +2506,10 @@ ipcMain.handle("ollama:abort", async (event) => {
 
 /** Stream chat tokens from Ollama back to the renderer. */
 ipcMain.handle("ollama:chat", async (event, { messages, model, numCtx, thinking, mode, modeFamily, contextPlan, maxCompletionTokens }) => {
-  const tools = ToolMap.toolsForProfile(mode || "ask");
+  const requestedProfile = normalizeProfile(modeFamily || "xekute", mode || "ask");
+  const legacyTools = ToolMap.toolsForProfile(requestedProfile);
+  const selectedCatalog = providerCatalogFor(requestedProfile.key, legacyTools);
+  const tools = selectedCatalog.tools;
   if (getActiveProvider() === "openrouter") return runOpenRouterChat(event, { messages, model, thinking, tools, contextPlan, maxCompletionTokens });
   const url = `${getOllamaBaseUrl()}/api/chat`;
   const mdl = model ?? "qwen2.5-coder:7b";
@@ -2721,37 +2725,7 @@ async function runOllamaJson(payload) {
   return String(body?.message?.content || "");
 }
 
-async function qualifyOllamaModel(model) {
-  try {
-    const output = await runOllamaJson({
-      model,
-      messages: AgentVerifier.qualificationPrompt(),
-      temperature: 0,
-    });
-    return {
-      ok: true,
-      model,
-      qualificationVersion: AgentVerifier.QUALIFICATION_VERSION,
-      ...AgentVerifier.scoreQualification(output),
-      checkedAt: new Date().toISOString(),
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      qualified: false,
-      score: 0,
-      model,
-      qualificationVersion: AgentVerifier.QUALIFICATION_VERSION,
-      error: error.message,
-      checkedAt: new Date().toISOString(),
-    };
-  }
-}
 
-ipcMain.handle("agent:qualifyModel", async (_event, { model } = {}) => {
-  if (!String(model || "").trim()) return { error: "A model is required", code: "MODEL_REQUIRED" };
-  return qualifyOllamaModel(String(model));
-});
 
 async function verifyFindingCandidate(workspace, model, candidate) {
   if (!workspace || !candidate || typeof candidate !== "object") return { error: "Workspace and candidate are required", code: "INVALID_VERIFIER_REQUEST" };
@@ -2891,28 +2865,8 @@ ipcMain.handle("agent:run", async (event, payload) => {
     if (runResult?.ok) assessmentRun = runResult.run;
   }
   const requestedProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");
-  if (requestedProfile.key === "agent") {
-    const settingsResult = payload.workspace ? assessmentWorkspace.readSettings(payload.workspace) : null;
-    const modelPolicy = settingsResult?.settings?.aiModels || {};
-    if (modelPolicy.requireQualifiedModelForTestAgent !== false) {
-      const cached = modelPolicy.qualification?.[payload.model];
-      const cacheFresh = cached?.qualificationVersion === AgentVerifier.QUALIFICATION_VERSION && Number.isFinite(Date.parse(cached.checkedAt)) && Date.now() - Date.parse(cached.checkedAt) < 7 * 24 * 60 * 60 * 1000;
-      const qualification = cacheFresh ? { ...cached, cached: true } : await qualifyOllamaModel(payload.model);
-      if (!cacheFresh && settingsResult?.settings && payload.workspace) {
-        assessmentWorkspace.writeSettings(payload.workspace, {
-          ...settingsResult.settings,
-          aiModels: { ...modelPolicy, qualification: { ...(modelPolicy.qualification || {}), [payload.model]: qualification } },
-        });
-      }
-      sendAgentEvent({ type: "model_qualification", qualification });
-      if (!qualification.qualified && !modelPolicy.allowUnqualifiedTestAgentDeveloperOverride) {
-        const result = { error: "The selected model did not pass XEKUTE's JSON, failure-state, evidence-state, and prompt-injection qualification check. Use Ask mode or enable the explicit developer override.", code: "MODEL_UNQUALIFIED", qualification };
-        if (assessmentRun?.id) assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, { status: "failed", completedAt: new Date().toISOString(), stopReason: result.error });
-        if (payload.workspace) appendAgentAction(payload.workspace, { runId: assessmentRun?.id || "", type: "run_terminal", timestamp: new Date().toISOString(), profile: requestedProfile.key, status: "failed", ok: false, errorCode: result.code, output: result.error, model: payload.model });
-        return result;
-      }
-    }
-  }
+  const selectedCatalog = providerCatalogFor(requestedProfile.key, ToolMap.toolsForProfile(requestedProfile));
+  const catalogMode = selectedCatalog.mode;
   const result = await runAgentTurn({
     workspace: payload.workspace,
     model: payload.model,
@@ -2920,7 +2874,8 @@ ipcMain.handle("agent:run", async (event, payload) => {
     contextBudget: payload.contextBudget,
     contextPlan: payload.contextPlan || null,
     thinking: payload.thinking,
-    tools: ToolMap.TOOLS,
+    tools: selectedCatalog.tools,
+    catalogMode,
     mode: payload.mode || "agent",
     modeFamily: payload.modeFamily || "xekute",
     approvalGranted: payload.approvalGranted || false,
@@ -2947,6 +2902,14 @@ ipcMain.handle("agent:run", async (event, payload) => {
       const terminalHost = createAgentTerminalHost(sender, sendAgentEvent);
       return toolExecutor.executeToolCall({ workspace, toolCall, terminalHost });
     },
+    executeUnifiedToolCall: ({ workspace, toolName, input, profile, runId, signal }) => container.unifiedToolRouter.execute(toolName, input, {
+      workspace,
+      profile,
+      actorId: runId || String(sender.id),
+      runId,
+      abortSignal: signal,
+      model: payload.model || "",
+    }),
     requestApproval: (proposal) => requestAgentActionApproval(event.sender, proposal),
     requestQuestions: (proposal) => requestOperatorQuestions(event.sender, proposal),
     findWorkspaceFiles,

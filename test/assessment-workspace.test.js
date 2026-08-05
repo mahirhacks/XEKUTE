@@ -165,8 +165,6 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.ok(html.includes('data-bounty-folder="WebClone"'));
   assert.ok(html.indexOf(">Context<") < html.indexOf(">Core<"));
   assert.ok(html.indexOf(">Scoute<") < html.indexOf('data-bounty-folder="Map"'));
-  assert.ok(html.includes('id="activity-toolbox"'));
-  assert.ok(html.includes('id="tool-config-overlay"'));
   assert.ok(html.includes('id="custom-commands-input"'));
   assert.ok(html.includes('id="command-registry-input"'));
   assert.ok(html.includes('id="app-settings-workspace"'));
@@ -199,8 +197,8 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.doesNotMatch(html, /chat-safety-toggle|chat-safety-button|chat-safety-tooltip|chat-mode-policy-note/);
   assert.ok(html.includes('<option value="hypothesis">Hypothesis</option><option value="planner">Plan</option><option value="agent">Agent</option><option value="ask">Ask</option>'));
   assert.doesNotMatch(html, /assessment-run-profile[^>]*>[\s\S]*?testing:execution/);
-  assert.ok(html.includes('data-bounty-item="agent-actions" data-bounty-file="logs/agent-actions.jsonl"'));
-  assert.ok(html.includes('data-bounty-item="agent-hypotheses" data-bounty-file="logs/agent-hypotheses.jsonl"'));
+  assert.ok(html.includes('data-bounty-item="agent-actions" data-bounty-file=".xekute/logs/agent-actions.jsonl"'));
+  assert.ok(html.includes('data-bounty-item="agent-hypotheses" data-bounty-file=".xekute/logs/agent-hypotheses.jsonl"'));
   assert.ok(html.includes('id="app-menu"'));
   assert.ok(html.includes('data-menu="files"'));
   assert.match(html, /data-action="create-project"[^>]*>Create New Project/);
@@ -221,7 +219,6 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.ok(html.includes('id="help-guide-overlay"'));
   assert.doesNotMatch(html, /custom-scripts-list/);
   assert.ok(html.includes('id="slash-command-suggestions"'));
-  assert.match(renderer, /Passive Recon Tools/);
   assert.match(renderer, /COMMAND_TOOL_GROUPS/);
   assert.match(renderer, /command-tool-groups/);
   assert.match(renderer, /command-settings-advanced/);

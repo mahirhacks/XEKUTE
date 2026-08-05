@@ -37,6 +37,8 @@ test("container constructs the full service graph with fake Electron deps", () =
   assert.equal(typeof container.assessmentWorkspace, "object");
   assert.equal(typeof container.assessmentMap, "object");
   assert.equal(typeof container.securityHttpWorkbench, "object");
+  assert.equal(typeof container.unifiedToolRouter.execute, "function");
+  assert.equal(container.unifiedToolRouter, container.unifiedToolRouter);
   assert.equal(typeof container.buildIntruderRequests, "function");
   assert.equal(typeof container.getProxyListener, "function");
   assert.equal(typeof container.projectProfileStore, "function");

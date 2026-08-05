@@ -123,11 +123,11 @@ const ASSESSMENT_ITEM_FILES = {
   runs: "runs/runs.json",
   report: "report/report.md",
   "pen-context": "pen_context.md",
-  "agent-actions": "logs/agent-actions.jsonl",
-  "agent-hypotheses": "logs/agent-hypotheses.jsonl",
-  "agent-runs": "logs/agent-runs.jsonl",
-  "agent-approvals": "logs/agent-approvals.jsonl",
-  "tool-output": "logs/tool-output.jsonl",
+  "agent-actions": ".xekute/logs/agent-actions.jsonl",
+  "agent-hypotheses": ".xekute/logs/agent-hypotheses.jsonl",
+  "agent-runs": ".xekute/logs/agent-runs.jsonl",
+  "agent-approvals": ".xekute/logs/agent-approvals.jsonl",
+  "tool-output": ".xekute/logs/tool-output.jsonl",
   settings: "settings.config",
 };
 
@@ -141,7 +141,6 @@ const REQUIRED_DIRECTORIES = [
   "findings",
   "penetration-testing",
   "runs",
-  "logs",
   "report",
   "context/sources",
   "custom",
@@ -544,9 +543,6 @@ const JSON_TEMPLATES = {
     },
     aiModels: {
       verifierModel: "",
-      requireQualifiedModelForTestAgent: true,
-      allowUnqualifiedTestAgentDeveloperOverride: false,
-      qualification: {},
       temperatures: { planner: 0.1, agent: 0.1, ask: 0.2, verifier: 0, reporter: 0 },
     },
     aiPrompts: resolvePromptDefaults(),
@@ -906,11 +902,11 @@ const JSON_TEMPLATES = {
 const JSONL_TEMPLATES = {
   "traffic/raw.jsonl": { recordType: "pointer-log-schema", schemaVersion: ASSESSMENT_VERSION, fields: ["timestamp", "requestId", "targetId", "direction", "protocol", "method", "url", "statusCode", "headersRedacted", "bodyFile", "durationMs", "source", "tags"] },
   "traffic/filtered.jsonl": { recordType: "pointer-log-schema", schemaVersion: ASSESSMENT_VERSION, fields: ["timestamp", "requestId", "targetId", "filterReason", "findingIds", "method", "url", "statusCode", "parameterNames", "contentType", "evidenceFiles", "notes", "tags"] },
-  "logs/agent-actions.jsonl": { recordType: "pointer-agent-action-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "phase", "tool", "target", "risk", "allowed", "reason", "ok", "errorCode", "output", "claim"] },
-  "logs/agent-hypotheses.jsonl": { recordType: "pointer-agent-hypothesis-log", schemaVersion: ASSESSMENT_VERSION, fields: ["id", "title", "question", "target", "expectedSignal", "rejectingSignal", "proposedTechnique", "evidencePlan", "stopConditions", "evidenceIds", "status", "source", "recordedAt"] },
-  "logs/agent-runs.jsonl": { recordType: "pointer-agent-run-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "status", "scopeSnapshotSha256", "configurationSnapshotSha256", "approvedBy", "approvalReference", "stopReason"] },
-  "logs/agent-approvals.jsonl": { recordType: "pointer-agent-approval-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "operator", "profile", "actionId", "tool", "target", "capability", "risk", "decision", "reason", "scope", "expiresAt"] },
-  "logs/tool-output.jsonl": { recordType: "pointer-tool-output-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "tool", "version", "command", "target", "exitCode", "outputPath", "sha256", "redacted", "truncated"] },
+  ".xekute/logs/agent-actions.jsonl": { recordType: "pointer-agent-action-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "phase", "tool", "target", "risk", "allowed", "reason", "ok", "errorCode", "output", "claim"] },
+  ".xekute/logs/agent-hypotheses.jsonl": { recordType: "pointer-agent-hypothesis-log", schemaVersion: ASSESSMENT_VERSION, fields: ["id", "title", "question", "target", "expectedSignal", "rejectingSignal", "proposedTechnique", "evidencePlan", "stopConditions", "evidenceIds", "status", "source", "recordedAt"] },
+  ".xekute/logs/agent-runs.jsonl": { recordType: "pointer-agent-run-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "status", "scopeSnapshotSha256", "configurationSnapshotSha256", "approvedBy", "approvalReference", "stopReason"] },
+  ".xekute/logs/agent-approvals.jsonl": { recordType: "pointer-agent-approval-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "operator", "profile", "actionId", "tool", "target", "capability", "risk", "decision", "reason", "scope", "expiresAt"] },
+  ".xekute/logs/tool-output.jsonl": { recordType: "pointer-tool-output-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "tool", "version", "command", "target", "exitCode", "outputPath", "sha256", "redacted", "truncated"] },
 };
 
 const REPORT_TEMPLATE = `# Security Assessment Report
