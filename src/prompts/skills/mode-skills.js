@@ -4,14 +4,17 @@ const HypothesisSkill = require("./modes/hypothesis-skill");
 const PlanSkill = require("./modes/plan-skill");
 const AgentSkill = require("./modes/agent-skill");
 const AskSkill = require("./modes/ask-skill");
-const { MODE_KEY_ALIASES } = require("../rules/operating-mode-rules");
+const { MODE_KEY_ALIASES } = require("../../agent/modes/mode-registry");
 
 const SKILLS = Object.freeze({
   hypothesis: HypothesisSkill.TESTING_HYPOTHESIS,
-  planner: PlanSkill.TESTING_PLAN,
-  agent: AgentSkill.TESTING_AGENT,
+  plan: PlanSkill.TESTING_PLAN,
   ask: AskSkill.TESTING_ASK,
 });
+
+function agentSkillContent() {
+  return AgentSkill.TESTING_AGENT;
+}
 
 function resolveSkillKey(profileId = "") {
   const raw = String(profileId || "").trim();
@@ -21,13 +24,13 @@ function resolveSkillKey(profileId = "") {
 
 function render(profileId = "") {
   const key = resolveSkillKey(profileId);
-  const content = SKILLS[key];
+  const content = key === "agent" ? agentSkillContent() : SKILLS[key];
   if (!content) return "";
   return content.trim();
 }
 
 function ids() {
-  return Object.keys(SKILLS);
+  return [...Object.keys(SKILLS), "agent"];
 }
 
 module.exports = { SKILLS, render, ids };

@@ -53,7 +53,7 @@
     if (social) {
       return Object.freeze({
         kind: "conversation", social: true, promptDepth: "compact", toolCategories: [], osMode: "none", osMutates: false, explicitFile: false, longRunning: false, cyberCapabilities: [],
-        includeWorkspaceContext: false, includeWorkspaceDiscovery: false, includeProjectContext: false, includeAuthority: false, includeMemory: false,
+        includeWorkspaceContext: false, includeWorkspaceDiscovery: false, includeProjectContext: false, includeMemory: false,
         responseRequirements: { evidence: false, interaction: "conversation", reason: "conversation" },
         interactionType: "conversation",
         classification: { type: "conversation", evidence: false, taskBrief: false, reason: "simple-conversation" },
@@ -149,7 +149,6 @@
       includeWorkspaceContext: inProject || planningMode || hypothesisMode,
       includeWorkspaceDiscovery: Boolean(inProject && (planningMode || hypothesisMode || osRequested || map || evidence || followUp || cyberTopic)),
       includeProjectContext: inProject || planningMode || hypothesisMode,
-      includeAuthority: inProject || planningMode || hypothesisMode,
       includeMemory: Boolean(inProject || planningMode || hypothesisMode || followUp || osRequested || cyberTopic),
       reason: `${toolCategories.length ? `${kind}:${toolCategories.join("+")}` : `${kind}:no-tools`}${inheritedOffer ? ":follow-up" : ""}`,
       followUp,

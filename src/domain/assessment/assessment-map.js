@@ -1,4 +1,5 @@
 const { getDomain } = require("tldts");
+const { createTrafficGraphStore, GRAPH_MANIFEST } = require("./traffic-graph-store.js");
 
 // Domain extraction seam: `tldts` is the default adapter; callers/tests may
 // inject a deterministic extractor to keep domain rules pure and testable.
@@ -11,8 +12,8 @@ function defaultDomainExtractor() {
 }
 
 const DEFAULT_LIMITS = Object.freeze({ maxBytes: 100 * 1024 * 1024, maxRecords: 50000 });
-const MAP_SCHEMA_VERSION = 3;
-const MAP_BUILDER_VERSION = "0.4.0";
+const MAP_SCHEMA_VERSION = 5;
+const MAP_BUILDER_VERSION = "0.7.0";
 const STATIC_EXTENSIONS = new Set([
   "css", "js", "mjs", "map", "png", "jpg", "jpeg", "gif", "svg", "ico", "webp",
   "woff", "woff2", "ttf", "eot", "mp3", "mp4", "webm", "avi", "mov",
@@ -20,6 +21,83 @@ const STATIC_EXTENSIONS = new Set([
 const SENSITIVE_FIELD_PATTERN = /(?:email|phone|address|token|secret|password|passwd|ssn|credit|card|account|dob|birth|api[_-]?key)/i;
 const HIGH_VALUE_PATH_PATTERN = /\/(?:api|admin|user|account|customer|payment|order|upload|download|reset-password|settings|graphql)(?:\/|$)/i;
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const PRIORITY_HIGH_THRESHOLD = 70;
+const PRIORITY_ELEVATED_THRESHOLD = 40;
+
+function priorityTier(score) {
+  if (score >= PRIORITY_HIGH_THRESHOLD) return "high";
+  if (score >= PRIORITY_ELEVATED_THRESHOLD) return "elevated";
+  if (score >= 15) return "normal";
+  return "low";
+}
+
+function priorityFactor(id, label, points) {
+  return { id, label, points };
+}
+
+function applyPriority(node, factors = [], evidenceMultiplier = 1) {
+  const rawScore = factors.reduce((total, factor) => total + Number(factor.points || 0), 0);
+  const priorityScore = Math.max(0, Math.min(100, Math.round(rawScore * evidenceMultiplier)));
+  node.priorityScore = priorityScore;
+  // `riskScore` is retained for existing graph snapshots, IPC consumers, and
+  // visual mode compatibility. It now represents deterministic investigation priority.
+  node.riskScore = priorityScore;
+  node.priorityTier = priorityTier(priorityScore);
+  node.priorityFactors = factors;
+  return node;
+}
+
+function identityDifferential(route) {
+  const profiles = new Map();
+  for (const variant of route.variants || []) {
+    const profile = `${variant.statusCode || 0}:${variant.responseSchemaHash || "unknown"}`;
+    for (const identityId of variant.identityIds || []) {
+      if (!profiles.has(identityId)) profiles.set(identityId, new Set());
+      profiles.get(identityId).add(profile);
+    }
+  }
+  const identities = [...profiles.keys()].sort();
+  const profileKeys = new Set([...profiles.values()].flatMap((values) => [...values]));
+  const hasDifferential = identities.length > 1 && profileKeys.size > 1;
+  const roles = new Set((route.variants || []).flatMap((variant) => variant.actorRoles || []).filter((role) => role && role !== "unknown"));
+  return { identityCount: identities.length, profileCount: profileKeys.size, roleCount: roles.size, hasDifferential };
+}
+
+function calculateRoutePriority(route) {
+  const factors = [];
+  const tags = [];
+  const add = (id, label, points, tag = id) => { factors.push(priorityFactor(id, label, points)); tags.push(tag); };
+  const hasObjectIdentifier = (route.parameters || []).some((item) => item.category === "id" || /(?:^|_)id$/i.test(item.name));
+  const hasSensitiveResponse = (route.sensitiveFields || []).length > 0;
+  const securityRelevantPath = HIGH_VALUE_PATH_PATTERN.test(route.template || "");
+  const stateChanging = STATE_CHANGING_METHODS.has(route.method);
+  const anonymousAccessObserved = (route.authTypes || []).includes("none");
+  const differential = identityDifferential(route);
+
+  if (stateChanging) add("state_changing", "State-changing endpoint", 14);
+  if (hasObjectIdentifier) add("object_identifier", "Object identifier accepted", 14);
+  if (hasSensitiveResponse) add("sensitive_response", "Sensitive-looking response fields observed", Math.min(20, 8 + (route.sensitiveFields || []).length * 2));
+  if (securityRelevantPath) add("security_relevant_route", "Security-relevant route family", 10);
+  if ((route.statusCodes || []).some((status) => status >= 500)) add("server_error_observed", "Server error observed", 12);
+  if ((route.variants || []).length > 1 && !differential.hasDifferential) add("behavior_variants", "Multiple observed response variants", Math.min(8, ((route.variants || []).length - 1) * 3));
+  if (anonymousAccessObserved && hasObjectIdentifier) add("anonymous_object_reference", "Anonymous object-reference access observed", 20);
+  if (anonymousAccessObserved && stateChanging) add("anonymous_state_change", "Anonymous state-changing access observed", 16);
+  if (anonymousAccessObserved && hasSensitiveResponse) add("anonymous_sensitive_response", "Anonymous response contains sensitive-looking fields", 14);
+  if (differential.hasDifferential) {
+    add("identity_response_differential", "Different identities received different response profiles", 10);
+    if (hasObjectIdentifier) add("object_access_differential", "Object route differs across identities", 8);
+    if (hasSensitiveResponse) add("sensitive_data_differential", "Sensitive response shape differs across identities", 6);
+  }
+  if (differential.roleCount > 1) add("multi_role_coverage", "Multiple account roles observed", 3);
+  if ((route.entryPointReasons || []).length) tags.push("entry_point");
+  if (!route.observed) tags.push("discovered_reference");
+
+  const evidenceMultiplier = route.observed ? 1 : Math.max(0.35, Math.min(0.7, Number(route.confidence) || 0.55));
+  applyPriority(route, factors, evidenceMultiplier);
+  route.riskTags = [...new Set(tags)];
+  route.priorityEvidence = route.observed ? "observed" : "discovered";
+  return route;
+}
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -229,6 +307,27 @@ function routeResourceName(template = "/") {
   return singularize(segment);
 }
 
+function classifyApplicationAction(observation = {}) {
+  const method = String(observation.method || "GET").toUpperCase();
+  const template = String(observation.template || "/");
+  const resource = routeResourceName(template) || "application";
+  if (/\/(?:logout|log-out|signout|sign-out)(?:\/|$)/i.test(template)) return { kind: "logout", resource, mutating: true, label: `Sign out via ${template}` };
+  if (/\/(?:login|log-in|signin|sign-in|authenticate|authentication|oauth(?:\/callback)?|session|token)(?:\/|$)/i.test(template)) return { kind: "authenticate", resource, mutating: method !== "GET", label: `Authenticate via ${template}` };
+  if (method === "POST") return { kind: "create", resource, mutating: true, label: `Create ${resource}` };
+  if (["PUT", "PATCH"].includes(method)) return { kind: "update", resource, mutating: true, label: `Update ${resource}` };
+  if (method === "DELETE") return { kind: "delete", resource, mutating: true, label: `Delete ${resource}` };
+  return { kind: "read", resource, mutating: false, label: `Read ${resource}` };
+}
+
+function lifecycleStateForAction(action = {}) {
+  if (action.kind === "create") return "created";
+  if (action.kind === "update") return "updated";
+  if (action.kind === "delete") return "deleted";
+  if (action.kind === "authenticate") return "authenticated";
+  if (action.kind === "logout") return "anonymous";
+  return "unchanged";
+}
+
 function collectIdentifierValues(value, namespace, output, depth = 0) {
   if (depth > 8 || output.size >= 250 || value == null) return;
   if (Array.isArray(value)) {
@@ -354,8 +453,15 @@ function decorateGraphForAgent(graph) {
     const auth = route.authTypes?.filter(Boolean) || [];
     const authText = auth.length ? `Authentication observed: ${auth.join(", ")}.` : "No authenticated traffic observed.";
     const entryText = route.entryPointReasons?.length ? "Marked as an entry point." : "Not marked as an observed entry point.";
-    const riskText = route.riskTags?.length ? `Signals: ${route.riskTags.join(", ")}.` : "No risk signals recorded.";
-    route.aiSummary = `${route.method} ${route.host}${route.template} observed ${route.observedCount || 0} time(s). ${authText} ${entryText} ${riskText} Incoming navigational relationships: ${incomingNavigation}.`;
+    const priorityText = route.riskTags?.length ? `Investigation signals: ${route.riskTags.join(", ")}.` : "No investigation signals recorded.";
+    const factorText = route.priorityFactors?.length ? `Priority ${route.priorityScore || 0}/100 (${route.priorityTier || "low"}) from ${route.priorityFactors.map((factor) => factor.label).join("; ")}.` : "Priority is low because no scored signals were observed.";
+    route.aiSummary = `${route.method} ${route.host}${route.template} observed ${route.observedCount || 0} time(s). ${authText} ${entryText} ${priorityText} ${factorText} Incoming navigational relationships: ${incomingNavigation}.`;
+  }
+  for (const state of graph.nodes.filter((node) => node.type === "ApplicationState")) {
+    state.aiSummary = `${state.label} is a ${state.observationType || "derived"} ${state.stateKind || "application"} state at ${Math.round((Number(state.confidence) || 0) * 100)}% confidence, supported by ${state.evidenceRefs?.length || 0} traffic reference(s) and connected to ${state.actionIds?.length || 0} action(s).`;
+  }
+  for (const action of graph.nodes.filter((node) => node.type === "Action")) {
+    action.aiSummary = `${action.label} maps to ${action.method || "HTTP"} ${action.host || ""}${action.template || ""}. Observed ${action.observedCount || 0} time(s): ${action.successfulCount || 0} success-class and ${action.rejectedCount || 0} rejected/error outcome(s). It requires ${action.preconditionStateIds?.length || 0} observed state(s) and produces ${action.resultingStateIds?.length || 0} derived state(s).`;
   }
 
   const centrality = {};
@@ -375,6 +481,25 @@ function decorateGraphForAgent(graph) {
     const degree = (outgoing.get(node.id)?.length || 0) + (incoming.get(node.id)?.length || 0);
     centrality[node.id] = { degree, downstreamReach: calculateReach(node.id), blastRadius: Math.min(100, degree * 4 + calculateReach(node.id) * 2) };
   }
+
+  const communityGroups = new Map();
+  for (const node of graph.nodes) {
+    let key = node.host ? `host:${node.host}` : "";
+    if (!key) {
+      const neighbor = [...(incoming.get(node.id) || []), ...(outgoing.get(node.id) || [])]
+        .map((edge) => nodeById.get(edge.source === node.id ? edge.target : edge.source))
+        .find((item) => item?.host);
+      key = neighbor?.host ? `host:${neighbor.host}` : `${node.type || "node"}:${node.label || node.id}`;
+    }
+    if (!communityGroups.has(key)) communityGroups.set(key, []);
+    communityGroups.get(key).push(node);
+  }
+  const communities = [...communityGroups.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, members], index) => {
+    const ranked = members.slice().sort((left, right) => (centrality[right.id]?.degree || 0) - (centrality[left.id]?.degree || 0) || left.id.localeCompare(right.id));
+    const label = key.startsWith("host:") ? key.slice(5) : ranked[0]?.label || key;
+    members.forEach((node) => { node.communityIndex = index; node.communityLabel = label; });
+    return { id: `community:${index + 1}`, index, label, nodeCount: members.length, representativeNodeId: ranked[0]?.id || "", nodeTypes: [...new Set(members.map((node) => node.type))].sort() };
+  });
 
   const hypotheses = [];
   const seenHypotheses = new Set();
@@ -406,21 +531,39 @@ function decorateGraphForAgent(graph) {
   graph.analysis = {
     entryPoints: routeNodes.filter((node) => (node.entryPointReasons || []).length).map((node) => node.id),
     centrality,
-    queryCapabilities: ["overview", "node", "neighbors", "paths", "search", "shared_objects", "evidence", "hypotheses", "annotate_finding"],
+    queryCapabilities: ["overview", "node", "neighbors", "paths", "search", "workflow", "state_model", "identity_diff", "variants", "anomalies", "shared_objects", "evidence", "hypotheses", "annotate_finding"],
   };
+  graph.communities = communities;
   graph.agentInterface = { version: "1.0", summary: "Query this graph through bounded Map tools; do not load the entire graph for a single hypothesis." };
   return graph;
 }
 
-function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () => new Date(), domainExtractor } = {}) {
+function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligence = null, javascriptArtifacts = null, graphStore = null, now = () => new Date(), domainExtractor } = {}) {
   if (!crypto?.createHash || !crypto?.createHmac || !crypto?.randomBytes) throw new TypeError("crypto hashing, HMAC, and random bytes are required");
   const registrableDomain = typeof domainExtractor === "function" ? domainExtractor : defaultDomainExtractor();
   const hash = (value, length = 20) => crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, length);
   const nodeId = (type, key) => `${type}:${hash(`${type}|${key}`)}`;
-  const mapRelativePath = "Map/application-map.json";
+  const snapshots = graphStore || createTrafficGraphStore({ fs, path, crypto, now });
+  const mapRelativePath = GRAPH_MANIFEST;
+
+  function attachIntelligenceProjection(graph, root) {
+    if (!graph || !intelligence?.status) return graph;
+    try {
+      const status = intelligence.status(root);
+      graph.intelligence = {
+        status: status.status || "unknown",
+        overview: status.overview || null,
+        estimate: status.estimate || null,
+      };
+    } catch {
+      graph.intelligence = { status: "unavailable", overview: null };
+    }
+    return graph;
+  }
 
   function projectCorrelationKey(root) {
-    const target = path.join(root, "Map", ".correlation-key");
+    const target = path.join(root, "traffic", "graph", "cache", ".correlation-key");
+    const legacyTarget = path.join(root, "Map", ".correlation-key");
     try {
       if (fs.existsSync(target)) {
         const value = fs.readFileSync(target, "utf8").trim();
@@ -428,6 +571,13 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
         throw new Error("Map correlation key is malformed");
       }
       fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (fs.existsSync(legacyTarget)) {
+        const legacyValue = fs.readFileSync(legacyTarget, "utf8").trim();
+        if (!/^[0-9a-f]{64}$/i.test(legacyValue)) throw new Error("Legacy Map correlation key is malformed");
+        try { fs.writeFileSync(target, `${legacyValue}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 }); }
+        catch (error) { if (error.code !== "EEXIST") throw error; }
+        return Buffer.from(legacyValue, "hex");
+      }
       const value = crypto.randomBytes(32).toString("hex");
       try { fs.writeFileSync(target, `${value}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 }); }
       catch (error) {
@@ -440,31 +590,23 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
     }
   }
 
-  function verifiedRoot(rawRoot, { operatorInitiated = false } = {}) {
+  function verifiedRoot(rawRoot, _options = {}) {
     const verification = assessmentWorkspace.verify(rawRoot);
     if (verification.error) return verification;
-    try {
-      const settings = JSON.parse(fs.readFileSync(path.join(verification.root, "settings.config"), "utf8"));
-      if (!operatorInitiated && !["unrestricted", "full", "ask"].includes(settings.authority?.superMode) && settings.authority?.permissions?.mapBuild === false) {
-        return { error: "Application Map access is disabled in XEKUTE Authority settings", code: "AUTHORITY_PERMISSION_DISABLED" };
-      }
-    } catch { /* specific Map readers report malformed inputs when needed */ }
     return { ok: true, root: verification.root, notice: verification.valid ? null : verification };
   }
 
   function read(rawRoot, options = {}) {
     const verified = verifiedRoot(rawRoot, options);
     if (verified.error) return verified;
-    const target = path.join(verified.root, "Map", "application-map.json");
-    if (!fs.existsSync(target)) return { ok: true, exists: false, path: mapRelativePath, graph: null };
     try {
-      const graph = JSON.parse(fs.readFileSync(target, "utf8"));
-      if (graph?.kind !== "xekute-application-behavior-map" || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
-        return { error: "Map/application-map.json is not a valid Xekute behavior map", code: "MAP_INVALID" };
-      }
+      const stored = snapshots.read(verified.root);
+      if (stored.error || !stored.exists) return stored;
+      const graph = stored.graph;
       graph.annotations = readAgentAnnotations(verified.root);
       decorateGraphForAgent(graph);
-      return { ok: true, exists: true, path: mapRelativePath, graph };
+      attachIntelligenceProjection(graph, verified.root);
+      return { ...stored, ok: true, exists: true, graph };
     } catch (error) {
       return { error: `Could not read the application Map: ${error.message}`, code: "MAP_READ_FAILED" };
     }
@@ -521,8 +663,8 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
   function mapOverview(rawRoot) {
     const loaded = loadQueryableGraph(rawRoot); if (loaded.error) return loaded;
     const { graph, root } = loaded;
-    const highRisk = graph.nodes.filter((node) => Number(node.riskScore) >= 60).map((node) => node.id);
-    return { ok: true, overview: { hosts: graph.stats?.hosts ?? graph.nodes.filter((node) => node.type === "Host").length, routes: graph.stats?.routes ?? graph.nodes.filter((node) => node.type === "Route").length, observations: graph.stats?.observations || 0, variants: graph.stats?.variants || 0, highRisk: highRisk.length, highRiskNodes: highRisk, components: graph.verification?.components || graph.analysis?.components || 0, builtAt: graph.builtAt, verification: graph.verification }, analysis: graph.analysis, graphMeta: { schemaVersion: graph.schemaVersion, builderVersion: graph.builderVersion }, root };
+    const highPriority = graph.nodes.filter((node) => Number(node.priorityScore ?? node.riskScore) >= PRIORITY_HIGH_THRESHOLD).map((node) => node.id);
+    return { ok: true, overview: { hosts: graph.stats?.hosts ?? graph.nodes.filter((node) => node.type === "Host").length, routes: graph.stats?.routes ?? graph.nodes.filter((node) => node.type === "Route").length, observations: graph.stats?.observations || 0, variants: graph.stats?.variants || 0, states: graph.stats?.states || 0, actions: graph.stats?.actions || 0, workflows: graph.stats?.stateWorkflows || 0, stateAnomalies: graph.stats?.stateAnomalies || 0, highPriority: highPriority.length, highPriorityNodes: highPriority, highRisk: highPriority.length, highRiskNodes: highPriority, components: graph.verification?.components || graph.analysis?.components || 0, builtAt: graph.builtAt, verification: graph.verification }, analysis: graph.analysis, graphMeta: { schemaVersion: graph.schemaVersion, builderVersion: graph.builderVersion }, root };
   }
 
   function mapGetNode(rawRoot, id) {
@@ -574,6 +716,81 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
     return { ok: true, query: pattern || "", routes: routes.map((node) => ({ ...node, scope: scopeStatus(loaded.root, node.host) })) };
   }
 
+  function mapSearchNodes(rawRoot, pattern, options = {}) {
+    const loaded = loadQueryableGraph(rawRoot); if (loaded.error) return loaded;
+    const needle = String(pattern || "").trim().toLowerCase();
+    const types = new Set((Array.isArray(options.types) ? options.types : []).map((value) => String(value).toLowerCase()));
+    const limit = Math.max(1, Math.min(Number(options.limit) || 30, 100));
+    const nodes = loaded.graph.nodes.filter((node) => (!types.size || types.has(String(node.type).toLowerCase())) && (!needle || [node.label, node.type, node.host, node.template, node.method, node.aiSummary, node.communityLabel, ...(node.riskTags || [])].some((value) => String(value || "").toLowerCase().includes(needle)))).slice(0, limit);
+    return { ok: true, query: pattern || "", nodes, count: nodes.length };
+  }
+
+  function mapWorkflow(rawRoot, options = {}) {
+    const loaded = loadQueryableGraph(rawRoot); if (loaded.error) return loaded;
+    const limit = Math.max(1, Math.min(Number(options.limit) || 30, 100));
+    const nodeById = new Map(loaded.graph.nodes.map((node) => [node.id, node]));
+    const transitions = loaded.graph.edges.filter((edge) => edge.type === "FOLLOWED_BY").sort((left, right) => (right.transitionCount || right.supportCount || 0) - (left.transitionCount || left.supportCount || 0) || left.id.localeCompare(right.id)).slice(0, limit).map((edge) => ({ edge, from: nodeById.get(edge.source), to: nodeById.get(edge.target) }));
+    return { ok: true, transitions, entryPoints: (loaded.graph.analysis?.entryPoints || []).map((id) => nodeById.get(id)).filter(Boolean).slice(0, limit) };
+  }
+
+  function mapStateModel(rawRoot, options = {}) {
+    const loaded = loadQueryableGraph(rawRoot); if (loaded.error) return loaded;
+    const limit = Math.max(1, Math.min(Number(options.limit) || 30, 100));
+    const model = loaded.graph.stateModel || { states: [], actions: [], entities: [], identities: [], transitions: [], workflows: [], anomalies: [] };
+    const confidence = Number.isFinite(Number(options.minConfidence)) ? Math.max(0, Math.min(1, Number(options.minConfidence))) : 0;
+    const bounded = (items = []) => items.filter((item) => Number(item.confidence ?? 1) >= confidence).slice(0, limit);
+    return {
+      ok: true,
+      version: model.version || 1,
+      derivation: model.derivation || "deterministic-traffic-projection",
+      summary: {
+        states: model.states?.length || 0, actions: model.actions?.length || 0, entities: model.entities?.length || 0,
+        identities: model.identities?.length || 0, transitions: model.transitions?.length || 0,
+        workflows: model.workflows?.length || 0, anomalies: model.anomalies?.length || 0,
+      },
+      states: bounded(model.states), actions: bounded(model.actions), entities: bounded(model.entities), identities: bounded(model.identities),
+      transitions: bounded(model.transitions), workflows: bounded(model.workflows), anomalies: bounded(model.anomalies),
+      pagination: { limit, truncated: ["states", "actions", "entities", "identities", "transitions", "workflows", "anomalies"].some((key) => (model[key]?.length || 0) > limit) },
+    };
+  }
+
+  function mapVariants(rawRoot, id, options = {}) {
+    const loaded = loadQueryableGraph(rawRoot); if (loaded.error) return loaded;
+    const limit = Math.max(1, Math.min(Number(options.limit) || 30, 100));
+    const routes = loaded.graph.nodes.filter((node) => node.type === "Route" && (!id || node.id === id || node.template === id));
+    return { ok: true, routes: routes.slice(0, limit).map((route) => ({ route: { id: route.id, label: route.label, host: route.host, template: route.template, method: route.method }, variants: (route.variants || []).slice(0, limit) })) };
+  }
+
+  function mapIdentityDiff(rawRoot, options = {}) {
+    const loaded = loadQueryableGraph(rawRoot); if (loaded.error) return loaded;
+    const limit = Math.max(1, Math.min(Number(options.limit) || 30, 100));
+    const differences = [];
+    for (const route of loaded.graph.nodes.filter((node) => node.type === "Route" && (node.variants || []).length > 1)) {
+      const identities = new Set(route.variants.flatMap((variant) => variant.identityIds || []).filter(Boolean));
+      const roles = new Set(route.variants.map((variant) => variant.actorRole).filter((value) => value && value !== "unknown"));
+      const statuses = new Set(route.variants.map((variant) => variant.statusCode).filter(Number.isFinite));
+      const schemas = new Set(route.variants.map((variant) => variant.responseSchemaHash).filter(Boolean));
+      if (identities.size < 2 && roles.size < 2 && !(statuses.size > 1 || schemas.size > 1)) continue;
+      differences.push({ route: { id: route.id, label: route.label, host: route.host, template: route.template, method: route.method }, identityIds: [...identities].sort(), roles: [...roles].sort(), statusCodes: [...statuses].sort(), responseSchemaCount: schemas.size, variantCount: route.variants.length, riskScore: route.riskScore });
+    }
+    differences.sort((left, right) => right.riskScore - left.riskScore || right.variantCount - left.variantCount || left.route.id.localeCompare(right.route.id));
+    return { ok: true, differences: differences.slice(0, limit), count: differences.length };
+  }
+
+  function mapAnomalies(rawRoot, options = {}) {
+    const loaded = loadQueryableGraph(rawRoot); if (loaded.error) return loaded;
+    const limit = Math.max(1, Math.min(Number(options.limit) || 30, 100));
+    const anomalies = loaded.graph.nodes.filter((node) => node.type === "Route").map((route) => {
+      const reasons = [];
+      if ((route.variants || []).length > 1) reasons.push("response_variants");
+      if ((route.statusCodes || []).some((status) => status >= 500)) reasons.push("server_error");
+      if ((route.riskTags || []).includes("object_identifier") && (route.authTypes || []).includes("none")) reasons.push("anonymous_object_reference");
+      if ((route.variants || []).some((variant) => (variant.identityIds || []).length) && new Set((route.variants || []).flatMap((variant) => variant.identityIds || [])).size > 1) reasons.push("multi_identity_behavior");
+      return reasons.length ? { route: { id: route.id, label: route.label, host: route.host, template: route.template, method: route.method }, reasons, riskScore: route.riskScore, statusCodes: route.statusCodes, variantCount: route.variants?.length || 0 } : null;
+    }).filter(Boolean).sort((left, right) => right.riskScore - left.riskScore || right.variantCount - left.variantCount || left.route.id.localeCompare(right.route.id));
+    return { ok: true, anomalies: anomalies.slice(0, limit), count: anomalies.length };
+  }
+
   function mapSharedObjects(rawRoot, id) {
     const loaded = loadQueryableGraph(rawRoot); if (loaded.error) return loaded;
     const edges = loaded.graph.edges.filter((edge) => edge.type === "SHARES_OBJECT" && (!id || edge.source === id || edge.target === id));
@@ -581,31 +798,15 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
   }
 
   function redactEvidence(raw) {
-    const text = String(raw || "");
-    const splitAt = text.indexOf("\r\n\r\n") >= 0 ? text.indexOf("\r\n\r\n") : text.indexOf("\n\n");
-    const separator = splitAt >= 0 && text.slice(splitAt, splitAt + 4) === "\r\n\r\n" ? "\r\n\r\n" : "\n\n";
-    const head = splitAt >= 0 ? text.slice(0, splitAt) : text;
-    let body = splitAt >= 0 ? text.slice(splitAt + separator.length) : "";
-    const redactedHead = head.replace(/^(authorization|proxy-authorization|cookie|set-cookie|x-api-key):.*$/gim, "$1: [REDACTED]");
-    if (/content-type:\s*[^\r\n]*json/i.test(head)) {
-      try {
-        const redactValue = (value, key = "") => {
-          if (SENSITIVE_FIELD_PATTERN.test(key)) return "[REDACTED]";
-          if (Array.isArray(value)) return value.map((item) => redactValue(item));
-          if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, redactValue(item, name)]));
-          return value;
-        };
-        body = JSON.stringify(redactValue(JSON.parse(body)));
-      } catch { body = body.replace(/((?:token|secret|password|api[_-]?key)=)[^&\s]+/gi, "$1[REDACTED]"); }
-    }
-    return splitAt >= 0 ? `${redactedHead}${separator}${body}` : redactedHead;
+    return String(raw || "");
   }
 
-  function mapEvidence(rawRoot, evidenceId) {
+  function mapEvidence(rawRoot, evidenceId, options = {}) {
     const verified = verifiedRoot(rawRoot); if (verified.error) return verified;
     const history = assessmentWorkspace.readTrafficHistory(verified.root, { limit: 50000 });
-    const ids = new Set((Array.isArray(evidenceId) ? evidenceId : [evidenceId]).filter(Boolean).map(String));
-    const records = (history.records || []).filter((record) => ids.has(String(record.requestId))).map((record) => ({ ...record, request: redactEvidence(record.request), response: redactEvidence(record.response), redacted: true }));
+    const ids = new Set((Array.isArray(evidenceId) ? evidenceId : [evidenceId]).filter(Boolean).map(String).slice(0, 10));
+    const maxChars = Math.max(1000, Math.min(Number(options.maxChars) || 100_000, 250_000));
+    const records = (history.records || []).filter((record) => ids.has(String(record.requestId))).map((record) => ({ ...record, request: redactEvidence(record.request).slice(0, maxChars), response: redactEvidence(record.response).slice(0, maxChars), redacted: false }));
     return { ok: true, evidence: records, missing: [...ids].filter((id) => !records.some((record) => String(record.requestId) === id)) };
   }
 
@@ -638,13 +839,6 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const temporary = `${target}.${crypto.randomBytes(6).toString("hex")}.tmp`;
     try { fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", flag: "wx" }); fs.renameSync(temporary, target); } finally { if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true }); }
-    const graphTarget = path.join(verified.root, "Map", "application-map.json");
-    try {
-      const graph = JSON.parse(fs.readFileSync(graphTarget, "utf8"));
-      graph.annotations = next.slice(0, 500);
-      const graphTemporary = `${graphTarget}.${crypto.randomBytes(6).toString("hex")}.tmp`;
-      try { fs.writeFileSync(graphTemporary, `${JSON.stringify(graph, null, 2)}\n`, { encoding: "utf8", flag: "wx" }); fs.renameSync(graphTemporary, graphTarget); } finally { if (fs.existsSync(graphTemporary)) fs.rmSync(graphTemporary, { force: true }); }
-    } catch { /* annotation file remains the durable source if graph refresh races this write */ }
     return { ok: true, annotation, path: "Map/agent-annotations.json" };
   }
 
@@ -701,14 +895,19 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
       const token = String(request.headers.authorization).replace(/^bearer\s+/i, "");
       try { jwtSubject = String(JSON.parse(Buffer.from(token.split(".")[1] || "", "base64url").toString("utf8"))?.sub || ""); } catch { /* opaque bearer token */ }
     }
+    const captureIdentity = record.captureIdentity && typeof record.captureIdentity === "object"
+      ? { id: String(record.captureIdentity.id || "").slice(0, 120), label: String(record.captureIdentity.label || "").slice(0, 160), role: String(record.captureIdentity.role || "").slice(0, 120) }
+      : null;
     const credentialEpoch = secret ? `credential:${fingerprint("credential", secret)}` : "";
-    const sessionId = jwtSubject
+    const sessionId = captureIdentity?.id
+      ? `identity:${fingerprint("capture-identity", captureIdentity.id)}`
+      : jwtSubject
       ? `session:${fingerprint("jwt-subject", jwtSubject)}`
       : secret
         ? `session:${fingerprint("credential-session", secret)}`
         : `anonymous:${fingerprint("anonymous-exchange", evidenceId)}`;
-    const sessionResolution = jwtSubject ? "unverified-jwt-subject" : secret ? "credential-epoch" : "unresolved-anonymous";
-    const sessionConfidence = jwtSubject ? 0.74 : secret ? 0.78 : 0.15;
+    const sessionResolution = captureIdentity?.id ? "explicit-capture-identity" : jwtSubject ? "unverified-jwt-subject" : secret ? "credential-epoch" : "unresolved-anonymous";
+    const sessionConfidence = captureIdentity?.id ? 0.98 : jwtSubject ? 0.74 : secret ? 0.78 : 0.15;
     const requestShape = {
       method,
       template: normalized.template,
@@ -801,10 +1000,16 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
       contentType: responseMeta.contentType,
       authType,
       authState: authType === "none" ? "anonymous" : "authenticated",
+      authSignals: {
+        setCookie: Boolean(response.headers["set-cookie"]),
+        clearsCookie: /(?:max-age\s*=\s*0|expires\s*=\s*thu,?\s*0?1\s+jan\s+1970)/i.test(String(response.headers["set-cookie"] || "")),
+        tokenShape: responseMeta.sensitiveFields.some((field) => /(?:^|\.)(?:access_?token|refresh_?token|id_?token|token)$/i.test(field)),
+      },
       sessionId,
       sessionResolution,
       sessionConfidence,
       credentialEpoch,
+      captureIdentity,
       variantKey,
       durationMs: Number(record.durationMs) || 0,
       tool: record.tool || record.source || "traffic",
@@ -838,6 +1043,7 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
       const routeMap = new Map();
       const hostMap = new Map();
       const edgeMap = new Map();
+      const auxiliaryNodes = [];
       let droppedReferenceRoutes = 0;
       let passiveSeededAssets = 0;
 
@@ -869,6 +1075,10 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
         edge.distinctSessions = edge._sessionIds.size;
         if (details.trustBoundary) edge.trustBoundary = details.trustBoundary;
         if (details.correlation) edge.correlation = details.correlation;
+        if (details.actionId) edge.actionId = details.actionId;
+        if (details.workflowId) edge.workflowId = details.workflowId;
+        if (details.outcome) edge.outcome = details.outcome;
+        if (details.identityId) edge.identityId = details.identityId;
         if (details.provenance && edge.provenanceSamples.length < 12) {
           const sample = { trafficId: evidenceId || "", ...details.provenance };
           if (!edge.provenanceSamples.some((item) => canonicalJson(item) === canonicalJson(sample))) edge.provenanceSamples.push(sample);
@@ -882,7 +1092,7 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
           hostMap.set(host, {
             id: stableNodeId("host", host), canonicalKey: host, type: "Host", label: host, host,
             observationType: "discovered", confidence, evidenceRefs: [],
-            observed: false, discovered: true, discoveredBy: [], observedCount: 0, routeCount: 0, riskScore: 0,
+            observed: false, discovered: true, discoveredBy: [], observedCount: 0, routeCount: 0, riskScore: 0, priorityScore: 0, priorityTier: "low", priorityFactors: [],
           });
         }
         const node = hostMap.get(host);
@@ -921,7 +1131,7 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
             observed: false, discovered: true, discoveredBy: [], evidenceIds: [], evidenceRefs: [], observedCount: 0,
             firstSeen: "", lastSeen: "", statusCodes: [], contentTypes: [], authTypes: [],
             parameters: [...normalized.parameters.map(({ observedValue, ...item }) => item), ...queryParameters],
-            sensitiveFields: [], riskTags: [], riskScore: 0, relevance: visibility.relevance,
+            sensitiveFields: [], riskTags: [], riskScore: 0, priorityScore: 0, priorityTier: "low", priorityFactors: [], relevance: visibility.relevance,
             visibility: visibility.visibility, filterReason: visibility.reason, variants: [], entryPointReasons: [],
           };
           routeMap.set(routeKey, route);
@@ -983,7 +1193,10 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
           variant = {
             id: stableNodeId("variant", `${observation.routeKey}|${observation.variantKey}`), fingerprint: hash(observation.variantKey, 64),
             observationType: "observed", confidence: 1,
-            actorRole: "unknown", authenticationState: observation.authState, authType: observation.authType,
+            actorRole: observation.captureIdentity?.role || "unknown",
+            actorRoles: observation.captureIdentity?.role ? [observation.captureIdentity.role] : [],
+            identityIds: observation.captureIdentity?.id ? [observation.captureIdentity.id] : [],
+            authenticationState: observation.authState, authType: observation.authType,
             requestShapeHash: observation.requestShapeHash, responseSchemaHash: observation.responseSchemaHash,
             responseSchema: observation.responseSchema, statusCode: observation.statusCode,
             sensitiveFields: observation.sensitiveFields, occurrenceCount: 0,
@@ -992,6 +1205,9 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
           route.variants.push(variant);
         }
         variant.occurrenceCount += 1;
+        if (observation.captureIdentity?.id && !variant.identityIds.includes(observation.captureIdentity.id)) variant.identityIds.push(observation.captureIdentity.id);
+        if (observation.captureIdentity?.role && !variant.actorRoles.includes(observation.captureIdentity.role)) variant.actorRoles.push(observation.captureIdentity.role);
+        if (variant.actorRole === "unknown" && observation.captureIdentity?.role) variant.actorRole = observation.captureIdentity.role;
         if (variant.evidenceIds.length < 100 && !variant.evidenceIds.includes(observation.evidenceId)) { variant.evidenceIds.push(observation.evidenceId); variant.evidenceRefs.push(observation.evidenceId); }
       }
 
@@ -1161,28 +1377,387 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
       }
       passiveSeededAssets = passiveSeeded;
 
+      // Pass 7: merge content-addressed JavaScript artifacts. Script bodies
+      // remain in the artifact store; the graph receives only deterministic
+      // metadata, endpoint hints, and source pointers.
+      let javascriptManifest = { artifacts: [], contentHash: "" };
+      try {
+        if (javascriptArtifacts?.readManifest) javascriptManifest = javascriptArtifacts.readManifest(verified.root);
+        else {
+          const manifestTarget = path.join(verified.root, "traffic", "artifacts", "javascript", "manifest.json");
+          if (fs.existsSync(manifestTarget)) javascriptManifest = JSON.parse(fs.readFileSync(manifestTarget, "utf8"));
+        }
+      } catch { javascriptManifest = { artifacts: [], contentHash: "", error: "unreadable" }; }
+      const javascriptNodes = new Map();
+      const javascriptByUrl = new Map();
+      for (const artifact of Array.isArray(javascriptManifest.artifacts) ? javascriptManifest.artifacts : []) {
+        if (!/^[a-f0-9]{64}$/i.test(String(artifact.sha256 || ""))) continue;
+        const firstUrl = (artifact.urls || []).find((entry) => entry?.url)?.url || "";
+        let label = `script ${artifact.sha256.slice(0, 12)}`;
+        let scriptHost = "";
+        try { const parsed = new URL(firstUrl); label = parsed.pathname.split("/").filter(Boolean).at(-1) || label; scriptHost = parsed.hostname.toLowerCase(); } catch { /* Keep hash label. */ }
+        const scriptNode = {
+          id: stableNodeId("javascript", artifact.sha256), canonicalKey: artifact.sha256,
+          type: "JavaScript", label, host: scriptHost, observationType: "discovered", confidence: 1,
+          contentHash: `sha256:${artifact.sha256}`, byteLength: Number(artifact.byteLength) || 0,
+          urlCount: (artifact.urls || []).length, importCount: (artifact.imports || []).length,
+          endpointCount: (artifact.endpoints || []).length, sourceMapCount: (artifact.sourceMaps || []).length,
+          urls: (artifact.urls || []).map((entry) => ({ url: entry.url, source: entry.source, captureIdentity: entry.captureIdentity || null })).slice(0, 100),
+          signals: artifact.signals || {}, sourceRef: artifact.objectPath || "",
+        };
+        const scriptFactors = [];
+        if (Number(artifact.signals?.authorizationReferences)) scriptFactors.push(priorityFactor("authorization_references", "Authorization logic referenced", 10));
+        if (Number(artifact.signals?.storageReferences)) scriptFactors.push(priorityFactor("storage_references", "Browser storage referenced", 8));
+        if (Number(artifact.signals?.graphqlReferences)) scriptFactors.push(priorityFactor("graphql_references", "GraphQL capability referenced", 10));
+        if (Number(artifact.sourceMaps?.length)) scriptFactors.push(priorityFactor("source_map_reference", "Source map reference discovered", 8));
+        if (Number(artifact.endpoints?.length) >= 5) scriptFactors.push(priorityFactor("endpoint_concentration", "Multiple endpoint declarations discovered", 6));
+        applyPriority(scriptNode, scriptFactors);
+        scriptNode.riskTags = scriptFactors.map((factor) => factor.id);
+        scriptNode.priorityEvidence = "discovered";
+        javascriptNodes.set(artifact.sha256, scriptNode);
+        auxiliaryNodes.push(scriptNode);
+        for (const entry of artifact.urls || []) {
+          if (!entry?.url) continue;
+          javascriptByUrl.set(entry.url, scriptNode);
+          const scriptRoute = ensureRoute(entry.url, "GET", { discoveredBy: entry.source || "javascript-artifact", confidence: 0.96, methodConfidence: 0.99 });
+          if (scriptRoute) addEdge(scriptRoute.id, scriptNode.id, "SERVES_SCRIPT", 0.98, "", { observationType: "discovered", provenance: { location: "javascript.manifest", extractor: "content-addressed-artifact", selector: artifact.sha256 } });
+        }
+        for (const endpoint of artifact.endpoints || []) {
+          const target = resolveReferencedRoute(endpoint.url, endpoint.method, { discoveredBy: endpoint.extractor || "javascript-analysis", confidence: Number(endpoint.confidence) || 0.7, methodConfidence: Number(endpoint.confidence) || 0.7 });
+          if (target) addEdge(scriptNode.id, target.id, "DECLARES_ENDPOINT", Number(endpoint.confidence) || 0.7, "", { observationType: "discovered", provenance: { location: "javascript.source", extractor: endpoint.extractor || "javascript-analysis", selector: endpoint.method || "GET" } });
+        }
+        for (const sourceMapUrl of artifact.sourceMaps || []) {
+          const sourceMapRoute = ensureRoute(sourceMapUrl, "GET", { discoveredBy: "source-map-reference", confidence: 0.9, methodConfidence: 0.99 });
+          if (sourceMapRoute) addEdge(scriptNode.id, sourceMapRoute.id, "REFERENCES_SOURCE_MAP", 0.9, "", { observationType: "discovered", provenance: { location: "javascript.source", extractor: "sourceMappingURL", selector: sourceMapUrl } });
+        }
+      }
+      for (const artifact of Array.isArray(javascriptManifest.artifacts) ? javascriptManifest.artifacts : []) {
+        const sourceNode = javascriptNodes.get(artifact.sha256);
+        if (!sourceNode) continue;
+        for (const importedUrl of artifact.imports || []) {
+          const importedNode = javascriptByUrl.get(importedUrl);
+          if (importedNode) addEdge(sourceNode.id, importedNode.id, "IMPORTS_SCRIPT", 0.96, "", { observationType: "discovered", provenance: { location: "javascript.source", extractor: "static-import", selector: importedUrl } });
+          else {
+            const importRoute = ensureRoute(importedUrl, "GET", { discoveredBy: "javascript-import", confidence: 0.88, methodConfidence: 0.99 });
+            if (importRoute) addEdge(sourceNode.id, importRoute.id, "IMPORTS_SCRIPT_RESOURCE", 0.88, "", { observationType: "discovered", provenance: { location: "javascript.source", extractor: "static-import", selector: importedUrl } });
+          }
+        }
+      }
+
       for (const route of routeMap.values()) {
-        const tags = [];
-        let score = 0;
-        if (STATE_CHANGING_METHODS.has(route.method)) { tags.push("state_changing"); score += 20; }
-        if (route.parameters.some((item) => item.category === "id" || /(?:^|_)id$/i.test(item.name))) { tags.push("object_identifier"); score += 18; }
-        if (route.sensitiveFields.length) { tags.push("sensitive_response"); score += Math.min(25, 12 + route.sensitiveFields.length * 3); }
-        if (HIGH_VALUE_PATH_PATTERN.test(route.template)) { tags.push("security_relevant_route"); score += 15; }
-        if (route.authTypes.some((type) => type !== "none")) { tags.push("authentication_observed"); score += 8; }
-        if (route.statusCodes.includes(500)) { tags.push("server_error_observed"); score += 12; }
-        if (route.variants.length > 1) { tags.push("behavior_variants"); score += Math.min(12, route.variants.length * 2); }
-        if (route.entryPointReasons.length) tags.push("entry_point");
-        if (!route.observed) tags.push("discovered_reference");
-        route.riskTags = tags;
-        route.riskScore = Math.min(100, score);
+        calculateRoutePriority(route);
         const host = ensureHost(route.host);
-        host.riskScore = Math.max(host.riskScore, route.riskScore);
+        if (route.priorityScore > (host.priorityScore ?? host.riskScore ?? 0)) {
+          applyPriority(host, [priorityFactor("highest_route_priority", `Highest route priority: ${route.label}`, route.priorityScore)]);
+          host.priorityEvidence = route.priorityEvidence;
+        }
         route.variants.sort((a, b) => b.occurrenceCount - a.occurrenceCount || String(a.id).localeCompare(String(b.id)));
       }
 
       for (const route of routeMap.values()) addEdge(hostMap.get(route.host).id, route.id, "EXPOSES", route.confidence, route.evidenceRefs[0] || "", {
         observationType: route.observationType, provenance: { location: "route.host", extractor: "host-route-materializer", selector: route.host },
       });
+
+      // Typed projections make identity differences, parameters, response
+      // variants, and business objects queryable without exposing raw values.
+      const identityNodes = new Map();
+      for (const observation of observations) {
+        const identity = observation.captureIdentity;
+        if (!identity?.id) continue;
+        if (!identityNodes.has(identity.id)) {
+          const node = {
+            id: stableNodeId("identity", identity.id), canonicalKey: identity.id, type: "Identity",
+            label: identity.label || identity.id, role: identity.role || "user",
+            observationType: "derived", confidence: 0.98, observedCount: 0, riskScore: 0, priorityScore: 0, priorityTier: "low", priorityFactors: [],
+          };
+          identityNodes.set(identity.id, node); auxiliaryNodes.push(node);
+        }
+        const node = identityNodes.get(identity.id); node.observedCount += 1;
+        const route = routeMap.get(observation.routeKey);
+        if (route) addEdge(node.id, route.id, "ACCESSED_AS", 0.98, observation.evidenceId, { observationType: "observed", sessionId: observation.sessionId, provenance: { location: "traffic.captureIdentity", extractor: "proxy-capture-context", selector: identity.role || "identity" } });
+      }
+
+      for (const route of routeMap.values()) {
+        for (const parameter of route.parameters || []) {
+          const canonicalKey = `${route.canonicalKey}|${parameter.location}|${parameter.name}`;
+          const parameterNode = {
+            id: stableNodeId("parameter", canonicalKey), canonicalKey, type: "Parameter",
+            label: `${parameter.location}:${parameter.name}`, name: parameter.name, location: parameter.location,
+            category: parameter.category || "value", host: route.host, observationType: "derived", confidence: route.confidence,
+            riskScore: 0,
+          };
+          applyPriority(parameterNode, parameter.category === "id"
+            ? [priorityFactor("object_identifier", "Object identifier parameter", 20)]
+            : []);
+          parameterNode.riskTags = parameterNode.priorityFactors.map((factor) => factor.id);
+          parameterNode.priorityEvidence = route.priorityEvidence;
+          auxiliaryNodes.push(parameterNode);
+          addEdge(route.id, parameterNode.id, "ACCEPTS_PARAMETER", route.confidence, route.evidenceRefs[0] || "", { observationType: route.observationType, provenance: { location: parameter.location, extractor: "parameter-normalizer", selector: parameter.name } });
+        }
+        for (const variant of route.variants || []) {
+          const canonicalKey = `${route.canonicalKey}|${variant.fingerprint}`;
+          const variantNode = {
+            id: stableNodeId("responsevariant", canonicalKey), canonicalKey, type: "ResponseVariant",
+            label: `${variant.statusCode || 0} · ${(variant.identityIds || []).length ? variant.identityIds.join(", ") : variant.authenticationState}`,
+            host: route.host, statusCode: variant.statusCode, authenticationState: variant.authenticationState,
+            actorRole: variant.actorRole, actorRoles: variant.actorRoles || [], identityIds: variant.identityIds || [],
+            occurrenceCount: variant.occurrenceCount, responseSchemaHash: variant.responseSchemaHash,
+            observationType: "derived", confidence: 1, riskScore: 0,
+          };
+          applyPriority(variantNode, variant.statusCode >= 500
+            ? [priorityFactor("server_error_observed", "Server error response variant", 12)]
+            : []);
+          variantNode.riskTags = variantNode.priorityFactors.map((factor) => factor.id);
+          variantNode.priorityEvidence = "observed";
+          auxiliaryNodes.push(variantNode);
+          addEdge(route.id, variantNode.id, "RETURNS_VARIANT", 1, variant.representativeEvidenceId || "", { observationType: "observed", provenance: { location: "traffic.response", extractor: "response-variant-cluster", selector: variant.responseSchemaHash } });
+        }
+      }
+
+      for (const [key, group] of routesByObject.entries()) {
+        if (!group.routes.size) continue;
+        const canonicalKey = key;
+        const objectNode = {
+          id: stableNodeId("businessobject", canonicalKey), canonicalKey, type: "BusinessObject",
+          label: group.reference.namespace, namespace: group.reference.namespace,
+          valueType: group.reference.valueType, lowEntropy: Boolean(group.reference.lowEntropy),
+          routeCount: group.routes.size, observationType: "derived", confidence: group.routes.size > 1 ? 0.9 : 0.72,
+          riskScore: 0,
+        };
+        applyPriority(objectNode, group.routes.size > 1
+          ? [priorityFactor("shared_business_object", "Business object appears across multiple routes", 24)]
+          : [priorityFactor("business_object", "Business object reference observed", 8)]);
+        objectNode.riskTags = objectNode.priorityFactors.map((factor) => factor.id);
+        objectNode.priorityEvidence = "observed";
+        auxiliaryNodes.push(objectNode);
+        for (const [routeId, relation] of group.routes.entries()) {
+          const types = relation.directions.has("produced") ? ["PRODUCES_OBJECT"] : [];
+          if (relation.directions.has("consumed")) types.push("CONSUMES_OBJECT");
+          if (relation.directions.has("target")) types.push("TARGETS_OBJECT");
+          for (const type of types) addEdge(routeId, objectNode.id, type, objectNode.confidence, relation.evidenceIds[0] || "", { observationType: "inferred", provenance: { location: "request-response-correlation", extractor: "business-object-projector", selector: group.reference.namespace } });
+        }
+      }
+
+      // Pass 9: derive an application state model from observed identities,
+      // route semantics, response outcomes, and correlated business objects.
+      // This pass never treats a derived state or anomaly as a verified finding.
+      const stateNodes = new Map();
+      const actionNodes = new Map();
+      const workflowNodes = [];
+      const stateSteps = new Map();
+      const stateAnomalies = [];
+      const objectNodesByKey = new Map(auxiliaryNodes.filter((node) => node.type === "BusinessObject").map((node) => [node.canonicalKey, node]));
+      const objectsByRoute = new Map();
+      for (const edge of edgeMap.values()) {
+        if (!["PRODUCES_OBJECT", "CONSUMES_OBJECT", "TARGETS_OBJECT"].includes(edge.type)) continue;
+        if (!objectsByRoute.has(edge.source)) objectsByRoute.set(edge.source, new Set());
+        objectsByRoute.get(edge.source).add(edge.target);
+      }
+      const ensureIdentity = (key, label, role, confidence = 0.9) => {
+        const identityKey = String(key || "anonymous");
+        if (identityNodes.has(identityKey)) return identityNodes.get(identityKey);
+        const node = {
+          id: stableNodeId("identity", identityKey), canonicalKey: identityKey, type: "Identity",
+          label: String(label || (identityKey === "anonymous" ? "Anonymous" : "Authenticated session")),
+          role: String(role || (identityKey === "anonymous" ? "anonymous" : "unknown")),
+          observationType: "derived", confidence, observedCount: 0, riskScore: 0, priorityScore: 0, priorityTier: "low", priorityFactors: [],
+        };
+        identityNodes.set(identityKey, node); auxiliaryNodes.push(node);
+        return node;
+      };
+      const ensureState = ({ key, label, stateKind, resource = "", lifecycle = "", host = "", identityNode, confidence = 0.8, observationType = "derived", evidenceId = "", routeId = "", actionId = "" }) => {
+        if (!stateNodes.has(key)) {
+          const node = {
+            id: stableNodeId("applicationstate", key), canonicalKey: key, type: "ApplicationState", label,
+            stateKind, resource, lifecycle, host, identityId: identityNode?.id || "", identityLabel: identityNode?.label || "",
+            role: identityNode?.role || "unknown", observationType, confidence, observedCount: 0,
+            evidenceRefs: [], routeIds: [], actionIds: [], anomalyIds: [], candidateTests: [],
+            riskScore: 0, priorityScore: 0, priorityTier: "low", priorityFactors: [],
+          };
+          stateNodes.set(key, node); auxiliaryNodes.push(node);
+        }
+        const node = stateNodes.get(key);
+        node.observedCount += 1;
+        node.confidence = Math.max(node.confidence, confidence);
+        if (evidenceId && node.evidenceRefs.length < 100 && !node.evidenceRefs.includes(evidenceId)) node.evidenceRefs.push(evidenceId);
+        if (routeId && !node.routeIds.includes(routeId)) node.routeIds.push(routeId);
+        if (actionId && !node.actionIds.includes(actionId)) node.actionIds.push(actionId);
+        return node;
+      };
+      const ensureAction = (observation, route) => {
+        const semantics = classifyApplicationAction(observation);
+        const key = route.canonicalKey;
+        if (!actionNodes.has(key)) {
+          const node = {
+            id: stableNodeId("action", key), canonicalKey: key, type: "Action", label: semantics.label,
+            actionKind: semantics.kind, resource: semantics.resource, mutating: semantics.mutating,
+            method: route.method, host: route.host, template: route.template, routeId: route.id,
+            observationType: "derived", confidence: route.confidence, observedCount: 0, successfulCount: 0, rejectedCount: 0,
+            statusCodes: [], identityIds: [], preconditionStateIds: [], resultingStateIds: [], entityIds: [], evidenceRefs: [], anomalyIds: [], candidateTests: [],
+            riskScore: route.riskScore || 0, priorityScore: route.priorityScore || 0, priorityTier: route.priorityTier || "low", priorityFactors: route.priorityFactors || [],
+          };
+          actionNodes.set(key, node); auxiliaryNodes.push(node);
+          addEdge(route.id, node.id, "IMPLEMENTS_ACTION", route.confidence, route.evidenceRefs[0] || "", { observationType: "derived", provenance: { location: "route.method", extractor: "application-state-model", selector: route.method } });
+        }
+        return actionNodes.get(key);
+      };
+      const orderedObservations = observations.slice().sort((left, right) => {
+        const leftTime = Date.parse(left.observedAt); const rightTime = Date.parse(right.observedAt);
+        if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) return leftTime - rightTime;
+        return left.sourceIndex - right.sourceIndex;
+      });
+      for (const observation of orderedObservations) {
+        const route = routeMap.get(observation.routeKey);
+        if (!route) continue;
+        const explicitIdentity = observation.captureIdentity;
+        const actorKey = explicitIdentity?.id || (observation.authState === "authenticated" ? "authenticated-session" : "anonymous");
+        const actor = ensureIdentity(actorKey, explicitIdentity?.label || (observation.authState === "authenticated" ? "Authenticated session" : "Anonymous"), explicitIdentity?.role || (observation.authState === "authenticated" ? "unknown" : "anonymous"), explicitIdentity?.id ? 0.98 : observation.sessionConfidence);
+        // Explicit capture identities were counted by the typed-identity pass;
+        // synthetic anonymous/session actors are first materialized here.
+        if (!explicitIdentity?.id) actor.observedCount += 1;
+        const action = ensureAction(observation, route);
+        const successful = Number(observation.statusCode) >= 200 && Number(observation.statusCode) < 400;
+        action.observedCount += 1;
+        if (successful) action.successfulCount += 1; else action.rejectedCount += 1;
+        if (Number.isFinite(observation.statusCode) && !action.statusCodes.includes(observation.statusCode)) action.statusCodes.push(observation.statusCode);
+        if (!action.identityIds.includes(actor.id)) action.identityIds.push(actor.id);
+        if (action.evidenceRefs.length < 100 && !action.evidenceRefs.includes(observation.evidenceId)) action.evidenceRefs.push(observation.evidenceId);
+        const authLifecycle = observation.authState === "authenticated" ? "authenticated" : "anonymous";
+        const beforeState = ensureState({
+          key: `authentication|${actorKey}|${observation.host}|${authLifecycle}`,
+          label: authLifecycle === "authenticated" ? `Authenticated · ${actor.label}` : "Anonymous",
+          stateKind: "authentication", lifecycle: authLifecycle, host: observation.host, identityNode: actor,
+          confidence: explicitIdentity?.id ? 0.98 : Math.max(0.55, observation.sessionConfidence), observationType: "observed",
+          evidenceId: observation.evidenceId, routeId: route.id, actionId: action.id,
+        });
+        if (!action.preconditionStateIds.includes(beforeState.id)) action.preconditionStateIds.push(beforeState.id);
+        addEdge(actor.id, beforeState.id, "HAS_STATE", beforeState.confidence, observation.evidenceId, { observationType: "observed", identityId: actor.id, provenance: { location: "traffic.request", extractor: "authentication-state-projector", selector: observation.authType } });
+        addEdge(beforeState.id, action.id, "REQUIRES_STATE", beforeState.confidence, observation.evidenceId, { observationType: "derived", identityId: actor.id, provenance: { location: "traffic.request", extractor: "application-state-model", selector: authLifecycle } });
+        const entityIds = [...(objectsByRoute.get(route.id) || [])];
+        for (const entityId of entityIds) {
+          if (!action.entityIds.includes(entityId)) action.entityIds.push(entityId);
+          addEdge(action.id, entityId, action.mutating ? "MUTATES_ENTITY" : "READS_ENTITY", action.mutating ? 0.88 : 0.82, observation.evidenceId, { observationType: "derived", identityId: actor.id, provenance: { location: "request-response-correlation", extractor: "application-state-model", selector: action.actionKind } });
+          addEdge(actor.id, entityId, "ACTED_ON_ENTITY", 0.72, observation.evidenceId, { observationType: "derived", identityId: actor.id, provenance: { location: "traffic.captureIdentity", extractor: "application-state-model", selector: action.actionKind } });
+        }
+        let afterState = beforeState;
+        if (successful && action.actionKind !== "read") {
+          const lifecycle = lifecycleStateForAction(action);
+          let resultActor = actor;
+          let resultActorKey = actorKey;
+          let confidence = 0.84;
+          let stateKind = "entity-lifecycle";
+          let label = `${action.resource} · ${lifecycle}`;
+          if (["authenticate", "logout"].includes(action.actionKind)) {
+            stateKind = "authentication";
+            if (action.actionKind === "authenticate" && actorKey === "anonymous") {
+              resultActorKey = "authenticated-session";
+              resultActor = ensureIdentity(resultActorKey, "Authenticated session", "unknown", 0.72);
+            }
+            label = action.actionKind === "logout" ? "Anonymous" : `Authenticated · ${resultActor.label}`;
+            confidence = observation.authSignals?.setCookie || observation.authSignals?.tokenShape || observation.authSignals?.clearsCookie ? 0.92 : 0.74;
+          }
+          afterState = ensureState({
+            key: `${stateKind}|${resultActorKey}|${observation.host}|${action.resource}|${lifecycle}`,
+            label, stateKind, resource: stateKind === "entity-lifecycle" ? action.resource : "", lifecycle, host: observation.host,
+            identityNode: resultActor, confidence, observationType: "derived", evidenceId: observation.evidenceId, routeId: route.id, actionId: action.id,
+          });
+          if (!action.resultingStateIds.includes(afterState.id)) action.resultingStateIds.push(afterState.id);
+          addEdge(action.id, afterState.id, "PRODUCES_STATE", confidence, observation.evidenceId, { observationType: "derived", actionId: action.id, identityId: resultActor.id, outcome: lifecycle, provenance: { location: "traffic.response", extractor: "application-state-model", selector: String(observation.statusCode || "unknown") } });
+          addEdge(beforeState.id, afterState.id, "TRANSITIONS_TO", confidence, observation.evidenceId, { observationType: "derived", actionId: action.id, identityId: actor.id, outcome: lifecycle, provenance: { location: "traffic.exchange", extractor: "application-state-model", selector: `${observation.method}:${observation.statusCode}` } });
+        } else {
+          addEdge(action.id, beforeState.id, "PRESERVES_STATE", successful ? 0.9 : 0.96, observation.evidenceId, { observationType: "observed", actionId: action.id, identityId: actor.id, outcome: successful ? "read" : "rejected", provenance: { location: "traffic.response", extractor: "application-state-model", selector: String(observation.statusCode || "unknown") } });
+        }
+        stateSteps.set(observation.sourceIndex, { actionId: action.id, routeId: route.id, beforeStateId: beforeState.id, afterStateId: afterState.id, identityId: actor.id, evidenceId: observation.evidenceId, statusCode: observation.statusCode, observedAt: observation.observedAt });
+      }
+
+      const stateProjectionNodeById = new Map([...actionNodes.values(), ...stateNodes.values()].map((node) => [node.id, node]));
+      const addStateAnomaly = (kind, basisKey, input) => {
+        const anomaly = {
+          id: stableNodeId("stateanomaly", `${kind}|${basisKey}`), kind, status: "candidate", confidence: input.confidence,
+          title: input.title, basis: input.basis, actionIds: input.actionIds || [], stateIds: input.stateIds || [],
+          routeIds: input.routeIds || [], entityIds: input.entityIds || [], identityIds: input.identityIds || [],
+          evidenceRefs: [...new Set(input.evidenceRefs || [])].slice(0, 20), candidateTest: input.candidateTest,
+        };
+        stateAnomalies.push(anomaly);
+        for (const nodeId of [...(anomaly.actionIds || []), ...(anomaly.stateIds || [])]) {
+          const node = stateProjectionNodeById.get(nodeId);
+          if (!node) continue;
+          if (!node.anomalyIds.includes(anomaly.id)) node.anomalyIds.push(anomaly.id);
+          if (anomaly.candidateTest && !node.candidateTests.includes(anomaly.candidateTest)) node.candidateTests.push(anomaly.candidateTest);
+        }
+      };
+      for (const action of actionNodes.values()) {
+        const anonymousStates = action.preconditionStateIds.map((id) => stateProjectionNodeById.get(id)).filter((state) => state?.lifecycle === "anonymous");
+        if (action.mutating && action.successfulCount > 0 && anonymousStates.length) addStateAnomaly("anonymous_state_change", action.id, {
+          confidence: 0.82, title: "Successful state change observed from an anonymous state",
+          basis: "A state-changing HTTP action returned a success-class response while the request carried no observed authentication material.",
+          actionIds: [action.id], stateIds: anonymousStates.map((state) => state.id), routeIds: [action.routeId], evidenceRefs: action.evidenceRefs,
+          candidateTest: "Replay the action anonymously and with an authenticated identity, then compare authorization, ownership, and persisted side effects.",
+        });
+        const route = routeMap.get(action.canonicalKey);
+        const differential = route ? identityDifferential(route) : { hasDifferential: false };
+        if (differential.hasDifferential) addStateAnomaly("identity_response_differential", action.id, {
+          confidence: 0.86, title: "Identity-dependent action outcome observed",
+          basis: "Different configured identities produced different status or response-schema profiles for the same normalized action.",
+          actionIds: [action.id], stateIds: action.preconditionStateIds, routeIds: [action.routeId], identityIds: action.identityIds, evidenceRefs: action.evidenceRefs,
+          candidateTest: "Repeat the action with each authorized test identity and compare object ownership, authorization outcome, and resulting state.",
+        });
+      }
+      const identitiesByObject = new Map();
+      for (const observation of observations) {
+        if (!observation.captureIdentity?.id) continue;
+        for (const reference of observation.objectReferences || []) {
+          const objectNode = objectNodesByKey.get(`${reference.namespace}|${reference.fingerprint}`);
+          if (!objectNode) continue;
+          if (!identitiesByObject.has(objectNode.id)) identitiesByObject.set(objectNode.id, new Map());
+          const identities = identitiesByObject.get(objectNode.id);
+          if (!identities.has(observation.captureIdentity.id)) identities.set(observation.captureIdentity.id, []);
+          if (identities.get(observation.captureIdentity.id).length < 10) identities.get(observation.captureIdentity.id).push(observation.evidenceId);
+        }
+      }
+      for (const [entityId, identities] of identitiesByObject) {
+        if (identities.size < 2) continue;
+        const identityGraphIds = [...identities.keys()].map((id) => identityNodes.get(id)?.id).filter(Boolean);
+        addStateAnomaly("cross_identity_entity", entityId, {
+          confidence: 0.78, title: "Business object observed across multiple identities",
+          basis: "The same privacy-preserving business-object fingerprint appeared in traffic captured under more than one configured identity.",
+          entityIds: [entityId], identityIds: identityGraphIds, evidenceRefs: [...identities.values()].flat(),
+          candidateTest: "Verify whether each identity is authorized to read or mutate this object; compare owner and non-owner outcomes without assuming an access-control flaw.",
+        });
+      }
+
+      const workflows = [];
+      for (const [sessionKey, sessionObservations] of observationsBySession.entries()) {
+        const steps = sessionObservations.map((observation) => stateSteps.get(observation.sourceIndex)).filter(Boolean).slice(0, 500);
+        if (!steps.length) continue;
+        const identityIds = [...new Set(steps.map((step) => step.identityId).filter(Boolean))];
+        const workflowId = stableNodeId("workflow", sessionKey);
+        const workflow = {
+          id: workflowId, label: `Workflow · ${identityIds.map((id) => auxiliaryNodes.find((node) => node.id === id)?.label).filter(Boolean).join(", ") || "session"}`,
+          observationType: "derived", confidence: Math.min(...sessionObservations.map((item) => Math.max(0.15, item.sessionConfidence))),
+          identityIds, actionIds: [...new Set(steps.map((step) => step.actionId))], stateIds: [...new Set(steps.flatMap((step) => [step.beforeStateId, step.afterStateId]))],
+          firstSeen: steps[0].observedAt || "", lastSeen: steps.at(-1).observedAt || "", observedCount: steps.length,
+          steps: steps.map((step, index) => ({ index: index + 1, ...step })),
+        };
+        workflows.push(workflow);
+        const node = { ...workflow, type: "Workflow", canonicalKey: sessionKey, evidenceRefs: steps.map((step) => step.evidenceId).slice(0, 100), riskScore: 0, priorityScore: 0, priorityTier: "low", priorityFactors: [] };
+        workflowNodes.push(node); auxiliaryNodes.push(node);
+        workflow.actionIds.forEach((actionId) => addEdge(node.id, actionId, "CONTAINS_ACTION", workflow.confidence, steps.find((step) => step.actionId === actionId)?.evidenceId || "", { observationType: "derived", workflowId, provenance: { location: "traffic.timeline", extractor: "application-state-model", selector: "ordered-session" } }));
+        addEdge(node.id, steps[0].beforeStateId, "STARTS_IN", workflow.confidence, steps[0].evidenceId, { observationType: "derived", workflowId, provenance: { location: "traffic.timeline", extractor: "application-state-model", selector: "first-state" } });
+        addEdge(node.id, steps.at(-1).afterStateId, "ENDS_IN", workflow.confidence, steps.at(-1).evidenceId, { observationType: "derived", workflowId, provenance: { location: "traffic.timeline", extractor: "application-state-model", selector: "last-state" } });
+      }
+
+      const stateModel = {
+        version: 1,
+        derivation: "deterministic-traffic-projection",
+        states: [...stateNodes.values()].map((node) => ({ id: node.id, label: node.label, stateKind: node.stateKind, resource: node.resource, lifecycle: node.lifecycle, host: node.host, identityId: node.identityId, confidence: node.confidence, observationType: node.observationType, evidenceRefs: node.evidenceRefs, actionIds: node.actionIds, routeIds: node.routeIds, anomalyIds: node.anomalyIds, candidateTests: node.candidateTests })),
+        actions: [...actionNodes.values()].map((node) => ({ id: node.id, label: node.label, actionKind: node.actionKind, resource: node.resource, mutating: node.mutating, method: node.method, host: node.host, template: node.template, routeId: node.routeId, observedCount: node.observedCount, successfulCount: node.successfulCount, rejectedCount: node.rejectedCount, identityIds: node.identityIds, preconditionStateIds: node.preconditionStateIds, resultingStateIds: node.resultingStateIds, entityIds: node.entityIds, evidenceRefs: node.evidenceRefs, anomalyIds: node.anomalyIds, candidateTests: node.candidateTests })),
+        entities: auxiliaryNodes.filter((node) => node.type === "BusinessObject").map((node) => ({ id: node.id, label: node.label, namespace: node.namespace, confidence: node.confidence })),
+        identities: [...identityNodes.values()].map((node) => ({ id: node.id, label: node.label, role: node.role, confidence: node.confidence })),
+        transitions: [...edgeMap.values()].filter((edge) => edge.type === "TRANSITIONS_TO").map((edge) => ({ id: edge.id, source: edge.source, target: edge.target, actionId: edge.actionId, identityId: edge.identityId, outcome: edge.outcome, confidence: edge.confidence, evidenceIds: edge.evidenceIds })),
+        workflows,
+        anomalies: stateAnomalies.sort((left, right) => right.confidence - left.confidence || left.id.localeCompare(right.id)),
+      };
 
       for (const edge of edgeMap.values()) {
         if (edge.type === "FOLLOWED_BY") {
@@ -1195,13 +1770,14 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
 
       const routes = [...routeMap.values()].sort((a, b) => b.riskScore - a.riskScore || b.observedCount - a.observedCount || a.label.localeCompare(b.label));
       const hosts = [...hostMap.values()].sort((a, b) => a.label.localeCompare(b.label));
+      const typedNodes = auxiliaryNodes.sort((a, b) => a.type.localeCompare(b.type) || a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
       const edges = [...edgeMap.values()].sort((a, b) => a.type.localeCompare(b.type) || a.source.localeCompare(b.source) || a.target.localeCompare(b.target));
       const evidenceIds = new Set(observations.map((observation) => observation.evidenceId));
       const secretValues = traffic.records.flatMap((record) => {
         const headers = parseRawMessage(record.request).headers;
         return [headers.authorization, headers.cookie].filter(Boolean);
       });
-      const verification = { ...graphVerification([...hosts, ...routes], edges, { evidenceIds, stableNodeId, secretValues }), sourceComplete: !traffic.truncated, referencesComplete: droppedReferenceRoutes === 0, droppedReferenceRoutes };
+      const verification = { ...graphVerification([...hosts, ...routes, ...typedNodes], edges, { evidenceIds, stableNodeId, secretValues }), sourceComplete: !traffic.truncated, referencesComplete: droppedReferenceRoutes === 0, droppedReferenceRoutes };
       if (duplicateSourceIds.length) {
         verification.verified = false;
         verification.duplicateSourceIds = duplicateSourceIds.length;
@@ -1223,12 +1799,15 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
         { pass: 4, name: "resolve-sessions", processed: observationsBySession.size, failed: observations.filter((observation) => observation.sessionResolution === "unresolved-anonymous").length },
         { pass: 5, name: "correlate-objects", processed: edges.filter((edge) => edge.type === "SHARES_OBJECT").length, failed: 0 },
         { pass: 6, name: "aggregate-workflows", processed: edges.filter((edge) => edge.type === "FOLLOWED_BY").length, failed: 0 },
+        { pass: 7, name: "project-javascript-artifacts", processed: javascriptNodes.size, failed: javascriptManifest.error ? 1 : 0 },
+        { pass: 8, name: "project-typed-entities", processed: typedNodes.length - javascriptNodes.size, failed: 0 },
+        { pass: 9, name: "derive-application-state-model", processed: stateModel.states.length + stateModel.actions.length + stateModel.workflows.length, failed: 0 },
         { pass: 10, name: "validate-integrity-and-provenance", processed: verification.checkedNodes + verification.checkedEdges, failed: verification.issueCount },
       ];
       const graph = {
         kind: "xekute-application-behavior-map",
         schemaVersion: MAP_SCHEMA_VERSION,
-        schemaVersionName: "3.0.0",
+        schemaVersionName: "4.0.0",
         builderVersion: MAP_BUILDER_VERSION,
         philosophy: "live-deduplicated-evidence-preserving",
         analysisModel: "auditable-multi-pass-connectivity",
@@ -1244,6 +1823,9 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
           processedCount: observations.length, failedCount: traffic.invalidCount + (traffic.records.length - observations.length),
           invalidRecords: traffic.invalidCount, truncated: traffic.truncated, completeSourceProcessed: !traffic.truncated,
           bytesConsidered: traffic.bytesConsidered, snapshotHash: traffic.snapshotHash, warnings,
+          javascriptManifestPath: "traffic/artifacts/javascript/manifest.json",
+          javascriptSnapshotHash: javascriptManifest.contentHash || "",
+          javascriptArtifacts: javascriptNodes.size,
         },
         passReports,
         stats: {
@@ -1257,25 +1839,30 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
           droppedReferenceRoutes,
           components: verification.components,
           hiddenRoutes: routes.filter((route) => route.visibility === "hidden").length,
-          highRiskRoutes: routes.filter((route) => route.riskScore >= 60).length,
+          highPriorityRoutes: routes.filter((route) => (route.priorityScore ?? route.riskScore) >= PRIORITY_HIGH_THRESHOLD).length,
+          highRiskRoutes: routes.filter((route) => (route.priorityScore ?? route.riskScore) >= PRIORITY_HIGH_THRESHOLD).length,
+          javascriptArtifacts: javascriptNodes.size,
+          identities: typedNodes.filter((node) => node.type === "Identity").length,
+          parameters: typedNodes.filter((node) => node.type === "Parameter").length,
+          responseVariantNodes: typedNodes.filter((node) => node.type === "ResponseVariant").length,
+          businessObjects: typedNodes.filter((node) => node.type === "BusinessObject").length,
+          states: stateModel.states.length,
+          actions: stateModel.actions.length,
+          stateTransitions: stateModel.transitions.length,
+          stateWorkflows: stateModel.workflows.length,
+          stateAnomalies: stateModel.anomalies.length,
         },
         filters: { defaultVisibility: "relevant", hiddenEvidencePreserved: true },
         annotations: readAgentAnnotations(verified.root),
         verification,
-        nodes: [...hosts, ...routes],
+        stateModel,
+        nodes: [...hosts, ...routes, ...typedNodes],
         edges,
       };
       decorateGraphForAgent(graph);
-      const target = path.join(verified.root, "Map", "application-map.json");
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      const temporary = `${target}.${crypto.randomBytes(6).toString("hex")}.tmp`;
-      try {
-        fs.writeFileSync(temporary, `${JSON.stringify(graph, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
-        fs.renameSync(temporary, target);
-      } finally {
-        if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
-      }
-      return { ok: true, exists: true, path: mapRelativePath, graph };
+      attachIntelligenceProjection(graph, verified.root);
+      const stored = snapshots.persist(verified.root, graph);
+      return stored?.error ? stored : { ...stored, ok: true, exists: true };
     } catch (error) {
       return { error: `Could not build the application Map: ${error.message}`, code: "MAP_BUILD_FAILED" };
     }
@@ -1290,6 +1877,12 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
     getNeighbors: mapNeighbors,
     findPaths: mapFindPaths,
     searchRoutes: mapSearchRoutes,
+    searchNodes: mapSearchNodes,
+    getWorkflow: mapWorkflow,
+    getStateModel: mapStateModel,
+    getVariants: mapVariants,
+    getIdentityDiff: mapIdentityDiff,
+    getAnomalies: mapAnomalies,
     getSharedObjects: mapSharedObjects,
     getEvidence: mapEvidence,
     getHypotheses: mapHypotheses,
@@ -1298,6 +1891,9 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, now = () =
 }
 
 module.exports = {
+  PRIORITY_ELEVATED_THRESHOLD,
+  PRIORITY_HIGH_THRESHOLD,
+  calculateRoutePriority,
   canonicalJson,
   createAssessmentMap,
   defaultDomainExtractor,

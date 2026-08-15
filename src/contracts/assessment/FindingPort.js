@@ -4,8 +4,8 @@
  * FindingPort
  *
  * Contract for finding-candidate normalization, fingerprinting, evidence
- * relevance, verifier requirements, and promotion-gate decisions. Implemented by
- * the domain finding gate; injected so application services never import a
+ * relevance, verifier requirements, and promotion decisions. Implemented by
+ * domain finding validation; injected so application services never import a
  * concrete validator.
  */
 

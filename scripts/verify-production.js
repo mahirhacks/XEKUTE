@@ -1,105 +1,255 @@
 "use strict";
 
+/*
+ * Production architecture checks.  This script intentionally checks the
+ * source tree from the outside: it must fail when a deleted compatibility
+ * path is recreated, even if the application still happens to start.
+ */
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const main = fs.readFileSync(path.join(root, "src/presentation/electron/main.js"), "utf8");
-const html = fs.readFileSync(path.join(root, "src/presentation/ui/index.html"), "utf8");
-const preload = fs.readFileSync(path.join(root, "src/preload.js"), "utf8");
-const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-const toolMap = require(path.join(root, "src/adapters/tools/core/tool-catalog"));
-const { classifyAction } = require(path.join(root, "src/application/policies/policy-engine"));
+const sourceRoot = path.join(root, "src");
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(root, relativePath), "utf8");
+}
+
+function exists(relativePath) {
+  return fs.existsSync(path.join(root, relativePath));
+}
+
+function sourceFiles(relativeDirectory) {
+  const directory = path.join(root, relativeDirectory);
+  if (!fs.existsSync(directory)) return [];
+  const result = [];
+  const visit = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const absolute = path.join(current, entry.name);
+      if (entry.isDirectory()) visit(absolute);
+      else result.push(absolute);
+    }
+  };
+  visit(directory);
+  return result;
+}
+
+function assertNoSourceReference(pattern, message) {
+  const matches = [];
+  for (const file of sourceFiles("src")) {
+    const text = fs.readFileSync(file, "utf8");
+    if (pattern.test(text)) matches.push(path.relative(root, file));
+  }
+  assert.deepEqual(matches, [], `${message}: ${matches.join(", ")}`);
+}
+
+const main = read("src/app/electron/main.js");
+const lifecycle = read("src/app/electron/lifecycle.js");
+const html = read("src/ui/index.html");
+const preload = read("src/app/electron/preload.js");
+const forgeConfig = read("forge.config.js");
+const packageJson = JSON.parse(read("package.json"));
+const ToolRegistry = require(path.join(root, "src/agent/tools/config/tool-registry.js"));
+const ToolPort = require(path.join(root, "src/contracts/tool/tool-port.js"));
+const ModeRegistry = require(path.join(root, "src/agent/modes/mode-registry.js"));
+const ScopePolicy = require(path.join(root, "src/agent/authority/scope/scope-policy.js"));
+const { createSkillKnowledgeGraph } = require(path.join(root, "src/app/services/assessment/knowledge/skill-knowledge-graph.js"));
 
 assert.match(main, /sandbox:\s*true/);
 assert.match(main, /contextIsolation:\s*true/);
 assert.match(main, /nodeIntegration:\s*false/);
 assert.match(main, /webviewTag:\s*false/);
-assert.match(main, /setPermissionRequestHandler/);
+assert.match(lifecycle, /setPermissionRequestHandler/);
 assert.match(main, /setWindowOpenHandler/);
 assert.match(html, /Content-Security-Policy/);
 assert.doesNotMatch(html, /<(?:script|link)[^>]+(?:src|href)=["']https?:\/\//i);
-assert.match(preload, /contextBridge\.exposeInMainWorld\("xekute"/);
-assert.doesNotMatch(preload, /exposeInMainWorld\("pointer"/, "unused Pointer-era preload alias must not return");
-assert.match(preload, /projectProfileGet/);
-assert.match(preload, /projectProfileSave/);
-const preloadRequires = [...preload.matchAll(/require\(["']([^"']+)["']\)/g)].map((match) => match[1]);
-assert.deepEqual(preloadRequires, ["electron"], "sandboxed preload must not require local CommonJS modules");
+assert.match(preload, /contextBridge\.exposeInMainWorld\("api"/);
+assert.doesNotMatch(preload, /exposeInMainWorld\("xekute"|legacy compatibility facade|legacyApi|xekuteApi/i);
+assert.doesNotMatch(preload, /exposeInMainWorld\("pointer"/);
+assert.deepEqual(
+  [...preload.matchAll(/require\(["']([^"']+)["']\)/g)].map((match) => match[1]),
+  ["electron"],
+  "sandboxed preload must not require local CommonJS modules",
+);
 assert.equal(packageJson.devDependencies.electron, "43.1.0");
 assert.equal(packageJson.dependencies["@vscode/codicons"], "0.0.45");
 assert.equal(packageJson.productName, "XEKUTE");
-assert.equal(new Set(toolMap.TOOL_NAMES).size, toolMap.TOOL_NAMES.length, "tool names must be unique");
-assert.ok(toolMap.TOOL_NAMES.every((name) => ["os", "cyber"].includes(toolMap.TOOL_META[name]?.category)), "every tool must belong to an explicit category");
-assert.ok(!toolMap.toolNamesForProfile("ask").includes("run_security_tool"), "Ask must not receive active security adapters");
-assert.ok(toolMap.toolNamesForProfile("agent").includes("run_security_tool"), "Agent must receive the policy-controlled security adapter");
-assert.ok(toolMap.toolsForProfile("ask").every((tool) => !toolMap.isMutating(tool.function.name)), "Ask must receive only non-mutating tools");
-assert.equal(toolMap.TOOL_GROUPS.cyber.isSecurityCommand("nmap -sV example.com"), true, "security CLIs must be recognized for typed routing");
-assert.equal(toolMap.TOOL_GROUPS.cyber.isSecurityCommand("npm run build"), false, "workspace verification must remain an OS command");
-assert.equal(classifyAction({ toolName: "run_command", args: { command: "npm run build" } }).active, false, "standard workspace builds must not be misclassified as active testing");
-assert.match(html, /adapters\/tools\/os\/tool-registry\.js[\s\S]+adapters\/tools\/cyber\/tool-registry\.js[\s\S]+adapters\/tools\/core\/tool-catalog\.js[\s\S]+features\/toolbox\/toolbox-controller\.js/);
-assert.match(html, /prompts\/instructs\/system_prompt\.js[\s\S]+prompts\/instructs\/initial_prompt\.js[\s\S]+application\/prompt\/prompt-compiler\.js/, "human-editable prompt sources must load before the browser compiler");
-// Renderer scripts must be browser-safe. A CommonJS re-export shim
-// (module.exports = require(...)) throws "module is not defined" in a script
-// tag and kills the whole chain (this has regressed twice). Guard it.
-for (const match of html.matchAll(/<script src="([^"]+)"><\/script>/g)) {
-  const src = match[1];
-  if (/node_modules/.test(src)) continue;
-  const scriptPath = path.join(root, "src/presentation/ui", src.replace(/^\//, ""));
-  assert.ok(fs.existsSync(scriptPath), `renderer script must exist: ${src}`);
-  const source = fs.readFileSync(scriptPath, "utf8");
-  assert.ok(
-    !/module\.exports\s*=\s*require/.test(source),
-    `renderer script must not be a CommonJS shim: ${src}`,
-  );
-}
-for (const relativePath of [
-  "src/prompts/instructs/system_prompt.js",
-  "src/prompts/instructs/initial_prompt.js",
-  "src/prompts/instructs/triage_prompt.js",
-  "src/prompts/skills/triage.js",
-  "src/prompts/skills/context-router.js",
-  "src/prompts/skills/cyber-library.js",
-  "src/application/policies/agentic-loop.js",
-  "src/application/policies/bugbounty.js",
-  "src/application/policies/operating-mode-rules.js",
-  "src/application/policies/runtime-policy-rules.js",
-  "src/application/policies/evidence-rules.js",
-  "src/application/policies/request-intent-rules.js",
-  "src/application/policies/command-guardrails.js",
-  "src/application/policies/data-guardrails.js",
-]) assert.ok(fs.existsSync(path.join(root, relativePath)), `${relativePath} must exist`);
-for (const removedFacade of ["security-tool-adapters.js", "web-research.js", "webclone.js", "workspace-search.js", "tools.js"]) {
-  assert.equal(fs.existsSync(path.join(root, "src/tools", removedFacade)), false, `obsolete tool facade must stay removed: ${removedFacade}`);
-}
-// Obsolete source trees must stay removed after the layered restructure.
-for (const obsoleteTree of ["src/sub-agent", "src/harness", "src/prompt"]) {
-  assert.equal(fs.existsSync(path.join(root, obsoleteTree)), false, `obsolete tree must stay removed: ${obsoleteTree}`);
-}
-const compilerSource = fs.readFileSync(path.join(root, "src/application/prompt/prompt-compiler.js"), "utf8");
-assert.match(compilerSource, /prompt-source/, "prompt compiler must consume the application PromptSourcePort adapter in Node");
-assert.match(compilerSource, /getSystemPrompt/, "prompt compiler must resolve the system prompt through the prompt-source seam");
-assert.match(compilerSource, /XekuteSystemPrompt/, "prompt compiler must consume the preloaded browser global when not in Node");
-assert.doesNotMatch(compilerSource, /You are XEKUTE/, "system prompt prose must not drift back into orchestration code");
-assert.ok(fs.existsSync(path.join(root, "src/content/build/manifest.json")), "content build manifest must exist");
-assert.ok(fs.existsSync(path.join(root, "src/content/content-loader.js")), "content loader must exist");
-assert.match(html, /data-action="create-project"[^>]*>Create New Project/);
-assert.match(html, /data-action="open-project"[^>]*>Open Existing Project/);
-assert.doesNotMatch(html, /data-action="create-assessment"/);
-assert.doesNotMatch(html, /data-action="open-assessment"/);
-assert.match(html, /data-app-settings-section="project"/);
-assert.match(html, /Rules, Skills, Subagents/);
-assert.match(html, /guidance-settings-list/);
-assert.doesNotMatch(html, /prompt-settings-editor|prompt-model-settings|Effective compiled prompt/);
-assert.match(html, /data-project-field="scope\.inScopeTargets"/);
-assert.match(html, /data-project-field="rulesOfEngagement\.stopConditions"/);
-assert.match(html, /data-project-field="context\.applicationOverview"/);
-assert.match(main, /project-profile:get/);
-assert.match(main, /project-profile:save/);
-assert.match(main, /guidance:save/);
-assert.match(preload, /guidanceContext/);
-const projectCreateBlock = main.slice(main.indexOf('ipcMain.handle("project:create"'), main.indexOf('/** Open a file picker'));
-assert.match(projectCreateBlock, /fs\.mkdirSync\(projectPath, \{ recursive: true \}\)/);
-assert.doesNotMatch(projectCreateBlock, /assessmentWorkspace|writeFileSync|repair\(/, "project creation must only create the selected directory");
+assert.match(forgeConfig, /temp_test/);
+assert.match(forgeConfig, /graphify-out/);
+assert.match(forgeConfig, /node_modules\/node-pty/);
+assert.doesNotMatch(forgeConfig, /src\/automation/);
 
-console.log("XEKUTE production security invariants verified.");
+const canonicalNames = ToolPort.REGISTRY_TOOL_NAMES;
+assert.equal(new Set(canonicalNames).size, 21, "the canonical registry must contain exactly 21 unique tools");
+assert.deepEqual(
+  canonicalNames,
+  [
+    "exec_command",
+    "read_file",
+    "search_workspace",
+    "apply_patch",
+    "inspect_environment",
+    "manage_plan",
+    "manage_state",
+    "ingest_traffic",
+    "manage_identity",
+    "replay_request",
+    "run_test_case",
+    "browser_action",
+    "compare_responses",
+    "verify_finding",
+    "store_finding",
+    "attack_graph",
+    "delegate_agent",
+    "query_assessment",
+    "expand_evidence",
+    "query_knowledge",
+    "web_research",
+  ],
+  "the tool contract must preserve the canonical 21-tool inventory and order",
+);
+assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
+assert.deepEqual(
+  Object.keys(require(path.join(root, "src/agent/tools/config/tool-metadata.js")).TOOL_METADATA).sort(),
+  [...canonicalNames].sort(),
+  "every canonical tool must have centralized metadata",
+);
+assert.deepEqual(ScopePolicy.evaluateToolScope({ workspace: root, toolName: "read_file", args: { path: "package.json" } }).ok, true);
+assert.equal(
+  ScopePolicy.evaluateToolScope({ workspace: root, toolName: "read_file", args: { path: "..\\outside" } }).code,
+  "WORKSPACE_OUT_OF_SCOPE",
+);
+
+for (const required of [
+  "src/agent/controller/agent-controller.js",
+  "src/agent/runtime/agent-runtime.js",
+  "src/agent/tools/config/tool-metadata.js",
+  "src/agent/tools/config/tool-registry.js",
+  "src/agent/tools/config/tool-surface.js",
+  "src/agent/authority/scope/scope-policy.js",
+  "src/agent/authority/authority-registry.js",
+  "src/agent/authority/invocation-pipeline.js",
+  "src/agent/authority/composition.js",
+  "src/agent/authority/gates/pipeline-manifest.js",
+  "src/agent/authority/profiles/profile-manifest.js",
+  "src/app/services/assessment/intelligence/intelligence-store.js",
+  "src/app/services/assessment/intelligence/intelligence-indexer.js",
+  "src/app/services/assessment/intelligence/assessment-intelligence-service.js",
+  "src/app/services/assessment/mode-workflow.js",
+  "src/app/services/assessment/knowledge/assessment-knowledge-engine.js",
+  "src/app/services/assessment/knowledge/skill-knowledge-graph.js",
+  "src/app/services/assessment/knowledge/mcp-runtime.js",
+  "src/app/storage/project-memory-store.js",
+  "src/agent/memory/context/context-compiler.js",
+  "src/app/storage/session-memory-store.js",
+  "src/app/electron/lifecycle.js",
+  "src/app/ipc/register.js",
+  "src/app/ipc/project.js",
+  "src/prompts/instructions/system-prompt.js",
+  "src/ui/bootstrap.js",
+  "src/ui/core/runtime-modules.js",
+  "src/ui/features/history/history-model.js",
+]) assert.ok(exists(required), `${required} must exist in the canonical tree`);
+
+for (const removed of [
+  "src/preload.js",
+  "src/application",
+  "src/adapters",
+  "src/presentation",
+  "src/content",
+  "src/automation",
+  "src/app/services/chat-session-store.js",
+  "src/agent/policy",
+  "src/agent/clarification",
+  "src/shared/ipc-contracts.js",
+  "src/contracts/content/PromptSourcePort.js",
+  "src/contracts/tool/tool-surface-config.js",
+  "src/agent/memory/action-log.js",
+  "src/agent/memory/records.js",
+]) assert.equal(exists(removed), false, `${removed} must remain removed`);
+
+const systemPromptSources = sourceFiles("src/prompts").filter((file) => /system[-_]prompt|system-prompt/i.test(path.basename(file)));
+assert.deepEqual(
+  systemPromptSources.map((file) => path.relative(root, file).replaceAll(path.sep, "/")),
+  ["src/prompts/instructions/system-prompt.js"],
+);
+assert.doesNotMatch(read("src/prompts/instructions/system-prompt.js"), /AUTO-GENERATED|content\/build|prompt_builder/i);
+assert.doesNotMatch(read("src/agent/runtime/prompt-compiler.js"), /prompt-source|content-loader|prompt_builder/i);
+
+assert.match(html, /<script type="module" src="bootstrap\.js"><\/script>/);
+assert.doesNotMatch(html, /presentation\/ui|application\/prompt|prompts\/instructs|src\/preload\.js/);
+const rendererSyntax = spawnSync(process.execPath, ["--input-type=module", "--check"], {
+  input: read("src/ui/bootstrap.js"),
+  encoding: "utf8",
+});
+assert.equal(rendererSyntax.status, 0, `renderer ES module must parse: ${rendererSyntax.stderr || rendererSyntax.stdout}`);
+for (const match of html.matchAll(/<script(?:\s+type="module")?\s+src="([^"]+)"\s*><\/script>/g)) {
+  const scriptPath = path.join(root, "src/ui", match[1]);
+  if (/node_modules/.test(match[1])) continue;
+  assert.ok(fs.existsSync(scriptPath), `renderer script must exist: ${match[1]}`);
+}
+
+assert.doesNotMatch(main, /evaluateAction|classifyAction|requestAgentActionApproval|agentResolveApproval|GATES_DISABLED/);
+assert.doesNotMatch(read("src/agent/controller/agent-controller.js"), /evaluateAction|requestApproval|approval_required|GATES_DISABLED/);
+assert.doesNotMatch(read("src/prompts/instructions/initial-context.js"), /authority\s+gate|approval\s+token|bypass/i);
+assert.doesNotMatch(read("src/ui/bootstrap.js"), /Unrestricted|unrestricted/);
+assert.match(read("src/app/ipc/project.js"), /function registerProjectIpc\(/);
+
+for (const [pattern, message] of [
+  [/XEKUTE_AGENT_GATES_DISABLED|XEKUTE_AGENT_TOOLS_DISABLED/i, "environment gate/tool-disable switches are removed"],
+  [/requestAgentActionApproval|agentResolveApproval|approval-token|evaluateAction|classifyAction/i, "legacy approval-token and monolithic policy paths are removed"],
+  [/policy-engine|role-registry|chat-session-store/i, "legacy runtime modules are removed"],
+  [/run_security_tool|load_tool_schemas|ingest_assessment_records/i, "stale controller tool branches are removed"],
+]) assertNoSourceReference(pattern, message);
+
+const authorityComposition = require(path.join(root, "src/agent/authority/composition.js")).createAuthorityComposition({
+  evaluateScope: async () => ({ ok: true, code: "IN_SCOPE" }),
+});
+const authorityManifest = require(path.join(root, "src/agent/authority/gates/pipeline-manifest.js"));
+assert.equal(authorityComposition.registry.modules().length, 20, "authority registry must contain exactly 20 modules including the resolver");
+assert.deepEqual(
+  authorityComposition.registry.modules().map((entry) => entry.name).sort(),
+  ["authority_profile_resolver", ...authorityManifest.moduleOrder].sort(),
+  "authority module inventory must match the fixed pipeline manifest",
+);
+assert.deepEqual(
+  authorityComposition.registry.profiles().map((profile) => profile.id).sort(),
+  ["approve_for_me", "ask_for_approval", "full_authority"],
+  "exactly three production authority profiles must be active",
+);
+assert.equal(authorityComposition.registry.profile("full_authority").modulePipeline.includes("approval_gate"), false);
+for (const profile of authorityComposition.registry.profiles()) {
+  assert.equal(profile.modulePipeline[0], "role_access_gate");
+  assert.equal(profile.modulePipeline.includes("authority_profile_resolver"), false);
+}
+
+const ipcContractSource = read("src/contracts/ipc/IpcContracts.js");
+assert.doesNotMatch(ipcContractSource, /chat-sessions|agent:resolveApproval|approval/);
+assert.doesNotMatch(preload, /loadChatSessions|saveChatSessions|agentResolveApproval|resolveApproval/);
+
+for (const directory of ["src/agent/controller", "src/agent/runtime", "src/agent/tools", "src/app", "src/interceptor", "src/domain", "src/contracts", "src/infrastructure"]) {
+  for (const file of sourceFiles(directory)) {
+    const content = fs.readFileSync(file, "utf8");
+    assert.doesNotMatch(content, /require\(["']\.\.\/\.\.\/application\//, `${path.relative(root, file)} imports the removed application layer`);
+  }
+}
+
+assert.ok(exists("architecture/source-layout.md"));
+assert.ok(exists("architecture/runtime-flow.md"));
+assert.ok(exists("architecture/authority-roadmap.md"));
+assert.ok(exists("architecture/memory-storage.md"));
+assert.ok(fs.existsSync(path.join(root, "temp_test")), "temp_test harness must remain present");
+
+const skillGraph = createSkillKnowledgeGraph({ libraryRoot: path.join(sourceRoot, "prompts", "skills") });
+const skillValidation = skillGraph.validation();
+assert.equal(skillValidation.ok, true, `skill knowledge graph must validate: ${skillValidation.error || "unknown error"}`);
+for (const requiredSkill of [
+  "vapt_cycle", "preflight", "scope_validation", "passive_recon", "active_recon", "osint", "enumeration",
+  "attack_surface_mapping", "traffic_analysis", "service_analysis", "technology_fingerprinting", "identity_session_analysis",
+  "authentication_testing", "authorization_testing", "input_validation", "business_logic_testing", "vulnerability_analysis",
+  "exploitation", "post_exploitation", "verification", "finding_documentation", "reporting", "retest",
+]) assert.ok(skillGraph.list().some((skill) => skill.id === requiredSkill), `skill ${requiredSkill} must be discoverable`);
+
+console.log("XEKUTE production architecture invariants verified.");

@@ -19,6 +19,7 @@ PointerSetup*.exe
 # Test, analysis, and generated assessment data
 /test_local/
 /graphify-out/
+.graphifyignore
 /coverage/
 /.nyc_output/
 /.webclone-*/

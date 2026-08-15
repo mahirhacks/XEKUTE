@@ -1,6 +1,6 @@
 /* Agentic decision helpers. Model-facing wording stays in instructs/. */
 
-const TriagePrompts = require("../instructs/triage_prompt");
+const TriagePrompts = require("../instructions/triage.js");
 
 function retryPrompt(input) { return TriagePrompts.actionRetry(input); }
 function summaryPrompt(input) { return TriagePrompts.postToolSummary(input); }

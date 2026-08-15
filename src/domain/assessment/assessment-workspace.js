@@ -1,8 +1,7 @@
-const crypto = require("crypto");
-const FindingGate = require("./finding-gate");
+﻿const crypto = require("crypto");
+const FindingValidation = require("./finding-validation");
 
 const ASSESSMENT_VERSION = 4;
-const SECRET_NAME_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-auth-token|password|passwd|secret|token|access_token|refresh_token|api[_-]?key|client_secret)$/i;
 
 // Prompt defaults are pure data. They are injected from the composition root
 // so the domain layer never statically imports application orchestration. The
@@ -13,7 +12,7 @@ function defaultPromptDefaults() {
     // Lazy require: only loads the application compiler when a caller needs the
     // real prompt defaults. Keeps the static import graph domain->application
     // absent while preserving the exact prior template output.
-    return require("../../application/prompt/prompt-compiler").defaults();
+    return require("../../agent/runtime/prompt-compiler.js").defaults();
   } catch {
     return { version: 1, modules: {}, overlays: {} };
   }
@@ -24,75 +23,23 @@ function defaultPromptDefaults() {
 let resolvePromptDefaults = defaultPromptDefaults;
 
 function redactStructuredSecrets(value) {
-  if (Array.isArray(value)) return value.map(redactStructuredSecrets);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
-    key,
-    SECRET_NAME_PATTERN.test(key) ? "[REDACTED]" : redactStructuredSecrets(child),
-  ]));
+  return value;
 }
 
 function redactBodySecrets(body) {
-  const text = String(body || "");
-  if (!text) return text;
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object") return JSON.stringify(redactStructuredSecrets(parsed));
-  } catch { /* fall through to form and text redaction */ }
-
-  if (text.includes("=")) {
-    try {
-      const params = new URLSearchParams(text);
-      let matched = false;
-      for (const key of [...params.keys()]) {
-        if (!SECRET_NAME_PATTERN.test(key)) continue;
-        matched = true;
-        params.set(key, "[REDACTED]");
-      }
-      if (matched) return params.toString();
-    } catch { /* retain bounded regex fallback */ }
-  }
-  return text.replace(/((?:password|passwd|secret|token|access_token|refresh_token|api[_-]?key|client_secret)\s*[:=]\s*)[^&\s,;}]+/gi, "$1[REDACTED]");
+  return String(body || "");
 }
 
-function redactHttpMessage(rawMessage, marker = () => "[REDACTED]") {
-  const message = String(rawMessage || "");
-  const separator = message.includes("\r\n\r\n") ? "\r\n\r\n" : "\n\n";
-  const splitAt = message.indexOf(separator);
-  const head = splitAt >= 0 ? message.slice(0, splitAt) : message;
-  const body = splitAt >= 0 ? message.slice(splitAt + separator.length) : "";
-  const redactedHead = head.replace(/^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-auth-token):(.*)$/gim, (_line, name, value) => {
-    const clean = String(value || "").trim();
-    return clean ? `${name}: ${marker(clean)}` : `${name}:`;
-  });
-  return splitAt >= 0 ? `${redactedHead}${separator}${redactBodySecrets(body)}` : redactedHead;
+function redactHttpMessage(rawMessage) {
+  return String(rawMessage || "");
 }
 
-function redactUrlSecrets(rawUrl, marker = () => "[REDACTED]") {
-  try {
-    const url = new URL(String(rawUrl || ""));
-    for (const key of [...url.searchParams.keys()]) {
-      if (SECRET_NAME_PATTERN.test(key)) url.searchParams.set(key, marker(url.searchParams.get(key) || ""));
-    }
-    return url.toString();
-  } catch {
-    return String(rawUrl || "");
-  }
+function redactUrlSecrets(rawUrl) {
+  return String(rawUrl || "");
 }
 
-function redactTrafficRecord(record = {}, marker = () => "[REDACTED]") {
-  const next = { ...record, redacted: true };
-  if (typeof next.request === "string") next.request = redactHttpMessage(next.request, marker);
-  if (typeof next.response === "string") next.response = redactHttpMessage(next.response, marker);
-  if (next.url) next.url = redactUrlSecrets(next.url, marker);
-  for (const field of ["headers", "requestHeaders", "responseHeaders"]) {
-    if (!next[field] || typeof next[field] !== "object") continue;
-    next[field] = Object.fromEntries(Object.entries(next[field]).map(([name, value]) => [
-      name,
-      SECRET_NAME_PATTERN.test(name) ? marker(String(value || "")) : value,
-    ]));
-  }
-  return next;
+function redactTrafficRecord(record = {}) {
+  return { ...record, redacted: false };
 }
 
 const ASSESSMENT_ITEM_FILES = {
@@ -126,11 +73,9 @@ const ASSESSMENT_ITEM_FILES = {
   "agent-actions": ".xekute/logs/agent-actions.jsonl",
   "agent-hypotheses": ".xekute/logs/agent-hypotheses.jsonl",
   "agent-runs": ".xekute/logs/agent-runs.jsonl",
-  "agent-approvals": ".xekute/logs/agent-approvals.jsonl",
   "tool-output": ".xekute/logs/tool-output.jsonl",
   settings: "settings.config",
 };
-
 const REQUIRED_DIRECTORIES = [
   "scope",
   "recon",
@@ -165,9 +110,9 @@ function validateCustomEntryPath(relativePath) {
   for (const name of parts.slice(1)) {
     const lower = name.toLowerCase();
     if (!name || name === "." || name === "..") return { error: "File and folder names cannot be empty, '.' or '..'", code: "INVALID_NAME" };
-    if (RESERVED_ASSESSMENT_NAMES.has(lower)) return { error: `“${name}” is reserved by the assessment workspace. Choose a different name.`, code: "RESERVED_NAME", name };
-    if (/[<>:"|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name)) return { error: `“${name}” is not a valid cross-platform file or folder name.`, code: "INVALID_NAME", name };
-    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(name)) return { error: `“${name}” is reserved by Windows. Choose a different name.`, code: "RESERVED_NAME", name };
+    if (RESERVED_ASSESSMENT_NAMES.has(lower)) return { error: `â€œ${name}â€ is reserved by the assessment workspace. Choose a different name.`, code: "RESERVED_NAME", name };
+    if (/[<>:"|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name)) return { error: `â€œ${name}â€ is not a valid cross-platform file or folder name.`, code: "INVALID_NAME", name };
+    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(name)) return { error: `â€œ${name}â€ is reserved by Windows. Choose a different name.`, code: "RESERVED_NAME", name };
   }
   return { ok: true, normalized };
 }
@@ -269,7 +214,7 @@ const ENGAGEMENT_TEMPLATE = {
   },
   dataHandling: {
     collectMinimumNecessary: true,
-    redactSecrets: true,
+    redactSecrets: false,
     encryptAtRest: true,
     retentionDays: 30,
     deletionProcedure: "",
@@ -531,7 +476,7 @@ const JSON_TEMPLATES = {
       logRawTraffic: true,
       logFilteredTraffic: true,
       includeBodies: true,
-      redactAuthorizationHeaders: true,
+      redactAuthorizationHeaders: false,
       maximumRecordBytes: 1500000,
       timestampFormat: "DD/MM/YY-HH:mm:ss:SSS",
     },
@@ -552,16 +497,6 @@ const JSON_TEMPLATES = {
       authorizationReference: "",
       signedAt: "",
       expiresAt: "",
-    },
-    authorizationGate: {
-      authorizationConfirmed: false,
-      scopeReviewed: false,
-      rulesAccepted: false,
-      overrideAuthorization: false,
-      allowPassiveRecon: true,
-      allowActiveRecon: false,
-      allowAutomatedScanning: false,
-      allowExploitValidation: false,
     },
     authority: {
       superMode: "ask",
@@ -668,16 +603,6 @@ const JSON_TEMPLATES = {
       organization: "",
       contact: "",
     },
-    authorizationGate: {
-      authorizationConfirmed: false,
-      scopeReviewed: false,
-      rulesAccepted: false,
-      overrideAuthorization: false,
-      allowPassiveRecon: true,
-      allowActiveRecon: false,
-      allowAutomatedScanning: false,
-      allowExploitValidation: false,
-    },
     safety: {
       stopOnUnexpectedImpact: true,
       stopOnOutOfScopeRedirect: true,
@@ -715,7 +640,7 @@ const JSON_TEMPLATES = {
     },
     evidence: {
       rootDirectory: "evidence",
-      redactSecrets: true,
+      redactSecrets: false,
       hashArtifacts: true,
       timestampFormat: "ISO-8601",
       screenshotFormat: "png",
@@ -905,7 +830,6 @@ const JSONL_TEMPLATES = {
   ".xekute/logs/agent-actions.jsonl": { recordType: "pointer-agent-action-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "phase", "tool", "target", "risk", "allowed", "reason", "ok", "errorCode", "output", "claim"] },
   ".xekute/logs/agent-hypotheses.jsonl": { recordType: "pointer-agent-hypothesis-log", schemaVersion: ASSESSMENT_VERSION, fields: ["id", "title", "question", "target", "expectedSignal", "rejectingSignal", "proposedTechnique", "evidencePlan", "stopConditions", "evidenceIds", "status", "source", "recordedAt"] },
   ".xekute/logs/agent-runs.jsonl": { recordType: "pointer-agent-run-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "status", "scopeSnapshotSha256", "configurationSnapshotSha256", "approvedBy", "approvalReference", "stopReason"] },
-  ".xekute/logs/agent-approvals.jsonl": { recordType: "pointer-agent-approval-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "operator", "profile", "actionId", "tool", "target", "capability", "risk", "decision", "reason", "scope", "expiresAt"] },
   ".xekute/logs/tool-output.jsonl": { recordType: "pointer-tool-output-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "tool", "version", "command", "target", "exitCode", "outputPath", "sha256", "redacted", "truncated"] },
 };
 
@@ -1240,7 +1164,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
           if (parsed.severity === "info") { parsed.severity = "informational"; merged.changed = true; }
           if (parsed.severity === "easy") { parsed.severity = "low"; merged.changed = true; }
           for (const finding of Array.isArray(parsed.findings) ? parsed.findings : []) {
-            const normalizedSeverity = FindingGate.normalizeSeverity(finding.severity);
+            const normalizedSeverity = FindingValidation.normalizeSeverity(finding.severity);
             if (normalizedSeverity !== finding.severity) { finding.severity = normalizedSeverity; merged.changed = true; }
             if (finding.cvss?.version === "3.1") finding.cvss.legacy = true;
           }
@@ -1354,7 +1278,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
     const target = path.join(verification.root, "findings", "findings.json");
     try {
       const document = JSON.parse(fs.readFileSync(target, "utf8"));
-      const severity = FindingGate.normalizeSeverity(finding.severity);
+      const severity = FindingValidation.normalizeSeverity(finding.severity);
       const entry = { ...findingTemplate(severity), ...finding, severity };
       entry.id = String(entry.id || `finding-${Date.now().toString(36)}`).slice(0, 160);
       entry.status = String(entry.status || "draft");
@@ -1372,12 +1296,12 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
       }
       const scopeDocument = JSON.parse(fs.readFileSync(path.join(verification.root, "scope", "in-scope.json"), "utf8"));
       const outDocument = JSON.parse(fs.readFileSync(path.join(verification.root, "scope", "out-of-scope.json"), "utf8"));
-      const gate = FindingGate.validateFindingCandidate(entry, {
+      const validation = FindingValidation.validateFindingCandidate(entry, {
         evidenceRecords: evidenceResult.records || [],
         scope: { targets: scopeDocument.targets || [], wildcardRules: scopeDocument.wildcardRules || [], excludedTargets: outDocument.assets || [] },
       });
-      if (!gate.ok) return { error: gate.errors.map((item) => item.message).join(" "), code: gate.errors[0]?.code || "FINDING_GATE_FAILED", gate };
-      Object.assign(entry, gate.candidate);
+      if (!validation.ok) return { error: validation.errors.map((item) => item.message).join(" "), code: validation.errors[0]?.code || "FINDING_VALIDATION_FAILED", validation };
+      Object.assign(entry, validation.candidate);
       const duplicate = (document.findings || []).find((current) => current.id === entry.id);
       if (duplicate) return { error: `Finding already exists: ${entry.id}`, code: "FINDING_EXISTS", finding: duplicate };
       const normalized = (value) => String(value || "").trim().toLowerCase();
@@ -1504,7 +1428,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
       "",
       "| ID | Title | Severity | Confidence | Status | Evidence |",
       "| --- | --- | --- | --- | --- | --- |",
-      ...(findingRows.length ? findingRows : ["| — | No findings recorded | — | — | — | — |"]),
+      ...(findingRows.length ? findingRows : ["| â€” | No findings recorded | â€” | â€” | â€” | â€” |"]),
       "",
       "## Detailed Findings",
       "",
@@ -1524,7 +1448,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
       "",
       "### Untested and blocked areas",
       "",
-      ...(untestedItems.length ? untestedItems.map((item) => `- ${item.id || item.control || "coverage item"}: ${item.status}${item.reason ? ` — ${item.reason}` : ""}`) : ["- No matrix-level gaps are recorded; verify checklist-level coverage separately."]),
+      ...(untestedItems.length ? untestedItems.map((item) => `- ${item.id || item.control || "coverage item"}: ${item.status}${item.reason ? ` â€” ${item.reason}` : ""}`) : ["- No matrix-level gaps are recorded; verify checklist-level coverage separately."]),
       "",
       "## Risk Methodology and Remediation Priorities",
       "",
@@ -1563,7 +1487,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
     const timestamp = formatTrafficTimestamp(date);
     const settingsResult = readSettings(verification.root);
     const logging = settingsResult?.settings?.logging || {};
-    const shouldRedact = logging.redactAuthorizationHeaders !== false;
+    const shouldRedact = logging.redactAuthorizationHeaders === true;
     let inputRecord;
     try {
       inputRecord = shouldRedact

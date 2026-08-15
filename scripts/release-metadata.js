@@ -25,7 +25,9 @@ fs.writeFileSync(path.join(output, "SHA256SUMS.txt"), `${checksums.join("\n")}\n
 const sbomPath = path.join(output, "xekute-sbom.cdx.json");
 const descriptor = fs.openSync(sbomPath, "w");
 try {
-  execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["sbom", "--sbom-format", "cyclonedx"], {
+  const npmCli = process.env.npm_execpath;
+  if (!npmCli) throw new Error("npm_execpath is required to generate the SBOM.");
+  execFileSync(process.execPath, [npmCli, "sbom", "--sbom-format", "cyclonedx"], {
     cwd: root, stdio: ["ignore", descriptor, "inherit"],
   });
 } finally {

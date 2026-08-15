@@ -3,62 +3,220 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { createToolHandlers } = require("../../adapters/tools/core/tool-handlers");
-const ToolMap = require("../../adapters/tools/core/tool-catalog");
-const { createWorkspaceSearch } = require("../../adapters/tools/os/workspace-search");
-const { createAgentTerminalRunner } = require("../../adapters/tools/os/terminal-runner");
-const { createSubagentRunner } = require("../../adapters/tools/cyber/subagent-runner");
-const { createWebResearch } = require("../../adapters/tools/cyber/web-research");
-const { resolveSecurityExecutable } = require("../../adapters/tools/cyber/executable-resolver");
-const { createWebCloneService } = require("../../adapters/tools/cyber/webclone");
-const { createAssessmentWorkspace, JSON_TEMPLATES } = require("../../domain/assessment/assessment-workspace");
+const { createWorkspaceSearch } = require("../../agent/tools/workspace/workspace-search.js");
+const { createWebResearch } = require("../../app/services/research/web-research.js");
+const { createWebCloneService } = require("../../app/services/research/webclone.js");
+const { createAssessmentWorkspace } = require("../../domain/assessment/assessment-workspace");
 const { createAssessmentMap } = require("../../domain/assessment/assessment-map");
-const { buildIntruderRequests, createSecurityHttpWorkbench } = require("../../domain/assessment/http-workbench");
-const { createProxyListenerService } = require("../../domain/assessment/proxy-listener");
-const { createChatSessionStore } = require("../../app/services/chat-session-store");
-const { createWorkspaceFiles } = require("../../app/services/workspace-files");
-const { createProjectProfileStore } = require("../../domain/project/project-profile-store");
+const { createJavascriptArtifactStore } = require("../../domain/assessment/javascript-artifact-store.js");
+const { createGraphBuildService } = require("../../app/services/assessment/traffic-graph/graph-build-service.js");
+const { createJavascriptCollector } = require("../../app/services/assessment/traffic-graph/javascript-collector.js");
+const { buildIntruderRequests, createSecurityHttpWorkbench } = require("../../interceptor/http-workbench.js");
+const { createProxyListenerService } = require("../../interceptor/proxy-listener.js");
+const { createProxyBrowserService } = require("../../interceptor/proxy-browser.js");
+const { createSessionMemoryStore } = require("../../app/storage/session-memory-store.js");
+const { createIdentityVault } = require("../../app/storage/identity-vault-store.js");
+const { createBrowserSessionManager } = require("../../agent/tools/assessment/browser-session-manager.js");
+const { createAssessmentIntelligenceService } = require("../../app/services/assessment/intelligence/assessment-intelligence-service.js");
+const { createAssessmentModeWorkflow } = require("../../app/services/assessment/mode-workflow.js");
+const { createProjectMemoryStore } = require("../../app/storage/project-memory-store.js");
+const { createContextCompiler } = require("../../agent/memory/context/context-compiler.js");
+const { createMcpRuntime } = require("../../app/services/assessment/knowledge/mcp-runtime.js");
+const { createWorkspaceFiles } = require("../../app/services/workspace/workspace-files.js");
+const { createProjectProfileStore } = require("../../app/storage/project-profile-store.js");
 const { createAppConfig } = require("../config/app-config");
-const { createUnifiedToolRouter } = require("../../application/tools/unified-tool-router");
-const { appendToolAudit, appendOperationState } = require("../../application/agent/memory/action-log");
-const { createCommandPort } = require("../../application/tools/ports/command-port");
-const { createWorkspacePort } = require("../../application/tools/ports/workspace-port");
-const { createPlanPort } = require("../../application/tools/ports/plan-port");
-const { createStatePort } = require("../../application/tools/ports/state-port");
-const { createScopePort } = require("../../application/tools/ports/scope-port");
-const { createTrafficPort } = require("../../application/tools/ports/traffic-port");
-const { createIdentityPort } = require("../../application/tools/ports/identity-port");
-const { createReplayPort } = require("../../application/tools/ports/replay-port");
-const { createTestingPort } = require("../../application/tools/ports/testing-port");
-const { createResponsePort } = require("../../application/tools/ports/response-port");
-const { createFindingPort } = require("../../application/tools/ports/finding-port");
-const { createGraphPort } = require("../../application/tools/ports/graph-port");
-const { createBrowserPort } = require("../../application/tools/ports/browser-port");
-const { createDelegationPort } = require("../../application/tools/ports/delegation-port");
-const { buildAction } = require("../../adapters/tools/cyber/security-tool-adapters");
-const { validateFindingCandidate } = require("../../domain/assessment/finding-gate");
-const AgentVerifier = require("../../application/clarification/verifier");
-const { loadPolicy } = require("../../application/policies/policy-engine");
+const { createAuthorityComposition } = require("../../agent/authority/composition.js");
+const { createInvocationPipeline } = require("../../agent/authority/invocation-pipeline.js");
+const { createToolAuditStore } = require("../../app/storage/tool-audit-store.js");
+const { createLongHorizonRunStore } = require("../../app/storage/long-horizon-run-store.js");
+const { createDurableProcessManager } = require("../../app/services/terminal/durable-process-manager.js");
 
-function createUnavailablePort() {
-  return { async execute() { return { ok: false, unavailable: true, code: "ADAPTER_UNAVAILABLE", summary: "Capability is not available in this migration stage." }; } };
-}
+// Tool registry + raw adapters (the 21 canonical tools).
+const { createToolRegistry, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerInspectEnvironment, registerManagePlan, registerManageState, registerIngestTraffic, registerManageIdentity, registerReplayRequest, registerRunTestCase, registerBrowserAction, registerCompareResponses, registerVerifyFinding, registerStoreFinding, registerAttackGraph, registerDelegateAgent, registerQueryAssessment, registerExpandEvidence, registerQueryKnowledge, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
+const { createExecCommandTool } = require("../../agent/tools/process/exec-command.js");
+const { createReadFileTool } = require("../../agent/tools/workspace/read-file.js");
+const { createSearchWorkspaceTool } = require("../../agent/tools/workspace/search-workspace.js");
+const { createApplyPatchTool } = require("../../agent/tools/workspace/apply-patch.js");
+const { createInspectEnvironmentTool } = require("../../agent/tools/workspace/inspect-environment.js");
+const { createManagePlanTool } = require("../../agent/tools/workspace/manage-plan.js");
+const { createManageStateTool } = require("../../agent/tools/workspace/manage-state.js");
+const { createIngestTrafficTool } = require("../../agent/tools/assessment/ingest-traffic.js");
+const { createManageIdentityTool } = require("../../agent/tools/assessment/manage-identity.js");
+const { createReplayRequestTool } = require("../../agent/tools/assessment/replay-request.js");
+const { createRunTestCaseTool } = require("../../agent/tools/assessment/run-test-case.js");
+const { createBrowserActionTool } = require("../../agent/tools/assessment/browser-action.js");
+const { createCompareResponsesTool } = require("../../agent/tools/assessment/compare-responses.js");
+const { createVerifyFindingTool } = require("../../agent/tools/assessment/verify-finding.js");
+const { createStoreFindingTool } = require("../../agent/tools/assessment/store-finding.js");
+const { createAttackGraphTool } = require("../../agent/tools/assessment/attack-graph.js");
+const { createDelegateAgentTool } = require("../../agent/tools/process/delegate-agent.js");
+const { createQueryAssessmentTool } = require("../../agent/tools/assessment/query-assessment.js");
+const { createExpandEvidenceTool } = require("../../agent/tools/assessment/expand-evidence.js");
+const { createQueryKnowledgeTool } = require("../../agent/tools/assessment/query-knowledge.js");
+const { createWebResearchTool } = require("../../agent/tools/assessment/web-research.js");
+const { evaluateToolScopeAsync, evaluateRedirectScopeAsync, evaluateLoginNavigation } = require("../../agent/authority/scope/scope-policy.js");
 
 /**
  * DI composition root.
  *
- * Constructs every long-lived service and owns the process/terminal/approval/
+ * Constructs every long-lived service and owns the process/terminal/
  * webclone state maps. `main.js` (the presentation shell) receives these
  * services and the `dispose()` path; no production module outside this file
  * constructs concrete adapters.
  */
-function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWindow = () => null, verifyFindingCandidate = null } = {}) {
+function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWindow = () => null } = {}) {
   if (!app?.getPath) throw new TypeError("DI container requires an Electron app instance");
 
   const config = createAppConfig({ app });
+  const memoryProtector = {
+    available: () => safeStorage?.isEncryptionAvailable?.() || false,
+    encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
+    decrypt: (payload) => safeStorage.decryptString(Buffer.from(payload, "base64")),
+  };
 
-  // ── Long-lived services (constructed once) ────────────────────────────────
   const workspaceSearch = createWorkspaceSearch({ fs, path });
+  const webResearch = createWebResearch();
+
+  const mcpRuntime = createMcpRuntime({ fs, path, home: () => app.getPath("home") });
+  const assessmentIntelligence = createAssessmentIntelligenceService({
+    mcpRuntime,
+    onEvent: (event) => {
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) win.webContents.send("assessment:intelligence", event);
+    },
+  });
+  const modeWorkflow = createAssessmentModeWorkflow();
+  const projectMemoryStore = createProjectMemoryStore({ fs, path, crypto });
+  const contextCompiler = createContextCompiler({
+    projectMemoryStore,
+    intelligence: assessmentIntelligence,
+    modeWorkflow,
+    finalizationDirectory: path.join(config.sessionMemoryDirectory(), "context-finalization"),
+    protector: memoryProtector,
+    fs,
+    path,
+    crypto,
+  });
+  contextCompiler.drainFinalizationJobs().catch(() => {});
+
+  let identityVaultInstance = null;
+  function identityVault() {
+    if (!identityVaultInstance) {
+      identityVaultInstance = createIdentityVault({
+        fs,
+        path,
+        crypto,
+        baseDir: config.sessionMemoryDirectory(),
+        protector: memoryProtector,
+        projectResolver: (workspace, options) => sessionMemoryStore().resolveProject(workspace, options),
+      });
+    }
+    return identityVaultInstance;
+  }
+
+  // Declared before tool registration so model-facing identity deletion can
+  // close every live browser context before removing the encrypted record.
+  let browserSessionManager = null;
+  const proxyBrowser = createProxyBrowserService({
+    fs,
+    path,
+    crypto,
+    profilesDirectory: config.proxyBrowserProfilesDirectory(),
+    onStatus: (event) => {
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) win.webContents.send("proxy:browserStatus", event);
+    },
+  });
+
+  // The canonical tool registry includes the two read-only intelligence tools.
+  // Provider-optional adapters degrade to structured "unavailable" responses
+  // when no provider is injected (see each adapter's contract).
+  const toolRegistry = createToolRegistry();
+  registerExecCommand(toolRegistry, createExecCommandTool());
+  registerReadFile(toolRegistry, createReadFileTool());
+  registerSearchWorkspace(toolRegistry, createSearchWorkspaceTool());
+  registerApplyPatch(toolRegistry, createApplyPatchTool());
+  registerInspectEnvironment(toolRegistry, createInspectEnvironmentTool());
+  registerManagePlan(toolRegistry, createManagePlanTool());
+  registerManageState(toolRegistry, createManageStateTool());
+  registerIngestTraffic(toolRegistry, createIngestTrafficTool());
+  registerManageIdentity(toolRegistry, createManageIdentityTool({
+    identityVault: identityVault(),
+    onDelete: async (workspace, identityId) => {
+      await browserSessionManager?.closeIdentity?.(workspace, identityId);
+      await proxyBrowser.close(workspace, identityId);
+    },
+  }));
+  registerReplayRequest(toolRegistry, createReplayRequestTool({
+    identityProvider: {
+      load: (identityId, executionContext) => {
+        const workspace = executionContext?.workspace?.root || "";
+        const loaded = identityVault().readSecret(workspace, identityId);
+        if (!loaded?.ok) return null;
+        const metadata = identityVault().metadataFor(workspace, identityId) || {};
+        return { ...loaded.secret, account: metadata.account || {}, role: metadata.role || "default" };
+      },
+    },
+    redirectGuard: (target, executionContext, { initialUrl } = {}) => evaluateRedirectScopeAsync(
+      initialUrl || target,
+      target,
+      {
+        workspace: executionContext?.workspace?.root || "",
+        projectProfile: projectProfileStore().read(executionContext?.workspace?.root || "")?.profile || null,
+      },
+    ),
+  }));
+  registerRunTestCase(toolRegistry, createRunTestCaseTool());
+
+  // browser_action reuses a matching operator-opened proxied context when one
+  // exists; otherwise it uses an isolated installed Edge/Chrome context. The
+  // fake provider remains available only when explicitly injected into tests.
+  browserSessionManager = createBrowserSessionManager({
+    identityVault: identityVault(),
+    onStatus: (event) => {
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) win.webContents.send("identity:persistence", event);
+    },
+    beforeNavigation: (url, executionContext) => evaluateToolScopeAsync({
+      workspace: executionContext?.workspace?.root || "",
+      toolName: "browser_action",
+      args: { action: "navigate", url },
+      projectProfile: projectProfileStore().read(executionContext?.workspace?.root || "")?.profile || null,
+    }),
+    loginNavigation: (url, executionContext) => evaluateLoginNavigation(
+      url,
+      projectProfileStore().read(executionContext?.workspace?.root || "")?.profile || null,
+      executionContext?.workspace?.root || "",
+    ),
+    sharedContextProvider: ({ workspace, identityId }) => proxyBrowser.getAgentContext(workspace, identityId),
+  });
+  registerBrowserAction(toolRegistry, createBrowserActionTool({
+    browserProvider: {
+      async execute(input, context, runtime = {}) {
+        const evidence = await browserSessionManager.execute(input, context, runtime);
+        return { ...(evidence && typeof evidence === "object" ? evidence : { evidence }), backend: browserSessionManager.runtime().name };
+      },
+      async close() {
+        await browserSessionManager.close();
+      },
+    },
+  }));
+
+  registerCompareResponses(toolRegistry, createCompareResponsesTool());
+  registerVerifyFinding(toolRegistry, createVerifyFindingTool());
+  registerStoreFinding(toolRegistry, createStoreFindingTool());
+  registerAttackGraph(toolRegistry, createAttackGraphTool());
+  registerDelegateAgent(toolRegistry, createDelegateAgentTool({
+    projectMemoryProvider: (workspace) => projectMemoryStore.projectMemoryProjection(projectMemoryStore.load(workspace).memory, workspace),
+  }));
+  registerQueryAssessment(toolRegistry, createQueryAssessmentTool({ intelligence: assessmentIntelligence }));
+  registerExpandEvidence(toolRegistry, createExpandEvidenceTool({ intelligence: assessmentIntelligence }));
+  registerQueryKnowledge(toolRegistry, createQueryKnowledgeTool({ knowledge: assessmentIntelligence.knowledge }));
+  registerWebResearch(toolRegistry, createWebResearchTool({ webResearch }));
+  const toolAuditStore = createToolAuditStore({ fsImpl: fs, pathImpl: path });
+  const longHorizonRunStore = createLongHorizonRunStore({ fsImpl: fs, pathImpl: path });
+  const authorityComposition = createAuthorityComposition({ evaluateScope: evaluateToolScopeAsync, fsImpl: fs });
+  const invocationPipeline = createInvocationPipeline({ authorityRegistry: authorityComposition.registry, concurrency: authorityComposition.concurrency });
   const {
     resolveWorkspaceTarget,
     editWorkspaceFile,
@@ -66,130 +224,45 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     transferWorkspacePath,
   } = createWorkspaceFiles({ fs, path, workspaceSearch });
   const { listProjectFiles } = workspaceSearch;
-  const webResearch = createWebResearch();
+  const durableProcessManager = createDurableProcessManager({
+    fsImpl: fs,
+    pathImpl: path,
+    resolveWorkspaceTarget,
+    resolveExecutable: require("../../agent/tools/process/executable-resolver.js").resolveSecurityExecutable,
+    terminateProcessTree,
+  });
   const webClone = createWebCloneService({ fs, path, webResearch });
   const assessmentWorkspace = createAssessmentWorkspace({
     fs,
     path,
-    promptDefaults: () => require("../../application/prompt/prompt-compiler").defaults(),
+    promptDefaults: () => require("../../agent/runtime/prompt-compiler.js").defaults(),
   });
-  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace });
+  const javascriptArtifacts = createJavascriptArtifactStore({ fs, path, crypto });
+  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligence: assessmentIntelligence, javascriptArtifacts });
+  assessmentIntelligence.setGraphProvider?.(assessmentMap);
+  const graphBuildService = createGraphBuildService({
+    assessmentMap,
+    javascriptArtifacts,
+    onEvent: (event) => {
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) win.webContents.send("assessment:graphStatus", event);
+    },
+  });
+  const javascriptCollector = createJavascriptCollector({
+    artifacts: javascriptArtifacts,
+    assessmentMap,
+    authorizeUrl: (target, { workspace, initialUrl, redirect } = {}) => {
+      const projectProfile = projectProfileStore().read(workspace)?.profile || null;
+      if (redirect > 0) return evaluateRedirectScopeAsync(initialUrl, target, { workspace, projectProfile });
+      return evaluateToolScopeAsync({ workspace, toolName: "browser_action", args: { action: "navigate", url: target }, projectProfile });
+    },
+    onEvent: (event) => {
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) win.webContents.send("assessment:graphStatus", event);
+    },
+  });
   const securityHttpWorkbench = createSecurityHttpWorkbench({ fs, path, assessmentWorkspace });
 
-  function writeUnifiedArtifact(workspace, content, metadata = {}) {
-    if (!workspace) return "";
-    const artifactDir = path.join(path.resolve(workspace), ".xekute", "artifacts");
-    fs.mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
-    const artifactId = `artifact-${crypto.randomUUID()}`;
-    const target = path.join(artifactDir, `${artifactId}.json`);
-    fs.writeFileSync(target, `${JSON.stringify({ ...metadata, content: String(content || "") }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    return artifactId;
-  }
-
-  const unifiedCommandPort = createCommandPort({ fs, path, artifactStore: writeUnifiedArtifact, terminateProcessTree });
-  const unifiedWorkspacePort = createWorkspacePort({ fs, path, workspaceSearch, resolveWorkspaceTarget, editWorkspaceFile });
-  const unifiedPlanPort = createPlanPort({ fs, path });
-  const unifiedStatePort = createStatePort({ fs, path });
-  const unifiedScopePort = createScopePort({ fs, path });
-  const unifiedTrafficPort = createTrafficPort({ assessmentWorkspace });
-  const unifiedIdentityPort = createIdentityPort({
-    fs,
-    path,
-    assessmentWorkspace,
-    protector: {
-      available: () => safeStorage?.isEncryptionAvailable?.() || false,
-      encrypt: (value) => safeStorage.encryptString(value).toString("base64"),
-      decrypt: (value) => safeStorage.decryptString(Buffer.from(value, "base64")),
-    },
-  });
-  const unifiedReplayPort = createReplayPort({ securityHttpWorkbench, identityPort: unifiedIdentityPort, scopePort: unifiedScopePort });
-  function appendManagedDescriptor(descriptor) {
-    if (!descriptor?.managedOperationId) return;
-    try {
-      const target = path.join(path.resolve(descriptor.cwd || "."), ".xekute", "logs", "managed-processes.jsonl");
-      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-      fs.appendFileSync(target, `${JSON.stringify(descriptor)}\n`, "utf8");
-    } catch { /* best-effort persistence */ }
-  }
-  function loadManagedDescriptor(managedOperationId) {
-    try {
-      const root = path.resolve(".");
-      const target = path.join(root, ".xekute", "logs", "managed-processes.jsonl");
-      if (!fs.existsSync(target)) return null;
-      return fs.readFileSync(target, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
-        .reverse().find((entry) => entry.managedOperationId === managedOperationId) || null;
-    } catch { return null; }
-  }
-  const unifiedTestingPort = createTestingPort({
-    buildAction,
-    assessmentWorkspace,
-    persistArtifact: writeUnifiedArtifact,
-    persistDescriptor: appendManagedDescriptor,
-    loadDescriptor: loadManagedDescriptor,
-    terminateProcessTree,
-  });
-  const unifiedResponsePort = createResponsePort({
-    evidenceStore: {
-      get: (workspace, evidenceId) => {
-        const result = assessmentWorkspace.readJsonl(workspace, "evidence/index.jsonl", { limit: 2000 });
-        return result?.records?.find((record) => String(record.id || record.requestId) === String(evidenceId)) || null;
-      },
-    },
-  });
-  const unifiedFindingPort = createFindingPort({
-    assessmentWorkspace,
-    fs,
-    path,
-    verifier: verifyFindingCandidate
-      ? ({ finding, context }) => verifyFindingCandidate(context.workspace, context.model, finding)
-      : null,
-  });
-  const unifiedGraphPort = createGraphPort({ assessmentMap });
-  const unifiedBrowserPort = createBrowserPort();
-  const unifiedDelegationPort = createDelegationPort();
-
-  const unifiedToolRouter = createUnifiedToolRouter({
-    scopeDecisionResolver: (decisionId, context) => unifiedScopePort.resolve(context, decisionId),
-    ports: {
-      exec_command: unifiedCommandPort,
-      read_file: unifiedWorkspacePort,
-      search_workspace: unifiedWorkspacePort,
-      apply_patch: unifiedWorkspacePort,
-      manage_plan: unifiedPlanPort,
-      manage_state: unifiedStatePort,
-      check_scope: unifiedScopePort,
-      ingest_traffic: unifiedTrafficPort,
-      manage_identity: unifiedIdentityPort,
-      replay_request: unifiedReplayPort,
-      run_test_case: unifiedTestingPort,
-      browser_action: unifiedBrowserPort,
-      compare_responses: unifiedResponsePort,
-      verify_finding: createUnavailablePort(),
-      store_finding: unifiedFindingPort,
-      attack_graph: unifiedGraphPort,
-      delegate_agent: unifiedDelegationPort,
-    },
-    policy: ({ toolName, input, profile, context }) => {
-      const decision = loadPolicy(context.workspace || ".", null, null);
-      if (toolName === "exec_command") return { allowed: true, code: "OK", reason: "Bounded workspace/development command capability." };
-      if (profile !== "agent" && ["apply_patch", "manage_plan", "manage_state"].includes(toolName)) return { allowed: false, code: "PROFILE_DENIED", reason: `${toolName} is not available in ${profile} profile.` };
-      return { allowed: true, policy: decision };
-    },
-    auditSink: (entry) => appendToolAudit(entry.workspace || "", entry),
-    stateStore: {
-      save: (state) => appendOperationState(state.workspace || "", state),
-      load: (operationId, workspace) => {
-        if (!workspace) return null;
-        try {
-          const target = path.join(path.resolve(workspace), ".xekute", "logs", "tool-operations.jsonl");
-          const lines = fs.readFileSync(target, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-          return lines.reverse().find((entry) => entry.operationId === operationId || entry.operation_id === operationId) || null;
-        } catch { return null; }
-      },
-    },
-  });
-
-  // Proxy needs CA directory + event delivery, resolved lazily.
   let proxyListener = null;
   function getProxyListener() {
     if (!proxyListener) {
@@ -197,6 +270,7 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
         fs,
         path,
         assessmentWorkspace,
+        javascriptArtifacts,
         getCaDirectory: (assessmentRoot) => resolveCentralCaDirectory(assessmentRoot),
         sendEvent: (channel, payload) => {
           const win = getMainWindow();
@@ -207,7 +281,6 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     return proxyListener;
   }
 
-  // Project profile store is lazy.
   let projectProfiles = null;
   function projectProfileStore() {
     if (!projectProfiles) {
@@ -221,30 +294,23 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     return projectProfiles;
   }
 
-  // Chat session store is lazy.
-  let chatSessionStoreInstance = null;
-  function chatSessionStore() {
-    if (!chatSessionStoreInstance) {
-      chatSessionStoreInstance = createChatSessionStore({
+  let sessionMemoryStoreInstance = null;
+  function sessionMemoryStore() {
+    if (!sessionMemoryStoreInstance) {
+      sessionMemoryStoreInstance = createSessionMemoryStore({
         fs,
         path,
         crypto,
-        baseDir: config.chatSessionsDirectory(),
-        protector: {
-          available: () => safeStorage?.isEncryptionAvailable?.() || false,
-          encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
-          decrypt: (payload) => safeStorage.decryptString(Buffer.from(payload, "base64")),
-        },
+        baseDir: config.sessionMemoryDirectory(),
+        protector: memoryProtector,
       });
     }
-    return chatSessionStoreInstance;
+    return sessionMemoryStoreInstance;
   }
 
-  // ── State maps (owned here; disposed by dispose()) ────────────────────────
   const terminals = new Map();
   const toolProcesses = new Map();
   const ollamaControllers = new Map();
-  const pendingAgentApprovals = new Map();
   const pendingOperatorQuestions = new Map();
   const webClonePreviewDocuments = new Map();
   let webClonePreviewServer = null;
@@ -254,8 +320,6 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
   let webClonePreviewUrl = "";
   let toolProcessCounter = 0;
 
-  // Mutable preview state the presentation shell reads/writes so dispose()
-  // always sees the live values.
   const webClonePreviewState = {
     get server() { return webClonePreviewServer; },
     set server(value) { webClonePreviewServer = value; },
@@ -271,7 +335,15 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     set processCounter(value) { toolProcessCounter = value; },
   };
 
-  // CA directory resolution (pure, uses config).
+  function readApplicationPreferences() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(config.preferencesPath(), "utf8"));
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
   function resolveCentralCaDirectory(assessmentRoot = "") {
     const configured = String(readApplicationPreferences()?.certificates?.caDirectory || "").trim();
     const target = configured && path.isAbsolute(configured) ? path.resolve(configured) : config.defaultCentralCaDirectory();
@@ -292,49 +364,48 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     return target;
   }
 
-  function readApplicationPreferences() {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(config.preferencesPath(), "utf8"));
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-
+  let disposePromise = null;
   function dispose() {
-    if (proxyListener) {
-      try { proxyListener.stop(); } catch { /* ignore */ }
-      proxyListener = null;
-    }
-    for (const record of terminals.values()) {
-      try { record.pty.kill(); } catch { /* ignore */ }
-    }
-    terminals.clear();
-    for (const record of toolProcesses.values()) {
-      terminateProcessTree(record.child);
-    }
-    toolProcesses.clear();
-    try { unifiedTestingPort.managed?.dispose?.(); } catch { /* ignore */ }
-    for (const pending of pendingAgentApprovals.values()) {
-      clearTimeout(pending.timer);
-      pending.resolve({ approved: false, expired: true, reason: "Application shutdown" });
-    }
-    pendingAgentApprovals.clear();
-    for (const pending of pendingOperatorQuestions.values()) {
-      clearTimeout(pending.timer);
-      pending.resolve({ answers: [], skipped: true, expired: true, reason: "Application shutdown" });
-    }
-    pendingOperatorQuestions.clear();
-    if (webClonePreviewView) {
-      try { webClonePreviewView.destroy(); } catch { /* ignore */ }
-      webClonePreviewView = null;
-    }
-    if (webClonePreviewServer) {
-      try { webClonePreviewServer.close(); } catch { /* ignore */ }
-      webClonePreviewServer = null;
-    }
-    webClonePreviewPort = 0;
-    webClonePreviewDocuments.clear();
+    if (disposePromise) return disposePromise;
+    disposePromise = (async () => {
+      await assessmentIntelligence.dispose();
+      await graphBuildService.flush();
+      await javascriptArtifacts.flush();
+      contextCompiler.dispose();
+      mcpRuntime.clearAll();
+      if (proxyListener) {
+        try { await proxyListener.stop(); } catch { /* ignore */ }
+        proxyListener = null;
+      }
+      for (const record of terminals.values()) {
+        try { record.pty.kill(); } catch { /* ignore */ }
+      }
+      terminals.clear();
+      for (const record of toolProcesses.values()) {
+        terminateProcessTree(record.child);
+      }
+      toolProcesses.clear();
+      for (const pending of pendingOperatorQuestions.values()) {
+        clearTimeout(pending.timer);
+        pending.resolve({ answers: [], skipped: true, expired: true, reason: "Application shutdown" });
+      }
+      pendingOperatorQuestions.clear();
+      if (webClonePreviewView) {
+        try { webClonePreviewView.destroy(); } catch { /* ignore */ }
+        webClonePreviewView = null;
+      }
+      if (webClonePreviewServer) {
+        try { webClonePreviewServer.close(); } catch { /* ignore */ }
+        webClonePreviewServer = null;
+      }
+      webClonePreviewPort = 0;
+      webClonePreviewDocuments.clear();
+      try { await browserSessionManager.close(); } catch { /* Best effort after identity state flush. */ }
+      try { await proxyBrowser.close(); } catch { /* The operator may already have closed the browser. */ }
+      try { await identityVaultInstance?.flush?.(); } catch { /* Encrypted persistence warnings were already surfaced. */ }
+      try { await longHorizonRunStore.flush(); } catch { /* Durable checkpoints are best effort during shutdown. */ }
+    })();
+    return disposePromise;
   }
 
   function terminateProcessTree(child) {
@@ -352,7 +423,7 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
 
   return {
     config,
-    ToolMap,
+    toolRegistry,
     workspaceSearch,
     listProjectFiles,
     resolveWorkspaceTarget,
@@ -363,20 +434,33 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     webClone,
     assessmentWorkspace,
     assessmentMap,
+    javascriptArtifacts,
+    javascriptCollector,
+    graphBuildService,
+    assessmentIntelligence,
+    modeWorkflow,
+    projectMemoryStore,
+    contextCompiler,
+    mcpRuntime,
     securityHttpWorkbench,
-    unifiedToolRouter,
     buildIntruderRequests,
     getProxyListener,
+    proxyBrowser,
     projectProfileStore,
-    chatSessionStore,
+    identityVault,
+    browserSessionManager,
+    sessionMemoryStore,
+    authorityRegistry: authorityComposition.registry,
+    invocationPipeline,
+    toolAuditStore,
+    longHorizonRunStore,
+    durableProcessManager,
     resolveCentralCaDirectory,
     readApplicationPreferences,
     terminateProcessTree,
-    // State maps exposed for the presentation shell.
     terminals,
     toolProcesses,
     ollamaControllers,
-    pendingAgentApprovals,
     pendingOperatorQuestions,
     webClonePreviewDocuments,
     webClonePreviewState,

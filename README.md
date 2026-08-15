@@ -81,6 +81,12 @@ Commands can use static Python orchestration or an AI-assisted role. Output loca
 
 XEKUTE does **not** bundle most third-party security binaries. Install only the tools you need and ensure their executables are available on `PATH`. On Windows, some tools may be easier to run through WSL. Each third-party tool remains subject to its own license and installation requirements.
 
+## Install on Windows
+
+For normal use, download and run `XEKUTESetup.exe` from the project's GitHub Releases page. No Node.js, npm, or Git setup is required. The installer does not bundle AI models or third-party security tools.
+
+For the full first-run guide, checksum verification, optional Ollama/OpenRouter setup, updates, and removal, see [INSTALL.md](INSTALL.md).
+
 ## Requirements
 
 ### Required for development
@@ -100,12 +106,12 @@ XEKUTE does **not** bundle most third-party security binaries. Install only the 
 - WSL for Linux-first security tooling on Windows.
 - A Windows code-signing certificate when producing signed release installers.
 
-## Quick Start
+## Build from source
 
 ```powershell
 git clone https://github.com/mahirhacks/XEKUTE.git
-cd Xekute
-npm install
+cd XEKUTE
+npm ci
 ```
 
 Install and start Ollama, then pull a model. For example:

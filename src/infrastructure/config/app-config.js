@@ -9,6 +9,7 @@ const path = require("path");
  */
 function createAppConfig({ app, processEnv = process.env } = {}) {
   const userData = () => app?.getPath?.("userData") || processEnv.APPDATA || process.cwd();
+  const home = () => app?.getPath?.("home") || processEnv.USERPROFILE || processEnv.HOME || process.cwd();
   const isDev = () => processEnv.NODE_ENV === "development" || (process.argv && process.argv.includes("--dev"));
 
   return {
@@ -17,8 +18,9 @@ function createAppConfig({ app, processEnv = process.env } = {}) {
     isDev: isDev(),
     preferencesPath: () => path.join(userData(), "pointer-preferences.json"),
     projectProfilesDirectory: () => path.join(userData(), "project-profiles"),
-    chatSessionsDirectory: () => userData(),
+    sessionMemoryDirectory: () => path.join(home(), ".xekute", "data"),
     defaultCentralCaDirectory: () => path.join(userData(), "certificates", "proxy-ca"),
+    proxyBrowserProfilesDirectory: () => path.join(userData(), "proxy-browser"),
     indexPath: () => path.join(__dirname, "..", "..", "..", "ui", "index.html"),
   };
 }

@@ -1,14 +1,8 @@
 "use strict";
 
-/**
- * Structured logger with source-level redaction. Preserves the current
- * console/error behavior while giving the container a single logging seam.
- */
-const SECRET_PATTERN = /(api[_-]?key|authorization|password|passwd|secret|token|client_secret)\s*[:=]\s*["']?[^\s"',;]+/gi;
-
+/** Structured logger seam. Values pass through unchanged. */
 function redact(value) {
-  const text = typeof value === "string" ? value : safeJson(value);
-  return text.replace(SECRET_PATTERN, "$1=[REDACTED]");
+  return typeof value === "string" ? value : safeJson(value);
 }
 
 function safeJson(value) {

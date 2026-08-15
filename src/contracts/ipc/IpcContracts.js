@@ -2,6 +2,7 @@
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const LARGE_MAX_BYTES = 16 * 1024 * 1024;
+const IDENTITY_MAX_BYTES = 4 * 1024 * 1024;
 const PATH_MAX_CHARS = 32768;
 const COMMAND_MAX_CHARS = 32768;
 const MAX_DEPTH = 12;
@@ -19,17 +20,36 @@ const LARGE_CHANNELS = new Set([
   "settings:llmSet",
   "ollama:countTokens",
   "ollama:summarizeContext",
+  "context:consolidate",
+  "context:event",
+  "context:projectMemory",
+  "context:flush",
   "ollama:chat",
   "agent:run",
-  "chat-sessions:save",
-  "chat-sessions:save-before-close",
+  "session-memory:begin",
+  "session-memory:event",
+  "session-memory:update",
+  "session-memory:archive",
+  "session-memory:unarchive",
+  "session-memory:flush",
+  "session-memory:save-before-close",
   "webclone:previewDocument",
+  "assessment:intelligenceStart",
+  "assessment:intelligenceRebuild",
+  "assessment:intelligenceQuery",
+  "assessment:intelligenceExpand",
+  "assessment:deepCollectGraph",
 ]);
 
 const COMMAND_CHANNELS = new Set([
   "tools:runCommand",
   "tools:startProcess",
   "commands:run",
+]);
+
+const IDENTITY_CHANNELS = new Set([
+  "settings:identityImport",
+  "settings:credentialCreate",
 ]);
 
 function error(message, code = "INVALID_IPC_PAYLOAD") {
@@ -77,7 +97,7 @@ function validateIpcRequest(channel, args = []) {
   const state = { bytes: 0 };
   const issue = inspectValue(args, state);
   if (issue) return issue;
-  const maxBytes = LARGE_CHANNELS.has(channel) ? LARGE_MAX_BYTES : DEFAULT_MAX_BYTES;
+  const maxBytes = IDENTITY_CHANNELS.has(channel) ? IDENTITY_MAX_BYTES : LARGE_CHANNELS.has(channel) ? LARGE_MAX_BYTES : DEFAULT_MAX_BYTES;
   if (state.bytes > maxBytes) return error(`IPC payload exceeds ${maxBytes} bytes`, "IPC_PAYLOAD_TOO_LARGE");
 
   const payload = args[0];
@@ -121,6 +141,7 @@ function normalizeResult(value) {
 module.exports = {
   DEFAULT_MAX_BYTES,
   LARGE_MAX_BYTES,
+  IDENTITY_MAX_BYTES,
   PATH_MAX_CHARS,
   COMMAND_MAX_CHARS,
   validateIpcRequest,
