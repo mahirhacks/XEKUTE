@@ -8,7 +8,7 @@ const {
   isPrivateIp,
   parseHttpUrl,
   parseSearchHtml,
-} = require("../src/adapters/tools/cyber/web-research");
+} = require("../src/app/services/research/web-research.js");
 
 function response({ status = 200, headers = {}, body = "" } = {}) {
   const normalized = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), String(value)]));

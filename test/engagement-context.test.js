@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { createAssessmentWorkspace } = require("../src/domain/assessment/assessment-workspace");
-const EngagementContext = require("../src/application/planning/engagement-context");
+const EngagementContext = require("../src/app/services/guidance/engagement-context.js");
 
 test("engagement context merges scope, engagement, checklist, and pen_context", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-engagement-ctx-"));
@@ -31,6 +31,7 @@ test("engagement context merges scope, engagement, checklist, and pen_context", 
     workspace: root,
     projectProfile: {
       project: { name: "Portal" },
+      engagement: { executionModel: "browser_bound" },
       context: { applicationOverview: "Customer billing portal" },
     },
   });
@@ -46,6 +47,8 @@ test("engagement context merges scope, engagement, checklist, and pen_context", 
   assert.match(rendered, /ENGAGEMENT CONTEXT/);
   assert.match(rendered, /app\.example\.com/);
   assert.match(rendered, /Customer billing portal/);
+  assert.match(rendered, /Execution path: Use the shared browser/);
+  assert.match(rendered, /Do not assume command-line tools share its session/);
   assert.match(rendered, /JWT auth/);
   assert.match(rendered, /WSTG/);
 

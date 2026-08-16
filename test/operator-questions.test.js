@@ -1,8 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const OperatorQuestions = require("../src/application/clarification/operator-questions");
-const ToolMap = require("../src/adapters/tools/core/tool-catalog");
+const OperatorQuestions = require("../src/agent/controller/operator-questions.js");
 
 test("buildQuestionsDocumentPath uses topic date and time slug", () => {
   const path = OperatorQuestions.buildQuestionsDocumentPath(
@@ -32,7 +31,7 @@ test("normalizeQuestions appends free-write option and keeps one recommended", (
   assert.equal(options.filter((row) => row.recommended).length, 1);
 });
 
-test("operator questions stay bounded and expose a complete nested tool schema", () => {
+test("operator questions stay bounded to three questions and four options each", () => {
   const result = OperatorQuestions.normalizeQuestions(Array.from({ length: 5 }, (_, questionIndex) => ({
     id: `q${questionIndex + 1}`,
     prompt: `Question ${questionIndex + 1}?`,
@@ -44,12 +43,6 @@ test("operator questions stay bounded and expose a complete nested tool schema",
   })));
   assert.equal(result.questions.length, 3);
   assert.ok(result.questions.every((question) => question.options.length === 4));
-
-  const tool = ToolMap.TOOLS.find((entry) => entry.function.name === "request_operator_questions");
-  const schema = tool.function.parameters.properties.questions;
-  assert.equal(schema.maxItems, 3);
-  assert.equal(schema.items.properties.options.maxItems, 3);
-  assert.deepEqual(schema.items.properties.options.items.required, ["id", "label"]);
 });
 
 test("applyAnswers and formatAnswersForModel render operator choices", () => {

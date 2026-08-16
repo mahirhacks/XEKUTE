@@ -6,6 +6,8 @@ const DELEGATE_AGENT_INPUT_SCHEMA = Object.freeze({
   type: "object",
   required: ["task", "contextPackage", "expectedOutput"],
   properties: {
+    operation: { type: "string", enum: ["spawn", "follow_up"] },
+    childInvocationId: { type: "string" },
     task: { type: "string" },
     contextPackage: {
       type: "object",
@@ -103,6 +105,11 @@ function validateInput(input) {
   if (typeof input.expectedOutput.format !== "string" || input.expectedOutput.format.trim() === "") {
     return invalidInput("expectedOutput.format must be a non-empty string");
   }
+  const operation = String(input.operation || "spawn").toLowerCase();
+  if (!["spawn", "follow_up"].includes(operation)) return invalidInput("operation must be spawn or follow_up");
+  if (operation === "follow_up" && (typeof input.childInvocationId !== "string" || input.childInvocationId.trim() === "")) {
+    return invalidInput("childInvocationId is required for a follow_up");
+  }
   return { ok: true };
 }
 
@@ -129,10 +136,11 @@ function createDelegateAgentTool({ delegationProvider = null, projectMemoryProvi
     name: "delegate_agent",
     description: [
       "Spawn a real child agent that runs the parent's tool set (except further delegation) against the same workspace.",
+      "Use operation=spawn for a new child, or operation=follow_up with childInvocationId to resume a finished child with feedback.",
       "Put everything the child needs in task and contextPackage; the child does NOT see the parent's chat transcript.",
       "task: the exact, self-contained instruction the child must execute. contextPackage: role/authority/scope/identity/resources the child inherits.",
       "expectedOutput: what the child must return (description + format).",
-      "The parent receives the child's final text and summary after it completes; use read_file/search_workspace afterwards to verify any claimed file changes.",
+      "The parent receives immediate acceptance, then one FIFO result after the child completes; use read_file/search_workspace afterwards to verify any claimed file changes.",
     ].join(" "),
     inputSchema: DELEGATE_AGENT_INPUT_SCHEMA,
     async execute(input, executionContext, runtime = {}) {
@@ -184,6 +192,7 @@ function createDelegateAgentTool({ delegationProvider = null, projectMemoryProvi
         ok: true,
         value: {
           childInvocationId: outcome.childInvocationId,
+          operation: String(input.operation || "spawn").toLowerCase(),
           parentInvocationId: executionContext.invocationId,
           role: input.contextPackage.role,
           authority: input.contextPackage.authority,

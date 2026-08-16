@@ -614,8 +614,12 @@ let deletingCustomEntries = false;
 let chatHistory  = [];
 const activeChatRuns = new Map();
 const chatSessionsNeedingAttention = new Set();
-let subagentCompletionPending = false;
-let pendingBackgroundWaitEvents = [];
+  let subagentCompletionPending = false;
+  let pendingBackgroundWaitEvents = [];
+  let pendingSubagentResults = [];
+  const subagentContinuationRuns = new Set();
+  const seenSubagentResultIds = new Set();
+  let subagentDrainRetryTimer = null;
 const waitCardTickers = new Map();
 let activeStreamContent = "";
 let contextFilesCache = [];
@@ -957,7 +961,7 @@ function sanitizePersistedChatHtml(html) {
   const clean = globalThis.DOMPurify
     ? globalThis.DOMPurify.sanitize(raw, {
       ADD_TAGS: ["button"],
-      ADD_ATTR: ["class", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "title", "type", "hidden", "aria-hidden", "aria-expanded", "aria-current"],
+       ADD_ATTR: ["class", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
     })
     : "";
   const template = document.createElement("template");
@@ -1340,6 +1344,7 @@ function renderCanonicalChatHistory(history = []) {
     ? ContextMemory.ensureMessageIdentity(history, session?.id || "chat")
     : (Array.isArray(history) ? history : []);
   const renderMessage = (message, container) => {
+    if (message?.__xekuteInternalSubagentResult) return;
     const content = String(message?.content || "").trim();
     if (message.role === "user") {
       if (!content) return;
@@ -1352,7 +1357,8 @@ function renderCanonicalChatHistory(history = []) {
       const commandTools = (Array.isArray(message.tool_calls) ? message.tool_calls : [])
         .map(commandToolFromHistoryCall)
         .filter((tool) => isAgentTerminalTool(tool));
-      if (!content && !commandTools.length) return;
+      const subagents = Array.isArray(message.subagents) ? message.subagents : [];
+      if (!content && !commandTools.length && !subagents.length) return;
       const turn = document.createElement("div");
       turn.className = "chat-turn assistant";
       if (message.createdAt) turn.dataset.createdAt = message.createdAt;
@@ -1365,6 +1371,7 @@ function renderCanonicalChatHistory(history = []) {
         turn.appendChild(body);
       }
       for (const tool of commandTools) turn.appendChild(createCommandTimelineRow(tool, { state: "success" }));
+      for (const subagent of subagents) createSubagentRunCard({ turn }, subagent);
       appendChatTurn(turn, { container });
       if (body) attachAssistantCopyButton(body);
     }
@@ -1373,6 +1380,13 @@ function renderCanonicalChatHistory(history = []) {
   messages.replaceChildren(fragment);
   syncChatStickyMask();
   syncChatEmptyState();
+}
+
+function hydrateSubagentRunCards(root = messages) {
+  root?.querySelectorAll?.(".subagent-run-card").forEach((card) => {
+    wireSubagentRunCard(card);
+    setSubagentCardState(card, card.dataset.state || "working");
+  });
 }
 
 function ensureChatEmptyState() {
@@ -1427,6 +1441,31 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
     ? ContextMemory.ensureMessageIdentity(run.history, session.id)
     : run.history;
   run.history = session.history;
+  const assistant = run.assistant;
+  if (assistant?.turn) {
+    const rows = [...assistant.turn.querySelectorAll(".subagent-run-card")].map((card) => ({
+      childInvocationId: String(card.dataset.childInvocationId || ""),
+      childSessionId: String(card.dataset.childSessionId || ""),
+      parentSessionId: String(card.dataset.parentSessionId || session.id || ""),
+      model: String(card.dataset.model || ""),
+      status: String(card.dataset.state || "working"),
+      summary: String(card.querySelector(".subagent-run-detail")?.textContent || "").slice(0, 240),
+    })).filter((row) => row.childInvocationId || row.childSessionId);
+    if (rows.length) {
+      let assistantMessage = [...session.history].reverse().find((message) => message?.role === "assistant");
+      if (!assistantMessage) {
+        assistantMessage = {
+          role: "assistant",
+          content: String(assistant.rawContent || ""),
+          id: `${session.id}-assistant-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        };
+        session.history.push(assistantMessage);
+      }
+      assistant.messageId = assistantMessage.id;
+      assistantMessage.subagents = rows;
+    }
+  }
   session.contextFilesCache = run.contextFilesCache || [];
   session.activeStreamContent = run.activeStreamContent || "";
   session.chatMode = run.mode;
@@ -1485,6 +1524,7 @@ function applyActiveChatSession(session) {
   } else if (session.messagesHtml) {
     messages.innerHTML = session.messagesHtml;
     redactThinkingDisclosures(messages);
+    hydrateSubagentRunCards(messages);
     // Migrate snapshots produced by the former compression UI. The cursor is
     // model-only state; it must never hide or remove visible transcript rows.
     if (messages.querySelector(".chat-archive-marker")) {
@@ -1527,6 +1567,39 @@ function applyActiveChatSession(session) {
     });
     scrollMessages({ force: true });
   });
+  scheduleSubagentResultDrain();
+}
+
+async function recoverPendingSubagentResults() {
+  if (typeof window.api?.pendingSubagentResults !== "function"
+    && typeof window.api?.pendingParentContinuations !== "function") return;
+  const sessionIds = [...chatSessions, ...closedChatSessions, ...archivedChatSessions]
+    .flatMap((session) => [session.id, session.memorySessionId])
+    .map((value) => String(value || ""))
+    .filter(Boolean);
+  try {
+    if (typeof window.api?.pendingSubagentResults === "function") {
+      const response = await window.api.pendingSubagentResults({ sessionIds });
+      for (const result of Array.isArray(response?.results) ? response.results : []) {
+        enqueueSubagentResult(result, { authoritative: true });
+      }
+    }
+    if (typeof window.api?.pendingParentContinuations === "function") {
+      const response = await window.api.pendingParentContinuations({ sessionIds });
+      for (const entry of Array.isArray(response?.results) ? response.results : []) {
+        queueParentContinuationEvent({
+          type: "parent_continuation_complete",
+          source: "parent_continuation",
+          sessionId: entry.parentSessionId || entry.sessionId,
+          parentSessionId: entry.parentSessionId || entry.sessionId,
+          continuationResultId: entry.resultId,
+          result: entry.result,
+        });
+      }
+    }
+  } catch (error) {
+    console.warn("Could not recover pending sub-agent results:", error);
+  }
 }
 
 async function restoreChatSessionsForCurrentWorkspace() {
@@ -1577,6 +1650,7 @@ async function restoreChatSessionsForCurrentWorkspace() {
   renderChatSessionSelect();
   updateContextUsage();
   if (saved?.warning) reportSessionMemoryWarning(saved.warning);
+  await recoverPendingSubagentResults();
 }
 
 function activeChatSession() {
@@ -6927,11 +7001,12 @@ function workingHistoryMessages(history = chatHistory, session = activeChatSessi
   const source = ContextMemory?.ensureMessageIdentity
     ? ContextMemory.ensureMessageIdentity(history, session?.id || "chat")
     : (Array.isArray(history) ? history : []);
+  const visibleSource = source.filter((message) => !message?.__xekuteInternalSubagentResult);
   const cursor = String(memoryRecord(session)?.archivedThroughMessageId || "");
-  if (!cursor) return source;
-  const index = source.findIndex((message) => String(message?.id || "") === cursor);
-  if (index < 0) return source;
-  const recent = source.slice(index + 1);
+  if (!cursor) return visibleSource;
+  const index = visibleSource.findIndex((message) => String(message?.id || "") === cursor);
+  if (index < 0) return visibleSource;
+  const recent = visibleSource.slice(index + 1);
   return ContextMemory?.projectRecentContextMessages
     ? ContextMemory.projectRecentContextMessages(recent)
     : recent;
@@ -12840,11 +12915,20 @@ function agentStateIcon(kind = "working") {
 function subagentCardTitle({ model = "", status = "running", childInvocationId = "" } = {}) {
   const modelLabel = String(model || "").trim();
   const modelSuffix = modelLabel ? ` (${modelLabel})` : "";
-  if (status === "stopped") return `Sub-agent stopped${modelSuffix}`;
-  if (status === "failed") return `Sub-agent failed${modelSuffix}`;
-  if (status === "completed") return `Sub-agent finished${modelSuffix}`;
   void childInvocationId;
-  return `Sub-agent is working${modelSuffix}`;
+  void status;
+  return `Sub-agent${modelSuffix}`;
+}
+
+function subagentCardStatus(status = "working") {
+  return {
+    queued: "Queued…",
+    running: "Working…",
+    working: "Working…",
+    completed: "Finished working.",
+    stopped: "Stopped.",
+    failed: "Failed.",
+  }[String(status || "working")] || "Working…";
 }
 
 function summarizeSubagentActivity(payload = {}) {
@@ -12853,6 +12937,31 @@ function summarizeSubagentActivity(payload = {}) {
 
 function subagentCardKey(payload = {}) {
   return String(payload.childInvocationId || payload.childSessionId || payload.sessionId || "");
+}
+
+function wireSubagentRunCard(card) {
+  if (!card || card.dataset.interactionsBound === "1") return card;
+  card.dataset.interactionsBound = "1";
+  const openChild = () => {
+    const childSessionId = card.dataset.childSessionId;
+    if (childSessionId && chatSessions.some((item) => item.id === childSessionId)) loadChatSession(childSessionId);
+  };
+  card.addEventListener("click", (event) => {
+    if (event.target.closest(".subagent-run-stop")) return;
+    openChild();
+  });
+  card.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openChild();
+    }
+  });
+  card.querySelector(".subagent-run-stop")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    window.api.abortChat?.({ sessionId: card.dataset.childSessionId || "" });
+    setSubagentCardState(card, "stopped");
+  });
+  return card;
 }
 
 function createSubagentRunCard(assistant, payload = {}) {
@@ -12868,14 +12977,11 @@ function createSubagentRunCard(assistant, payload = {}) {
   card.dataset.childInvocationId = String(payload.childInvocationId || "");
   card.dataset.childSessionId = String(payload.childSessionId || "");
   card.dataset.parentSessionId = String(payload.parentSessionId || "");
-  card.dataset.state = "running";
+  card.dataset.model = String(payload.model || "");
+  card.dataset.state = String(payload.status || (payload.type === "subagent_queued" ? "queued" : "working"));
   card.setAttribute("role", "button");
   card.setAttribute("tabindex", "0");
   card.setAttribute("aria-label", "Sub-agent is working. Click to open its chat.");
-
-  const icon = document.createElement("span");
-  icon.className = "subagent-run-icon codicon codicon-loading codicon-modifier-spin";
-  icon.setAttribute("aria-hidden", "true");
 
   const body = document.createElement("span");
   body.className = "subagent-run-body";
@@ -12886,7 +12992,7 @@ function createSubagentRunCard(assistant, payload = {}) {
 
   const detail = document.createElement("span");
   detail.className = "subagent-run-detail";
-  detail.textContent = summarizeSubagentActivity(payload);
+  detail.textContent = subagentCardStatus(card.dataset.state);
 
   body.append(title, detail);
 
@@ -12895,59 +13001,35 @@ function createSubagentRunCard(assistant, payload = {}) {
   stop.className = "subagent-run-stop";
   stop.title = "Stop sub-agent";
   stop.setAttribute("aria-label", "Stop sub-agent");
-  stop.innerHTML = '<span class="codicon codicon-debug-stop" aria-hidden="true"></span>';
+  stop.textContent = "Stop";
 
-  card.append(icon, body, stop);
+  card.append(body, stop);
 
-  const openChild = () => {
-    const childSessionId = card.dataset.childSessionId;
-    if (childSessionId) {
-      const session = chatSessions.find((item) => item.id === childSessionId);
-      if (session) loadChatSession(childSessionId);
-    }
-  };
-  card.addEventListener("click", (event) => {
-    if (event.target.closest(".subagent-run-stop")) return;
-    openChild();
+  assistant.subagentRows = assistant.subagentRows || new Map();
+  assistant.subagentRows.set(key, {
+    childInvocationId: card.dataset.childInvocationId,
+    childSessionId: card.dataset.childSessionId,
+    parentSessionId: card.dataset.parentSessionId,
+    model: String(payload.model || ""),
+    state: card.dataset.state,
+    summary: summarizeSubagentActivity(payload),
   });
-  card.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      openChild();
-    }
-  });
-  stop.addEventListener("click", (event) => {
-    event.stopPropagation();
-    window.api.abortChat?.({ sessionId: card.dataset.childSessionId || "" });
-    setSubagentCardState(card, "stopped", "Stopped by operator");
-  });
-
-  // Insert as a sibling of tool cards, before the assistant reply content.
-  assistant.turn.insertBefore(card, assistant.contentEl);
+  // Keep delegated rows below the parent's prose and tool timeline.
+  assistant.turn.appendChild(card);
+  wireSubagentRunCard(card);
+  setSubagentCardState(card, card.dataset.state);
   return card;
 }
 
 function setSubagentCardState(card, status = "running", detail = "") {
   if (!card) return;
   card.dataset.state = status;
-  const icon = card.querySelector(".subagent-run-icon");
-  if (icon) {
-    icon.className = status === "running"
-      ? "subagent-run-icon codicon codicon-loading codicon-modifier-spin"
-      : status === "stopped"
-        ? "subagent-run-icon codicon codicon-debug-stop"
-        : status === "failed"
-          ? "subagent-run-icon codicon codicon-error"
-          : "subagent-run-icon codicon codicon-check";
-  }
   const title = card.querySelector(".subagent-run-title");
   if (title) title.textContent = subagentCardTitle({ model: card.dataset.model || "", status });
-  if (detail) {
-    const detailEl = card.querySelector(".subagent-run-detail");
-    if (detailEl) detailEl.textContent = String(detail).slice(0, 240);
-  }
+  const detailEl = card.querySelector(".subagent-run-detail");
+  if (detailEl) detailEl.textContent = String(detail || subagentCardStatus(status)).slice(0, 240);
   const stop = card.querySelector(".subagent-run-stop");
-  if (stop) stop.hidden = status === "running" ? false : true;
+  if (stop) stop.hidden = !["queued", "running", "working"].includes(String(status));
   card.setAttribute("aria-label", title?.textContent || "Sub-agent");
 }
 
@@ -12960,14 +13042,17 @@ function handleSubagentCardEvent(assistant, payload = {}) {
   );
   if (!card) return;
   if (payload.model) card.dataset.model = String(payload.model);
-  if (type === "subagent_activity") {
-    const detailEl = card.querySelector(".subagent-run-detail");
-    if (detailEl) detailEl.textContent = summarizeSubagentActivity(payload);
+  if (type === "subagent_queued" || type === "subagent_started") {
+    setSubagentCardState(card, type === "subagent_queued" ? "queued" : "working");
     return;
   }
-  if (type === "subagent_completed") setSubagentCardState(card, "completed", summarizeSubagentActivity(payload));
-  if (type === "subagent_stopped") setSubagentCardState(card, "stopped", summarizeSubagentActivity(payload));
-  if (type === "subagent_failed") setSubagentCardState(card, "failed", summarizeSubagentActivity(payload));
+  if (type === "subagent_activity") {
+    setSubagentCardState(card, card.dataset.state || "working");
+    return;
+  }
+  if (type === "subagent_completed") setSubagentCardState(card, "completed");
+  if (type === "subagent_stopped") setSubagentCardState(card, "stopped");
+  if (type === "subagent_failed") setSubagentCardState(card, "failed");
 }
 
 // Ensure a chat session tab exists for a delegated child. The child is created
@@ -13335,6 +13420,8 @@ function createAssistantTurn() {
       }
       const copyAnchor = this.contentSegments.find((segment) => !segment.el.hidden)?.el || this.contentEl;
       attachAssistantCopyButton(copyAnchor);
+      const subagentRows = [...this.turn.querySelectorAll(".subagent-run-card")];
+      if (subagentRows.length) this.turn.append(...subagentRows);
       this.finishLiveState(this.finalOutcome || "complete");
       this.pruneIfEmpty();
     },
@@ -13537,18 +13624,23 @@ async function runStaticSlashCommand(rawCommand) {
   return true;
 }
 
-async function sendMessageWithAgentRuntime() {
+async function sendMessageWithAgentRuntime(options = {}) {
+  const internal = Boolean(options?.internal);
+  const targetSessionId = String(options?.sessionId || activeChatSessionId || "");
   let text = effectiveChatInputValue().trim();
-  if (!text || isRunningChatActive()) return;
-  if (isDelegatedChildRunLocked()) {
+  if (internal) text = String(options?.text || "Review the delegated result and decide the next action.").trim();
+  if (!internal) {
+    if (!text || isRunningChatActive()) return;
+  } else if (!text || isChatSessionRunning(targetSessionId)) return;
+  if (!internal && isDelegatedChildRunLocked()) {
     addErrorMessage("This sub-agent chat is running under its parent. Wait for it to finish, or stop it first.");
     return;
   }
-  if (text.startsWith("/")) {
+  if (!internal && text.startsWith("/")) {
     const handled = await runStaticSlashCommand(text);
     if (handled) { chatInput.value = ""; resetChatInput(); closeSlashSuggestions(); return; }
   }
-  text = expandSlashCommand(text);
+  if (!internal) text = expandSlashCommand(text);
   if (!text) {
     resetChatInput();
     closeSlashSuggestions();
@@ -13556,35 +13648,38 @@ async function sendMessageWithAgentRuntime() {
   }
   closeSlashSuggestions();
 
-  if (!selectedModel) {
-    addErrorMessage("Select a model before sending a message.");
-    return;
-  }
-
-  const runSession = activeChatSession();
+  const runSession = chatSessions.find((session) => session.id === targetSessionId)
+    || (internal ? null : activeChatSession());
   if (!runSession) return;
   let runHistory = runSession.history;
-  const runModel = selectedModel;
-  const runMode = chatMode;
-  const runFamily = chatFamily;
+  const runModel = runSession.selectedModel || selectedModel;
+  const runMode = runSession.chatMode || chatMode;
+  const runFamily = runSession.chatFamily || chatFamily;
+  if (!runModel) {
+    if (!internal) addErrorMessage("Select a model before sending a message.");
+    return;
+  }
   const runSettings = getModelSettings(runModel);
   const runContextPlan = resolvedWorkingContextPlan();
   const runActiveFile = getActiveFileContext();
 
-  chatInput.value = "";
-  runSession.draftText = "";
-  runSession.draftSlashCommand = "";
-  resetChatInput();
-  addUserMessage(text);
+  if (!internal) {
+    chatInput.value = "";
+    runSession.draftText = "";
+    runSession.draftSlashCommand = "";
+    resetChatInput();
+    addUserMessage(text);
+  }
   const userMessage = {
     role: "user",
     content: text,
     id: `${runSession.id}-message-${Date.now()}-${runHistory.length + 1}`,
     createdAt: new Date().toISOString(),
+    ...(internal ? { __xekuteInternalSubagentResult: true } : {}),
   };
   runHistory.push(userMessage);
   runSession.lastContextUsage = null;
-  maybeNameActiveChat(text);
+  if (!internal) maybeNameActiveChat(text);
   const run = {
     sessionId: runSession.id,
     session: runSession,
@@ -13598,6 +13693,8 @@ async function sendMessageWithAgentRuntime() {
     viewHost: null,
     state: "running",
     stopRequested: false,
+    internal,
+    continuation: options?.continuation || null,
   };
   activeChatRuns.set(run.sessionId, run);
   setAgentStatus(`${modeLabel(runMode)} working`);
@@ -13613,6 +13710,7 @@ async function sendMessageWithAgentRuntime() {
 
   const historyStart = runHistory.length - 1;
   let assistant = null;
+  let agentRunResult = null;
   let unsubscribeAgentEvent = () => {};
   let sessionMemoryFinalized = false;
   const finalizeSessionMemory = async (outcome) => {
@@ -13643,6 +13741,11 @@ async function sendMessageWithAgentRuntime() {
 
     const handleAgentEvent = async (payload) => {
     if (!payload) return;
+    // Main-owned FIFO continuations have their own renderer event bridge. The
+    // original user-turn listener may still be settling its IPC response when
+    // the main process starts the continuation, so do not render those events
+    // into the old assistant turn as well.
+    if (payload.source === "parent_continuation") return;
 
     if (payload.type === "task_brief" && payload.brief) {
       assistant.ensureTaskBrief(payload.brief);
@@ -13656,11 +13759,12 @@ async function sendMessageWithAgentRuntime() {
       return;
     }
 
-    if (payload.type === "subagent_started") {
+    if (payload.type === "subagent_queued" || payload.type === "subagent_started") {
       const card = createSubagentRunCard(assistant, payload);
       if (card) {
         card.dataset.model = String(payload.model || "");
         card.dataset.summary = summarizeSubagentActivity(payload);
+        setSubagentCardState(card, payload.type === "subagent_queued" ? "queued" : "working");
       }
       // Register the child chat session tab so the operator can click into it.
       ensureSubagentSessionTab(payload);
@@ -13852,7 +13956,7 @@ async function sendMessageWithAgentRuntime() {
     const activeSession = runSession;
     const activeMemory = memoryRecord(runSession);
 
-    const result = await window.api.agentRun({
+    agentRunResult = await window.api.agentRun({
       workspace: rootPath,
       model: runModel,
       numCtx: runContextPlan.provider === "ollama" ? runContextPlan.effectiveLimitTokens : null,
@@ -13863,7 +13967,7 @@ async function sendMessageWithAgentRuntime() {
       mode: runMode,
       modeFamily: runFamily,
       authorityProfile: authoritySettingsData.superMode,
-      chatHistory: workingHistoryMessages(runHistory, runSession),
+       chatHistory: workingHistoryMessages(runHistory.filter((message) => !message?.__xekuteInternalSubagentResult), runSession),
       rawSourceTokens: estimateMessagesTokens(runHistory),
       contextSummary: activeSession?.contextSummary || "",
       sessionId: activeSession?.memorySessionId || activeSession?.id || "",
@@ -13872,8 +13976,10 @@ async function sendMessageWithAgentRuntime() {
       activeFile: runActiveFile,
       extraFiles: run.contextFilesCache,
       subagentModel: getExploreSubagentModel(),
-      userMessage: text,
+       userMessage: internal ? "" : text,
+       continuation: internal ? (options?.continuation || null) : null,
     });
+    const result = agentRunResult;
     // Drain serialized UI events so the last tokens/tool cards land before
     // we finalize the transcript.
     await agentEventQueue;
@@ -13893,11 +13999,16 @@ async function sendMessageWithAgentRuntime() {
     if (result?.error) {
       assistant.completeTaskBrief("error");
       assistant.finishLiveState("error");
-      addErrorMessage(result.error, { container: chatRunContainer(run), session: runSession });
+      // Internal continuation failures are returned to the FIFO drain. Do
+      // not surface a transient hand-off race (or a coordinator stop) as a
+      // user-facing error, but keep the complete result object available so
+      // the drain can requeue PARENT_BUSY and release stopped results.
+      const transientContinuation = internal && (result.aborted || ["PARENT_BUSY", "SUBAGENT_RESULT_NOT_READY"].includes(String(result.code || "")));
+      if (!transientContinuation) addErrorMessage(result.error, { container: chatRunContainer(run), session: runSession });
       await finalizeSessionMemory(run.stopRequested ? "stopped" : "failed");
       runHistory.splice(historyStart);
       syncChatRunSession(run);
-      return;
+      return agentRunResult;
     }
 
     if (run.stopRequested) {
@@ -13906,7 +14017,7 @@ async function sendMessageWithAgentRuntime() {
       assistant.finalizeContent();
       updateRunContextUsage();
       await finalizeSessionMemory("stopped");
-      return;
+      return agentRunResult;
     }
 
     if (Array.isArray(result?.appendedMessages) && result.appendedMessages.length) {
@@ -13943,6 +14054,12 @@ async function sendMessageWithAgentRuntime() {
     syncChatRunSession(run);
     await finalizeSessionMemory(assistant.rawContent.trim() ? "completed" : "incomplete");
   } catch (error) {
+    agentRunResult = {
+      ok: false,
+      error: error?.message || "The agent run failed unexpectedly.",
+      code: error?.code || "AGENT_RUN_FAILED",
+      aborted: Boolean(run.stopRequested),
+    };
     assistant?.completeTaskBrief?.("error");
     assistant?.finishLiveState?.("error");
     await finalizeSessionMemory(run.stopRequested ? "stopped" : "failed");
@@ -13990,7 +14107,9 @@ async function sendMessageWithAgentRuntime() {
       runSession.pendingAutoCompression = true;
     }
     queueMicrotask(drainPendingBackgroundWaitEvents);
+    scheduleSubagentResultDrain();
   }
+  return agentRunResult;
 }
 
 function stopGeneration() {
@@ -14083,10 +14202,17 @@ function ensureDelegatedChildRun(payload = {}) {
     activeChatRuns.set(childSessionId, run);
   }
   run.delegated = true;
-  if (!run.assistant && runIsChildVisible(childSessionId)) {
-    run.assistant = createAssistantTurn({ container: chatRunContainer(run) });
-    run.assistant.contentEl.classList.add("streaming");
+  if (payload.task && !run.history.some((message) => message?.role === "user" && String(message.content || "") === String(payload.task))) {
+    run.history.push({
+      role: "user",
+      content: String(payload.task),
+      id: `${childSessionId}-task-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+    });
   }
+  // Keep a detached view host while the child tab is closed so its transcript
+  // is ready when the operator clicks the row.
+  childAssistant(run);
   return run;
 }
 
@@ -14108,18 +14234,26 @@ function handleDelegatedChildEvent(payload = {}) {
   if (!type.startsWith("subagent_")) return;
   const childSessionId = String(payload.childSessionId || payload.sessionId || "");
 
-  if (type === "subagent_started") {
+  if (payload.parentSessionId && String(payload.sessionId || "") === String(payload.parentSessionId)) {
+    handleParentSubagentLifecycle(payload);
+    return;
+  }
+
+  if (type === "subagent_queued" || type === "subagent_started") {
     const run = ensureDelegatedChildRun(payload);
     if (run) {
       run.model = String(payload.model || run.model || "");
       run.session.selectedModel = run.model;
-      childAssistant(run)?.setLiveState({ kind: "working", detail: summarizeSubagentActivity(payload) });
+      childAssistant(run)?.setLiveState({ kind: "working", detail: type === "subagent_queued" ? "Queued…" : summarizeSubagentActivity(payload) });
       // Parent card (mirrored payloads carry parentSessionId).
       if (payload.parentSessionId) {
         const parentRun = activeChatRuns.get(payload.parentSessionId);
         if (parentRun?.assistant) {
           const card = createSubagentRunCard(parentRun.assistant, payload);
-          if (card) card.dataset.model = String(payload.model || "");
+          if (card) {
+            card.dataset.model = String(payload.model || "");
+            setSubagentCardState(card, type === "subagent_queued" ? "queued" : "working");
+          }
         }
       }
     }
@@ -14128,7 +14262,10 @@ function handleDelegatedChildEvent(payload = {}) {
 
   // Route child-scoped events into the child's live run, and mirror updates to
   // the parent card when the payload carries a parentSessionId.
-  const run = activeChatRuns.get(childSessionId);
+  const run = activeChatRuns.get(childSessionId)
+    || (["subagent_completed", "subagent_stopped", "subagent_failed"].includes(type)
+      ? ensureDelegatedChildRun(payload)
+      : null);
   const assistant = run ? childAssistant(run) : null;
 
   if (type === "subagent_activity") {
@@ -14142,10 +14279,18 @@ function handleDelegatedChildEvent(payload = {}) {
 
   if (type === "subagent_completed" || type === "subagent_stopped" || type === "subagent_failed") {
     if (assistant) {
-      assistant.setRawContent(String(payload.summary || "").trim() || "Sub-agent finished.");
+      if (!assistant.rawContent.trim()) assistant.setRawContent(String(payload.summary || "").trim() || "Sub-agent finished.");
       assistant.finalizeContent();
     }
     if (run) {
+      if (assistant) {
+        const finalText = assistant.rawContent.trim();
+        let message = [...run.history].reverse().find((item) => item?.role === "assistant");
+        if (!message) {
+          message = { role: "assistant", content: finalText, id: `${childSessionId}-assistant-${Date.now()}`, createdAt: new Date().toISOString() };
+          run.history.push(message);
+        } else if (finalText) message.content = finalText;
+      }
       run.state = "complete";
       run.delegated = false;
       if (run.assistant) run.assistant.turn.setAttribute("aria-busy", "false");
@@ -14160,15 +14305,384 @@ function handleDelegatedChildEvent(payload = {}) {
   }
 }
 
+function persistedSubagentRowForSession(session, payload = {}) {
+  if (!session) return null;
+  const key = subagentCardKey(payload);
+  if (!key) return null;
+  let message = [...(Array.isArray(session.history) ? session.history : [])].reverse().find((item) => item?.role === "assistant");
+  if (!message) {
+    message = {
+      role: "assistant",
+      content: "",
+      id: `${session.id}-assistant-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+    };
+    session.history = [...(Array.isArray(session.history) ? session.history : []), message];
+  }
+  const rows = Array.isArray(message.subagents) ? message.subagents : [];
+  let row = rows.find((item) => subagentCardKey(item) === key);
+  if (!row) {
+    row = {
+      childInvocationId: String(payload.childInvocationId || ""),
+      childSessionId: String(payload.childSessionId || ""),
+      parentSessionId: String(payload.parentSessionId || session.id),
+      model: String(payload.model || ""),
+      status: String(payload.status || (payload.type === "subagent_queued" ? "queued" : "working")),
+      summary: summarizeSubagentActivity(payload),
+    };
+    rows.push(row);
+    message.subagents = rows;
+  }
+  if (payload.model) row.model = String(payload.model);
+  if (payload.status) row.status = String(payload.status);
+  if (payload.type === "subagent_queued") row.status = "queued";
+  if (payload.type === "subagent_started") row.status = "working";
+  if (payload.type === "subagent_completed") row.status = "completed";
+  if (payload.type === "subagent_stopped") row.status = "stopped";
+  if (payload.type === "subagent_failed") row.status = "failed";
+  if (payload.summary || payload.task) row.summary = summarizeSubagentActivity(payload);
+  session.updatedAt = new Date().toISOString();
+  return row;
+}
+
+function chatSessionIdForRuntimeId(runtimeId = "") {
+  const id = String(runtimeId || "");
+  if (!id) return "";
+  const allSessions = [...chatSessions, ...closedChatSessions, ...archivedChatSessions];
+  const direct = allSessions.find((session) => session.id === id);
+  if (direct) return direct.id;
+  const memoryMatch = allSessions.find((session) => session.memorySessionId === id);
+  if (memoryMatch) return memoryMatch.id;
+  for (const run of activeChatRuns.values()) {
+    if (String(run?.memorySessionId || run?.session?.memorySessionId || "") === id) return run.sessionId;
+  }
+  return id;
+}
+
+function updateRenderedSubagentCard(payload = {}, root = messages) {
+  const key = subagentCardKey(payload);
+  if (!key || !root?.querySelectorAll) return false;
+  const card = [...root.querySelectorAll(".subagent-run-card")].find(
+    (item) => (item.dataset.childInvocationId || item.dataset.childSessionId) === key,
+  );
+  if (!card) return false;
+  if (payload.model) card.dataset.model = String(payload.model);
+  const type = String(payload.type || "");
+  if (type === "subagent_queued") setSubagentCardState(card, "queued");
+  else if (type === "subagent_started") setSubagentCardState(card, "working");
+  else if (type === "subagent_completed") setSubagentCardState(card, "completed");
+  else if (type === "subagent_stopped") setSubagentCardState(card, "stopped");
+  else if (type === "subagent_failed") setSubagentCardState(card, "failed");
+  else if (type === "subagent_activity") setSubagentCardState(card, card.dataset.state || "working");
+  return true;
+}
+
+function handleParentSubagentLifecycle(payload = {}) {
+  const parentSessionId = chatSessionIdForRuntimeId(payload.parentSessionId || payload.sessionId || "");
+  const parentRun = activeChatRuns.get(parentSessionId);
+  if (parentRun?.assistant) {
+    if (payload.type === "subagent_queued" || payload.type === "subagent_started") {
+      const card = createSubagentRunCard(parentRun.assistant, payload);
+      if (card) setSubagentCardState(card, payload.type === "subagent_queued" ? "queued" : "working");
+    } else {
+      handleSubagentCardEvent(parentRun.assistant, payload);
+    }
+    syncChatRunSession(parentRun, { persist: false });
+    return;
+  }
+  if (activeChatSessionId === parentSessionId && updateRenderedSubagentCard(payload)) {
+    syncActiveChatSession({ persist: false });
+  }
+  const session = [...chatSessions, ...closedChatSessions, ...archivedChatSessions]
+    .find((item) => item.id === parentSessionId);
+  if (session) {
+    persistedSubagentRowForSession(session, payload);
+    schedulePersistChatSessions();
+  }
+}
+
+async function handleDelegatedChildRuntimeEvent(payload = {}) {
+  const childSessionId = String(payload.childSessionId || "");
+  if (!childSessionId || String(payload.sessionId || "") !== childSessionId) return;
+  const run = ensureDelegatedChildRun(payload);
+  const assistant = childAssistant(run);
+  if (!assistant) return;
+  const type = String(payload.type || "");
+  if (type === "thinking") {
+    assistant.showPrivateReasoning();
+    assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
+  } else if (type === "content" || type === "token") {
+    const delta = String(payload.delta || payload.token || "");
+    if (delta) assistant.appendContent(delta);
+  } else if (type === "status" || type === "activity") {
+    if (payload.text || payload.summary) assistant.setStatus(String(payload.text || payload.summary));
+  } else if (type === "run_state") {
+    const phase = String(payload.state?.phase || "working").replace(/-/g, " ");
+    assistant.setStatus(phase);
+  } else if (type === "tool_call") {
+    for (const tool of Array.isArray(payload.tools) ? payload.tools : []) {
+      if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
+    }
+  } else if (type === "tool_start" && payload.tool) {
+    if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
+    else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
+  } else if (type === "tool_result" && payload.tool && payload.result) {
+    const uiResult = toolUiResult(payload.result);
+    if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
+    else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+  } else if (type === "context_usage" && payload.usage) {
+    run.session.lastContextUsage = payload.usage;
+  }
+  syncChatRunSession(run, { persist: false });
+  if (runIsChildVisible(childSessionId)) scrollMessages();
+}
+
+function scheduleSubagentResultDrain(delay = 0) {
+  if (Number(delay) > 0) {
+    if (subagentDrainRetryTimer) return;
+    subagentDrainRetryTimer = setTimeout(() => {
+      subagentDrainRetryTimer = null;
+      drainPendingSubagentResults();
+    }, Number(delay));
+    return;
+  }
+  queueMicrotask(drainPendingSubagentResults);
+}
+
+function enqueueSubagentResult(payload = {}, { authoritative = false } = {}) {
+  const resultId = String(payload.resultId || "");
+  const parentSessionId = chatSessionIdForRuntimeId(payload.parentSessionId || payload.sessionId || "");
+  if (!resultId || !parentSessionId) return;
+  if (pendingSubagentResults.some((item) => item.resultId === resultId)) return;
+  if (seenSubagentResultIds.has(resultId) && !authoritative) return;
+  if (authoritative) seenSubagentResultIds.delete(resultId);
+  seenSubagentResultIds.add(resultId);
+  pendingSubagentResults.push({ resultId, parentSessionId, payload });
+  drainPendingSubagentResults();
+}
+
+function drainPendingSubagentResults() {
+  if (!pendingSubagentResults.length) return;
+  const next = pendingSubagentResults[0];
+  if (next) {
+    const resolvedParentSessionId = chatSessionIdForRuntimeId(
+      next.payload?.parentSessionId || next.payload?.sessionId || next.parentSessionId,
+    );
+    if (resolvedParentSessionId) next.parentSessionId = resolvedParentSessionId;
+  }
+  if (!next
+    || !chatSessions.some((session) => session.id === next.parentSessionId)
+    || isChatSessionRunning(next.parentSessionId)
+    || subagentContinuationRuns.has(next.parentSessionId)) return;
+  pendingSubagentResults.shift();
+  subagentContinuationRuns.add(next.parentSessionId);
+  let retryLater = false;
+  Promise.resolve(sendMessageWithAgentRuntime({
+    internal: true,
+    sessionId: next.parentSessionId,
+    continuation: { resultId: next.resultId },
+    text: "Review the delegated result.",
+  })).then((result) => {
+    // A user stop intentionally pauses the claimed result in the coordinator.
+    // Allow the next parent turn to receive the same result again.
+    if (result?.aborted) {
+      seenSubagentResultIds.delete(next.resultId);
+      return;
+    }
+    // A result can arrive at the same boundary as a parent turn finishing.
+    // Keep it queued only while the parent is busy. A not-ready response means
+    // another turn already consumed the FIFO result, so retrying would create
+    // a reload-time loop around a permanently stale result id.
+    if (result?.ok === false && result.code === "PARENT_BUSY") {
+      seenSubagentResultIds.delete(next.resultId);
+      pendingSubagentResults.unshift(next);
+      retryLater = true;
+    }
+  }).catch(() => {}).finally(() => {
+    subagentContinuationRuns.delete(next.parentSessionId);
+    scheduleSubagentResultDrain(retryLater ? 250 : 0);
+  });
+}
+
+const parentContinuationEventQueues = new Map();
+
+function ensureParentContinuationRun(payload = {}) {
+  const parentSessionId = chatSessionIdForRuntimeId(payload.parentSessionId || payload.sessionId || "");
+  if (!parentSessionId) return null;
+  const session = [...chatSessions, ...closedChatSessions, ...archivedChatSessions].find((item) => item.id === parentSessionId);
+  if (!session) return null;
+  let run = activeChatRuns.get(parentSessionId);
+  if (!run || !run.parentContinuation) {
+    const host = activeChatSessionId === parentSessionId
+      ? messages
+      : (() => {
+        const detached = document.createElement("div");
+        detached.innerHTML = session.messagesHtml || "";
+        return detached;
+      })();
+    run = {
+      sessionId: parentSessionId,
+      memorySessionId: session.memorySessionId || parentSessionId,
+      session,
+      history: Array.isArray(session.history) ? session.history : [],
+      model: String(payload.model || session.selectedModel || ""),
+      mode: session.chatMode || "agent",
+      family: session.chatFamily || "xekute",
+      contextPlan: null,
+      contextFilesCache: session.contextFilesCache || [],
+      activeStreamContent: "",
+      viewHost: host === messages ? null : host,
+      state: "running",
+      stopRequested: false,
+      parentContinuation: true,
+    };
+    activeChatRuns.set(parentSessionId, run);
+    run.assistant = createAssistantTurn({ container: host });
+    run.assistant.contentEl.classList.add("streaming");
+    run.assistant.setLiveState({ kind: "working", detail: "Reviewing delegated result" });
+  }
+  return run;
+}
+
+async function renderParentContinuationEvent(payload = {}) {
+  const type = String(payload.type || "");
+  // Child lifecycle/runtime events mirrored during an automatic continuation
+  // still use the normal child renderers; only parent-scoped model events are
+  // rendered by the lightweight continuation run below.
+  if (type === "subagent_result_ready" && payload.continuationOwner === "main") return;
+  if (payload.childSessionId && String(payload.sessionId || "") === String(payload.childSessionId)) {
+    if (payload.source === "parent_continuation") {
+      if (payload.type === "subagent_queued" || payload.type === "subagent_started"
+        || payload.type === "subagent_activity" || payload.type === "subagent_completed"
+        || payload.type === "subagent_stopped" || payload.type === "subagent_failed") {
+        handleDelegatedChildEvent(payload);
+      } else {
+        await handleDelegatedChildRuntimeEvent(payload);
+      }
+      return;
+    }
+  }
+  if (type.startsWith("subagent_")) {
+    handleDelegatedChildEvent(payload);
+    return;
+  }
+  const run = ensureParentContinuationRun(payload);
+  if (!run?.assistant) return;
+  const assistant = run.assistant;
+  const visible = activeChatSessionId === run.sessionId && !run.viewHost;
+  if (type === "thinking") {
+    assistant.showPrivateReasoning();
+    assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
+  } else if (type === "content" || type === "token") {
+    const delta = String(payload.delta || payload.token || "");
+    if (delta) {
+      assistant.finalizeThinking();
+      assistant.appendContent(delta);
+      run.activeStreamContent = assistant.rawContent;
+    }
+  } else if (type === "status") {
+    assistant.setStatus(payload.text || "Working...");
+  } else if (type === "activity") {
+    if (payload.text && !isSilentToolRoutingActivity(payload.text)) assistant.noteTaskActivity(payload.text, payload.kind || "info");
+  } else if (type === "output_continuation") {
+    assistant.outputContinuationCount = Math.max(assistant.outputContinuationCount, Number(payload.segment) || 1);
+    assistant.setStatus("Continuing the response…");
+  } else if (type === "context_usage" && payload.usage) {
+    storeLastContextUsage(payload.usage, { session: run.session, model: run.model, contextPlan: run.contextPlan });
+  } else if (type === "run_state") {
+    const phase = String(payload.state?.phase || "working").replace(/-/g, " ");
+    assistant.updateTaskStage(phase);
+    assistant.setStatus(`${phase} · ${payload.state?.completionGate || "working"}`);
+  } else if (type === "questions_required") {
+    const response = await assistant.requestQuestions(payload);
+    await window.api.agentResolveQuestions?.({
+      requestId: payload.requestId,
+      answers: response?.answers || [],
+      skipped: Boolean(response?.skipped),
+    });
+    assistant.setStatus(response?.skipped ? "Clarification skipped" : "Clarification answers submitted");
+  } else if (type === "tool_call") {
+    assistant.finalizeThinking();
+    for (const tool of Array.isArray(payload.tools) ? payload.tools : []) {
+      if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
+    }
+  } else if (type === "tool_start" && payload.tool) {
+    assistant.finalizeThinking();
+    if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
+    else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
+  } else if (type === "tool_result" && payload.tool && payload.result) {
+    const uiResult = toolUiResult(payload.result);
+    if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
+    else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+  } else if (type === "parent_continuation_complete") {
+    const result = payload.result && typeof payload.result === "object" ? payload.result : {};
+    if (Array.isArray(result.appendedMessages) && result.appendedMessages.length) {
+      const appended = ContextMemory?.ensureMessageIdentity
+        ? ContextMemory.ensureMessageIdentity(result.appendedMessages, `${run.session.id}-agent`)
+        : result.appendedMessages;
+      run.history.push(...appended.map((message) => ({ ...message, createdAt: message.createdAt || new Date().toISOString() })));
+    }
+    const finalText = String(result.finalText || "").trim();
+    if (finalText && !assistant.rawContent.trim()) assistant.setRawContent(finalText);
+    if (result.error && !result.aborted) addErrorMessage(result.error, { container: chatRunContainer(run), session: run.session });
+    if (result.aborted && !assistant.rawContent.trim()) assistant.setRawContent("Stopped.");
+    assistant.completeTaskBrief(result.aborted ? "stopped" : result.ok === false ? "error" : "complete");
+    assistant.finalizeContent();
+    assistant.pruneIfEmpty();
+    run.state = "complete";
+    run.activeStreamContent = "";
+    assistant.turn.setAttribute("aria-busy", "false");
+    syncChatRunSession(run);
+    window.api.ackParentContinuation?.({
+      sessionId: run.session.memorySessionId || run.session.id,
+      resultId: payload.continuationResultId || "",
+    }).catch?.(() => {});
+    activeChatRuns.delete(run.sessionId);
+    updateSendBtn();
+    if (visible) {
+      scrollMessages();
+      setAgentStatus(`${modeLabel()} ready`);
+    }
+    return;
+  }
+  if (visible) scrollMessages();
+}
+
+function queueParentContinuationEvent(payload = {}) {
+  const key = chatSessionIdForRuntimeId(payload.parentSessionId || payload.sessionId || "");
+  if (!key) return;
+  const prior = parentContinuationEventQueues.get(key) || Promise.resolve();
+  const next = prior.then(() => renderParentContinuationEvent(payload)).catch(() => {});
+  parentContinuationEventQueues.set(key, next);
+  next.finally(() => {
+    if (parentContinuationEventQueues.get(key) === next) parentContinuationEventQueues.delete(key);
+  });
+}
+
 // Global listener for delegated children: the per-run listener inside
 // sendMessageWithAgentRuntime is attached to the parent's session id, so child
 // events (sessionId=childSessionId) never reach it.
 window.api?.onAgentEvent?.((payload) => {
   const type = String(payload?.type || "");
-  if (type === "subagent_started" || type === "subagent_activity"
+  if (payload?.source === "parent_continuation") {
+    queueParentContinuationEvent(payload);
+    return;
+  }
+  if (type === "subagent_result_ready") {
+    // Production Electron owns parent re-entry. The renderer still receives
+    // the event for observability, but must not race the main-process FIFO
+    // claim with a second continuation request. Recovery via
+    // pendingSubagentResults remains available after a reload.
+    if (payload?.continuationOwner === "main") return;
+    enqueueSubagentResult(payload);
+    return;
+  }
+  if (type === "subagent_queued" || type === "subagent_started" || type === "subagent_activity"
     || type === "subagent_completed" || type === "subagent_stopped" || type === "subagent_failed") {
     handleDelegatedChildEvent(payload);
+    return;
   }
+  if (payload?.source === "subagent" && payload?.childSessionId) handleDelegatedChildRuntimeEvent(payload).catch(() => {});
 });
 
 // When a background terminal command or traffsucker subagent checkpoints or

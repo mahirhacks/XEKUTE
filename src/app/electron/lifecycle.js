@@ -12,6 +12,7 @@ function registerLifecycle({
   container,
   createWindow,
   createApplicationMenu,
+  shutdown = null,
   applicationId = "com.pointer.securityworkspace",
 } = {}) {
   if (!app || !BrowserWindow || !session || !container) {
@@ -49,7 +50,8 @@ function registerLifecycle({
       ? container.sessionMemoryStore().flush?.()
       : null;
     const contextFlush = container.contextCompiler?.flush?.() || null;
-    const flush = Promise.all([sessionFlush, contextFlush].map((pending) => Promise.resolve(pending)));
+    const runtimeShutdown = typeof shutdown === "function" ? shutdown() : null;
+    const flush = Promise.all([runtimeShutdown, sessionFlush, contextFlush].map((pending) => Promise.resolve(pending)));
     Promise.resolve(flush)
       .catch((error) => console.warn("Session memory flush failed during shutdown:", error?.message || error))
       .finally(async () => {

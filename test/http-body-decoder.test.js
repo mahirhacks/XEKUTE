@@ -5,10 +5,11 @@ const { promisify } = require("node:util");
 
 const {
   decodeHttpBody,
+  decodeHttpBodyBuffer,
   decodeHttpRequestBody,
   formatBinaryBody,
   bufferToDisplayText,
-} = require("../src/domain/assessment/http-body-decoder");
+} = require("../src/interceptor/http-body-decoder.js");
 
 const gzip = promisify(zlib.gzip);
 
@@ -38,6 +39,13 @@ test("formatBinaryBody truncates long previews", () => {
   const binary = Buffer.alloc(600, 0xab);
   const text = formatBinaryBody(binary);
   assert.match(text, /\(88 more bytes\)/);
+});
+
+test("compressed bodies cannot expand beyond the configured decode limit", async () => {
+  const compressed = await gzip(Buffer.alloc(2 * 1024 * 1024, 0x41));
+  const decoded = await decodeHttpBodyBuffer(compressed, "gzip", 64 * 1024);
+  assert.equal(decoded.equals(compressed), true);
+  assert.ok(decoded.length < 64 * 1024);
 });
 
 test("request decoder preserves form fields while summarizing binary multipart uploads", async () => {

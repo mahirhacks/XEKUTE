@@ -484,6 +484,7 @@ async function runAgentTurn({
   toolMetadataForName = () => null,
   getBrowserTarget = () => "",
   checkpointRun = () => Promise.resolve(),
+  nested = false,
   maxAgentRounds = MAX_AGENT_ROUNDS,
 } = {}) {
   const profile = normalizeProfile(modeFamily, mode);
@@ -585,6 +586,22 @@ async function runAgentTurn({
   let thinkingSignaled = false;
   let boundRunFinished = false;
   let completedPlanArtifact = null;
+  // Nested delegated turns may validate against the parent's approved plan,
+  // but the parent remains the only authority that commits plan actions and
+  // evidence. Keep a bounded ledger for the parent to review instead of
+  // mutating shared workflow state from the child.
+  const provisionalPlanActions = [];
+  const provisionalEvidenceIds = new Set();
+  const provisionalPlan = () => {
+    if (!nested || !activePlanBinding) return null;
+    return {
+      planId: String(activePlanBinding.planId || ""),
+      runId: String(activePlanBinding.runId || ""),
+      contentHash: String(activePlanBinding.contentHash || activePlanBinding.executionHash || ""),
+      evidenceIds: [...provisionalEvidenceIds].slice(0, 500),
+      actions: provisionalPlanActions.slice(-50),
+    };
+  };
   let lastProjectedMessageCount = 0;
   const appendedMessages = () => workingHistory
     .slice(prompt.history.length)
@@ -592,8 +609,11 @@ async function runAgentTurn({
   const finishBoundRun = (status) => {
     if (boundRunFinished) return completedPlanArtifact;
     boundRunFinished = true;
-    if (activePlanBinding && intelligence?.completeRun) intelligence.completeRun(workspace, runId, status);
-    if (activePlanBinding && modeWorkflow?.finishPlanRun) {
+    // A delegated child may validate and record actions against the parent's
+    // approved binding, but it must not close the parent's plan run when its
+    // own turn ends. The parent remains the lifecycle owner.
+    if (!nested && activePlanBinding && intelligence?.completeRun) intelligence.completeRun(workspace, runId, status);
+    if (!nested && activePlanBinding && modeWorkflow?.finishPlanRun) {
       const finished = modeWorkflow.finishPlanRun(workspace, activePlanBinding, status);
       if (finished?.ok) completedPlanArtifact = finished.plan || null;
     }
@@ -615,6 +635,7 @@ async function runAgentTurn({
       workflow: { action: workflowDecision.action, targetMode: workflowDecision.targetMode || "", planBinding: activePlanBinding },
       evidenceIds: [],
       failureRecords,
+      provisionalPlan: provisionalPlan(),
     };
   }
 
@@ -638,6 +659,7 @@ async function runAgentTurn({
       finalText: "",
       runState,
       contextRoute,
+      provisionalPlan: provisionalPlan(),
     };
   }
 
@@ -648,7 +670,7 @@ async function runAgentTurn({
       AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
       finishBoundRun("stopped");
       sendEvent({ type: "run_state", runId, state: { ...runState } });
-      return { ok: false, finalText, appendedMessages: appendedMessages(), runState, contextRoute, aborted: true, evidenceIds: [] };
+      return { ok: false, finalText, appendedMessages: appendedMessages(), runState, contextRoute, aborted: true, evidenceIds: [], provisionalPlan: provisionalPlan() };
     }
     const projected = projectLongHorizonHistory(workingHistory, longHorizonLedger, { promptBudget, userMessage });
     if (projected.compacted && projected.representedMessages !== lastProjectedMessageCount) {
@@ -672,6 +694,7 @@ async function runAgentTurn({
         runState,
         contextRoute,
         contextUsage: { source: "estimate", promptTokens: fitted.usedTokens, toolNames: [...allowedNames] },
+        provisionalPlan: provisionalPlan(),
       };
     }
     const messages = [...fitted.messages];
@@ -773,6 +796,7 @@ async function runAgentTurn({
         contextUsage: measuredUsage,
         aborted: Boolean(result.aborted),
         workflow: { action: workflowDecision.action, planBinding: activePlanBinding, artifact: completedPlanArtifact },
+        provisionalPlan: provisionalPlan(),
       };
     }
 
@@ -790,6 +814,7 @@ async function runAgentTurn({
         contextUsage: measuredUsage,
         aborted: true,
         evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+        provisionalPlan: provisionalPlan(),
       };
     }
 
@@ -874,6 +899,7 @@ async function runAgentTurn({
         evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
         failureRecords,
         lastUsage,
+        provisionalPlan: provisionalPlan(),
         workflow: { action: workflowDecision.action, planBinding: activePlanBinding, artifact: workflowArtifact?.artifact || workflowArtifact?.hypothesis || workflowArtifact?.plan || completedPlanArtifact || null },
       };
     }
@@ -1000,26 +1026,42 @@ async function runAgentTurn({
         sendEvent({ type: "knowledge_tools", tools: toolResult.activeTools, sessionId });
       }
       const actionEvidenceIds = AgentRuntime.evidenceIdsFromResults([toolResult]);
-      if (activePlanBinding && modeWorkflow?.recordProducedEvidence) {
-        if (actionEvidenceIds.length) {
+      if (activePlanBinding && actionEvidenceIds.length) {
+        activePlanBinding = {
+          ...activePlanBinding,
+          producedEvidenceIds: [...new Set([...(activePlanBinding.producedEvidenceIds || []), ...actionEvidenceIds])].slice(0, 500),
+        };
+        if (nested) {
+          actionEvidenceIds.forEach((evidenceId) => provisionalEvidenceIds.add(String(evidenceId)));
+        } else if (modeWorkflow?.recordProducedEvidence) {
           modeWorkflow.recordProducedEvidence(workspace, runId, actionEvidenceIds);
-          activePlanBinding = {
-            ...activePlanBinding,
-            producedEvidenceIds: [...new Set([...(activePlanBinding.producedEvidenceIds || []), ...actionEvidenceIds])].slice(0, 500),
-          };
         }
       }
       let planAction = null;
       if (activePlanBinding && modeWorkflow?.recordPlanAction && !INTELLIGENCE_TOOLS.has(toolName) && !KNOWLEDGE_TOOLS.has(toolName)) {
-        planAction = modeWorkflow.recordPlanAction(workspace, activePlanBinding, {
+        const actionRecord = {
           actionId,
           toolName,
           stepId: validatedPlanStepId,
-          result: { ...toolResult, evidenceIds: actionEvidenceIds },
-        });
+          // The provisional ledger crosses the child→parent boundary. Keep it
+          // bounded and secret-safe; the parent must inspect the workspace or
+          // assessment evidence itself before recording a real plan action.
+          result: {
+            ok: Boolean(toolResult?.ok && !toolResult?.error),
+            error: toolResult?.error ? redactSecrets(String(toolResult.error)).slice(0, 500) : "",
+            errorCode: String(toolResult?.errorCode || toolResult?.code || "").slice(0, 120),
+            evidenceIds: actionEvidenceIds,
+          },
+        };
+        if (nested) provisionalPlanActions.push(actionRecord);
+        else planAction = modeWorkflow.recordPlanAction(workspace, activePlanBinding, actionRecord);
       }
       if (activePlanBinding && intelligence?.recordRunEvidence) {
-        intelligence.recordRunEvidence(workspace, { runId, planId: activePlanBinding.planId, stepId: planAction?.stepId || "", evidenceIds: actionEvidenceIds });
+        if (nested) {
+          actionEvidenceIds.forEach((evidenceId) => provisionalEvidenceIds.add(String(evidenceId)));
+        } else {
+          intelligence.recordRunEvidence(workspace, { runId, planId: activePlanBinding.planId, stepId: planAction?.stepId || "", evidenceIds: actionEvidenceIds });
+        }
       }
       AgentRuntime.noteAction(runState, {
         actionId,
@@ -1056,6 +1098,7 @@ async function runAgentTurn({
           aborted: true,
           evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
           failureRecords,
+          provisionalPlan: provisionalPlan(),
         };
       }
     }
@@ -1085,6 +1128,7 @@ async function runAgentTurn({
     },
     evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
     failureRecords,
+    provisionalPlan: provisionalPlan(),
     workflow: { action: workflowDecision.action, planBinding: activePlanBinding, artifact: completedPlanArtifact },
   };
 }

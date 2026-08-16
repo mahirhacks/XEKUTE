@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const ContextMemory = require("../src/application/agent/memory/context-memory");
+const ContextMemory = require("../src/agent/memory/context-memory.js");
 
 test("context transcript is bounded and prioritizes recent exact workspace facts", () => {
   const messages = [];
@@ -28,13 +28,13 @@ test("context transcript is bounded and prioritizes recent exact workspace facts
   });
 
   const transcript = ContextMemory.buildMemoryTranscript(
-    "Prior decision: preserve src/presentation/ui/bootstrap.js behavior.",
+    "Prior decision: preserve src/ui/bootstrap.js behavior.",
     messages,
     { contextTokens: 4096 },
   );
 
   assert.ok(transcript.length <= ContextMemory.transcriptCharLimit(4096) + 50);
-  assert.match(transcript, /preserve src\/presentation\/ui\/bootstrap\.js behavior/);
+  assert.match(transcript, /preserve src\/ui\/bootstrap\.js behavior/);
   assert.match(transcript, /npm test -- context-memory/);
   assert.match(transcript, /Exit: 0/);
   assert.doesNotMatch(transcript, /old turn 0/);
@@ -94,4 +94,79 @@ test("messages appended during compaction are retained after the history swap", 
   const merged = ContextMemory.mergeRecentWithAppended(recent, liveHistory, 4);
   assert.equal(merged.length, 3);
   assert.equal(merged.at(-1).content, "message submitted while summarizing");
+});
+
+test("knowledge leases are omitted from the durable compaction transcript", () => {
+  const transcript = ContextMemory.buildMemoryTranscript("", [{
+    role: "tool",
+    tool_name: "query_knowledge",
+    content: JSON.stringify({ payload: "secret methodology packet" }),
+  }]);
+  assert.doesNotMatch(transcript, /secret methodology packet/);
+  assert.match(transcript, /knowledge lease content omitted/);
+});
+
+test("large scan outputs are bounded before context IPC and durable consolidation", () => {
+  const raw = JSON.stringify({
+    ok: true,
+    summary: "Nmap scan completed",
+    evidenceIds: ["ev-nmap-1"],
+    payload: { raw: "x".repeat(2_000_000), evidenceIds: ["ev-nmap-1"] },
+  });
+  const messages = [
+    { id: "user-1", role: "user", content: "Run the approved deep reconnaissance scan." },
+    { id: "tool-1", role: "tool", tool_name: "exec_command", content: raw },
+  ];
+
+  const transcript = ContextMemory.buildMemoryTranscript("", messages, { contextTokens: 4096 });
+  const projected = ContextMemory.projectDurableMessages(messages);
+  assert.ok(transcript.length <= ContextMemory.transcriptCharLimit(4096) + 50);
+  assert.ok(Buffer.byteLength(JSON.stringify(projected), "utf8") < 20_000);
+  assert.equal(projected[1].content, "");
+  assert.doesNotMatch(transcript, /x{1000}/);
+});
+
+test("compaction deterministically normalizes and deduplicates repeated tool results", () => {
+  const repeated = JSON.stringify({
+    ok: true,
+    status: "complete",
+    evidenceIds: ["ev-1"],
+    payload: JSON.stringify({ executable: "nmap.exe", args: ["-sV", "example.test"], exitCode: 0, stdout: "\u001b[32m443/tcp open https\u001b[0m" }),
+  });
+  const records = ContextMemory.normalizedCompactionRecords([
+    { role: "tool", tool_name: "exec_command", content: repeated },
+    { role: "tool", tool_name: "exec_command", content: repeated },
+    { role: "user", content: "Keep both explicit user turns." },
+    { role: "user", content: "Keep both explicit user turns." },
+  ]);
+
+  assert.equal(records.length, 3);
+  assert.match(records[0].entry, /repeated 2 times/);
+  assert.match(records[0].entry, /nmap\.exe/);
+  assert.doesNotMatch(records[0].entry, /\u001b/);
+  assert.equal(records.filter((record) => record.message.role === "user").length, 2);
+});
+
+test("the retained recon tail uses bounded context projections", () => {
+  const projected = ContextMemory.projectRecentContextMessages([
+    {
+      role: "tool",
+      tool_name: "exec_command",
+      tool_call_id: "scan-1",
+      content: `raw scan ${"port output ".repeat(200_000)}`,
+    },
+    {
+      role: "tool",
+      tool_name: "query_knowledge",
+      tool_call_id: "knowledge-1",
+      content: "private leased methodology",
+    },
+  ]);
+
+  assert.equal(projected[0].tool_call_id, "scan-1");
+  assert.ok(projected[0].content.length < 2_000);
+  assert.match(projected[0].content, /truncated/);
+  assert.equal(projected[1].tool_call_id, "knowledge-1");
+  assert.doesNotMatch(projected[1].content, /private leased methodology/);
+  assert.match(projected[1].content, /lease expired/);
 });

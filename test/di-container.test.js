@@ -37,12 +37,10 @@ test("container constructs the full service graph with fake Electron deps", () =
   assert.equal(typeof container.assessmentWorkspace, "object");
   assert.equal(typeof container.assessmentMap, "object");
   assert.equal(typeof container.securityHttpWorkbench, "object");
-  assert.equal(typeof container.unifiedToolRouter.execute, "function");
-  assert.equal(container.unifiedToolRouter, container.unifiedToolRouter);
   assert.equal(typeof container.buildIntruderRequests, "function");
   assert.equal(typeof container.getProxyListener, "function");
   assert.equal(typeof container.projectProfileStore, "function");
-  assert.equal(typeof container.chatSessionStore, "function");
+  assert.equal(typeof container.sessionMemoryStore, "function");
   assert.equal(typeof container.resolveCentralCaDirectory, "function");
   assert.equal(typeof container.readApplicationPreferences, "function");
   assert.equal(typeof container.terminateProcessTree, "function");
@@ -55,7 +53,6 @@ test("container exposes singleton state maps and a dispose path", () => {
   assert.ok(container.terminals instanceof Map);
   assert.ok(container.toolProcesses instanceof Map);
   assert.ok(container.ollamaControllers instanceof Map);
-  assert.ok(container.pendingAgentApprovals instanceof Map);
   assert.ok(container.pendingOperatorQuestions instanceof Map);
   assert.ok(container.webClonePreviewDocuments instanceof Map);
   assert.ok(container.webClonePreviewState);
@@ -68,7 +65,7 @@ test("container exposes singleton state maps and a dispose path", () => {
 test("container lazy stores are singletons", () => {
   const container = createContainer({ app: fakeApp(), safeStorage: fakeSafeStorage(), getMainWindow: () => null });
   assert.equal(container.projectProfileStore(), container.projectProfileStore());
-  assert.equal(container.chatSessionStore(), container.chatSessionStore());
+  assert.equal(container.sessionMemoryStore(), container.sessionMemoryStore());
   assert.equal(container.getProxyListener(), container.getProxyListener());
 });
 

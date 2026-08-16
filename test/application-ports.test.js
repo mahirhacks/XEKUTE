@@ -3,17 +3,29 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { runAgentTurn } = require("../src/application/agent/controller");
-const { normalizeProfile } = require("../src/application/policies/operating-modes");
-const { createChatPort } = require("../src/adapters/llm/chat-port");
-const ToolPort = require("../src/application/agent/tool-port");
+const { runAgentTurn } = require("../src/agent/controller/agent-controller.js");
+const { normalizeProfile } = require("../src/agent/modes/mode-registry.js");
+const { createChatPort } = require("../src/agent/llm/common/chat-port.js");
+const ToolPort = require("../src/contracts/tool/tool-port.js");
 
-test("controller consumes the ToolPort seam without importing concrete adapters directly", () => {
-  // The controller's only tool dependency is application/agent/tool-port.js,
-  // which the DI container can replace. Assert the port shape is complete.
-  for (const key of ["TOOLS", "TOOL_META", "TOOL_NAMES", "TOOL_GROUPS", "MODE_TOOL_GROUPS", "TOOL_PACKS", "LOADABLE_PACK_NAMES", "AGENT_HOT_TOOLS", "normalizeToolCall", "parseArguments", "targetForTool", "isMutating", "toolNamesForProfile", "toolsForProfile", "buildToolCatalog", "schemasForNames", "resolveSchemaLoad", "validateToolCall", "compactTools", "deriveErrorClass", "estimateTokenCount"]) {
+test("controller consumes the canonical tool contract without importing concrete adapters directly", () => {
+  for (const key of ["MODE_TOOL_GROUPS", "TOOL_GROUPS", "TOOL_META", "LOADABLE_PACK_NAMES", "toolsForProfile", "hotToolNamesForProfile", "compactTools", "buildToolCatalog", "normalizeToolCall", "parseArguments", "targetForTool", "isMutating", "validateToolCall", "deriveErrorClass", "estimateTokenCount", "clampWaitMs"]) {
     assert.ok(key in ToolPort, `ToolPort must expose ${key}`);
   }
+  // F-008: The port is a real surface against the new tool registry, not a stub.
+  const agentTools = ToolPort.toolsForProfile({ key: "agent" });
+  assert.ok(agentTools.length > 0, "agent profile must receive an authorized tool surface");
+  assert.ok(agentTools.some((tool) => tool.function?.name === "apply_patch"), "agent profile must include apply_patch");
+  const askTools = ToolPort.toolsForProfile({ key: "ask" });
+  assert.ok(askTools.every((tool) => !ToolPort.isMutating(tool.function?.name)), "ask profile must be read-only");
+  assert.equal(ToolPort.isMutating("apply_patch"), true, "apply_patch is a mutation");
+  assert.equal(ToolPort.isMutating("read_file"), false, "read_file is read-only");
+  const normalized = ToolPort.normalizeToolCall({ id: "call-1", function: { name: "apply_patch", arguments: { operations: [] } } });
+  assert.equal(normalized.toolName, "apply_patch", "normalizeToolCall must preserve the tool name");
+  assert.deepEqual(normalized.args.operations, [], "normalizeToolCall must preserve canonical args");
+  const validation = ToolPort.validateToolCall({ function: { name: "read_file", arguments: { path: "x" } } });
+  assert.equal(validation.ok, true, "a valid registered tool call must validate");
+  assert.equal(ToolPort.validateToolCall({ function: { name: "legacy_file" } }).code, "UNKNOWN_TOOL");
 });
 
 test("ChatPort adapter drives a streaming request with provider routing", async () => {
@@ -27,12 +39,10 @@ test("ChatPort adapter drives a streaming request with provider routing", async 
   }
 });
 
-test("controller normalizes profiles through the application policy seam", () => {
-  // Application orchestration resolves profiles from application/policies,
-  // not from concrete adapters.
+test("controller normalizes the four canonical modes", () => {
   const profile = normalizeProfile("assist", "ask");
   assert.equal(typeof profile.id, "string");
-  assert.ok(profile.legacyMode);
+  assert.equal(profile.key, "ask");
 });
 
 test("runAgentTurn is callable with a fake executeToolCall (no concrete adapter)", async () => {

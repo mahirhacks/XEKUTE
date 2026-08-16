@@ -52,7 +52,7 @@ Module._load = function (request, parent, isMain) {
 };
 
 try {
-  require("../src/presentation/electron/main.js");
+  require("../src/app/electron/main.js");
   console.log("BOOT SMOKE OK");
   process.exit(0);
 } catch (error) {

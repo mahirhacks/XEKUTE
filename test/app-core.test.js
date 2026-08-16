@@ -8,7 +8,7 @@ const path = require("node:path");
 
 function loadCore() {
   const context = { globalThis: {}, AbortController, setTimeout, clearTimeout };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../src/presentation/ui/core/app-core.js"), "utf8"), context);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../src/ui/core/app-core.js"), "utf8"), context);
   return context.globalThis.XekuteCore;
 }
 

@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { captureOllamaStream } = require("../src/adapters/llm/ollama/ollama-stream");
+const { captureOllamaStream } = require("../src/agent/llm/ollama/ollama-stream.js");
 
 function fragmentedStream(text, cuts = []) {
   const bytes = new TextEncoder().encode(text);
@@ -57,6 +57,7 @@ test("losslessly demultiplexes fragmented UTF-8 thinking, content, and tool call
   assert.equal(tools.length, 1);
   assert.deepEqual(events, [1, 2, 3]);
   assert.equal(result.done, true);
+  assert.equal(result.finishReason, "stop");
   assert.equal(result.sequence, 3);
   assert.deepEqual(result.usage, {
     promptTokens: 42,

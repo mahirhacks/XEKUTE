@@ -156,64 +156,50 @@
 .agent-live-state[data-state="error"] { border-left-color: #f48771; }
 .agent-live-state[data-state="error"] .agent-live-state-icon { color: #f48771; }
 
-/* Delegated sub-agent run card (parent chat). Click opens the child session;
-   hover reveals the far-right stop button that aborts only the child. */
+/* Delegated sub-agent row. It stays visually quiet beside the parent's prose;
+   clicking opens the child chat and Stop aborts only that child. */
 .subagent-run-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 38px;
-  margin: 0 0 7px;
-  padding: 7px 9px;
-  border: 1px solid #363636;
-  border-left: 2px solid #75beff;
-  border-radius: 5px;
-  background: #1e1e1e;
-  cursor: default;
+  gap: 10px;
+  min-height: 34px;
+  margin: 9px 0 0;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   animation: chat-state-in 160ms ease-out both;
 }
-.subagent-run-card:hover,
 .subagent-run-card:focus-visible {
-  border-color: #4a4d50;
-  background: #232324;
-  outline: none;
+  outline: 1px solid rgba(255, 255, 255, 0.28);
+  outline-offset: 4px;
+  border-radius: 5px;
 }
-.subagent-run-card[data-state="completed"] { border-left-color: #89d185; }
-.subagent-run-card[data-state="stopped"] { border-left-color: #d7ba7d; }
-.subagent-run-card[data-state="failed"] { border-left-color: #f48771; }
-.subagent-run-icon { flex: 0 0 auto; color: #75beff; font-size: 14px; }
-.subagent-run-card[data-state="completed"] .subagent-run-icon { color: #89d185; }
-.subagent-run-card[data-state="stopped"] .subagent-run-icon { color: #d7ba7d; }
-.subagent-run-card[data-state="failed"] .subagent-run-icon { color: #f48771; }
-.subagent-run-body { display: grid; gap: 1px; min-width: 0; flex: 1; }
-.subagent-run-title { color: #dcdcdc; font-size: 10px; font-weight: 600; }
+.subagent-run-body { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.subagent-run-title { color: #e5e5e5; font-size: 13px; font-weight: 400; line-height: 1.25; }
 .subagent-run-detail {
   overflow: hidden;
-  color: #858585;
-  font-size: 9px;
+  color: #9b9b9b;
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .subagent-run-stop {
   flex: 0 0 auto;
-  width: 22px;
+  min-width: 40px;
   height: 22px;
-  padding: 0;
-  border: 1px solid #4a4d50;
-  border-radius: 4px;
-  background: #2a2d2e;
-  color: #f48771;
-  font-size: 12px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.subagent-run-card:hover .subagent-run-stop,
-.subagent-run-card:focus-within .subagent-run-stop {
-  opacity: 1;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  color: #1b1b1b;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 22px;
+  text-align: center;
 }
 .subagent-run-stop:hover {
-  background: #3a2422;
-  border-color: #6b3a35;
+  background: #e8e8e8;
 }
 .subagent-run-stop[hidden] { display: none; }
 

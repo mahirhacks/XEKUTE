@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { parseCommand, runCommand } = require("../src/automation/commands/command-parser");
+const { parseCommand, runCommand } = require("../src/app/commands/command-parser.js");
 
 async function runCommandAction(action, payload) {
   if (action === "parse") return parseCommand(payload.command, payload.overrides);
@@ -18,9 +18,10 @@ test("slash command parser separates static and AI roles", () => {
   assert.equal(passive.role, "static");
   assert.equal(passive.output, "recon/passive-recon.json");
 
-  const active = runParser({ command: "/active example.com" });
-  assert.deepEqual(active.tools, ["httpx", "nmap", "ffuf"]);
-  assert.equal(active.role, "static");
+  const removedActive = runParser({ command: "/active example.com" });
+  assert.equal(removedActive.ok, false);
+  assert.equal(removedActive.code, "UNKNOWN_COMMAND");
+  assert.equal(runParser({ command: "/active example.com", overrides: { "/active": { role: "ai", prompt: "old override" } } }).code, "UNKNOWN_COMMAND");
 
   const ai = runParser({ command: "/pentest example.com" });
   assert.equal(ai.ok, true);
@@ -35,7 +36,7 @@ test("slash command parser separates static and AI roles", () => {
   assert.equal(customScript.script, "collect.py");
 });
 
-test("targetless passive and active commands derive the reviewed in-scope target", async () => {
+test("targetless passive command derives the reviewed in-scope target", async () => {
   const assessment = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-slash-target-"));
   try {
     for (const folder of ["scope", "recon", ".xekute/logs", "enumeration", "tools"]) fs.mkdirSync(path.join(assessment, folder), { recursive: true });
@@ -49,14 +50,10 @@ test("targetless passive and active commands derive the reviewed in-scope target
     fs.writeFileSync(path.join(assessment, "scope", "configurations.json"), JSON.stringify({ authorizationGate: { authorizationConfirmed: true, scopeReviewed: true, rulesAccepted: true, allowActiveRecon: true } }));
     fs.writeFileSync(path.join(assessment, "scope", "engagement.json"), JSON.stringify({ authorization: { confirmed: true }, scopeReview: { reviewed: true, exclusionsConfirmed: true } }));
 
-    const overrides = { "/passive": { tools: [] }, "/active": { tools: [] } };
+    const overrides = { "/passive": { tools: [] } };
     const passive = await runCommandAction("run", { command: "/passive", assessment, overrides });
     assert.equal(passive.ok, true);
     assert.equal(passive.target, "https://example.com/app");
-
-    const active = await runCommandAction("run", { command: "/active", assessment, overrides });
-    assert.equal(active.ok, true);
-    assert.equal(active.target, "https://example.com/app");
   } finally {
     fs.rmSync(assessment, { recursive: true, force: true });
   }

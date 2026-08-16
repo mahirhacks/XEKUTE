@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { createAssessmentWorkspace } = require("../src/domain/assessment/assessment-workspace");
-const { ingest, listDatasets } = require("../src/automation/commands/assessment-ingest");
+const { ingest, listDatasets } = require("../src/app/services/assessment/assessment-ingest.js");
 
 function runIngest(payload) {
   try {

@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { createAssessmentWorkspace } = require("../src/domain/assessment/assessment-workspace");
-const { createAssessmentMap, normalizeRoutePath } = require("../src/domain/assessment/assessment-map");
+const { calculateRoutePriority, createAssessmentMap, normalizeRoutePath } = require("../src/domain/assessment/assessment-map");
 
 function fixture() {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-map-"));
@@ -58,6 +58,42 @@ test("route normalization deduplicates dynamic identifiers while retaining param
   });
 });
 
+test("route priority is deterministic, evidence-weighted, and elevates cross-identity differentials", () => {
+  const baseline = {
+    method: "GET", template: "/about", parameters: [], sensitiveFields: [], authTypes: ["none"], statusCodes: [200], variants: [], entryPointReasons: [], observed: true, confidence: 1,
+  };
+  calculateRoutePriority(baseline);
+  assert.equal(baseline.priorityScore, 0);
+  assert.equal(baseline.priorityTier, "low");
+
+  const candidate = {
+    method: "POST", template: "/api/customers/{customer_id}",
+    parameters: [{ name: "customer_id", location: "path", category: "id" }],
+    sensitiveFields: ["email"], authTypes: ["cookie"], statusCodes: [200, 403], entryPointReasons: [], observed: true, confidence: 1,
+    variants: [
+      { statusCode: 200, responseSchemaHash: "profile-a", identityIds: ["account-a"], actorRoles: ["user"] },
+      { statusCode: 403, responseSchemaHash: "profile-b", identityIds: ["account-b"], actorRoles: ["admin"] },
+    ],
+  };
+  calculateRoutePriority(candidate);
+  assert.equal(candidate.priorityScore, 75);
+  assert.equal(candidate.riskScore, 75);
+  assert.equal(candidate.priorityTier, "high");
+  assert.ok(candidate.riskTags.includes("identity_response_differential"));
+  assert.ok(candidate.riskTags.includes("object_access_differential"));
+  assert.ok(candidate.priorityFactors.some((factor) => factor.id === "sensitive_data_differential"));
+
+  const discovered = { ...candidate, observed: false, confidence: 0.5, priorityFactors: [], riskTags: [] };
+  calculateRoutePriority(discovered);
+  assert.ok(discovered.priorityScore < candidate.priorityScore);
+  assert.equal(discovered.priorityEvidence, "discovered");
+
+  const anonymousObject = { ...baseline, template: "/api/orders/{order_id}", parameters: [{ name: "order_id", location: "path", category: "id" }] };
+  calculateRoutePriority(anonymousObject);
+  assert.ok(anonymousObject.riskTags.includes("anonymous_object_reference"));
+  assert.ok(anonymousObject.priorityScore >= 40);
+});
+
 test("Map building remains available when an unrelated assessment file differs from its template", () => {
   const { parent, root, assessmentWorkspace, map } = fixture();
   fs.writeFileSync(path.join(root, "enumeration", "assets.json"), "[]\n", "utf8");
@@ -104,7 +140,9 @@ test("behavior Map builds a stable, deduplicated, evidence-preserving route grap
   const persisted = map.read(root);
   assert.equal(persisted.exists, true);
   assert.equal(persisted.graph.builtAt, "2026-07-12T08:00:00.000Z");
-  assert.equal(fs.existsSync(path.join(root, "Map", "application-map.json")), true);
+  assert.equal(fs.existsSync(path.join(root, "traffic", "graph", "manifest.json")), true);
+  assert.equal(fs.existsSync(path.join(root, ...persisted.path.split("/"))), true);
+  assert.equal(fs.existsSync(path.join(root, ...persisted.htmlPath.split("/"))), true);
 
   const rebuilt = map.build(root);
   assert.deepEqual(rebuilt.graph.nodes.map((node) => node.id), built.graph.nodes.map((node) => node.id));
@@ -129,7 +167,7 @@ test("multi-pass connectivity links a late root response, subdomains, referrers,
 
   const built = map.build(root);
   assert.equal(built.ok, true);
-  assert.equal(built.graph.schemaVersion, 3);
+  assert.equal(built.graph.schemaVersion, 5);
   assert.equal(built.graph.analysisModel, "auditable-multi-pass-connectivity");
   assert.equal(built.graph.verification.verified, true);
   assert.equal(built.graph.verification.checkedNodes, built.graph.nodes.length);
@@ -237,7 +275,7 @@ test("project-scoped HMAC correlation is private, stable, and different across p
   const serialized = JSON.stringify(firstGraph);
   assert.doesNotMatch(serialized, /super-secret-session|secret@example\.com|"272"/);
   assert.equal(firstGraph.verification.leakedSecrets, 0);
-  assert.equal(fs.existsSync(path.join(first.root, "Map", ".correlation-key")), true);
+  assert.equal(fs.existsSync(path.join(first.root, "traffic", "graph", "cache", ".correlation-key")), true);
   fs.rmSync(first.parent, { recursive: true, force: true });
   fs.rmSync(second.parent, { recursive: true, force: true });
 });
@@ -273,8 +311,8 @@ test("unchanged input rebuilds idempotently with stable snapshot and builder met
   const first = map.build(root).graph;
   const second = map.build(root).graph;
   assert.deepEqual(second, first);
-  assert.equal(first.schemaVersion, 3);
-  assert.equal(first.builderVersion, "0.4.0");
+  assert.equal(first.schemaVersion, 5);
+  assert.equal(first.builderVersion, "0.7.0");
   assert.match(first.source.snapshotHash, /^sha256:[0-9a-f]{64}$/);
   assert.equal(first.source.failedCount, 1);
   assert.ok(first.source.warnings.some((warning) => warning.includes("malformed")));
@@ -300,7 +338,7 @@ test("Map exposes bounded AI queries, summaries, hypotheses, and provenance-safe
   assert.equal(map.getNode(root, route.id).node.aiSummary, route.aiSummary);
   assert.ok(map.searchRoutes(root, "customers").routes.some((node) => node.id === route.id));
   assert.ok(map.getNeighbors(root, route.id).neighbors.length >= 0);
-  assert.ok(map.getEvidence(root, "one").evidence[0].request.includes("[REDACTED]"));
+  assert.ok(map.getEvidence(root, "one").evidence[0].request.includes("Cookie: sid=user-a"));
 
   const annotation = map.annotateFinding(root, { hypothesis: "possible_idor", routes: [route.id], result: "untested" });
   assert.equal(annotation.ok, true);

@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createWebCloneService, extractReferences, safeRelativePath } = require("../src/adapters/tools/cyber/webclone");
+const { createWebCloneService, extractReferences, safeRelativePath } = require("../src/app/services/research/webclone.js");
 
 test("WebClone extracts unique same-document references and bounds paths", () => {
   const refs = extractReferences('<link href="/app.css"><script src="/app.js"></script><img src="/app.css">', "https://example.test/");
@@ -12,7 +12,7 @@ test("WebClone extracts unique same-document references and bounds paths", () =>
 });
 
 test("WebClone workspace keeps the central view separate from the right file drawer", () => {
-  const html = fs.readFileSync(require.resolve("../src/presentation/ui/index.html"), "utf8");
+  const html = fs.readFileSync(require.resolve("../src/ui/index.html"), "utf8");
   assert.match(html, /id="webclone-files-toggle"/);
   assert.match(html, /class="webclone-preview-pane" hidden/);
   assert.match(html, /id="webclone-preview-frame" class="webclone-preview-surface"/);
@@ -20,8 +20,8 @@ test("WebClone workspace keeps the central view separate from the right file dra
 });
 
 test("WebClone preview uses a dedicated no-preload view and a loopback-only document server", () => {
-  const main = fs.readFileSync(require.resolve("../src/presentation/electron/main.js"), "utf8");
-  const renderer = fs.readFileSync(require.resolve("../src/presentation/ui/bootstrap.js"), "utf8");
+  const main = fs.readFileSync(require.resolve("../src/app/electron/main.js"), "utf8");
+  const renderer = fs.readFileSync(require.resolve("../src/ui/bootstrap.js"), "utf8");
   assert.match(main, /new WebContentsView/);
   assert.match(main, /server\.listen\(0, "127\.0\.0\.1"/);
   assert.match(main, /connect-src 'none'/);

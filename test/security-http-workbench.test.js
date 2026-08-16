@@ -10,7 +10,7 @@ const {
   createSecurityHttpWorkbench,
   parseRawHttpRequest,
   urlMatchesTarget,
-} = require("../src/domain/assessment/http-workbench");
+} = require("../src/interceptor/http-workbench.js");
 
 function response(body = "ok", status = 200) {
   const headers = new Map([["content-type", "text/plain"], ["content-length", String(Buffer.byteLength(body))]]);
@@ -27,19 +27,11 @@ function configureAuthorizedScope(root) {
   const configPath = path.join(root, "scope", "configurations.json");
   const settingsPath = path.join(root, "settings.config");
   const inScope = JSON.parse(fs.readFileSync(inScopePath, "utf8"));
-  inScope.authorization.confirmed = true;
   inScope.targets.push({ ...inScope.targetTemplate, id: "target-1", value: "https://authorized.example" });
   fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`);
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  config.authorizationGate.authorizationConfirmed = true;
-  config.authorizationGate.rulesAccepted = true;
-  config.authorizationGate.allowAutomatedScanning = true;
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  settings.authorization.confirmed = true;
-  settings.authorizationGate.authorizationConfirmed = true;
-  settings.authorizationGate.rulesAccepted = true;
-  settings.authorizationGate.allowAutomatedScanning = true;
   fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 }
 
@@ -80,7 +72,7 @@ test("workbench blocks unauthorized and out-of-scope traffic", async () => {
   });
 
   const unauthorized = await workbench.run({ assessmentPath: root, rawRequest: "GET / HTTP/1.1\nHost: authorized.example", mode: "repeater" });
-  assert.equal(unauthorized.code, "AUTHORIZATION_REQUIRED");
+  assert.equal(unauthorized.code, "OUT_OF_SCOPE");
   configureAuthorizedScope(root);
   const outside = await workbench.run({ assessmentPath: root, rawRequest: "GET / HTTP/1.1\nHost: outside.example", mode: "repeater" });
   assert.equal(outside.code, "OUT_OF_SCOPE");
@@ -106,7 +98,7 @@ test("authorized workbench requests are returned and timestamped in Traffic Raw"
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
-test("workbench accepts authorization from settings.config", async () => {
+test("workbench uses configured scope independently of authority metadata", async () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-http-"));
   const root = path.join(parent, "assessment");
   const assessment = createAssessmentWorkspace({ fs, path });
@@ -118,9 +110,7 @@ test("workbench accepts authorization from settings.config", async () => {
   inScope.targets.push({ ...inScope.targetTemplate, id: "target-1", value: "https://authorized.example" });
   fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`);
   const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  settings.authorization.confirmed = true;
-  settings.authorizationGate.authorizationConfirmed = true;
-  settings.authorizationGate.rulesAccepted = true;
+  settings.authority.superMode = "full";
   fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
   const workbench = createSecurityHttpWorkbench({
@@ -138,7 +128,7 @@ test("workbench accepts authorization from settings.config", async () => {
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
-test("override authorization bypasses the authorization gate", async () => {
+test("authority metadata cannot bypass configured scope", async () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-http-"));
   const root = path.join(parent, "assessment");
   const assessment = createAssessmentWorkspace({ fs, path });
@@ -147,10 +137,9 @@ test("override authorization bypasses the authorization gate", async () => {
   const inScopePath = path.join(root, "scope", "in-scope.json");
   const settingsPath = path.join(root, "settings.config");
   const inScope = JSON.parse(fs.readFileSync(inScopePath, "utf8"));
-  inScope.targets.push({ ...inScope.targetTemplate, id: "target-1", value: "https://authorized.example" });
   fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`);
   const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  settings.authorizationGate.overrideAuthorization = true;
+  settings.authority.superMode = "full";
   fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
   const workbench = createSecurityHttpWorkbench({
@@ -164,6 +153,6 @@ test("override authorization bypasses the authorization gate", async () => {
     rawRequest: "GET / HTTP/1.1\nHost: authorized.example",
     mode: "intruder",
   });
-  assert.equal(result.ok, true);
+  assert.equal(result.code, "OUT_OF_SCOPE");
   fs.rmSync(parent, { recursive: true, force: true });
 });

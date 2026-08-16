@@ -5,11 +5,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "bootstrap.js"), "utf8");
-const styles = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "base.css"), "utf8");
-const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "ui", "styles", "chat.css"), "utf8");
-const controller = fs.readFileSync(path.join(__dirname, "..", "src", "application", "agent", "controller.js"), "utf8");
-const main = fs.readFileSync(path.join(__dirname, "..", "src", "presentation", "electron", "main.js"), "utf8");
+const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
+const controller = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "controller", "agent-controller.js"), "utf8");
+const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
 
 test("thinking uses one private status line and never exposes model reasoning", () => {
   assert.match(renderer, /thinking:\s*null,\s*\n\s*thinkingConfigured:\s*false/);
@@ -26,14 +26,27 @@ test("thinking uses one private status line and never exposes model reasoning", 
 });
 
 test("content and tool events replace thinking and completion settles to elapsed time", () => {
-  assert.match(renderer, /if \(payload\.type === "content"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
+  assert.match(renderer, /if \(payload\.type === "content" \|\| payload\.type === "token"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
   assert.match(renderer, /if \(payload\.type === "tool_call"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
   assert.match(renderer, /this\.setLiveState\(\{ kind: "working", detail: "Writing response" \}\)/);
   assert.match(renderer, /completeReasoningActivity\(\)/);
   assert.match(renderer, /finishLiveState\(outcome = "complete"\)/);
   assert.match(renderer, /`Worked for \$\{duration\}`/);
   assert.match(renderer, /`Stopped after \$\{duration\}`/);
+  assert.match(renderer, /this\.settlePendingActivities\(outcome\)/);
+  assert.match(renderer, /icon\.hidden = !stopped/);
+  assert.doesNotMatch(renderer, /stopped \? "codicon-debug-stop" : "codicon-check"/);
+  assert.match(chatStyles, /\.agent-status-line\[data-final="true"\]:not\(\[data-state="error"\]\) \.agent-status-icon[\s\S]*?display: none/);
   assert.doesNotMatch(renderer, /message\.textContent = "Reasoning complete"|completedThinkingLabel/);
+});
+
+test("turn finalization settles orphaned progress, file, and command activity", () => {
+  assert.match(renderer, /settlePendingActivities\(outcome = "complete"\)/);
+  assert.match(renderer, /entry\?\.dataset\.state !== "running"/);
+  assert.match(renderer, /\.tool-card\.pending, \.tool-card\[data-state='queued'\], \.tool-card\[data-state='running'\]/);
+  assert.match(renderer, /\^Editing[\s\S]*?"Edited"/);
+  assert.match(renderer, /\.agent-command-event\[data-state='running'\]/);
+  assert.match(renderer, /if \(card\.classList\.contains\("subagent-wait"\)\) continue/);
 });
 
 test("status renderer owns one node and updates it in place", () => {
@@ -105,5 +118,5 @@ test("chat auto-follow pauses when the operator scrolls up", () => {
 test("every agent failure path restores the composer", () => {
   assert.match(renderer, /let assistant = null;[\s\S]*?try \{[\s\S]*?await refreshDirMap\(\)/);
   assert.match(renderer, /catch \(error\) \{[\s\S]*?addErrorMessage\(error\?\.message/);
-  assert.match(renderer, /finally \{[\s\S]*?streaming = false;[\s\S]*?chatInput\.disabled = false;[\s\S]*?chatInput\.readOnly = false;[\s\S]*?chatInput\.focus\(\)/);
+  assert.match(renderer, /finally \{[\s\S]*?activeChatRuns\.delete\(runSession\.id\)[\s\S]*?chatInput\.disabled = false;[\s\S]*?chatInput\.readOnly = false;[\s\S]*?chatInput\.focus\(\)/);
 });

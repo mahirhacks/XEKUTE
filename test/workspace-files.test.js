@@ -5,8 +5,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createWorkspaceFiles, applyPatchesToContent } = require("../src/app/services/workspace-files");
-const { createWorkspaceSearch } = require("../src/adapters/tools/os/workspace-search");
+const { createWorkspaceFiles, applyPatchesToContent } = require("../src/app/services/workspace/workspace-files.js");
+const { createWorkspaceSearch } = require("../src/agent/tools/workspace/workspace-search.js");
 
 test("workspace patches require one exact match and apply in order", () => {
   assert.deepEqual(
@@ -48,6 +48,13 @@ test("workspace file mutations stay inside the root and preserve edit, copy, mov
   const moved = files.transferWorkspacePath(workspace, "src/copy.txt", "src/moved.txt", { move: true });
   assert.equal(moved.mode, "move");
   assert.equal(fs.existsSync(path.join(workspace, "src", "copy.txt")), false);
+
+  fs.mkdirSync(path.join(workspace, "folder-before", "nested"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "folder-before", "nested", "keep.txt"), "kept", "utf8");
+  const renamedFolder = files.transferWorkspacePath(workspace, "folder-before", "folder-after", { move: true });
+  assert.equal(renamedFolder.targetType, "directory");
+  assert.equal(fs.existsSync(path.join(workspace, "folder-before")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, "folder-after", "nested", "keep.txt"), "utf8"), "kept");
 
   const deleted = files.deleteWorkspaceFile(workspace, "src/moved.txt");
   assert.deepEqual(deleted, { ok: true, mode: "delete", file: "src/moved.txt", targetType: "file" });

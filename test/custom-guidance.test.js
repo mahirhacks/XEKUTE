@@ -8,7 +8,7 @@ const {
   listGuidanceEntries,
   listWorkspaceGuidance,
   writeGuidanceFile,
-} = require("../src/application/planning/custom-guidance");
+} = require("../src/app/services/guidance/custom-guidance.js");
 
 test("project guidance loads only supported custom skill, rule, and instruction files", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-guidance-"));

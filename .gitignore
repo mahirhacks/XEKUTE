@@ -95,3 +95,7 @@ $RECYCLE.BIN/
 
 /tmp/
 /version_tracking/
+temp_test
+test/*
+!test/delegation-provider.test.js
+!test/subagent-coordinator.test.js

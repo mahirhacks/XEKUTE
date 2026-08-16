@@ -4,9 +4,11 @@ const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const { createAssessmentWorkspace } = require("../src/domain/assessment/assessment-workspace");
-const { createProxyListenerService } = require("../src/domain/assessment/proxy-listener");
+const { createJavascriptArtifactStore } = require("../src/domain/assessment/javascript-artifact-store");
+const { createProxyListenerService, isConnectionProxyError, CAPTURE_CONTEXT_HEADER } = require("../src/interceptor/proxy-listener.js");
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -18,6 +20,61 @@ function listen(server) {
 function close(server) {
   return new Promise((resolve) => server.close(resolve));
 }
+
+test("client TLS disconnects are connection-local and do not poison a running listener", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-proxy-client-error-"));
+  let reportError;
+  let listenOptions;
+  const instance = {
+    httpPort: 43123,
+    onError(handler) { reportError = handler; },
+    onRequest() {},
+    onRequestData() {},
+    onRequestEnd() {},
+    onResponse() {},
+    onResponseData() {},
+    onResponseEnd() {},
+  };
+  const service = createProxyListenerService({
+    fs,
+    path,
+    assessmentWorkspace: {},
+    proxyAdapter: {
+      create: () => instance,
+      listen: async (options) => { listenOptions = options; return { error: "" }; },
+      close() {},
+    },
+  });
+
+  try {
+    const started = await service.configure(parent, {
+      settings: {
+        listener: { enabled: true, bindAddress: "127.0.0.1", port: 43123 },
+        interception: { enabled: false, onlyInScope: false },
+      },
+      targets: [],
+    });
+    assert.equal(started.running, true);
+    assert.equal(listenOptions.timeout, 0);
+    assert.equal(listenOptions.keepAlive, true);
+
+    reportError(null, new Error("SSL routines:OPENSSL_internal:SSLV3_ALERT_CERTIFICATE_UNKNOWN"), "HTTPS_CLIENT_ERROR");
+    assert.equal(service.getStatus().running, true);
+    assert.equal(service.getStatus().error, "");
+
+    reportError(null, new Error("listener failed"), "PROXY_ERROR");
+    assert.match(service.getStatus().error, /listener failed/);
+    assert.equal(service.clearError().error, "");
+  } finally {
+    await service.stop();
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("proxy client error classification covers browser-close TLS failures", () => {
+  assert.equal(isConnectionProxyError(null, new Error("SSLV3_ALERT_CERTIFICATE_UNKNOWN"), "HTTPS_CLIENT_ERROR"), true);
+  assert.equal(isConnectionProxyError(null, new Error("listener failed"), "PROXY_ERROR"), false);
+});
 
 test("proxy listener pauses, forwards, captures, and logs an in-scope HTTP exchange", { timeout: 15000 }, async () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-proxy-"));
@@ -178,6 +235,60 @@ test("intercepted POST bodies survive Forward and are recorded after the request
     assert.match(traffic.at(-1).request, /tester@example\.com/);
     assert.equal(traffic.at(-1).requestBodyBytes, Buffer.byteLength(body));
     assert.equal(traffic.at(-1).requestBodyTruncated, false);
+  } finally {
+    await service.stop();
+    await close(targetServer);
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("proxy capture strips the private identity header and passively indexes in-scope JavaScript", { timeout: 15000 }, async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-proxy-javascript-"));
+  const root = path.join(parent, "assessment");
+  const assessment = createAssessmentWorkspace({ fs, path });
+  const javascriptArtifacts = createJavascriptArtifactStore({ fs, path, crypto });
+  assessment.repair(root, { createRoot: true });
+  let leakedCaptureHeader = "";
+  const targetServer = http.createServer((request, response) => {
+    leakedCaptureHeader = String(request.headers[CAPTURE_CONTEXT_HEADER] || "");
+    response.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+    response.end('import "./chunk.js"; fetch("/api/orders?token=secret");');
+  });
+  const targetPort = await listen(targetServer);
+  const targetUrl = `http://127.0.0.1:${targetPort}/assets/app.js`;
+  const inScopePath = path.join(root, "scope", "in-scope.json");
+  const inScope = JSON.parse(fs.readFileSync(inScopePath, "utf8"));
+  inScope.targets.push({ ...inScope.targetTemplate, value: `http://127.0.0.1:${targetPort}` });
+  fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`);
+  const settingsPath = path.join(root, "settings.config");
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  settings.listener = { ...settings.listener, enabled: true, bindAddress: "127.0.0.1", port: 0 };
+  settings.interception = { ...settings.interception, enabled: false, onlyInScope: true };
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  const service = createProxyListenerService({ fs, path, assessmentWorkspace: assessment, javascriptArtifacts });
+  const captureToken = "abcdef0123456789abcdef0123456789";
+
+  try {
+    const started = await service.configure(root);
+    assert.equal(service.registerCaptureContext(captureToken, { id: "account-a", label: "Account A", role: "user" }).ok, true);
+    const response = await new Promise((resolve, reject) => {
+      const request = http.request({ hostname: "127.0.0.1", port: started.port, method: "GET", path: targetUrl, headers: { host: `127.0.0.1:${targetPort}`, [CAPTURE_CONTEXT_HEADER]: captureToken } }, (incoming) => {
+        incoming.resume();
+        incoming.on("end", () => resolve(incoming.statusCode));
+      });
+      request.on("error", reject);
+      request.end();
+    });
+    assert.equal(response, 200);
+    await service.stop();
+    assert.equal(leakedCaptureHeader, "");
+    const manifest = javascriptArtifacts.readManifest(root);
+    assert.equal(manifest.artifacts.length, 1);
+    assert.equal(manifest.artifacts[0].urls[0].captureIdentity.id, "account-a");
+    assert.deepEqual(manifest.artifacts[0].imports, [`http://127.0.0.1:${targetPort}/assets/chunk.js`]);
+    assert.equal(manifest.artifacts[0].endpoints[0].url, `http://127.0.0.1:${targetPort}/api/orders?token=%5BREDACTED%5D`);
+    const traffic = fs.readFileSync(path.join(root, "traffic", "raw.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(traffic.at(-1).captureIdentity.id, "account-a");
   } finally {
     await service.stop();
     await close(targetServer);
