@@ -24,8 +24,8 @@ jobs:
     env:
       HAS_SIGNING_CERT: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -39,6 +39,8 @@ jobs:
 
       - run: npm ci
       - run: npm run verify:native
+      # temp_test is gitignored (harness dir), but verify:production asserts it exists.
+      - run: mkdir temp_test
       - run: npm run verify:production
       - run: npm test
 
