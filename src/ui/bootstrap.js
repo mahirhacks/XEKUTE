@@ -279,7 +279,12 @@ const appSettingsProfileName = $("app-settings-profile-name");
 const appSettingsProfilePlan = $("app-settings-profile-plan");
 const appSettingsGeneralPanel = $("app-settings-general-panel");
 const generalStatusBarToggle = $("general-status-bar-toggle");
+const generalUpdatesToggle = $("general-updates-toggle");
 const statusbar = $("statusbar");
+const updateToast = $("update-toast");
+const updateToastVersion = $("update-toast-version");
+const updateToastInstall = $("update-toast-install");
+const updateToastIgnore = $("update-toast-ignore");
 const appSettingsProjectPanel = $("app-settings-project-panel");
 const projectSettingsUnavailable = $("project-settings-unavailable");
 const projectSettingsShell = $("project-settings-shell");
@@ -4223,7 +4228,10 @@ function closeAssessmentRepairDialog() {
 }
 
 function setNotifications(items = []) {
-  notificationItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  const merged = updatesState.pendingNotification
+    ? [updatesState.pendingNotification, ...(Array.isArray(items) ? items : [])]
+    : (Array.isArray(items) ? items : []);
+  notificationItems = merged.filter(Boolean);
   if (notificationCount) {
     notificationCount.textContent = String(notificationItems.length);
     notificationCount.hidden = notificationItems.length === 0;
@@ -4237,10 +4245,153 @@ function setNotifications(items = []) {
     ? notificationItems.map((item) => `<article class="notification-item ${escapeHtml(item.tone || "warning")}"><span class="codicon ${escapeHtml(item.icon || "codicon-warning")}"></span><div><strong>${escapeHtml(item.title || "Notification")}</strong><p>${escapeHtml(item.message || "")}</p>${item.action ? `<button type="button" class="notification-action" data-notification-action="${escapeHtml(item.action)}">${escapeHtml(item.actionLabel || "Review")}</button>` : ""}</div></article>`).join("")
     : '<div class="notification-empty">No notifications</div>';
   notificationList.querySelectorAll("[data-notification-action]").forEach((button) => button.addEventListener("click", () => {
-    if (button.dataset.notificationAction === "assessment-repair") openAssessmentRepairDialog();
-    if (notificationPanel) notificationPanel.hidden = true;
-    btnNotifications?.setAttribute("aria-expanded", "false");
-  }));
+      if (button.dataset.notificationAction === "assessment-repair") openAssessmentRepairDialog();
+      if (button.dataset.notificationAction === "update-install") beginUpdateInstallFromNotification();
+      if (notificationPanel) notificationPanel.hidden = true;
+      btnNotifications?.setAttribute("aria-expanded", "false");
+    }));
+  }
+
+  function beginUpdateInstallFromNotification() {
+    updatesState.pendingNotification = null;
+    updatesState.ignoredVersion = "";
+    setNotifications(notificationItems);
+    beginUpdateInstall();
+  }
+
+// ── In-app updates ──────────────────────────────────────────────────────────
+const updatesState = {
+  availableVersion: "",
+  ignoredVersion: "",
+  pendingNotification: null,
+  transientTimer: null,
+};
+
+async function loadUpdateSettings() {
+  try {
+    const result = await window.api.updatesSettingsGet?.();
+    const settings = result?.value || (result && !result.ok ? null : result);
+    if (settings) {
+      updatesState.ignoredVersion = String(settings.ignoredVersion || "");
+      if (generalUpdatesToggle) generalUpdatesToggle.checked = settings.checkOnLaunch !== false;
+    }
+  } catch { /* bridge unavailable */ }
+}
+
+function runUpdateCheck(manual = false) {
+  window.api.updatesCheck?.({ manual }).catch(() => {});
+}
+
+function showUpdateToast(version) {
+  if (!updateToast) return;
+  updatesState.availableVersion = String(version || "");
+  if (updateToastVersion) updateToastVersion.textContent = updatesState.availableVersion;
+  const title = updateToast.querySelector(".update-toast-title");
+  if (title) title.textContent = "A new update is available";
+  const sub = updateToast.querySelector(".update-toast-version");
+  if (sub) sub.textContent = "";
+  updateToast.classList.remove("update-toast-downloading");
+  updateToast.querySelectorAll(".update-toast-progress, .update-toast-progress-label").forEach((el) => el.remove());
+  if (updateToastInstall) updateToastInstall.hidden = false;
+  if (updateToastIgnore) updateToastIgnore.hidden = false;
+  updateToast.hidden = false;
+  // Restart the entrance animation.
+  updateToast.style.animation = "none";
+  void updateToast.offsetWidth;
+  updateToast.style.animation = "";
+}
+
+function hideUpdateToast() {
+  if (updateToast) updateToast.hidden = true;
+}
+
+function showTransientUpdateNotice(titleText, subText) {
+  if (!updateToast) return;
+  clearTimeout(updatesState.transientTimer);
+  if (updateToastVersion) updateToastVersion.textContent = "";
+  const title = updateToast.querySelector(".update-toast-title");
+  if (title) title.textContent = titleText;
+  const sub = updateToast.querySelector(".update-toast-version");
+  if (sub) sub.textContent = subText;
+  updateToast.classList.remove("update-toast-downloading");
+  updateToast.querySelectorAll(".update-toast-progress, .update-toast-progress-label").forEach((el) => el.remove());
+  if (updateToastInstall) updateToastInstall.hidden = true;
+  if (updateToastIgnore) updateToastIgnore.hidden = true;
+  updateToast.hidden = false;
+  updateToast.style.animation = "none";
+  void updateToast.offsetWidth;
+  updateToast.style.animation = "";
+  updatesState.transientTimer = setTimeout(hideUpdateToast, 4000);
+}
+
+function beginUpdateInstall() {
+  if (!window.api.updatesInstall) return;
+  if (updateToast) updateToast.classList.add("update-toast-downloading");
+  if (updateToastInstall) updateToastInstall.hidden = true;
+  if (updateToastIgnore) updateToastIgnore.hidden = true;
+  window.api.updatesInstall().catch(() => {});
+}
+
+function ignoreCurrentUpdate() {
+  const version = updatesState.availableVersion;
+  updatesState.ignoredVersion = version;
+  window.api.updatesIgnore?.({ version }).catch(() => {});
+  hideUpdateToast();
+  if (version) showUpdateNotification(version);
+}
+
+function showUpdateNotification(version) {
+  const v = String(version || "");
+  if (!v) return;
+  updatesState.pendingNotification = {
+    title: `Update available — XEKUTE ${v}`,
+    message: "A new version has been released. Install it when you're ready.",
+    action: "update-install",
+    actionLabel: "Install",
+    icon: "codicon-cloud-download",
+    tone: "warning",
+  };
+  setNotifications(notificationItems);
+}
+
+function handleUpdateEvent(payload = {}) {
+  const type = String(payload.type || "");
+  if (type === "available") {
+    const version = String(payload.version || "");
+    // Per-version suppression: never re-nag after Ignore (Q6). The update
+    // stays reachable through the notification center instead.
+    if (version && version === updatesState.ignoredVersion) {
+      showUpdateNotification(version);
+      return;
+    }
+    showUpdateToast(version);
+  } else if (type === "progress") {
+    if (!updateToast || updateToast.hidden) return;
+    updateToast.classList.add("update-toast-downloading");
+    if (updateToastInstall) updateToastInstall.hidden = true;
+    if (updateToastIgnore) updateToastIgnore.hidden = true;
+    let bar = updateToast.querySelector(".update-toast-progress");
+    if (!bar) {
+      updateToast.querySelector(".update-toast-actions")?.insertAdjacentHTML(
+        "beforeend",
+        '<span class="update-toast-progress"><i></i></span><span class="update-toast-progress-label">0%</span>'
+      );
+      bar = updateToast.querySelector(".update-toast-progress");
+    }
+    const percent = Math.max(0, Math.min(100, Math.round(Number(payload.percent) || 0)));
+    bar.querySelector("i")?.style.setProperty("width", `${percent}%`);
+    const label = updateToast.querySelector(".update-toast-progress-label");
+    if (label) label.textContent = `${percent}%`;
+  } else if (type === "downloaded") {
+    const label = updateToast?.querySelector(".update-toast-progress-label");
+    if (label) label.textContent = "Installing…";
+    else showTransientUpdateNotice("Installing update…", "XEKUTE will restart automatically.");
+    // The main process quits the app shortly after this event.
+  } else if (type === "none") {
+    // Manual check only (auto-checks are silent): brief "up to date" toast.
+    showTransientUpdateNotice("XEKUTE is up to date", "You're on the latest version.");
+  }
+  // "error" events are intentionally silent (Q8) — the next launch retries.
 }
 
 async function openAssessmentRepairDialog() {
@@ -8730,12 +8881,22 @@ btnNotifications?.addEventListener("click", (event) => {
   if (notificationPanel) notificationPanel.hidden = !opening;
   btnNotifications.setAttribute("aria-expanded", String(opening));
 });
-notificationClear?.addEventListener("click", () => setNotifications([]));
+notificationClear?.addEventListener("click", () => {
+  updatesState.pendingNotification = null;
+  setNotifications([]);
+});
 document.addEventListener("click", (event) => {
   if (notificationPanel && !notificationPanel.hidden && !notificationPanel.contains(event.target) && !btnNotifications?.contains(event.target)) {
     notificationPanel.hidden = true;
     btnNotifications?.setAttribute("aria-expanded", "false");
   }
+});
+
+// In-app update wiring
+updateToastInstall?.addEventListener("click", beginUpdateInstall);
+updateToastIgnore?.addEventListener("click", ignoreCurrentUpdate);
+generalUpdatesToggle?.addEventListener("change", () => {
+  window.api.updatesSettingsSet?.({ checkOnLaunch: Boolean(generalUpdatesToggle.checked) }).catch(() => {});
 });
 certificateBrowse?.addEventListener("click", chooseCertificateDirectory);
 certificateReset?.addEventListener("click", resetCertificateDirectory);
@@ -8952,8 +9113,9 @@ async function runMenuAction(action) {
     "new-chat",
     "about",
     "configure-run",
-    "run-code",
-  ]);
+        "run-code",
+        "check-updates",
+      ]);
   if (!focusedActions.has(action)) return;
   switch (action) {
     case "new-file":
@@ -9047,8 +9209,11 @@ async function runMenuAction(action) {
       openAppSettings();
       break;
     case "help-guide":
-      showHelpGuide();
-      break;
+          showHelpGuide();
+          break;
+        case "check-updates":
+          runUpdateCheck(true);
+          break;
     case "new-chat":
       newChatSession();
       break;
@@ -15647,3 +15812,5 @@ setChatCollapsed(false);
 setTerminalCollapsed(!TerminalManager.hasSessions(), { createIfMissing: false });
 chatInput.focus();
 restoreLastWorkspace();
+window.api.onUpdateEvent?.(handleUpdateEvent);
+loadUpdateSettings().then(() => runUpdateCheck(false));

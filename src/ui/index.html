@@ -63,6 +63,7 @@
       <div class="app-menu-item">
         <button type="button" class="app-menu-button" data-menu="help" aria-haspopup="true" aria-expanded="false">Help</button>
         <div class="app-menu-dropdown" data-menu-panel="help" role="menu" hidden>
+          <button type="button" data-action="check-updates" role="menuitem">Check for Updates</button>
           <button type="button" data-action="help-guide" role="menuitem">XEKUTE Guide</button>
           <button type="button" data-action="about" role="menuitem">About XEKUTE</button>
         </div>
@@ -387,6 +388,13 @@
                 <div class="general-settings-row">
                   <div><strong>Status Bar</strong><p>Show status bar at the bottom of the window</p></div>
                   <label class="general-toggle" aria-label="Show status bar"><input id="general-status-bar-toggle" type="checkbox" checked><span aria-hidden="true"></span></label>
+                </div>
+              </section>
+              <h2 class="general-settings-section-title">Updates</h2>
+              <section class="general-settings-card general-settings-list">
+                <div class="general-settings-row">
+                  <div><strong>Check for updates automatically</strong><p>XEKUTE checks GitHub for a new version each time it starts. You can still check manually from the Help menu.</p></div>
+                  <label class="general-toggle" aria-label="Check for updates automatically"><input id="general-updates-toggle" type="checkbox" checked><span aria-hidden="true"></span></label>
                 </div>
               </section>
             </div>
@@ -1268,6 +1276,20 @@
     <button type="button" data-workspace-context-action="delete" role="menuitem">
       <span class="codicon codicon-remove"></span><span>Delete</span>
     </button>
+  </div>
+
+  <div id="update-toast" class="update-toast" role="status" aria-label="Update available" hidden>
+    <div class="update-toast-body">
+      <span class="update-toast-icon codicon codicon-cloud-download" aria-hidden="true"></span>
+      <div class="update-toast-text">
+        <strong class="update-toast-title">A new update is available</strong>
+        <p class="update-toast-version">XEKUTE <span id="update-toast-version"></span> is ready with new features and fixes.</p>
+      </div>
+    </div>
+    <div class="update-toast-actions">
+      <button type="button" id="update-toast-install" class="update-toast-btn update-toast-install">Install</button>
+      <button type="button" id="update-toast-ignore" class="update-toast-btn update-toast-ignore">Ignore</button>
+    </div>
   </div>
 
   <footer id="statusbar">

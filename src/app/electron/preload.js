@@ -219,12 +219,24 @@ const api = {
     return () => ipcRenderer.removeListener("identity:status", listener);
   },
   onIdentityPersistence: (cb) => {
-    const listener = (_event, payload) => cb(payload ?? {});
-    ipcRenderer.on("identity:persistence", listener);
-    return () => ipcRenderer.removeListener("identity:persistence", listener);
-  },
-  removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
-};
+      const listener = (_event, payload) => cb(payload ?? {});
+      ipcRenderer.on("identity:persistence", listener);
+      return () => ipcRenderer.removeListener("identity:persistence", listener);
+    },
+    removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
+
+    // In-app updates
+    updatesCheck: (payload = {}) => ipcRenderer.invoke("updates:check", payload),
+    updatesInstall: () => ipcRenderer.invoke("updates:install"),
+    updatesIgnore: (payload = {}) => ipcRenderer.invoke("updates:ignore", payload),
+    updatesSettingsGet: () => ipcRenderer.invoke("updates:settingsGet"),
+    updatesSettingsSet: (payload = {}) => ipcRenderer.invoke("updates:settingsSet", payload),
+    onUpdateEvent: (cb) => {
+      const listener = (_event, payload) => cb(payload ?? {});
+      ipcRenderer.on("updates:event", listener);
+      return () => ipcRenderer.removeListener("updates:event", listener);
+    },
+  };
 
 function resultCall(fn) {
   return async (...args) => {

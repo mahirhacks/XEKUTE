@@ -49,7 +49,20 @@ XEKUTE does not bundle third-party security tools. Install only tools that your 
 
 ## Updates and removal
 
-Install a newer release by running its `XEKUTESetup.exe`. To remove XEKUTE, use **Settings > Apps > Installed apps > XEKUTE > Uninstall** in Windows. Back up important project folders before uninstalling or upgrading.
+XEKUTE checks GitHub for a new release each time it starts. When one is available, a
+notification appears at the bottom-left with **Install** and **Ignore** options:
+choose **Install** and XEKUTE downloads the update, closes itself, applies it, and
+reopens on the new version. If you choose **Ignore**, the update stays available in
+the notification center (top-right bell) until you install it or a newer version
+appears. You can also check manually via **Help → Check for Updates**, and disable
+automatic checks in **Settings → General → Check for updates automatically**
+(handy during an active engagement). New releases are published automatically from
+the `v*` tag workflow to the GitHub Releases page.
+
+To install a newer release manually, run its `XEKUTESetup.exe` from the project's
+GitHub Releases page. To remove XEKUTE, use **Settings > Apps > Installed apps >
+XEKUTE > Uninstall** in Windows. Back up important project folders before
+uninstalling or upgrading.
 
 ## Build from source (developers)
 

@@ -31,6 +31,7 @@ Module._load = function (request, parent, isMain) {
       app: {
         on() {}, whenReady: () => Promise.resolve(), getPath: () => path.join(os.tmpdir(), "xekute-boot-test"),
         quit() {}, requestSingleInstanceLock: () => true, setAppUserModelId() {},
+        isPackaged: false, getVersion: () => "0.0.0-test", relaunch() {}, exit() {},
       },
       BrowserWindow: windowStub,
       WebContentsView: function () { return { webContents: webContentsStub(), setBackgroundColor() {}, setVisible() {}, setBounds() {} }; },

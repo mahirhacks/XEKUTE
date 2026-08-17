@@ -10,7 +10,7 @@ module.exports = {
     asarUnpack: ["**/node_modules/node-pty/**"],
     ignore: [
       /^\/(?:\.git|\.github|\.cursor|\.agents|\.commandcode|architecture|docs|graphify-out|out|scripts|temp_test|test|tmp|version_tracking)(?:\/|$)/,
-      /^\/(?:\.env(?:\..*)?|\.gitignore|\.graphifyignore|AGENTS\.md|forge\.config\.js|INSTALL\.md|README\.md|unified-tool-process-monitoring\.md)$/,
+/^\/?(?:\.env(?:\..*)?|\.gitignore|\.graphifyignore|AGENTS\.md|forge\.config\.js|INSTALL\.md|README\.md|update-publish\.md|unified-tool-process-monitoring\.md)$/,
     ],
     win32metadata: {
       CompanyName: "XEKUTE",

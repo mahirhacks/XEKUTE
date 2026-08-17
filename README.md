@@ -85,6 +85,8 @@ XEKUTE does **not** bundle most third-party security binaries. Install only the 
 
 For normal use, download and run `XEKUTESetup.exe` from the project's GitHub Releases page. No Node.js, npm, or Git setup is required. The installer does not bundle AI models or third-party security tools.
 
+Once installed, XEKUTE checks GitHub for updates on every launch: a notification offers **Install** (downloads, closes, updates, and reopens the app) or **Ignore** (the update moves to the notification center). See [INSTALL.md](INSTALL.md) for details.
+
 For the full first-run guide, checksum verification, optional Ollama/OpenRouter setup, updates, and removal, see [INSTALL.md](INSTALL.md).
 
 ## Requirements

@@ -1,0 +1,68 @@
+name: Windows release
+
+# Publishes a GitHub Release (full release, never pre-release) so the
+# in-app updater (update.electronjs.org / Squirrel.Windows) can serve it.
+# Trigger with: git tag v<package.json version> && git push origin <tag>
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Squirrel bakes the version into the .nupkg name, so the tag and
+      # package.json must agree or users get a broken update feed.
+      - name: Tag must match package.json version
+        shell: bash
+        run: |
+          node -e "const p=require('./package.json');const tag=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(tag!==p.version){console.error('Tag '+process.env.GITHUB_REF_NAME+' does not match package.json version '+p.version);process.exit(1)}"
+
+      - run: npm ci
+      - run: npm run verify:native
+      - run: npm run verify:production
+      - run: npm test
+
+      - name: Build signed installer
+        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\xekute-signing.pfx", [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}"))
+          $env:WINDOWS_CERTIFICATE_FILE = "$env:RUNNER_TEMP\xekute-signing.pfx"
+          npm run make
+          npm run release:metadata
+
+      - name: Build unsigned installer
+        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 == '' }}
+        shell: pwsh
+        run: |
+          npm run make
+          npm run release:metadata
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/make/squirrel.windows/x64/*
+            out/make/SHA256SUMS.txt
+            out/make/xekute-sbom.cdx.json
+          generate_release_notes: true
+        # Deliberately NOT pre-release: update.electronjs.org only serves
+        # stable releases. Marking the checkbox again breaks the updater.
