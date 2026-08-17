@@ -7,6 +7,10 @@ on:
 jobs:
   verify:
     runs-on: windows-2022
+    # `secrets` is not allowed inside `if:` conditions, so surface the signing
+    # credential presence as an env flag once, at the job level.
+    env:
+      HAS_SIGNING_CERT: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,7 +24,7 @@ jobs:
       - run: npm test
       - run: npm run package
       - name: Build signed installer when signing credentials are configured
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        if: env.HAS_SIGNING_CERT == 'true'
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
