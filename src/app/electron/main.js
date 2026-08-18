@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard, autoUpdater } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -3046,10 +3046,10 @@ async function handleAgentRun(event, payload = {}, options = {}) {
 
 ipcMain.handle("agent:run", handleAgentRun);
 
-// ── In-app updates (Path A: update.electronjs.org / Squirrel.Windows) ───────
+// ── In-app updates (electron-updater / NSIS) ─────────────────────────────────
 // Detects new GitHub releases, surfaces them to the renderer, and applies
-// the downloaded update by closing + relaunching the app (Q4).
-const { createUpdateService, createUpdateSettingsStore, createSquirrelBackend, createMockBackend, nextMinorVersion } = require("../services/updates/update-service.js");
+// the downloaded update by closing + relaunching the app.
+const { createUpdateService, createUpdateSettingsStore, createElectronUpdaterBackend, createMockBackend, nextMinorVersion } = require("../services/updates/update-service.js");
 const { registerUpdateIpc } = require("../ipc/updates.js");
 
 const updateSettingsStore = createUpdateSettingsStore({
@@ -3058,15 +3058,23 @@ const updateSettingsStore = createUpdateSettingsStore({
 // Dev/testing override (Q9): mock the whole flow when unpackaged or forced,
 // and allow pointing the real feed anywhere (staging mirror, custom server).
 const updateMockMode = process.env.XEKUTE_UPDATE_MOCK === "1" || !app.isPackaged;
-const updateFeedUrl = process.env.XEKUTE_UPDATE_FEED
-  || `https://update.electronjs.org/mahirhacks/XEKUTE/${process.platform}-${process.arch}/${app.getVersion()}`;
+const updateFeedUrl = process.env.XEKUTE_UPDATE_FEED || "";
 const updateBackend = updateMockMode
   ? createMockBackend({
       app,
       loadedVersion: app.getVersion(),
       targetVersion: process.env.XEKUTE_UPDATE_MOCK_VERSION || nextMinorVersion(app.getVersion()),
     })
-  : createSquirrelBackend({ autoUpdater, feedUrl: updateFeedUrl });
+  : createElectronUpdaterBackend({
+      autoUpdater: require("electron-updater").autoUpdater,
+      feedUrl: updateFeedUrl,
+      provider: {
+        provider: "github",
+        owner: "mahirhacks",
+        repo: "XEKUTE",
+        releaseType: "release",
+      },
+    });
 const updateService = createUpdateService({
   app,
   backend: updateBackend,
@@ -3076,19 +3084,3 @@ const updateService = createUpdateService({
   },
 });
 registerUpdateIpc(ipcMain, { service: updateService });
-
-// ── Installer interface (in-app setup wizard) ────────────────────────────────
-// Wizard with install-directory options, shortcut creation, live install log,
-// and "Launch on finish". The Squirrel setup exe does the actual file copy;
-// this service runs the user-facing steps and reports them to the renderer.
-const { createInstallerService } = require("../services/installer/installer-service.js");
-const { registerInstallerIpc } = require("../ipc/installer.js");
-
-const installerService = createInstallerService({
-  app,
-  dialog,
-  shell,
-  getMainWindow: () => mainWindow,
-  defaultDir: path.join(app.getPath("appData"), "XEKUTE"),
-});
-registerInstallerIpc(ipcMain, { service: installerService });

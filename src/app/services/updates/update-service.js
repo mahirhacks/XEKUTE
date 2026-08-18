@@ -6,7 +6,7 @@
  * Owns update *policy and mechanics* in the main process:
  *   - persistence of operator preferences (auto-check on launch, ignored version)
  *   - the check → available → downloading → downloaded → quitAndInstall state machine
- *   - backend selection (real Electron autoUpdater vs. dev mock)
+ *   - backend selection (real electron-updater vs. dev mock)
  *
  * The module never requires("electron") at load time so it stays unit-testable;
  * Electron objects are injected by the composition root (main.js).
@@ -64,20 +64,23 @@ function createUpdateSettingsStore({ file }) {
 // ── Backends ────────────────────────────────────────────────────────────────
 
 /**
- * Production backend: Electron's built-in autoUpdater (Squirrel.Windows)
- * fed by the update.electronjs.org feed. Only constructed when packaged —
- * Squirrel's autoUpdater refuses to run in an unpackaged dev app.
+ * Production backend: electron-updater (NSIS) fed by GitHub Releases or a
+ * configured generic provider. Only constructed when packaged.
  */
-function createSquirrelBackend({ autoUpdater, feedUrl }) {
+function createElectronUpdaterBackend({ autoUpdater, feedUrl, provider = null, allowPrerelease = false }) {
   const emitter = new EventEmitter();
   let initialized = false;
 
   function init() {
     if (initialized) return;
     initialized = true;
-    try {
-      autoUpdater.autoDownload = false;
-    } catch { /* property may not exist on some platforms */ }
+    try { autoUpdater.autoDownload = false; } catch { /* optional */ }
+    try { autoUpdater.allowPrerelease = Boolean(allowPrerelease); } catch { /* optional */ }
+    if (provider) {
+      try { autoUpdater.setFeedURL(provider); } catch { /* electron-updater may use app-update.yml */ }
+    } else if (feedUrl) {
+      try { autoUpdater.setFeedURL({ provider: "generic", url: feedUrl }); } catch { /* electron-updater may use app-update.yml */ }
+    }
     autoUpdater.on("update-available", (info) =>
       emitter.emit("available", { version: String(info?.version || ""), mock: false }));
     autoUpdater.on("update-not-available", () => emitter.emit("none"));
@@ -97,9 +100,6 @@ function createSquirrelBackend({ autoUpdater, feedUrl }) {
     emitter,
     check() {
       init();
-      const feed = feedUrl || "";
-      if (!feed) throw new Error("Update feed URL is not configured");
-      autoUpdater.setFeedURL({ url: feed });
       autoUpdater.checkForUpdates();
     },
     install() {
@@ -112,6 +112,8 @@ function createSquirrelBackend({ autoUpdater, feedUrl }) {
     },
   };
 }
+
+const createSquirrelBackend = createElectronUpdaterBackend;
 
 /**
  * Dev/test backend: no network, no Squirrel. Simulates the same event
@@ -266,6 +268,7 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, log = con
 module.exports = {
   createUpdateService,
   createUpdateSettingsStore,
+  createElectronUpdaterBackend,
   createSquirrelBackend,
   createMockBackend,
   nextMinorVersion,

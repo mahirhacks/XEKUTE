@@ -9,6 +9,9 @@
 /.webpack/
 /.electron-gyp/
 /build/
+!/build/
+/build/*
+!/build/installer.nsh
 *.asar
 *.blockmap
 *.nupkg

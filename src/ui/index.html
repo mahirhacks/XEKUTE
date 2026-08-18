@@ -11,7 +11,6 @@
   <link rel="stylesheet" href="styles/base.css" />
   <link rel="stylesheet" href="styles/chat.css" />
   <link rel="stylesheet" href="styles/settings.css" />
-  <link rel="stylesheet" href="styles/installer.css" />
 </head>
 <body>
   <div id="app-shell">
@@ -90,9 +89,6 @@
     </button>
     <button type="button" id="btn-top-settings" class="topbar-icon" title="XEKUTE Settings">
       <span class="codicon codicon-settings-gear"></span>
-    </button>
-    <button type="button" id="btn-top-installer" class="topbar-icon" title="Installer">
-      <span class="codicon codicon-wrench"></span>
     </button>
     <button type="button" id="btn-window-minimize" class="window-control" title="Minimize">
       <span class="codicon codicon-chrome-minimize"></span>
@@ -1486,81 +1482,12 @@
     </section>
   </div>
 
-  <div id="installer-overlay" class="installer-overlay" role="dialog" aria-modal="true" aria-labelledby="installer-title" hidden>
-    <section class="installer-window">
-      <header class="installer-header">
-        <div class="installer-heading">
-          <span class="codicon codicon-wrench" aria-hidden="true"></span>
-          <div>
-            <strong id="installer-title">XEKUTE Installer</strong>
-            <small id="installer-subtitle">Set up XEKUTE on this computer</small>
-          </div>
-        </div>
-        <button type="button" id="installer-close" class="icon-btn" title="Close" aria-label="Close installer">
-          <span class="codicon codicon-close"></span>
-        </button>
-      </header>
-
-      <div class="installer-steps" aria-label="Install steps">
-        <span class="installer-step active" data-installer-step-indicator="options">1. Options</span>
-        <span class="installer-step" data-installer-step-indicator="installing">2. Installing</span>
-        <span class="installer-step" data-installer-step-indicator="finish">3. Finish</span>
-      </div>
-
-      <div class="installer-body">
-        <section id="installer-step-options" class="installer-pane" data-installer-step="options">
-          <h3>Install directory</h3>
-          <p class="installer-help">XEKUTE will be set up in this folder. You can change it now, or accept the default.</p>
-          <div class="installer-dir-row">
-            <input id="installer-dir" class="installer-dir-input" type="text" spellcheck="false" placeholder="C:\Users\You\AppData\Roaming\XEKUTE" />
-            <button type="button" id="installer-browse" class="secondary-button">Browse…</button>
-          </div>
-          <p id="installer-dir-error" class="installer-error" hidden></p>
-
-          <h3>Shortcuts</h3>
-          <label class="installer-check">
-            <input id="installer-desktop-shortcut" type="checkbox" checked />
-            <span>Create a desktop shortcut</span>
-          </label>
-          <label class="installer-check">
-            <input id="installer-taskbar-shortcut" type="checkbox" />
-            <span>Create a taskbar shortcut</span>
-          </label>
-        </section>
-
-        <section id="installer-step-installing" class="installer-pane" data-installer-step="installing" hidden>
-          <h3>Installing XEKUTE</h3>
-          <p class="installer-help">This may take a moment. Progress is shown below.</p>
-          <pre id="installer-log" class="installer-log" aria-live="polite"></pre>
-        </section>
-
-        <section id="installer-step-finish" class="installer-pane" data-installer-step="finish" hidden>
-          <h3>Installation complete</h3>
-          <p class="installer-help">XEKUTE is ready to use.</p>
-          <label class="installer-check">
-            <input id="installer-launch-on-finish" type="checkbox" checked />
-            <span>Launch XEKUTE on finish</span>
-          </label>
-        </section>
-      </div>
-
-      <footer class="installer-footer">
-        <button type="button" id="installer-back" class="secondary-button" hidden>Back</button>
-        <span class="installer-footer-spacer"></span>
-        <button type="button" id="installer-next" class="primary-button">Next</button>
-        <button type="button" id="installer-finish" class="primary-button" hidden>Finish</button>
-        <button type="button" id="installer-retry" class="primary-button" hidden>Retry</button>
-      </footer>
-    </section>
-  </div>
-
   <script src="../../node_modules/marked/lib/marked.umd.js"></script>
   <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
   <script src="../../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/monaco-editor/min/vs/loader.js"></script>
-  <script type="module" src="features/installer/installer-controller.js"></script>
   <script type="module" src="bootstrap.js"></script>
 </body>
 </html>

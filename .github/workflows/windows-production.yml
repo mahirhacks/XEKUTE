@@ -18,6 +18,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify installer build inputs
+        shell: pwsh
+        run: |
+          if (!(Test-Path .\electron-builder.config.js)) { throw "electron-builder.config.js is missing from the checkout." }
+          if (!(Test-Path .\build\installer.nsh)) { throw "build/installer.nsh is missing from the checkout." }
       - run: npm run audit:runtime
       - run: npm run verify:native
       # temp_test is gitignored (harness dir), but verify:production asserts it exists.
@@ -32,10 +37,19 @@ jobs:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\xekute-signing.pfx", [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}"))
-          $env:WINDOWS_CERTIFICATE_FILE = "$env:RUNNER_TEMP\xekute-signing.pfx"
+          $env:WIN_CSC_LINK = "$env:RUNNER_TEMP\xekute-signing.pfx"
+          $env:WIN_CSC_KEY_PASSWORD = "$env:WINDOWS_CERTIFICATE_PASSWORD"
+          npm run make
+          npm run release:metadata
+      - name: Build unsigned installer
+        if: env.HAS_SIGNING_CERT == 'false'
+        shell: pwsh
+        run: |
           npm run make
           npm run release:metadata
       - uses: actions/upload-artifact@v4
         with:
           name: xekute-windows-package
-          path: out/XEKUTE-win32-x64
+          path: |
+            out/XEKUTE-win32-x64
+            out/make/nsis
