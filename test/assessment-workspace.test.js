@@ -213,9 +213,12 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.doesNotMatch(html, /Explore Subagent Model/);
   assert.match(renderer, /function modelsVisibleInPicker\(\)[\s\S]*?filter\(\(name\) => enabled\.has\(name\)\)/);
   assert.match(renderer, /option\.textContent = "Enable a model in Models"/);
-  assert.ok(html.includes('class="resource-viewer-empty-logo codicon codicon-target"'));
+  assert.ok(html.includes('<img src="../../xekute_icon.png" alt="" class="resource-viewer-empty-logo">'));
   assert.doesNotMatch(html, /Do something to get started/);
-  assert.match(baseStyles, /\.resource-viewer-empty-logo\.codicon \{[\s\S]*color: #d0d0d0;[\s\S]*font-size: 72px !important;[\s\S]*line-height: 1 !important;[\s\S]*opacity: 0\.25;/);
+  assert.ok(baseStyles.includes(".resource-viewer-empty-logo {"));
+  assert.match(baseStyles, /width: 84px;/);
+  assert.match(baseStyles, /height: 84px;/);
+  assert.match(baseStyles, /opacity: 0\.25;/);
   assert.ok(html.includes('class="guidance-customize-page"'));
   assert.ok(html.includes("Tools &amp; MCPs"));
   assert.ok(html.includes('data-chat-mode="hypothesis"'));
