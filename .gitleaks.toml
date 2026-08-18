@@ -1,0 +1,40 @@
+# XEKUTE secret-scan configuration for Gitleaks.
+# Extends the default ruleset with app-specific rules for the credentials
+# this project actually handles: OpenRouter API keys, signing certificates,
+# and private-key material.
+
+[extend]
+useDefault = true
+
+# OpenRouter keys are issued as "sk-or-v1-" followed by a long random suffix.
+[[rules]]
+id = "openrouter-api-key"
+description = "OpenRouter API key"
+regex = '''sk-or-v1-[a-zA-Z0-9_\-]{20,}'''
+entropy = 3.0
+keywords = ["sk-or-v1-"]
+
+# A base64 PKCS#12 blob (MII...) assigned to a signing-certificate variable
+# is the exact shape of the WINDOWS_CERTIFICATE_BASE64 release secret.
+[[rules]]
+id = "signing-certificate-base64"
+description = "Possible base64-encoded signing certificate assigned to a certificate variable"
+regex = '''(?i)(windows_certificate|win_csc_link|csc_link|signing[_-]?cert)[a-z0-9_"'\s:=.\-]{0,40}["']?MII[A-Za-z0-9+/]{40,}'''
+keywords = ["windows_certificate", "win_csc_link", "csc_link"]
+
+[allowlist]
+description = "Generated output, harness scratch space, lockfiles, and known fake fixtures"
+# Sequential-hex fake capture token from test/proxy-listener.test.js. It is
+# already in git history, so it is allowlisted by value only (nothing else is).
+stopwords = [
+  "abcdef0123456789abcdef0123456789",
+]
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)graphify-out/''',
+  '''(^|/)out/''',
+  '''(^|/)temp_test/''',
+  '''(^|/)version_tracking/''',
+  '''(^|/)\.commandcode/''',
+  '''package-lock\.json$''',
+]
