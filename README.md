@@ -83,10 +83,8 @@ XEKUTE does **not** bundle most third-party security binaries. Install only the 
 
 ## Install on Windows
 
-For normal use, **download and run the installer**:
+For normal use, **download and run the installer from the XEKUTE website**:
 
-- **Direct download:** [XEKUTESetup.exe](https://github.com/mahirhacks/XEKUTE/releases/download/v0.2.1/XEKUTESetup.exe) → https://github.com/mahirhacks/XEKUTE/releases/download/v0.2.1/XEKUTESetup.exe
-- **Release page:** https://github.com/mahirhacks/XEKUTE/releases
 - **Website:** https://mahirhacks.github.io/MHACKS/xekute.html
 
 No Node.js, npm, or Git setup is required. The installer does not bundle AI models or third-party security tools.
