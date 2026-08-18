@@ -1,7 +1,7 @@
 name: Windows release
 
-# Publishes a GitHub Release (full release, never pre-release) so the
-# in-app updater (update.electronjs.org / Squirrel.Windows) can serve it.
+# Publishes a GitHub Release (full release, never pre-release) for the
+# assisted NSIS installer and electron-updater.
 # Trigger with: git tag v<package.json version> && git push origin <tag>
 
 on:
@@ -30,14 +30,18 @@ jobs:
           node-version: 22
           cache: npm
 
-      # Squirrel bakes the version into the .nupkg name, so the tag and
-      # package.json must agree or users get a broken update feed.
+      # Keep release tags and package metadata identical.
       - name: Tag must match package.json version
         shell: bash
         run: |
           node -e "const p=require('./package.json');const tag=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(tag!==p.version){console.error('Tag '+process.env.GITHUB_REF_NAME+' does not match package.json version '+p.version);process.exit(1)}"
 
       - run: npm ci
+      - name: Verify installer build inputs
+        shell: pwsh
+        run: |
+          if (!(Test-Path .\electron-builder.config.js)) { throw "electron-builder.config.js is missing from the checkout." }
+          if (!(Test-Path .\build\installer.nsh)) { throw "build/installer.nsh is missing from the checkout." }
       - run: npm run verify:native
       # temp_test is gitignored (harness dir), but verify:production asserts it exists.
       - run: mkdir temp_test
@@ -51,24 +55,31 @@ jobs:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\xekute-signing.pfx", [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}"))
-          $env:WINDOWS_CERTIFICATE_FILE = "$env:RUNNER_TEMP\xekute-signing.pfx"
+          $env:WIN_CSC_LINK = "$env:RUNNER_TEMP\xekute-signing.pfx"
+          $env:WIN_CSC_KEY_PASSWORD = "$env:WINDOWS_CERTIFICATE_PASSWORD"
           npm run make
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run release:metadata
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build unsigned installer
         if: env.HAS_SIGNING_CERT == 'false'
         shell: pwsh
         run: |
           npm run make
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run release:metadata
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            out/make/squirrel.windows/x64/*
+            out/make/nsis/XEKUTESetup.exe
+            out/make/nsis/XEKUTESetup.exe.blockmap
+            out/make/nsis/latest.yml
             out/make/SHA256SUMS.txt
             out/make/xekute-sbom.cdx.json
           generate_release_notes: true
-        # Deliberately NOT pre-release: update.electronjs.org only serves
-        # stable releases. Marking the checkbox again breaks the updater.
+        # Deliberately NOT pre-release: electron-updater consumes stable
+        # GitHub release metadata and latest.yml.

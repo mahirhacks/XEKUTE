@@ -27,19 +27,6 @@ module.exports = {
     // ABI benefit, so package the verified prebuild instead.
     onlyModules: ["__xekute_uses_node_pty_prebuild__"],
   },
-  makers: [
-    {
-      name: "@electron-forge/maker-squirrel",
-      config: {
-        name: "XEKUTE",
-        authors: "XEKUTE Contributors",
-        setupExe: "XEKUTESetup.exe",
-        setupIcon: "xekute_icon.ico",
-        certificateFile: process.env.WINDOWS_CERTIFICATE_FILE || undefined,
-        certificatePassword: process.env.WINDOWS_CERTIFICATE_PASSWORD || undefined,
-      },
-    },
-  ],
   plugins: [
     new FusesPlugin({
       version: FuseVersion.V1,

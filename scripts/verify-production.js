@@ -79,6 +79,12 @@ assert.equal(packageJson.productName, "XEKUTE");
 assert.match(forgeConfig, /temp_test/);
 assert.match(forgeConfig, /graphify-out/);
 assert.match(forgeConfig, /node_modules\/node-pty/);
+assert.doesNotMatch(forgeConfig, /maker-squirrel|electron-winstaller|Squirrel\.Windows/);
+const builderConfig = read("electron-builder.config.js");
+assert.match(builderConfig, /oneClick:\s*false/);
+assert.match(builderConfig, /allowToChangeInstallationDirectory:\s*true/);
+assert.match(builderConfig, /artifactName:\s*["']XEKUTESetup\.exe["']/);
+assert.match(builderConfig, /include:\s*["']build\/installer\.nsh["']/);
 assert.doesNotMatch(forgeConfig, /src\/automation/);
 
 const canonicalNames = ToolPort.REGISTRY_TOOL_NAMES;

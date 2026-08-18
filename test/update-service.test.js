@@ -7,7 +7,7 @@ const { EventEmitter } = require("node:events");
 const {
   createUpdateService,
   createUpdateSettingsStore,
-  createSquirrelBackend,
+  createElectronUpdaterBackend,
   createMockBackend,
   nextMinorVersion,
   DEFAULT_CHECK_ON_LAUNCH,
@@ -137,23 +137,28 @@ test("mock backend progresses to 100% then reports downloaded", async () => {
   assert.deepEqual(downloaded, ["0.2.0"]);
 });
 
-test("squirrel backend wires electron autoUpdater events", () => {
+test("electron-updater backend wires NSIS updater events", () => {
   const handler = {};
+  const feedCalls = [];
   const autoUpdater = {
     autoDownload: true,
     on(event, fn) { handler[event] = fn; },
-    setFeedURL() {},
+    setFeedURL(value) { feedCalls.push(value); },
     checkForUpdates() {},
     downloadUpdate() {},
     quitAndInstall() {},
   };
   const events = [];
-  const backend = createSquirrelBackend({ autoUpdater, feedUrl: "https://update.electronjs.org/mahirhacks/XEKUTE/win32-x64/0.1.1" });
+  const backend = createElectronUpdaterBackend({
+    autoUpdater,
+    provider: { provider: "github", owner: "mahirhacks", repo: "XEKUTE", releaseType: "release" },
+  });
   backend.emitter.on("available", (info) => events.push(["available", info.version]));
   backend.emitter.on("progress", (info) => events.push(["progress", info.percent]));
   backend.emitter.on("downloaded", (info) => events.push(["downloaded", info.version]));
   backend.check();
   assert.equal(autoUpdater.autoDownload, false);
+  assert.deepEqual(feedCalls, [{ provider: "github", owner: "mahirhacks", repo: "XEKUTE", releaseType: "release" }]);
   handler["update-available"]({ version: "0.2.0" });
   handler["download-progress"]({ percent: 12.34 });
   handler["update-downloaded"]({ version: "0.2.0" });

@@ -13,12 +13,12 @@ XEKUTE is a local-first desktop workspace for **authorized** penetration testing
    ```
 
    The displayed SHA-256 value must match the entry for `XEKUTESetup.exe`.
-3. Run `XEKUTESetup.exe` and follow the Windows installer prompts.
+3. Run `XEKUTESetup.exe`. The setup wizard lets you choose the install directory, choose desktop and Start Menu shortcuts, watch installation progress and errors, and launch XEKUTE when it finishes.
 4. Open **XEKUTE** from the Start menu.
 
 The installer writes only its application files and Windows-managed app settings. It does not install assessment tools, create projects, or transmit your assessment data.
 
-Inside the app, the **Installer** button (wrench icon in the top bar) opens the setup wizard: choose where XEKUTE is set up, optionally create desktop/taskbar shortcuts, watch the install log, and optionally relaunch XEKUTE on finish.
+The wizard also creates `uninstall.exe` in the selected installation directory. You can run it directly or remove XEKUTE from Windows Installed apps.
 
 > XEKUTE is currently an unsigned alpha release. Windows may show a SmartScreen warning. Only continue after confirming that you downloaded the installer from the project's official release and, where supplied, that its SHA-256 checksum matches.
 

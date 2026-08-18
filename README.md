@@ -89,7 +89,7 @@ For normal use, **download and run the installer from the XEKUTE website**:
 
 No Node.js, npm, or Git setup is required. The installer does not bundle AI models or third-party security tools.
 
-Once installed, XEKUTE checks GitHub for updates on every launch: a notification offers **Install** (downloads, closes, updates, and reopens the app) or **Ignore** (the update moves to the notification center). See [INSTALL.md](INSTALL.md) for details.
+Once installed, XEKUTE checks GitHub for updates on every launch: a notification offers **Install** (downloads, closes, updates, and reopens the app) or **Ignore** (the update moves to the notification center). The setup wizard also supports a custom install directory, shortcut choices, progress/error details, launch-on-finish, and `uninstall.exe`. See [INSTALL.md](INSTALL.md) for details.
 
 For the full first-run guide, checksum verification, optional Ollama/OpenRouter setup, updates, and removal, see [INSTALL.md](INSTALL.md).
 
@@ -180,13 +180,13 @@ Create an unpacked Windows application:
 npm run package
 ```
 
-Create the Squirrel.Windows installer:
+Create the assisted NSIS Windows installer (`XEKUTESetup.exe`):
 
 ```powershell
 npm run make
 ```
 
-Build artifacts are written under `out/`. Windows signing can be enabled with:
+Build artifacts are written under `out/make/nsis/`. Windows signing can be enabled with:
 
 ```powershell
 $env:WINDOWS_CERTIFICATE_FILE = "C:\path\to\certificate.pfx"

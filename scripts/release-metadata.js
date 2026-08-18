@@ -7,7 +7,10 @@ const { execFileSync } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
 const output = path.join(root, "out", "make");
-if (!fs.existsSync(output)) throw new Error("Run npm run make before generating release metadata.");
+const artifactRoot = path.join(output, "nsis");
+if (!fs.existsSync(artifactRoot)) throw new Error("Run npm run make before generating release metadata.");
+const setupExe = path.join(artifactRoot, "XEKUTESetup.exe");
+if (!fs.existsSync(setupExe)) throw new Error("XEKUTESetup.exe was not produced by the NSIS build.");
 
 function files(folder) {
   return fs.readdirSync(folder, { withFileTypes: true }).flatMap((entry) => {
