@@ -83,7 +83,13 @@ XEKUTE does **not** bundle most third-party security binaries. Install only the 
 
 ## Install on Windows
 
-For normal use, download and run `XEKUTESetup.exe` from the project's GitHub Releases page. No Node.js, npm, or Git setup is required. The installer does not bundle AI models or third-party security tools.
+For normal use, **download and run the installer**:
+
+- **Direct download:** [XEKUTESetup.exe](https://github.com/mahirhacks/XEKUTE/releases/download/v0.2.1/XEKUTESetup.exe) → https://github.com/mahirhacks/XEKUTE/releases/download/v0.2.1/XEKUTESetup.exe
+- **Release page:** https://github.com/mahirhacks/XEKUTE/releases
+- **Website:** https://mahirhacks.github.io/MHACKS/xekute.html
+
+No Node.js, npm, or Git setup is required. The installer does not bundle AI models or third-party security tools.
 
 Once installed, XEKUTE checks GitHub for updates on every launch: a notification offers **Install** (downloads, closes, updates, and reopens the app) or **Ignore** (the update moves to the notification center). See [INSTALL.md](INSTALL.md) for details.
 

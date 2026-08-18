@@ -94,6 +94,13 @@ html, body {
   font-size: 15px;
 }
 
+.app-brand-icon {
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
 .app-menu-item {
   position: relative;
   height: 100%;
@@ -1936,11 +1943,12 @@ html.panel-resizing iframe {
   display: none;
 }
 
-.resource-viewer-empty-logo.codicon {
-  color: #d0d0d0;
-  font-size: 72px !important;
-  line-height: 1 !important;
+.resource-viewer-empty-logo {
+  width: 84px;
+  height: 84px;
+  border-radius: 18px;
   opacity: 0.25;
+  user-select: none;
 }
 
 .resource-editor-shell {

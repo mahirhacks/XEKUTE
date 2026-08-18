@@ -6,6 +6,7 @@ module.exports = {
     name: "XEKUTE",
     executableName: "XEKUTE",
     appBundleId: "com.xekute.securityworkspace",
+    icon: "xekute_icon.ico",
     asar: true,
     asarUnpack: ["**/node_modules/node-pty/**"],
     ignore: [
@@ -33,7 +34,7 @@ module.exports = {
         name: "XEKUTE",
         authors: "XEKUTE Contributors",
         setupExe: "XEKUTESetup.exe",
-        setupIcon: undefined,
+        setupIcon: "xekute_icon.ico",
         certificateFile: process.env.WINDOWS_CERTIFICATE_FILE || undefined,
         certificatePassword: process.env.WINDOWS_CERTIFICATE_PASSWORD || undefined,
       },

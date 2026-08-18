@@ -714,6 +714,7 @@ function createWindow() {
     frame: false,
     autoHideMenuBar: true,
     show: false,
+    icon: path.join(__dirname, "../../..", "xekute_icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
