@@ -73,7 +73,7 @@ assert.deepEqual(
   ["electron"],
   "sandboxed preload must not require local CommonJS modules",
 );
-assert.equal(packageJson.devDependencies.electron, "43.1.0");
+assert.equal(packageJson.devDependencies.electron, "43.4.0");
 assert.equal(packageJson.dependencies["@vscode/codicons"], "0.0.45");
 assert.equal(packageJson.productName, "XEKUTE");
 assert.match(forgeConfig, /temp_test/);
