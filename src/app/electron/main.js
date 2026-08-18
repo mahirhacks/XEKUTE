@@ -3076,3 +3076,19 @@ const updateService = createUpdateService({
   },
 });
 registerUpdateIpc(ipcMain, { service: updateService });
+
+// ── Installer interface (in-app setup wizard) ────────────────────────────────
+// Wizard with install-directory options, shortcut creation, live install log,
+// and "Launch on finish". The Squirrel setup exe does the actual file copy;
+// this service runs the user-facing steps and reports them to the renderer.
+const { createInstallerService } = require("../services/installer/installer-service.js");
+const { registerInstallerIpc } = require("../ipc/installer.js");
+
+const installerService = createInstallerService({
+  app,
+  dialog,
+  shell,
+  getMainWindow: () => mainWindow,
+  defaultDir: path.join(app.getPath("appData"), "XEKUTE"),
+});
+registerInstallerIpc(ipcMain, { service: installerService });

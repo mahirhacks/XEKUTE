@@ -236,6 +236,17 @@ const api = {
       ipcRenderer.on("updates:event", listener);
       return () => ipcRenderer.removeListener("updates:event", listener);
     },
+
+    // Installer interface (in-app setup wizard)
+    installerGetDefault: () => ipcRenderer.invoke("installer:getDefault"),
+    installerBrowseDirectory: () => ipcRenderer.invoke("installer:browseDirectory"),
+    installerInstall: (payload = {}) => ipcRenderer.invoke("installer:install", payload),
+    installerLaunch: () => ipcRenderer.invoke("installer:launch"),
+    onInstallerEvent: (cb) => {
+      const listener = (_event, payload) => cb(payload ?? {});
+      ipcRenderer.on("installer:event", listener);
+      return () => ipcRenderer.removeListener("installer:event", listener);
+    },
   };
 
 function resultCall(fn) {

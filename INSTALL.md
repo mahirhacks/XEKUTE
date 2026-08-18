@@ -18,6 +18,8 @@ XEKUTE is a local-first desktop workspace for **authorized** penetration testing
 
 The installer writes only its application files and Windows-managed app settings. It does not install assessment tools, create projects, or transmit your assessment data.
 
+Inside the app, the **Installer** button (wrench icon in the top bar) opens the setup wizard: choose where XEKUTE is set up, optionally create desktop/taskbar shortcuts, watch the install log, and optionally relaunch XEKUTE on finish.
+
 > XEKUTE is currently an unsigned alpha release. Windows may show a SmartScreen warning. Only continue after confirming that you downloaded the installer from the project's official release and, where supplied, that its SHA-256 checksum matches.
 
 ## 2. Set up AI assistance (optional)
