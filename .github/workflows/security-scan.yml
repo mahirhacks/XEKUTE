@@ -1,0 +1,49 @@
+name: Security scan
+
+# Pre-merge security gate: secret scanning (Gitleaks) and SAST (CodeQL).
+# Add the `secrets` and `sast` checks to the required status checks in the
+# repository branch-protection settings so they block merges like `verify`.
+
+on:
+  push:
+  pull_request:
+
+# Least privilege: read-only for the workflow; jobs request more explicitly.
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: secrets (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # let Gitleaks post PR annotations
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        with:
+          config-path: .gitleaks.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sast:
+    name: sast (codeql)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload CodeQL results to the Security tab
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config.yml
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          category: "/language:javascript-typescript"

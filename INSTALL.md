@@ -62,7 +62,31 @@ automatic checks in **Settings → General → Check for updates automatically**
 the `v*` tag workflow to the GitHub Releases page.
 
 To install a newer release manually, run its `XEKUTESetup.exe` from the project's
-GitHub Releases page. To remove XEKUTE, use **Settings > Apps > Installed apps >
+GitHub Releases page, or download it from the project website.
+
+## Release security
+
+- Releases are built and published automatically by the `v*` tag workflow. CI pins
+  every third-party action to a commit SHA, scans for secrets (Gitleaks) and runs
+  CodeQL SAST on every pull request, and a protected `main` branch keeps the gate
+  green before anything merges.
+- **Currently unsigned.** XEKUTE does not yet sign its binaries with a code-signing
+  certificate, so Windows may show a "Unknown publisher" SmartScreen warning on
+  install — that is expected. Verify the distribution by comparing the SHA-256 of
+  `XEKUTESetup.exe` against `SHA256SUMS.txt` on the release page.
+- **Automatic updates are hash-verified.** The in-app updater checks each downloaded
+  installer against the SHA-512 in `latest.yml` from XEKUTE's own GitHub release.
+  Authenticode publisher verification is not enabled until releases are signed.
+- `SHA256SUMS.txt` and the SBOM (`xekute-sbom.cdx.json`) are **audit artifacts for
+  users** — they are not runtime protections.
+- **Signing secret (for maintainers, when a certificate is available):** set the
+  `WINDOWS_CERTIFICATE_BASE64` (base64-encoded `.pfx`) and
+  `WINDOWS_CERTIFICATE_PASSWORD` repository secrets; CI then signs the installer,
+  app exe, and uninstaller automatically. To rotate: replace both secrets and
+  re-tag. If a signing key is ever suspected of leaking: revoke/reissue the
+  certificate, rotate the secrets, and tag a fresh release.
+
+To remove XEKUTE, use **Settings > Apps > Installed apps >
 XEKUTE > Uninstall** in Windows. Back up important project folders before
 uninstalling or upgrading.
 
