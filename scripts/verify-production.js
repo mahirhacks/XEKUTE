@@ -85,6 +85,9 @@ assert.match(builderConfig, /oneClick:\s*false/);
 assert.match(builderConfig, /allowToChangeInstallationDirectory:\s*true/);
 assert.match(builderConfig, /artifactName:\s*["']XEKUTESetup\.exe["']/);
 assert.match(builderConfig, /include:\s*["']build\/installer\.nsh["']/);
+assert.match(read("src/app/electron/lifecycle.js"), /function setAllowImmediateQuit/);
+assert.match(read("src/app/electron/main.js"), /onInstallReady:\s*\(\)\s*=>\s*setAllowImmediateQuit\(true\)/);
+assert.match(read("src/app/services/updates/update-service.js"), /quitAndInstall\(true,\s*true\)/);
 assert.doesNotMatch(forgeConfig, /src\/automation/);
 
 const canonicalNames = ToolPort.REGISTRY_TOOL_NAMES;

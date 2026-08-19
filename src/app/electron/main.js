@@ -48,7 +48,7 @@ const {
   writeGuidanceFile,
 } = require("../services/guidance/custom-guidance.js");
 const { createContainer } = require("../../infrastructure/di/container");
-const { registerLifecycle } = require("./lifecycle.js");
+const { registerLifecycle, setAllowImmediateQuit } = require("./lifecycle.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { createTestCaseRunner } = require("../services/assessment/test-case-runner.js");
@@ -3079,6 +3079,7 @@ const updateService = createUpdateService({
   app,
   backend: updateBackend,
   settingsStore: updateSettingsStore,
+  onInstallReady: () => setAllowImmediateQuit(true),
   sendEvent: (payload) => {
     try { mainWindow?.webContents.send("updates:event", payload); } catch { /* window gone */ }
   },

@@ -104,11 +104,16 @@ function createElectronUpdaterBackend({ autoUpdater, feedUrl, provider = null, a
     },
     install() {
       init();
-      autoUpdater.downloadUpdate();
+      return autoUpdater.downloadUpdate();
     },
     quitAndInstall() {
       init();
-      try { autoUpdater.quitAndInstall(); } catch { /* app may already be quitting */ }
+      try {
+        // Silent + relaunch: XEKUTE's NSIS installer has extra pages
+        // (directory + shortcuts). A non-silent /S-less launch looks like
+        // "Install did nothing" because the running app never closes.
+        autoUpdater.quitAndInstall(true, true);
+      } catch { /* app may already be quitting */ }
     },
   };
 }
@@ -174,8 +179,9 @@ function nextMinorVersion(version) {
  * @param {object} deps.settingsStore  store from createUpdateSettingsStore
  * @param {(payload: object) => void} deps.sendEvent  forwards update events to the renderer
  */
-function createUpdateService({ app, backend, settingsStore, sendEvent, log = console.debug }) {
+function createUpdateService({ app, backend, settingsStore, sendEvent, onInstallReady = null, log = console.debug }) {
   let checking = false;
+  let installing = false;
   let downloadedVersion = "";
 
   function emit(payload) {
@@ -212,6 +218,7 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, log = con
   backend.emitter.on("downloaded", (info) => {
     downloadedVersion = info.version;
     emit({ type: "downloaded", version: info.version });
+    try { onInstallReady?.(); } catch { /* never block install */ }
     // Close the app and reopen on the new build (Q4). Give the renderer
     // a beat to paint the "Installing…" state before the process exits.
     setTimeout(() => backend.quitAndInstall(), 600);
@@ -239,11 +246,23 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, log = con
     },
 
     install() {
+      if (installing) return { ok: true, skipped: true };
+      installing = true;
       try {
-        backend.install();
+        const pending = backend.install();
+        if (pending && typeof pending.then === "function") {
+          pending.catch((error) => {
+            installing = false;
+            const message = error?.message || "Update download failed";
+            log(`[updates] install rejected: ${message}`);
+            emit({ type: "error", message });
+          });
+        }
         return { ok: true };
       } catch (error) {
+        installing = false;
         log(`[updates] install threw: ${error?.message || error}`);
+        emit({ type: "error", message: error?.message || "Update install failed" });
         return { ok: false, error: error?.message || "Update install failed" };
       }
     },
