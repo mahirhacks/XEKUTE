@@ -140,13 +140,14 @@ test("mock backend progresses to 100% then reports downloaded", async () => {
 test("electron-updater backend wires NSIS updater events", () => {
   const handler = {};
   const feedCalls = [];
+  const quitCalls = [];
   const autoUpdater = {
     autoDownload: true,
     on(event, fn) { handler[event] = fn; },
     setFeedURL(value) { feedCalls.push(value); },
     checkForUpdates() {},
     downloadUpdate() {},
-    quitAndInstall() {},
+    quitAndInstall() { quitCalls.push([...arguments]); },
   };
   const events = [];
   const backend = createElectronUpdaterBackend({
@@ -167,6 +168,36 @@ test("electron-updater backend wires NSIS updater events", () => {
     ["progress", 12],
     ["downloaded", "0.2.0"],
   ]);
+  backend.quitAndInstall();
+  assert.deepEqual(quitCalls, [[true, true]]);
+});
+
+test("install promise rejection is forwarded as an error event", async () => {
+  const backend = createScriptedBackend();
+  backend.install = () => Promise.reject(new Error("Please check update first"));
+  const { service, events } = createHarness({ backend });
+  const result = service.install();
+  assert.equal(result.ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(events.at(-1).type, "error");
+  assert.match(events.at(-1).message, /Please check update first/);
+});
+
+test("downloaded update marks the process ready for an immediate quit", async () => {
+  let ready = 0;
+  const events = [];
+  const backend = createScriptedBackend();
+  const service = createUpdateService({
+    app: { relaunch() {}, exit() {} },
+    backend,
+    settingsStore: tempSettings(),
+    sendEvent: (payload) => events.push(payload),
+    onInstallReady: () => { ready += 1; },
+  });
+  service.check({ manual: true });
+  backend.emitter.emit("downloaded", { version: "0.2.8" });
+  assert.equal(ready, 1);
+  assert.equal(events.at(-1).type, "downloaded");
 });
 
 test("nextMinorVersion bumps the minor and resets patch", () => {

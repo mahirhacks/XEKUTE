@@ -5,6 +5,12 @@
  * window/menu/container functions; this module owns only process-level
  * startup, single-instance behavior, and the final durable-memory flush.
  */
+let allowImmediateQuit = false;
+
+function setAllowImmediateQuit(value) {
+  allowImmediateQuit = Boolean(value);
+}
+
 function registerLifecycle({
   app,
   BrowserWindow,
@@ -42,17 +48,25 @@ function registerLifecycle({
     createWindow?.();
   });
 
-  app.on("before-quit", (event) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    event.preventDefault?.();
+  function flushDurableState() {
     const sessionFlush = typeof container.sessionMemoryStore === "function"
       ? container.sessionMemoryStore().flush?.()
       : null;
     const contextFlush = container.contextCompiler?.flush?.() || null;
     const runtimeShutdown = typeof shutdown === "function" ? shutdown() : null;
-    const flush = Promise.all([runtimeShutdown, sessionFlush, contextFlush].map((pending) => Promise.resolve(pending)));
-    Promise.resolve(flush)
+    return Promise.all([runtimeShutdown, sessionFlush, contextFlush].map((pending) => Promise.resolve(pending)));
+  }
+
+  app.on("before-quit", (event) => {
+    if (allowImmediateQuit) {
+      shuttingDown = true;
+      flushDurableState().catch((error) => console.warn("Session memory flush failed during update install:", error?.message || error));
+      return;
+    }
+    if (shuttingDown) return;
+    shuttingDown = true;
+    event.preventDefault?.();
+    flushDurableState()
       .catch((error) => console.warn("Session memory flush failed during shutdown:", error?.message || error))
       .finally(async () => {
         try { await container.dispose?.(); } finally { app.quit(); }
@@ -70,4 +84,4 @@ function registerLifecycle({
   return true;
 }
 
-module.exports = { registerLifecycle };
+module.exports = { registerLifecycle, setAllowImmediateQuit };

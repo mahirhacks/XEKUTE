@@ -4390,8 +4390,9 @@ function handleUpdateEvent(payload = {}) {
   } else if (type === "none") {
     // Manual check only (auto-checks are silent): brief "up to date" toast.
     showTransientUpdateNotice("XEKUTE is up to date", "You're on the latest version.");
+  } else if (type === "error") {
+    showTransientUpdateNotice("Update failed", "XEKUTE could not download or install the update. Try again from Help → Check for Updates.");
   }
-  // "error" events are intentionally silent (Q8) — the next launch retries.
 }
 
 async function openAssessmentRepairDialog() {
