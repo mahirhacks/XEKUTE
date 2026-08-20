@@ -8,6 +8,7 @@ const AgentToolSurface = require("../src/agent/tools/config/tool-surface.js");
 const {
   MAX_AGENT_ROUNDS,
   buildEngagementPromptContext,
+  isReasonablyLargeAgentRequest,
   runAgentTurn,
   trimHistoryForContext,
   selectHistoryGroups,
@@ -23,6 +24,55 @@ const { createAssessmentWorkspace } = require("../src/domain/assessment/assessme
 
 test("agent tool surface is enabled by default in controller turns", () => {
   assert.equal(AgentToolSurface.toolsEnabled(), true);
+});
+
+test("the temporary task-list tool is exposed only for reasonably large Agent requests", async () => {
+  assert.equal(isReasonablyLargeAgentRequest("Fix the typo in README.md"), false);
+  assert.equal(isReasonablyLargeAgentRequest("Implement the following:\n- inspect the updater\n- fix notification state\n- verify packaging"), false);
+  assert.equal(isReasonablyLargeAgentRequest("Implement the following:\n- inspect the updater\n- fix notification state\n- update the tests\n- verify packaging"), true);
+  assert.equal(isReasonablyLargeAgentRequest("Inspect the code. Update the parser. Run the tests."), false);
+  assert.equal(isReasonablyLargeAgentRequest("Inspect the code. Update the parser. Add regression coverage. Run the tests."), true);
+  const seen = [];
+  const run = (userMessage) => runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage,
+    runModelRound: async ({ tools }) => {
+      seen.push(tools.map((tool) => tool.function.name));
+      return { fullText: "done", toolCalls: [] };
+    },
+  });
+  await run("Fix the typo in README.md");
+  await run("Implement the following:\n- inspect the updater\n- fix notification state\n- update the tests\n- verify packaging");
+  assert.equal(seen[0].includes("update_task_list"), false);
+  assert.equal(seen[1].includes("update_task_list"), true);
+  assert.equal(seen[0].includes("manage_plan"), false);
+  assert.equal(seen[1].includes("manage_plan"), false);
+});
+
+test("a large Agent task publishes checklist updates and removes the checklist on completion", async () => {
+  const events = [];
+  let round = 0;
+  const tasks = [
+    { id: "inspect", title: "Inspect current behavior", status: "in_progress" },
+    { id: "change", title: "Implement the change", status: "pending" },
+    { id: "cover", title: "Add regression coverage", status: "pending" },
+    { id: "verify", title: "Verify the result", status: "pending" },
+  ];
+  await runAgentTurn({
+    workspace: path.resolve("."),
+    mode: "agent",
+    userMessage: "Implement the following:\n- inspect current behavior\n- make the required change\n- add regression coverage\n- verify the result",
+    sendEvent: (event) => events.push(event),
+    runModelRound: async () => {
+      if (round++ === 0) return { fullText: "", toolCalls: [{ id: "tasks", type: "function", function: { name: "update_task_list", arguments: JSON.stringify({ tasks }) } }] };
+      return { fullText: "Done", toolCalls: [] };
+    },
+    executeToolCall: async () => ({ ok: true, value: { tasks, completed: false, currentIndex: 0, total: 4 } }),
+  });
+  assert.equal(events.some((event) => event.type === "task_brief"), false);
+  assert.equal(events.some((event) => event.type === "task_list" && event.tasks?.length === 4), true);
+  assert.equal(events.some((event) => event.type === "task_list" && event.clear === true), true);
 });
 
 test("nested plan-bound turns validate against the binding without closing the parent plan", async () => {
@@ -495,7 +545,7 @@ test("scope questions in an open project inject project settings and scope guida
   assert.match(prompt, /filesystem and network scope separately/i);
   assert.match(prompt, /UNTRUSTED CONTEXT DATA/);
   assert.ok(Array.isArray(roundPayload.tools) && roundPayload.tools.length > 0, "ask mode exposes its read-only tool set");
-  assert.ok(roundPayload.tools.every((tool) => ["read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"].includes(tool.function?.name)), "ask tools are read-only");
+  assert.ok(roundPayload.tools.every((tool) => ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"].includes(tool.function?.name)), "ask tools are read-only");
   assert.equal(result.contextRoute.includeProjectContext, true);
 });
 

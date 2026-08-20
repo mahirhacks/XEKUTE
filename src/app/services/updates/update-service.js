@@ -4,7 +4,7 @@
  * XEKUTE update service.
  *
  * Owns update *policy and mechanics* in the main process:
- *   - persistence of operator preferences (auto-check on launch, ignored version)
+ *   - persistence of operator preferences and durable deferred updates
  *   - the check → available → downloading → downloaded → quitAndInstall state machine
  *   - backend selection (real electron-updater vs. dev mock)
  *
@@ -48,9 +48,16 @@ function writeJsonAtomic(file, data) {
 function createUpdateSettingsStore({ file }) {
   function read() {
     const stored = readJsonFile(file);
+    const ignoredVersion = typeof stored.ignoredVersion === "string" ? stored.ignoredVersion : "";
     return {
       checkOnLaunch: stored.checkOnLaunch !== false,
-      ignoredVersion: typeof stored.ignoredVersion === "string" ? stored.ignoredVersion : "",
+      ignoredVersion,
+      // Backfill the durable notification from the legacy ignored-version
+      // field so users upgrading from <= 0.2.8 do not lose their reminder.
+      deferredVersion: typeof stored.deferredVersion === "string" ? stored.deferredVersion : ignoredVersion,
+      pendingInstalledVersion: typeof stored.pendingInstalledVersion === "string" ? stored.pendingInstalledVersion : "",
+      installedFromVersion: typeof stored.installedFromVersion === "string" ? stored.installedFromVersion : "",
+      lastNotifiedVersion: typeof stored.lastNotifiedVersion === "string" ? stored.lastNotifiedVersion : "",
     };
   }
   function write(patch = {}) {
@@ -100,7 +107,10 @@ function createElectronUpdaterBackend({ autoUpdater, feedUrl, provider = null, a
     emitter,
     check() {
       init();
-      autoUpdater.checkForUpdates();
+      const pending = autoUpdater.checkForUpdates();
+      // electron-updater also emits `error`; consume the rejection so a
+      // transient GitHub/network failure never becomes unhandled.
+      if (pending && typeof pending.catch === "function") pending.catch(() => {});
     },
     install() {
       init();
@@ -121,10 +131,25 @@ function createElectronUpdaterBackend({ autoUpdater, feedUrl, provider = null, a
 const createSquirrelBackend = createElectronUpdaterBackend;
 
 /**
+ * Unpackaged development builds never contact or install from the production
+ * release feed. The explicit mock backend remains available for end-to-end UI
+ * testing through XEKUTE_UPDATE_MOCK=1.
+ */
+function createDisabledUpdateBackend() {
+  const emitter = new EventEmitter();
+  return {
+    emitter,
+    check() { queueMicrotask(() => emitter.emit("disabled")); },
+    install() { throw new Error("Updates are disabled in development builds"); },
+    quitAndInstall() {},
+  };
+}
+
+/**
  * Dev/test backend: no network, no Squirrel. Simulates the same event
  * sequence so the full UI flow (popup → ignore → progress → relaunch)
  * can be exercised end-to-end before a release exists.
- * Enabled by XEKUTE_UPDATE_MOCK=1 or by running unpackaged.
+ * Enabled explicitly by XEKUTE_UPDATE_MOCK=1.
  */
 function createMockBackend({ app, loadedVersion, targetVersion, stepMs = 300 }) {
   const emitter = new EventEmitter();
@@ -170,6 +195,21 @@ function nextMinorVersion(version) {
   return `${major}.${minor}.0`;
 }
 
+function versionParts(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(String(version || "").replace(/^v/i, ""));
+  return match ? match.slice(1, 4).map(Number) : null;
+}
+
+function compareVersions(left, right) {
+  const a = versionParts(left);
+  const b = versionParts(right);
+  if (!a || !b) return String(left || "").localeCompare(String(right || ""), undefined, { numeric: true });
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+  }
+  return 0;
+}
+
 // ── Service ─────────────────────────────────────────────────────────────────
 
 /**
@@ -178,34 +218,152 @@ function nextMinorVersion(version) {
  * @param {object} deps.backend        backend from createSquirrelBackend / createMockBackend
  * @param {object} deps.settingsStore  store from createUpdateSettingsStore
  * @param {(payload: object) => void} deps.sendEvent  forwards update events to the renderer
+ * @param {boolean} deps.updatedLaunch true when NSIS relaunched with --updated
  */
-function createUpdateService({ app, backend, settingsStore, sendEvent, onInstallReady = null, log = console.debug }) {
+function createUpdateService({ app, backend, settingsStore, sendEvent, updatedLaunch = false, onInstallReady = null, log = console.debug }) {
   let checking = false;
+  let checkContext = { manual: false, reason: "launch" };
   let installing = false;
+  let installRequested = false;
+  let availableVersion = "";
   let downloadedVersion = "";
+  const currentVersion = String(app?.getVersion?.() || "");
 
   function emit(payload) {
     try { sendEvent?.(payload); } catch { /* renderer may be gone */ }
   }
 
-  backend.emitter.on("available", (info) => {
+  function completedPendingUpdate(settings = settingsStore.read()) {
+    return Boolean(
+      settings.pendingInstalledVersion
+      && currentVersion
+      && currentVersion !== settings.installedFromVersion
+      && compareVersions(currentVersion, settings.pendingInstalledVersion) >= 0
+    );
+  }
+
+  function clearCompletedOrObsoleteState(settings = settingsStore.read(), { preservePending = false } = {}) {
+    const patch = {};
+    if (settings.deferredVersion && currentVersion && compareVersions(currentVersion, settings.deferredVersion) >= 0) {
+      patch.ignoredVersion = "";
+      patch.deferredVersion = "";
+    }
+    if (!preservePending && completedPendingUpdate(settings)) {
+      patch.pendingInstalledVersion = "";
+      patch.installedFromVersion = "";
+    }
+    return Object.keys(patch).length ? settingsStore.write(patch) : settings;
+  }
+
+  function resetCheck() {
+    const context = checkContext;
     checking = false;
-    const settings = settingsStore.read();
-    emit({ type: "available", version: info.version, mock: Boolean(info.mock) });
+    checkContext = { manual: false, reason: "launch" };
+    return context;
+  }
+
+  function startDownload() {
+    if (installing) return { ok: true, skipped: true };
+    if (!availableVersion) return { ok: false, queued: true };
+    installing = true;
+    installRequested = false;
+    settingsStore.write({
+      pendingInstalledVersion: availableVersion,
+      installedFromVersion: currentVersion,
+    });
+    emit({ type: "downloading", version: availableVersion });
+    try {
+      const pending = backend.install();
+      if (pending && typeof pending.then === "function") {
+        pending.catch((error) => {
+          installing = false;
+          const message = error?.message || "Update download failed";
+          log(`[updates] install rejected: ${message}`);
+          emit({ type: "error", message, version: availableVersion, phase: "download" });
+        });
+      }
+      return { ok: true };
+    } catch (error) {
+      installing = false;
+      const message = error?.message || "Update install failed";
+      log(`[updates] install threw: ${message}`);
+      emit({ type: "error", message, version: availableVersion, phase: "download" });
+      return { ok: false, error: message };
+    }
+  }
+
+  // NSIS always relaunches an upgraded app with --updated. This covers the
+  // first transition from legacy builds that could not persist pending state.
+  const initialSettings = clearCompletedOrObsoleteState(settingsStore.read(), { preservePending: true });
+  if (updatedLaunch && currentVersion && initialSettings.lastNotifiedVersion !== currentVersion && !completedPendingUpdate(initialSettings)) {
+    settingsStore.write({
+      pendingInstalledVersion: currentVersion,
+      installedFromVersion: "__nsis_updated_launch__",
+    });
+  }
+
+  backend.emitter.on("available", (info) => {
+    const context = resetCheck();
+    availableVersion = String(info.version || "");
+    let settings = settingsStore.read();
+    const installedPreviousUpdate = completedPendingUpdate(settings);
+    const ignored = Boolean(availableVersion && availableVersion === settings.ignoredVersion);
+
+    const patch = {};
+    if (installedPreviousUpdate) {
+      patch.pendingInstalledVersion = "";
+      patch.installedFromVersion = "";
+      patch.lastNotifiedVersion = currentVersion;
+    }
+    // A newer release supersedes the old ignored reminder. This is what lets
+    // somebody skip several versions but still receive the newest update.
+    if (settings.ignoredVersion && availableVersion !== settings.ignoredVersion) {
+      patch.ignoredVersion = "";
+      patch.deferredVersion = "";
+    }
+    if (Object.keys(patch).length) settings = settingsStore.write(patch);
+
+    emit({ type: "available", version: availableVersion, mock: Boolean(info.mock), manual: context.manual, ignored });
+    if (installRequested) startDownload();
   });
 
   backend.emitter.on("none", () => {
-    checking = false;
-    emit({ type: "none" });
+    const context = resetCheck();
+    const settings = settingsStore.read();
+    const updated = completedPendingUpdate(settings) && settings.lastNotifiedVersion !== currentVersion;
+    installRequested = false;
+    availableVersion = "";
+    if (updated) {
+      settingsStore.write({
+        ignoredVersion: "",
+        deferredVersion: "",
+        pendingInstalledVersion: "",
+        installedFromVersion: "",
+        lastNotifiedVersion: currentVersion,
+      });
+      emit({ type: "updated", version: currentVersion, manual: context.manual });
+      return;
+    }
+    clearCompletedOrObsoleteState(settings);
+    emit({ type: "none", version: currentVersion, manual: context.manual, reason: context.reason });
+  });
+
+  backend.emitter.on("disabled", () => {
+    const context = resetCheck();
+    installRequested = false;
+    emit({ type: "disabled", manual: context.manual, reason: context.reason });
   });
 
   backend.emitter.on("error", (info) => {
-    checking = false;
-    // Fail silently (Q8): the renderer shows nothing; the next launch retries.
+    const context = resetCheck();
+    installRequested = false;
+    // Automatic check failures stay quiet; manual/download failures are
+    // surfaced by the renderer and every later launch retries normally.
     log(`[updates] check failed: ${info.message}`);
-    emit({ type: "error", message: info.message });
+    emit({ type: "error", message: info.message, manual: context.manual, reason: context.reason });
   });
 
+  /* c8 ignore start -- event wiring is exercised through the public service */
   backend.emitter.on("progress", (info) => {
     emit({
       type: "progress",
@@ -217,58 +375,52 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, onInstall
 
   backend.emitter.on("downloaded", (info) => {
     downloadedVersion = info.version;
+    settingsStore.write({ ignoredVersion: "", deferredVersion: "" });
     emit({ type: "downloaded", version: info.version });
     try { onInstallReady?.(); } catch { /* never block install */ }
-    // Close the app and reopen on the new build (Q4). Give the renderer
-    // a beat to paint the "Installing…" state before the process exits.
+    // Close the app and reopen on the new build. Give the renderer a beat to
+    // paint the "Installing…" state before the process exits.
     setTimeout(() => backend.quitAndInstall(), 600);
   });
+  /* c8 ignore stop */
+
+  function beginCheck({ manual = false, reason = "launch", force = false } = {}) {
+    if (checking) return { ok: true, skipped: true };
+    if (!force && !manual && !settingsStore.read().checkOnLaunch) {
+      log("[updates] auto-check disabled; skipping");
+      return { ok: true, skipped: true };
+    }
+    checking = true;
+    checkContext = { manual: Boolean(manual), reason: String(reason || "launch") };
+    emit({ type: "checking", manual: Boolean(manual), reason: checkContext.reason });
+    try {
+      backend.check();
+    } catch (error) {
+      const context = resetCheck();
+      log(`[updates] check threw: ${error?.message || error}`);
+      emit({ type: "error", message: error?.message || "Update check failed", manual: context.manual, reason: context.reason });
+      return { ok: false, error: error?.message || "Update check failed" };
+    }
+    return { ok: true };
+  }
 
   return {
     /** @param {{manual?: boolean}} [options] */
     check(options = {}) {
-      const manual = Boolean(options.manual);
-      if (checking) return { ok: true, skipped: true };
-      if (!manual && !settingsStore.read().checkOnLaunch) {
-        log("[updates] auto-check disabled; skipping");
-        return { ok: true, skipped: true };
-      }
-      checking = true;
-      emit({ type: "checking" });
-      try {
-        backend.check();
-      } catch (error) {
-        log(`[updates] check threw: ${error?.message || error}`);
-        emit({ type: "error", message: error?.message || "Update check failed" });
-        return { ok: false, error: error?.message || "Update check failed" };
-      }
-      return { ok: true };
+      return beginCheck({ manual: Boolean(options.manual), reason: options.manual ? "manual" : "launch" });
     },
 
     install() {
       if (installing) return { ok: true, skipped: true };
-      installing = true;
-      try {
-        const pending = backend.install();
-        if (pending && typeof pending.then === "function") {
-          pending.catch((error) => {
-            installing = false;
-            const message = error?.message || "Update download failed";
-            log(`[updates] install rejected: ${message}`);
-            emit({ type: "error", message });
-          });
-        }
-        return { ok: true };
-      } catch (error) {
-        installing = false;
-        log(`[updates] install threw: ${error?.message || error}`);
-        emit({ type: "error", message: error?.message || "Update install failed" });
-        return { ok: false, error: error?.message || "Update install failed" };
-      }
+      installRequested = true;
+      if (availableVersion) return startDownload();
+      if (checking) return { ok: true, queued: true };
+      return beginCheck({ manual: false, reason: "install", force: true });
     },
 
     ignore(version) {
-      settingsStore.write({ ignoredVersion: String(version || "") });
+      const normalized = String(version || availableVersion || "");
+      settingsStore.write({ ignoredVersion: normalized, deferredVersion: normalized });
     },
 
     setSettings(patch = {}) {
@@ -280,6 +432,7 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, onInstall
 
     getSettings: () => settingsStore.read(),
     isChecking: () => checking,
+    availableVersion: () => availableVersion,
     downloadedVersion: () => downloadedVersion,
   };
 }
@@ -288,8 +441,10 @@ module.exports = {
   createUpdateService,
   createUpdateSettingsStore,
   createElectronUpdaterBackend,
+  createDisabledUpdateBackend,
   createSquirrelBackend,
   createMockBackend,
   nextMinorVersion,
+  compareVersions,
   DEFAULT_CHECK_ON_LAUNCH,
 };

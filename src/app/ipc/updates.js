@@ -28,7 +28,8 @@ function registerUpdateIpc(ipcMain, { service }) {
   // User clicked Install (toast or notification action).
   ipcMain.handle("updates:install", () => service.install());
 
-  // User clicked Ignore — suppress that version permanently on this machine.
+  // User clicked Ignore — suppress that version's popup while preserving a
+  // notification-center action until it is installed or superseded.
   ipcMain.handle("updates:ignore", (_event, payload = {}) => {
     service.ignore(payload?.version);
     return { ok: true };

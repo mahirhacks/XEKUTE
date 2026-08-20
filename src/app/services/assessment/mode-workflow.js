@@ -3,9 +3,10 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { parsePlanMarkdown, planMarkdownPath, renderPlanMarkdown } = require("../../../shared/plan-markdown.js");
 
 const EXECUTABLE_TOOLS = new Set([
-  "exec_command", "read_file", "search_workspace", "apply_patch", "inspect_environment",
+  "exec_command", "update_task_list", "read_file", "search_workspace", "apply_patch", "inspect_environment",
   "manage_plan", "manage_state", "ingest_traffic", "manage_identity", "replay_request",
   "run_test_case", "browser_action", "compare_responses", "verify_finding", "store_finding",
   "attack_graph", "delegate_agent", "web_research",
@@ -181,6 +182,12 @@ function createAssessmentModeWorkflow() {
     fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     fs.renameSync(temporary, file);
   }
+  function atomicWriteText(file, value) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temporary = `${file}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(temporary, String(value || ""), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporary, file);
+  }
   function defaultState() {
     return {
       schemaVersion: 1,
@@ -206,7 +213,19 @@ function createAssessmentModeWorkflow() {
     saveState(workspace, { [key]: number + 1 });
     return `${kind}_${number}`;
   }
-  function artifactPath(workspace, kind, id) { return path.join(root(workspace), ".xekute", kind, `${id}.json`); }
+  function artifactPath(workspace, kind, id) {
+    return kind === "plan"
+      ? planMarkdownPath(root(workspace), id)
+      : path.join(root(workspace), ".xekute", kind, `${id}.json`);
+  }
+  function legacyPlanPath(workspace, id) { return path.join(root(workspace), ".xekute", "plan", `${id}.json`); }
+  function writePlanRecord(workspace, record) {
+    const target = artifactPath(workspace, "plan", record.id);
+    atomicWriteText(target, renderPlanMarkdown(record));
+    const legacy = legacyPlanPath(workspace, record.id);
+    if (fs.existsSync(legacy)) fs.rmSync(legacy, { force: true });
+    return target;
+  }
 
   function saveHypothesis(workspace, input = {}) {
     const state = loadState(workspace);
@@ -296,7 +315,7 @@ function createAssessmentModeWorkflow() {
   function savePlan(workspace, input = {}) {
     const state = loadState(workspace);
     const id = text(input.id || "", 120) || nextArtifact(workspace, "plan");
-    const existing = readJson(artifactPath(workspace, "plan", id), {});
+    const existing = readPlan(workspace, id) || {};
     const executionFields = {
       linkedHypothesis: text(input.linkedHypothesis || input.hypothesisId || existing.linkedHypothesis || state.activeHypothesis, 120),
       objective: text(input.objective || existing.objective || input.title || "", 12_000),
@@ -318,6 +337,7 @@ function createAssessmentModeWorkflow() {
       schemaVersion: 1,
       id,
       sequence: Number(id.match(/_(\d+)$/)?.[1] || existing.sequence || 0),
+      title: text(input.title || existing.title || input.objective || existing.objective || "Implementation plan", 500),
       ...executionFields,
       expectedSignals: Array.isArray(input.expectedSignals) ? input.expectedSignals.map((value) => text(value, 1_000)) : (existing.expectedSignals || []),
       rejectingSignals: Array.isArray(input.rejectingSignals) ? input.rejectingSignals.map((value) => text(value, 1_000)) : (existing.rejectingSignals || []),
@@ -327,7 +347,7 @@ function createAssessmentModeWorkflow() {
       createdAt: existing.createdAt || now(),
       updatedAt: now(),
     };
-    atomicWrite(artifactPath(workspace, "plan", id), record);
+    writePlanRecord(workspace, record);
     saveState(workspace, { nextPlan: Math.max(Number(loadState(workspace).nextPlan) || 1, record.sequence + 1), activePlan: id, pendingRecommendation: { targetMode: "agent", reason: "Plan is ready" } });
     return { ok: true, plan: record, path: artifactPath(workspace, "plan", id) };
   }
@@ -335,11 +355,25 @@ function createAssessmentModeWorkflow() {
   function readPlan(workspace, id = "") {
     const state = loadState(workspace);
     const target = id || state.activePlan;
-    return target ? readJson(artifactPath(workspace, "plan", target), null) : null;
+    if (!target) return null;
+    const markdownPath = artifactPath(workspace, "plan", target);
+    try {
+      const parsed = parsePlanMarkdown(fs.readFileSync(markdownPath, "utf8"));
+      return parsed?.id ? { schemaVersion: 1, ...parsed } : null;
+    } catch {
+      const legacyPath = legacyPlanPath(workspace, target);
+      const legacy = readJson(legacyPath, null);
+      if (!legacy?.id) return null;
+      // Migrate the old machine-only JSON plan the first time it is opened.
+      // The Markdown write completes before the exact legacy file is removed.
+      writePlanRecord(workspace, legacy);
+      return legacy;
+    }
   }
 
   function parseStructuredText(value) {
     const source = String(value || "").trim();
+    if (/^#\s+Implementation Plan:/im.test(source) && /^##\s+Tasks\s*$/im.test(source)) return parsePlanMarkdown(source);
     const fenced = source.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
     const candidate = fenced ? fenced[1] : source;
     try {
@@ -370,10 +404,12 @@ function createAssessmentModeWorkflow() {
     }
     if (currentMode === "plan") {
       const tasks = Array.isArray(structured.tasks) ? structured.tasks : [];
+      if (!tasks.length) return { ok: false, artifact: null, error: "The plan response did not contain executable tasks." };
       return savePlan(workspace, {
         id: newArtifact ? "" : state.activePlan || "",
         linkedHypothesis: structured.linkedHypothesis || structured.hypothesisId || state.activeHypothesis,
         objective: structured.objective || structured.title || finalText,
+        title: structured.title || structured.objective || "Implementation plan",
         tasks,
         allowedTools: structured.allowedTools || [],
         requiredEvidence: [...(structured.requiredEvidence || structured.evidenceRefs || []), ...evidenceIds],
@@ -394,7 +430,7 @@ function createAssessmentModeWorkflow() {
     if (plan.status === "executing") return { ok: false, error: "An executing plan cannot be approved again.", code: "PLAN_ALREADY_EXECUTING" };
     const approval = { status: "approved", contentHash: plan.executionHash || hash(plan), approvedAt: now(), approvedBy: text(approver, 200) || "local-user" };
     const updated = { ...plan, status: "approved", approval, updatedAt: now() };
-    atomicWrite(artifactPath(workspace, "plan", plan.id), updated);
+    writePlanRecord(workspace, updated);
     saveState(workspace, { activePlan: plan.id, pendingRecommendation: { targetMode: "agent", reason: "Plan approved" } });
     return { ok: true, plan: updated };
   }
@@ -411,7 +447,7 @@ function createAssessmentModeWorkflow() {
       : [];
     const binding = { planId: plan.id, contentHash: plan.executionHash, runId: text(runId, 200), producedEvidenceIds, createdAt: existingBinding?.createdAt || now() };
     const executing = { ...plan, status: "executing", updatedAt: now() };
-    atomicWrite(artifactPath(workspace, "plan", plan.id), executing);
+    writePlanRecord(workspace, executing);
     saveState(workspace, { activePlan: plan.id, planBinding: binding, pendingRecommendation: null });
     return { ok: true, binding, plan: executing };
   }
@@ -439,7 +475,7 @@ function createAssessmentModeWorkflow() {
       }].slice(-500),
       updatedAt: now(),
     };
-    atomicWrite(artifactPath(workspace, "plan", plan.id), updated);
+    writePlanRecord(workspace, updated);
     const state = loadState(workspace);
     if (state.planBinding?.runId === binding?.runId) saveState(workspace, { planBinding: null, pendingRecommendation: null });
     return { ok: true, plan: updated };
@@ -474,8 +510,49 @@ function createAssessmentModeWorkflow() {
       executionHistory: [...history, { actionId: text(actionId, 200), toolName: text(toolName, 120), stepId: text(current.id, 120), ok: actionSucceeded, outcome: toolName === "run_test_case" ? text(result?.value?.outcome || "", 40) : "", evidenceIds: result?.evidenceIds || [], recordedAt: now() }].slice(-500),
       updatedAt: now(),
     };
-    atomicWrite(artifactPath(workspace, "plan", plan.id), updated);
+    writePlanRecord(workspace, updated);
     return { ok: true, plan: updated, stepId: current.id };
+  }
+
+  function updatePlanTaskStatuses(workspace, binding, requestedTasks = []) {
+    const plan = readPlan(workspace, binding?.planId);
+    if (!plan || plan.executionHash !== binding?.contentHash || hash(executionProjection(plan)) !== binding.contentHash) return { ok: false, code: "PLAN_CHANGED", error: "The approved plan changed." };
+    const currentTasks = Array.isArray(plan.tasks) ? plan.tasks : [];
+    const requested = Array.isArray(requestedTasks) ? requestedTasks : [];
+    if (requested.length !== currentTasks.length) return { ok: false, code: "PLAN_TASK_LIST_CHANGED", error: "The approved task list cannot be replaced during execution." };
+    for (let index = 0; index < currentTasks.length; index += 1) {
+      if (String(requested[index]?.id || "") !== currentTasks[index].id || String(requested[index]?.title || "") !== currentTasks[index].title) {
+        return { ok: false, code: "PLAN_TASK_LIST_CHANGED", error: "Task IDs, order, and titles must match the approved plan." };
+      }
+    }
+    const statuses = requested.map((task) => String(task.status || "pending").toLowerCase());
+    if (statuses.some((status) => !["pending", "in_progress", "completed", "blocked"].includes(status))) return { ok: false, code: "PLAN_TASK_STATUS_INVALID", error: "A plan task status is invalid." };
+    const active = statuses.filter((status) => status === "in_progress" || status === "blocked").length;
+    if (active > 1) return { ok: false, code: "PLAN_TASK_SEQUENCE_INVALID", error: "Only one approved task may be active at a time." };
+    let incompleteSeen = false;
+    let pendingSeen = false;
+    for (let index = 0; index < statuses.length; index += 1) {
+      const previous = String(currentTasks[index].status || "pending").toLowerCase();
+      const next = statuses[index];
+      if (previous === "completed" && next !== "completed") return { ok: false, code: "PLAN_TASK_SEQUENCE_INVALID", error: "A completed approved task cannot be reopened during the same execution." };
+      if (incompleteSeen && next === "completed") return { ok: false, code: "PLAN_TASK_SEQUENCE_INVALID", error: "Approved tasks must complete sequentially." };
+      if (pendingSeen && (next === "in_progress" || next === "blocked")) return { ok: false, code: "PLAN_TASK_SEQUENCE_INVALID", error: "The active approved task must appear before pending tasks." };
+      if (next !== "completed") incompleteSeen = true;
+      if (next === "pending") pendingSeen = true;
+    }
+    const updatedAt = now();
+    const updated = {
+      ...plan,
+      tasks: currentTasks.map((task, index) => ({
+        ...task,
+        status: statuses[index],
+        ...(statuses[index] === "in_progress" ? { startedAt: task.startedAt || updatedAt } : {}),
+        ...(statuses[index] === "completed" ? { startedAt: task.startedAt || updatedAt, completedAt: task.completedAt || updatedAt } : {}),
+      })),
+      updatedAt,
+    };
+    writePlanRecord(workspace, updated);
+    return { ok: true, plan: updated };
   }
 
   function allowedEvidence(workspace, binding, intelligence = null) {
@@ -644,7 +721,11 @@ function createAssessmentModeWorkflow() {
     const approval = /^(?:yes[, ]*)?(?:approve|approved|i approve|approve the plan|approve plan)\b/i.test(value);
     const hypothesisIntent = /\b(?:hypothesis|hypotheses|correlate the findings|analy[sz]e (?:the )?(?:current )?(?:findings|evidence)|enough info(?:rmation)?|start with some assessment|what might be wrong)\b/i.test(value);
     const planIntent = /\b(?:plan|planning|assessment procedure|testing procedure|how should we test|steps to validate)\b/i.test(value);
-    const executeIntent = /\b(?:execute|run the plan|start the assessment|perform the assessment|carry out the plan|test it|begin testing)\b/i.test(value);
+    // Only bind or block on an explicit request to execute a plan/assessment.
+    // Generic command wording (including negated phrases such as "no need to
+    // execute a command") must remain ordinary Agent work even when a stale
+    // unapproved plan exists in the workspace.
+    const executeIntent = /\b(?:(?:execute|run|start|perform|begin)\s+(?:(?:the|a|an|this|that|approved|saved|current)\s+)*(?:plan|assessment)|carry\s+out\s+(?:(?:the|a|an|this|that|approved|saved|current)\s+)*(?:plan|assessment)|test\s+(?:(?:the|this|that|approved|saved|current)\s+)*(?:plan|assessment))\b/i.test(value);
     const refineIntent = /\b(?:refine|revise|explain|clarify|expand|why)\b/i.test(value);
     const revisionIntent = /\b(?:refine|revise|change|update|edit)\b/i.test(value);
     const explanationIntent = /\b(?:explain|clarify|why)\b/i.test(value);
@@ -679,7 +760,7 @@ function createAssessmentModeWorkflow() {
     return packet;
   }
 
-  return Object.freeze({ loadState, saveState, classify, saveHypothesis, readHypothesis, savePlan, readPlan, completeTurn, approvePlan, bindPlan, finishPlanRun, recordProducedEvidence, recordPlanAction, validateAction, contextPacket, artifactPath });
+  return Object.freeze({ loadState, saveState, classify, saveHypothesis, readHypothesis, savePlan, readPlan, completeTurn, approvePlan, bindPlan, finishPlanRun, recordProducedEvidence, recordPlanAction, updatePlanTaskStatuses, validateAction, contextPacket, artifactPath });
 }
 
 module.exports = { createAssessmentModeWorkflow, EXECUTABLE_TOOLS, INTELLIGENCE_TOOLS, KNOWLEDGE_TOOLS };

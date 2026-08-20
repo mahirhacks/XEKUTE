@@ -152,7 +152,7 @@
             </button>
           </div>
         </div>
-        <div id="file-tree"></div>
+        <div id="file-tree" role="tree" aria-multiselectable="true"></div>
       </div>
 
       <div id="bugbounty-sidebar-view" class="sidebar-view bugbounty-sidebar-view ide-internal" hidden aria-hidden="true">
@@ -1184,6 +1184,7 @@
 
       <div id="input-bar">
         <div id="composer-questions" class="composer-questions" hidden aria-live="polite"></div>
+        <div id="composer-task-list" class="composer-task-list" hidden aria-live="polite"></div>
         <div class="composer">
           <div id="slash-command-suggestions" class="slash-command-suggestions" role="listbox" aria-label="Available slash commands" hidden></div>
           <div class="composer-input-row">
@@ -1274,7 +1275,7 @@
       <span class="codicon codicon-edit"></span><span>Rename</span>
     </button>
     <button type="button" data-workspace-context-action="delete" role="menuitem">
-      <span class="codicon codicon-remove"></span><span>Delete</span>
+      <span class="codicon codicon-remove"></span><span id="workspace-context-delete-label">Delete</span>
     </button>
   </div>
 

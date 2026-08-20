@@ -280,8 +280,12 @@ function createSessionMemoryStore({
         const question = {
           prompt: text(rawQuestion.prompt || rawQuestion.question || "", "", 4_000),
           options: normalizeOptions(rawQuestion.options),
+          multiple: Boolean(rawQuestion.multiple),
           ...(rawQuestion.answer !== undefined ? { answer: text(rawQuestion.answer, "", 8_000) } : {}),
           ...(rawQuestion.selected_option_id ? { selected_option_id: text(rawQuestion.selected_option_id, "", 200) } : {}),
+          ...(Array.isArray(rawQuestion.selected_option_ids)
+            ? { selected_option_ids: rawQuestion.selected_option_ids.map((optionId) => text(optionId, "", 200).trim()).filter(Boolean) }
+            : {}),
           ...(rawQuestion.free_text !== undefined ? { free_text: text(rawQuestion.free_text, "", 8_000) } : {}),
           ...(rawQuestion.request_id ? { request_id: text(rawQuestion.request_id, "", 240) } : {}),
           ...(rawQuestion.reason ? { reason: text(rawQuestion.reason, "", 4_000) } : {}),
@@ -544,6 +548,7 @@ function createSessionMemoryStore({
         ...previous,
         prompt: text(rawQuestion.prompt || rawQuestion.question || previous.prompt || "", "", 4_000),
         options: normalizeOptions(rawQuestion.options || previous.options),
+        multiple: Boolean(rawQuestion.multiple),
         ...(requestId ? { request_id: text(requestId, "", 240) } : {}),
         ...(reason ? { reason: text(reason, "", 4_000) } : {}),
       };
@@ -574,11 +579,20 @@ function createSessionMemoryStore({
       if (!questionId || !block.questions_id[questionId]) continue;
       const question = block.questions_id[questionId];
       const selectedOptionId = text(rawAnswer.selectedOptionId || rawAnswer.selected_option_id || rawAnswer.optionId || "", "", 200).trim();
+      const selectedOptionIds = (Array.isArray(rawAnswer.selectedOptionIds)
+        ? rawAnswer.selectedOptionIds
+        : Array.isArray(rawAnswer.selected_option_ids)
+          ? rawAnswer.selected_option_ids
+          : [])
+        .map((optionId) => text(optionId, "", 200).trim())
+        .filter(Boolean);
       const answerText = text(rawAnswer.answer || "", "", 8_000).trim();
       const freeText = text(rawAnswer.freeText || rawAnswer.free_text || "", "", 8_000).trim();
       const selected = question.options.find((option) => option.id === selectedOptionId || option.label === answerText);
-      question.answer = freeText || selected?.label || answerText || selectedOptionId;
+      const selectedLabels = selectedOptionIds.map((optionId) => question.options.find((option) => option.id === optionId)?.label || optionId);
+      question.answer = freeText || selectedLabels.join(", ") || selected?.label || answerText || selectedOptionId;
       question.selected_option_id = selectedOptionId || selected?.id || "";
+      question.selected_option_ids = selectedOptionIds;
       question.free_text = freeText;
       question.status = status;
       question.answered_at = timestamp();

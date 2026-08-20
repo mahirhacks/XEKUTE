@@ -63,6 +63,8 @@ WebClone is a review aid, not a guaranteed offline reproduction. Applications th
 - Opt into **Test** mode for policy-controlled active testing within an authorized assessment.
 - Route a compact tool set by profile: read-only context for Ask and Hypothesis, workspace operations for Safe Agent, and typed security adapters only for Testing Agent.
 - Configure authority for file access, commands, processes, terminal use, network requests, proxy actions, traffic capture, Map operations, reconnaissance, scanning, and exploit validation.
+- In **Ask for Approval**, review the exact command before it runs; long commands collapse to two lines and expand on click, and Approve/Deny acts immediately.
+- Let the agent request structured operator input through recommended-first single- or multi-select question cards instead of burying choices in chat text.
 - Review agent runs, actions, approvals, hypotheses, and tool output.
 - Keep chat sessions per workspace until they are explicitly deleted.
 
@@ -89,7 +91,7 @@ For normal use, **download and run the installer from the XEKUTE website**:
 
 No Node.js, npm, or Git setup is required. The installer does not bundle AI models or third-party security tools.
 
-Once installed, XEKUTE checks GitHub for updates on every launch: a notification offers **Install** (downloads, closes, updates, and reopens the app) or **Ignore** (the update moves to the notification center). The setup wizard also supports a custom install directory, shortcut choices, progress/error details, launch-on-finish, and `uninstall.exe`. See [INSTALL.md](INSTALL.md) for details.
+Once installed, XEKUTE checks GitHub for updates on every launch: a notification offers **Install** (downloads, closes, updates, and reopens the app) or **Ignore** (the update remains installable from the notification center). After an update, XEKUTE confirms the new version once and keeps later up-to-date launch checks silent. Users can update directly to the newest release even after skipping several versions. The setup wizard also supports a custom install directory, shortcut choices, progress/error details, launch-on-finish, and `uninstall.exe`. See [INSTALL.md](INSTALL.md) for details.
 
 For the full first-run guide, checksum verification, optional Ollama/OpenRouter setup, updates, and removal, see [INSTALL.md](INSTALL.md).
 

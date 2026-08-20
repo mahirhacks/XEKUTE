@@ -5,12 +5,17 @@ const path = require("node:path");
 
 const read = (relativePath) => fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
 
-test("workspace tasks emit a runtime-grounded plan before model work", () => {
+test("only reasonably large Agent tasks receive the temporary checklist surface", () => {
   const controller = read("src/agent/controller/agent-controller.js");
-  assert.match(controller, /function buildTaskBrief\(/);
-  assert.match(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
-  assert.match(controller, /id: "inspect"/);
-  assert.match(controller, /id: "report"/);
+  const modes = read("src/agent/modes/mode-registry.js");
+  assert.match(controller, /function isReasonablyLargeAgentRequest\(/);
+  assert.match(controller, /profile\.key === "agent"[\s\S]*?!== "manage_plan"/);
+  assert.match(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
+  assert.match(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
+  assert.match(controller, /sendEvent\(\{ type: "task_list"/);
+  assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
+  assert.match(modes, /plan: Object\.freeze\(\[[\s\S]*?"manage_plan"/);
+  assert.doesNotMatch(modes.match(/agent: Object\.freeze\(\[[\s\S]*?\]\),/)?.[0] || "", /"manage_plan"/);
 });
 
 test("chat keeps runtime plans internal and renders a compact activity feed", () => {
@@ -30,7 +35,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /return "Edited"/);
   assert.match(renderer, /data-guidance-delete-path/);
   assert.match(renderer, /deleteGuidanceEntry\(button\.dataset\.guidanceDeletePath/);
-  assert.match(controller, /Report the result/);
+  assert.match(controller, /isReasonablyLargeAgentRequest/);
   assert.match(renderer, /const filePath = String\(result\.path/);
   assert.match(renderer, /chatSessionSelect\?\.addEventListener\("wheel"/);
   assert.match(renderer, /chatSessionSelect\.scrollLeft - event\.deltaY/);

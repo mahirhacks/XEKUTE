@@ -85,6 +85,36 @@ function registerExecCommand(toolRegistry, adapter) {
   });
 }
 
+function registerAskQuestions(toolRegistry, adapter) {
+  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
+  return toolRegistry.register({
+    name: "ask_questions",
+    adapter,
+    inputSchema: adapter.inputSchema,
+    metadata: {
+      targetTypes: ["operator", "interaction"],
+      mutating: false,
+      reversible: true,
+      interactive: true,
+    },
+  });
+}
+
+function registerUpdateTaskList(toolRegistry, adapter) {
+  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
+  return toolRegistry.register({
+    name: "update_task_list",
+    adapter,
+    inputSchema: adapter.inputSchema,
+    description: adapter.description,
+    metadata: {
+      targetTypes: ["runtime", "task-list"],
+      mutating: false,
+      reversible: true,
+    },
+  });
+}
+
 function registerReadFile(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
@@ -340,6 +370,8 @@ module.exports = {
   createToolRegistry,
   toOpenAITool,
   toOpenAITools,
+  registerAskQuestions,
+  registerUpdateTaskList,
   registerExecCommand,
   registerReadFile,
   registerSearchWorkspace,

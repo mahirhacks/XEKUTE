@@ -16,8 +16,8 @@ function actionRetry({ targetFile = "", userMessage = "" } = {}) {
 function postToolSummary({ mode = "agent", lastVerification = null } = {}) {
   if (mode === "plan") {
     return [
-      "The plan file was saved. Do not call tools.",
-      "Reply with a brief chat summary only: file path, hypothesis count, top priorities, blocked items, and next step.",
+      "The Markdown plan was saved. Do not call tools.",
+      "Reply with a brief confirmation only: file path, ready-for-review status, and that approval enables sequential execution.",
       "Do not paste the full plan body into chat.",
     ].join(" ");
   }
@@ -33,9 +33,9 @@ function postToolSummary({ mode = "agent", lastVerification = null } = {}) {
 
 function planGrounding(userMessage = "") {
   return [
-    "Hypothesis mode — create or update the full plan with native plan-file tools, not in chat.",
+    "Plan mode — create or update the structured Markdown plan with manage_plan, not in chat.",
     "Use the exact path and create/update operation in the PLAN DOCUMENT CONTRACT; never modify a non-plan file.",
-    "Walk the full loop for each hypothesis. Map work to OWASP WSTG and Top 10:2025.",
+    "Use a clear Overview followed by concrete, ordered Markdown checkbox Tasks that can be executed sequentially.",
     `Original user request: ${userMessage}`,
   ].join(" ");
 }

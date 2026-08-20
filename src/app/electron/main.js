@@ -102,7 +102,7 @@ function displayExecCommand(executable, args = []) {
   return [quote(executable), ...(Array.isArray(args) ? args.map(quote) : [])].join(" ").trim();
 }
 
-async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", mode = "agent", terminalHost = null, planBinding = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, durableRunId = "", delegationProvider = null }) {
+async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", mode = "agent", terminalHost = null, planBinding = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", delegationProvider = null }) {
   const name = toolCall?.function?.name || toolCall?.toolName || "";
   const args = toolCall?.function?.arguments || {};
   const entry = container?.toolRegistry?.get(name);
@@ -111,7 +111,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
   if (!entry && !dynamicEntry) {
     return { ok: false, error: `Unknown tool '${name}'`, code: "UNKNOWN_TOOL", retryable: false };
   }
-  if (planBinding && container?.modeWorkflow?.validateAction) {
+  if (!["ask_questions", "update_task_list"].includes(name) && planBinding && container?.modeWorkflow?.validateAction) {
     const planDecision = container.modeWorkflow.validateAction(
       workspace,
       planBinding,
@@ -239,9 +239,11 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
         onProgress: monitorRuntime.progress,
         onHeartbeat: monitorRuntime.heartbeat,
       })
-        : await entry.adapter.execute(args, rawContext, name === "delegate_agent" && typeof delegationProvider === "function"
-          ? { ...monitorRuntime, delegationProvider }
-          : monitorRuntime);
+        : await entry.adapter.execute(args, rawContext, {
+          ...monitorRuntime,
+          ...(name === "delegate_agent" && typeof delegationProvider === "function" ? { delegationProvider } : {}),
+          ...(name === "ask_questions" && typeof questionProvider === "function" ? { questionProvider } : {}),
+        });
       }
     }
     if (name === "browser_action" && !result?.ok && result?.error?.code === "BROWSER_ACTION_STOPPED") {
@@ -2648,19 +2650,28 @@ function requestOperatorQuestions(sender, proposal) {
   });
 }
 
+const { formatCommandForApproval } = require("../services/approval/command-approval.js");
+
 async function requestToolApproval(sender, proposal = {}) {
   const requestId = `approval-${String(proposal.invocationId || Date.now())}`;
+  if (proposal.toolName !== "exec_command") {
+    return { id: requestId, approved: false, reason: "Interactive approval is available only for exec_command." };
+  }
   const response = await requestOperatorQuestions(sender, {
     requestId,
     sessionId: String(proposal.sessionId || ""),
     reason: `${proposal.toolName || "Tool"} requires approval under ${String(proposal.profile || "the selected authority profile").replace(/_/g, " ")}. Risk: ${proposal.risk?.level || "unknown"}.`,
     topic: "tool-approval",
     expiresInMs: 0,
+    approval: {
+      kind: "command",
+      command: formatCommandForApproval(proposal.args),
+    },
     questions: [{
       id: "approval",
-      prompt: `Allow ${proposal.toolName || "this tool"} to execute with the displayed arguments?`,
+      prompt: "Allow the below command to be executed?",
       options: [
-        { id: "approve", label: "Approve", recommended: true, freeWrite: false },
+        { id: "approve", label: "Approve", recommended: false, freeWrite: false },
         { id: "deny", label: "Deny", recommended: false, freeWrite: false },
       ],
     }],
@@ -2948,6 +2959,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       terminalHost: agentTerminalHost,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
       approvalProvider: (proposal) => requestToolApproval(event.sender, { ...proposal, sessionId }),
+      questionProvider: (proposal) => requestOperatorQuestions(event.sender, { ...proposal, sessionId }),
       durableRunId,
       delegationProvider,
     }),
@@ -3049,15 +3061,22 @@ ipcMain.handle("agent:run", handleAgentRun);
 // ── In-app updates (electron-updater / NSIS) ─────────────────────────────────
 // Detects new GitHub releases, surfaces them to the renderer, and applies
 // the downloaded update by closing + relaunching the app.
-const { createUpdateService, createUpdateSettingsStore, createElectronUpdaterBackend, createMockBackend, nextMinorVersion } = require("../services/updates/update-service.js");
+const {
+  createUpdateService,
+  createUpdateSettingsStore,
+  createElectronUpdaterBackend,
+  createDisabledUpdateBackend,
+  createMockBackend,
+  nextMinorVersion,
+} = require("../services/updates/update-service.js");
 const { registerUpdateIpc } = require("../ipc/updates.js");
 
 const updateSettingsStore = createUpdateSettingsStore({
   file: path.join(app.getPath("userData"), "update-settings.json"),
 });
-// Dev/testing override (Q9): mock the whole flow when unpackaged or forced,
-// and allow pointing the real feed anywhere (staging mirror, custom server).
-const updateMockMode = process.env.XEKUTE_UPDATE_MOCK === "1" || !app.isPackaged;
+// Development builds are isolated from the production release feed. Opt into
+// the complete simulated flow with XEKUTE_UPDATE_MOCK=1 when testing updates.
+const updateMockMode = process.env.XEKUTE_UPDATE_MOCK === "1";
 const updateFeedUrl = process.env.XEKUTE_UPDATE_FEED || "";
 const updateBackend = updateMockMode
   ? createMockBackend({
@@ -3065,7 +3084,9 @@ const updateBackend = updateMockMode
       loadedVersion: app.getVersion(),
       targetVersion: process.env.XEKUTE_UPDATE_MOCK_VERSION || nextMinorVersion(app.getVersion()),
     })
-  : createElectronUpdaterBackend({
+  : !app.isPackaged
+    ? createDisabledUpdateBackend()
+    : createElectronUpdaterBackend({
       autoUpdater: require("electron-updater").autoUpdater,
       feedUrl: updateFeedUrl,
       provider: {
@@ -3074,11 +3095,12 @@ const updateBackend = updateMockMode
         repo: "XEKUTE",
         releaseType: "release",
       },
-    });
+      });
 const updateService = createUpdateService({
   app,
   backend: updateBackend,
   settingsStore: updateSettingsStore,
+  updatedLaunch: process.argv.includes("--updated"),
   onInstallReady: () => setAllowImmediateQuit(true),
   sendEvent: (payload) => {
     try { mainWindow?.webContents.send("updates:event", payload); } catch { /* window gone */ }

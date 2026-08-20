@@ -12,14 +12,17 @@ if (!fs.existsSync(artifactRoot)) throw new Error("Run npm run make before gener
 const setupExe = path.join(artifactRoot, "XEKUTESetup.exe");
 if (!fs.existsSync(setupExe)) throw new Error("XEKUTESetup.exe was not produced by the NSIS build.");
 
-function files(folder) {
-  return fs.readdirSync(folder, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(folder, entry.name);
-    return entry.isDirectory() ? files(full) : [full];
-  });
+// Keep the checksum manifest aligned with the files the release workflow
+// actually publishes. In particular, never hash SHA256SUMS.txt itself and do
+// not expose electron-builder's internal debug/config files as release assets.
+const artifacts = [
+  setupExe,
+  path.join(artifactRoot, "XEKUTESetup.exe.blockmap"),
+  path.join(artifactRoot, "latest.yml"),
+];
+for (const artifact of artifacts) {
+  if (!fs.existsSync(artifact)) throw new Error(`Release artifact is missing: ${path.relative(root, artifact)}`);
 }
-
-const artifacts = files(output).filter((file) => !/\.(?:sha256|json)$/i.test(file));
 const checksums = artifacts.map((file) => {
   const hash = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   return `${hash} *${path.relative(output, file).replace(/\\/g, "/")}`;

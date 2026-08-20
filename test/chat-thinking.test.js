@@ -71,16 +71,51 @@ test("clarification UI is compact, hides internal metadata, and pages questions"
   assert.match(renderer, /codicon-chevron-left/);
   assert.match(renderer, /codicon-chevron-right/);
   assert.doesNotMatch(renderer, /Clarification needed|RUN PAUSED|agent-questions-reason|agent-questions-expiry/);
-    assert.match(renderer, /class="agent-questions-recommended">\(recommended\)<\/span>/);
+    assert.match(renderer, /class="agent-questions-recommended">\(Recommended\)<\/span>/);
     assert.match(chatStyles, /\.agent-questions-card \{[\s\S]*?background: var\(--bg-0\)/);
     assert.match(chatStyles, /\.agent-questions-option \{[\s\S]*?grid-template-columns: 14px minmax\(0, 1fr\) auto/);
     assert.match(chatStyles, /\.agent-questions-option\.is-selected \{ background: #575757; color: #f0f0f0; \}/);
     assert.match(chatStyles, /\.agent-questions-field\[hidden\] \{ display: none !important; \}/);
     assert.match(chatStyles, /\.composer-questions \{[\s\S]*?z-index: 1;[\s\S]*?margin-bottom: -25px/);
-    assert.match(chatStyles, /\.composer-questions:not\(\[hidden\]\) \+ \.composer \{[\s\S]*?z-index: 2/);
+    assert.match(chatStyles, /\.composer-questions:not\(\[hidden\]\) ~ \.composer \{[\s\S]*?z-index: 2/);
     assert.match(chatStyles, /\.composer-questions-card \{[\s\S]*?padding-bottom: 24px/);
     assert.match(chatStyles, /#input-bar\.has-composer-questions \.composer \{[\s\S]*?box-shadow: none/);
   assert.doesNotMatch(chatStyles, /\.agent-questions-(?:card|option|button)[^{]*\{[^}]*#(?:75beff|7fbd91|2d5a7a)/);
+});
+
+test("command approval shows an expandable command and resolves immediately without preselection", () => {
+  const commandPanel = renderer.match(/function showCommandApprovalPanel\([\s\S]*?\n}\n\nfunction showComposerQuestionsPanel/)?.[0] || "";
+  assert.match(commandPanel, /Allow the below command to be executed\?/);
+  assert.match(commandPanel, /class="agent-command-approval-preview" aria-expanded="false"/);
+  assert.match(commandPanel, /data-command-decision="approve">Approve/);
+  assert.match(commandPanel, /data-command-decision="deny">Deny/);
+  assert.match(commandPanel, /document\.addEventListener\("pointerdown", outsidePointer\)/);
+  assert.match(commandPanel, /finish\(button\.dataset\.commandDecision/);
+  assert.doesNotMatch(commandPanel, /type="radio"|data-questions-action="(?:back|submit|skip)"|codicon-chevron-(?:left|right)/);
+  assert.match(chatStyles, /\.agent-command-approval-button \{[\s\S]*?grid-template-columns: 14px minmax\(0, 1fr\)[\s\S]*?border-radius: 999px[\s\S]*?background: #383838/);
+  assert.match(chatStyles, /\.agent-command-approval-button::before \{[\s\S]*?width: 13px[\s\S]*?border-radius: 50%[\s\S]*?background: #d0d0d0/);
+  assert.doesNotMatch(chatStyles, /\.agent-command-approval-button\.deny/);
+  assert.match(chatStyles, /\.agent-command-approval-preview code \{[\s\S]*?-webkit-line-clamp: 2/);
+  assert.match(chatStyles, /\.agent-command-approval-preview\[aria-expanded="true"\] code/);
+});
+
+test("agent question tool supports recommended-first single select and explicit multi-select paging", () => {
+  assert.match(renderer, /const isToolQuestionnaire = questionnaire\?\.kind === "agent_questions"/);
+  assert.match(renderer, /const inputType = question\.multiple \? "checkbox" : "radio"/);
+  assert.match(renderer, /isToolQuestionnaire && input\.checked\) queueMicrotask\(\(\) => submitButton\?\.click\(\)\)/);
+  assert.match(renderer, /selectedOptionIds: selectedInputs\.map/);
+  assert.match(renderer, /Select more than one if applicable/);
+  assert.match(chatStyles, /data-questions-action="skip"\] \{ margin-left: auto/);
+});
+
+test("large Agent work uses a temporary collapsible composer checklist", () => {
+  assert.match(renderer, /function renderComposerTaskList\(payload = \{\}\)/);
+  assert.match(renderer, /payload\.clear \|\| payload\.completed/);
+  assert.match(renderer, /class="composer-task-list-card" aria-expanded=/);
+  assert.match(renderer, /if \(!activeComposerTaskList\?\.expanded \|\| composerTaskListEl\?\.contains\(event\.target\)\) return/);
+  assert.match(renderer, /if \(!isAgentTerminalTool\(tool\) && !isTaskListTool\(tool\)\)/);
+  assert.match(chatStyles, /\.composer-task-list-card \{[\s\S]*?border-radius: 10px/);
+  assert.match(chatStyles, /\.composer-task-list-row\[data-task-status="completed"\] \.composer-task-list-title \{[\s\S]*?text-decoration: line-through/);
 });
 
 test("status styling is chrome-free, neutral, animated, and motion-safe", () => {

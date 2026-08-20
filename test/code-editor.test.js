@@ -28,7 +28,7 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
   assert.match(renderer, /if \(isInterceptorTab\(activeTab\)\) \{[\s\S]*?showSecurityWorkspaceContent\(activeTab\.securityTool \|\| ""\);/);
   assert.match(renderer, /if \(isApplicationGraphTab\(activeTab\)\) \{[\s\S]*?await showMapWorkspace\(\);/);
   assert.match(renderer, /async function openFile\(filePath, fileName, \{ focusEditor = true, preview = false \} = \{\}\) \{[\s\S]*?showCodeEditorWorkspace\(\)/);
-  assert.match(renderer, /item\.addEventListener\("click"[\s\S]*?selectItem\(item\)[\s\S]*?openFile\(entry\.path, entry\.name, \{ focusEditor: false, preview: true \}\)/);
+  assert.match(renderer, /item\.addEventListener\("click"[\s\S]*?selectItem\(item, \{ ctrlKey: e\.ctrlKey, metaKey: e\.metaKey, shiftKey: e\.shiftKey \}\)[\s\S]*?openFile\(entry\.path, entry\.name, \{ focusEditor: false, preview: true \}\)/);
   assert.match(renderer, /item\.addEventListener\("dblclick"[\s\S]*?selectItem\(item\)[\s\S]*?await openFile\(entry\.path, entry\.name, \{ focusEditor: true, preview: false \}\)/);
   assert.match(renderer, /function discardCleanPreviewTabs\(exceptPath = ""\)/);
   assert.match(renderer, /function reorderOpenTabs\(draggedPath, targetPath, \{ after = false \} = \{\}\)/);
@@ -91,7 +91,7 @@ test("workspace context menu renames files and folders without discarding open e
   assert.match(html, /data-workspace-context-action="cut"[\s\S]*?codicon-move[\s\S]*?<span>Cut<\/span>/);
   assert.doesNotMatch(html, /codicon-cut/);
   assert.match(html, /data-workspace-context-action="rename"[\s\S]*?<span>Rename<\/span>/);
-  assert.match(renderer, /setHidden\("rename", !target\)/);
+  assert.match(renderer, /setHidden\("rename", !target \|\| multiple\)/);
   assert.match(renderer, /async function renameWorkspaceContextTarget\(target\)/);
   assert.match(renderer, /window\.api\.movePath\(\{[\s\S]*?source: target\.relativePath,[\s\S]*?destination/);
   assert.match(renderer, /function remapOpenTabsUnderWorkspacePath\(sourceAbsolute, destinationAbsolute\)/);

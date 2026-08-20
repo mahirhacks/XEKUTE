@@ -31,8 +31,10 @@ const { createToolAuditStore } = require("../../app/storage/tool-audit-store.js"
 const { createLongHorizonRunStore } = require("../../app/storage/long-horizon-run-store.js");
 const { createDurableProcessManager } = require("../../app/services/terminal/durable-process-manager.js");
 
-// Tool registry + raw adapters (the 21 canonical tools).
-const { createToolRegistry, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerInspectEnvironment, registerManagePlan, registerManageState, registerIngestTraffic, registerManageIdentity, registerReplayRequest, registerRunTestCase, registerBrowserAction, registerCompareResponses, registerVerifyFinding, registerStoreFinding, registerAttackGraph, registerDelegateAgent, registerQueryAssessment, registerExpandEvidence, registerQueryKnowledge, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
+// Tool registry + raw adapters (the 23 canonical tools).
+const { createToolRegistry, registerAskQuestions, registerUpdateTaskList, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerInspectEnvironment, registerManagePlan, registerManageState, registerIngestTraffic, registerManageIdentity, registerReplayRequest, registerRunTestCase, registerBrowserAction, registerCompareResponses, registerVerifyFinding, registerStoreFinding, registerAttackGraph, registerDelegateAgent, registerQueryAssessment, registerExpandEvidence, registerQueryKnowledge, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
+const { createAskQuestionsTool } = require("../../agent/tools/process/ask-questions.js");
+const { createUpdateTaskListTool } = require("../../agent/tools/process/update-task-list.js");
 const { createExecCommandTool } = require("../../agent/tools/process/exec-command.js");
 const { createReadFileTool } = require("../../agent/tools/workspace/read-file.js");
 const { createSearchWorkspaceTool } = require("../../agent/tools/workspace/search-workspace.js");
@@ -132,6 +134,8 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
   // Provider-optional adapters degrade to structured "unavailable" responses
   // when no provider is injected (see each adapter's contract).
   const toolRegistry = createToolRegistry();
+  registerAskQuestions(toolRegistry, createAskQuestionsTool());
+  registerUpdateTaskList(toolRegistry, createUpdateTaskListTool());
   registerExecCommand(toolRegistry, createExecCommandTool());
   registerReadFile(toolRegistry, createReadFileTool());
   registerSearchWorkspace(toolRegistry, createSearchWorkspaceTool());

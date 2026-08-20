@@ -27,6 +27,8 @@ const MUTATING_TOOL_NAMES = new Set([
 ]);
 
 const READ_ONLY_TOOL_NAMES = new Set([
+  "ask_questions",
+  "update_task_list",
   "read_file",
   "search_workspace",
   "inspect_environment",

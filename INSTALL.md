@@ -59,7 +59,15 @@ the notification center (top-right bell) until you install it or a newer version
 appears. You can also check manually via **Help → Check for Updates**, and disable
 automatic checks in **Settings → General → Check for updates automatically**
 (handy during an active engagement). New releases are published automatically from
-the `v*` tag workflow to the GitHub Releases page.
+the `v*` tag workflow to the GitHub Releases page. The first launch after an
+in-app update shows one confirmation that the new version is current; later
+successful launch checks remain silent. Update metadata always targets the newest
+stable release, so an older installation can safely skip intermediate versions.
+
+Development source and tooling remain in the Git repository. The release workflow
+publishes only the production installer, updater metadata, checksums, and SBOM as
+release assets; unpackaged development runs never contact the production update
+feed unless `XEKUTE_UPDATE_MOCK=1` is explicitly set for local flow testing.
 
 To install a newer release manually, run its `XEKUTESetup.exe` from the project's
 GitHub Releases page, or download it from the project website.

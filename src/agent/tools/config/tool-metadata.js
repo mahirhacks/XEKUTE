@@ -3,6 +3,8 @@
 // The canonical inventory is deliberately data-only. Adapters own execution;
 // this module owns names, categories, mutation flags, and mode surfaces.
 const TOOL_REGISTRY_NAMES = Object.freeze([
+  "ask_questions",
+  "update_task_list",
   "exec_command",
   "read_file",
   "search_workspace",
@@ -27,6 +29,8 @@ const TOOL_REGISTRY_NAMES = Object.freeze([
 ]);
 
 const TOOL_METADATA = Object.freeze({
+  ask_questions: Object.freeze({ mutating: false, reversible: true, interactive: true, targetTypes: ["operator", "interaction"] }),
+  update_task_list: Object.freeze({ mutating: false, reversible: true, targetTypes: ["runtime", "task-list"] }),
   exec_command: Object.freeze({ mutating: true, reversible: false, targetTypes: ["process", "workspace"] }),
   read_file: Object.freeze({ mutating: false, reversible: true, targetTypes: ["file", "workspace"] }),
   search_workspace: Object.freeze({ mutating: false, reversible: true, targetTypes: ["file", "workspace"] }),
@@ -51,10 +55,12 @@ const TOOL_METADATA = Object.freeze({
 });
 
 const MODE_TOOL_GROUPS = Object.freeze({
-  ask: Object.freeze(["read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"]),
-  hypothesis: Object.freeze(["read_file", "search_workspace", "inspect_environment", "manage_state", "ingest_traffic", "compare_responses", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"]),
-  plan: Object.freeze(["read_file", "search_workspace", "inspect_environment", "manage_plan", "manage_state", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"]),
-  agent: TOOL_REGISTRY_NAMES,
+  ask: Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"]),
+  hypothesis: Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "manage_state", "ingest_traffic", "compare_responses", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"]),
+  plan: Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "manage_plan", "manage_state", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"]),
+  // Agent mode can execute an approved plan and synchronize its checkbox
+  // statuses through the workflow, but only Plan mode may create/revise one.
+  agent: Object.freeze(TOOL_REGISTRY_NAMES.filter((name) => name !== "manage_plan")),
 });
 
 module.exports = { MODE_TOOL_GROUPS, TOOL_METADATA, TOOL_REGISTRY_NAMES };
