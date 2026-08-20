@@ -84,7 +84,7 @@ test("clarification UI is compact, hides internal metadata, and pages questions"
 });
 
 test("command approval shows an expandable command and resolves immediately without preselection", () => {
-  const commandPanel = renderer.match(/function showCommandApprovalPanel\([\s\S]*?\n}\n\nfunction showComposerQuestionsPanel/)?.[0] || "";
+  const commandPanel = renderer.match(/function showCommandApprovalPanel\([\s\S]*?\r?\n}\r?\n\r?\nfunction showComposerQuestionsPanel/)?.[0] || "";
   assert.match(commandPanel, /Allow the below command to be executed\?/);
   assert.match(commandPanel, /class="agent-command-approval-preview" aria-expanded="false"/);
   assert.match(commandPanel, /data-command-decision="approve">Approve/);
