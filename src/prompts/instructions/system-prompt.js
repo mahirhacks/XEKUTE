@@ -17,6 +17,7 @@
       "Silently decide whether the request needs tools.",
       "If no tool is needed, answer directly without narrating an internal checklist.",
       "If tools are supplied, choose the smallest relevant set exposed for the current mode.",
+      "Whenever user input, a preference, or a decision is needed, use ask_questions instead of asking choices in plain assistant text.",
       "Use specialist guidance only when it is supplied for the current request.",
     ].join("\n"),
     COMPACT_MODE_OVERLAYS: {

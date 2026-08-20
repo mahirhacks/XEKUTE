@@ -1,8 +1,8 @@
-/* Hypothesis plan document path and prompt contracts. */
+/* Markdown plan document path and prompt contracts. */
 
-const PLAN_DIR = "plans";
-const PLAN_CREATE_TOOL = "apply_patch";
-const PLAN_UPDATE_TOOLS = Object.freeze(["apply_patch"]);
+const PLAN_DIR = ".xekute/plans";
+const PLAN_CREATE_TOOL = "manage_plan";
+const PLAN_UPDATE_TOOLS = Object.freeze(["manage_plan"]);
 const PLAN_MUTATION_TOOLS = Object.freeze([PLAN_CREATE_TOOL, ...PLAN_UPDATE_TOOLS]);
 
 function slugifyTopic(text = "") {
@@ -35,15 +35,15 @@ function planDocumentContract({ path = "", userMessage = "", operation = "create
   return [
     "PLAN DOCUMENT CONTRACT FOR THIS REQUEST",
     updating
-      ? "Update the existing hypothesis plan in place. Call read_file first when its exact contents are not already supplied, then use apply_patch (kind modify) for focused revisions or an intentional full-plan rewrite."
-      : "Create the complete hypothesis plan with apply_patch (kind create). Do not write the full hypothesis plan in chat.",
-    "Do not create or update source code, assessment records, or any unrelated workspace file in Hypothesis mode.",
-    `When a missing decision materially blocks planning, call request_operator_questions before ${updating ? "updating the plan" : "apply_patch (kind create)"}. Ask 1–3 short plain-language questions with 2–3 choices each; otherwise make a conservative stated assumption and continue.`,
+      ? "Update the existing Markdown plan in place with manage_plan (operation update). Read only the context needed for the requested revision."
+      : "Create the complete Markdown implementation plan with manage_plan (operation create). Do not write the full plan in chat.",
+    "Do not create or update source code, assessment records, or any unrelated workspace file in Plan mode.",
+    `When a missing decision materially blocks planning, call ask_questions before ${updating ? "updating" : "creating"} the plan; otherwise make a conservative stated assumption and continue.`,
     `Required path: ${target}`,
     updating
       ? "Preserve useful existing content and apply the operator's requested plan changes at that exact path."
-      : "Put the full VAPT hypothesis plan in the file content: engagement snapshot, scope, attack surface, numbered hypotheses (9-field loop), WSTG/Top 10 matrix, evidence capture, stop conditions, and limitations.",
-    "After the plan-file mutation succeeds, reply in chat with a brief summary only (path, hypothesis count, top priorities, blocked items) — never paste the full plan body.",
+      : "Create a structured plan with an Overview and ordered Markdown checkbox Tasks, matching the professional implementation-plan format.",
+    "After manage_plan succeeds, reply in chat with a brief confirmation only: the Markdown path, ready-for-review status, and that approval enables sequential execution. Never paste the full plan body.",
     userMessage ? `Original user request: ${String(userMessage).slice(0, 500)}` : "",
   ].filter(Boolean).join("\n");
 }
@@ -53,12 +53,12 @@ function planDocumentRetry({ path = "", userMessage = "", operation = "create" }
   return [
     `Your previous response did not ${updating ? "update" : "create"} the required plan file.`,
     updating
-      ? "Call read_file if needed, then apply_patch (kind modify) for the existing plan. Do not answer in chat until the plan is updated."
-      : "Call apply_patch (kind create) now with the complete plan markdown. Do not answer in chat until the file is created.",
+      ? "Call manage_plan with operation update for the existing plan. Do not answer in chat until the plan is updated."
+      : "Call manage_plan with operation create now. Do not answer in chat until the Markdown plan is created.",
     path ? `Required path: ${path}` : "",
     updating
       ? "Do not create a replacement plan at another path and do not modify a non-plan file."
-      : "Do not use apply_patch modify for a new plan. Do not print the plan as chat prose or a fenced code block instead of apply_patch (kind create).",
+      : "Do not print the plan as chat prose or a fenced code block instead of calling manage_plan.",
     userMessage ? `Original user request: ${userMessage}` : "",
   ].filter(Boolean).join(" ");
 }

@@ -88,13 +88,20 @@ assert.match(builderConfig, /include:\s*["']build\/installer\.nsh["']/);
 assert.match(read("src/app/electron/lifecycle.js"), /function setAllowImmediateQuit/);
 assert.match(read("src/app/electron/main.js"), /onInstallReady:\s*\(\)\s*=>\s*setAllowImmediateQuit\(true\)/);
 assert.match(read("src/app/services/updates/update-service.js"), /quitAndInstall\(true,\s*true\)/);
+assert.match(main, /!app\.isPackaged\s*\?\s*createDisabledUpdateBackend\(\)/);
+assert.match(main, /updatedLaunch:\s*process\.argv\.includes\(["']--updated["']\)/);
+assert.match(read("src/app/services/updates/update-service.js"), /pendingInstalledVersion/);
+assert.match(read("src/app/services/updates/update-service.js"), /deferredVersion/);
+assert.match(read("src/ui/bootstrap.js"), /type === "updated"/);
 assert.doesNotMatch(forgeConfig, /src\/automation/);
 
 const canonicalNames = ToolPort.REGISTRY_TOOL_NAMES;
-assert.equal(new Set(canonicalNames).size, 21, "the canonical registry must contain exactly 21 unique tools");
+assert.equal(new Set(canonicalNames).size, 23, "the canonical registry must contain exactly 23 unique tools");
 assert.deepEqual(
   canonicalNames,
   [
+    "ask_questions",
+    "update_task_list",
     "exec_command",
     "read_file",
     "search_workspace",
@@ -117,7 +124,7 @@ assert.deepEqual(
     "query_knowledge",
     "web_research",
   ],
-  "the tool contract must preserve the canonical 21-tool inventory and order",
+  "the tool contract must preserve the canonical 23-tool inventory and order",
 );
 assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
 assert.deepEqual(
@@ -137,6 +144,7 @@ for (const required of [
   "src/agent/tools/config/tool-metadata.js",
   "src/agent/tools/config/tool-registry.js",
   "src/agent/tools/config/tool-surface.js",
+  "src/agent/tools/process/ask-questions.js",
   "src/agent/authority/scope/scope-policy.js",
   "src/agent/authority/authority-registry.js",
   "src/agent/authority/invocation-pipeline.js",
@@ -146,6 +154,7 @@ for (const required of [
   "src/app/services/assessment/intelligence/intelligence-store.js",
   "src/app/services/assessment/intelligence/intelligence-indexer.js",
   "src/app/services/assessment/intelligence/assessment-intelligence-service.js",
+  "src/app/services/approval/command-approval.js",
   "src/app/services/assessment/mode-workflow.js",
   "src/app/services/assessment/knowledge/assessment-knowledge-engine.js",
   "src/app/services/assessment/knowledge/skill-knowledge-graph.js",

@@ -57,20 +57,20 @@
   const READ_ONLY_CAPABILITIES = new Set(["observe", "assess", "verify", "report"]);
 
   const MODE_TOOL_GROUPS = Object.freeze({
-    ask: Object.freeze(["read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"]),
+    ask: Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"]),
     agent: Object.freeze([
-      "exec_command", "read_file", "search_workspace", "apply_patch", "inspect_environment",
-      "manage_plan", "manage_state", "ingest_traffic", "manage_identity", "replay_request",
+      "ask_questions", "update_task_list", "exec_command", "read_file", "search_workspace", "apply_patch", "inspect_environment",
+      "manage_state", "ingest_traffic", "manage_identity", "replay_request",
       "run_test_case", "browser_action", "compare_responses", "verify_finding", "store_finding",
       "attack_graph", "delegate_agent", "query_assessment", "expand_evidence",
       "query_knowledge", "web_research",
     ]),
     hypothesis: Object.freeze([
-      "read_file", "search_workspace", "inspect_environment", "manage_state",
+      "ask_questions", "read_file", "search_workspace", "inspect_environment", "manage_state",
       "ingest_traffic", "compare_responses", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research",
     ]),
     plan: Object.freeze([
-      "read_file", "search_workspace", "inspect_environment", "manage_plan", "manage_state", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research",
+      "ask_questions", "read_file", "search_workspace", "inspect_environment", "manage_plan", "manage_state", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research",
     ]),
   });
 

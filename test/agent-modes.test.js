@@ -8,10 +8,12 @@ const { evaluateToolScope } = require("../src/agent/authority/scope/scope-policy
 
 test("mode surfaces are exact and do not depend on authority labels", () => {
   assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.length, 5);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.hypothesis.length, 11);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.plan.length, 10);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.agent.length, 21);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.length, 6);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.hypothesis.length, 12);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.plan.length, 11);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.agent.length, 22);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.agent.includes("manage_plan"), false);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.plan.includes("manage_plan"), true);
   assert.equal(ModeRegistry.normalizeProfile({ key: "agent", authority: "full" }).key, "agent");
 });
 

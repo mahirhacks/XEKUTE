@@ -6,6 +6,7 @@ const { normalizeProfile, profileKey } = require("../modes/mode-registry");
 const PromptCompiler = require("./prompt-compiler");
 const InitialPrompts = require("../../prompts/instructions/initial-context.js");
 const RequestIntentRules = require("../../prompts/rules/request-intent-rules");
+const ModeSkills = require("../../prompts/skills/mode-skills.js");
 
 function parseProjectFiles(dirMap) {
   if (!dirMap) return [];
@@ -114,7 +115,8 @@ function clipText(value, maxChars) {
 
 function buildSystemContext({ mode = "agent", modeFamily = "xekute", promptConfig = null, depth = "operational", specializedGuidance = "" } = {}) {
   const profile = normalizeProfile(modeFamily, mode);
-  return PromptCompiler.compile({ family: profile.family, mode: profile.key, overrides: promptConfig, depth, specializedGuidance });
+  const guidance = [ModeSkills.render(profile.key), specializedGuidance].filter(Boolean).join("\n\n");
+  return PromptCompiler.compile({ family: profile.family, mode: profile.key, overrides: promptConfig, depth, specializedGuidance: guidance });
 }
 
 function buildUntrustedContext({ dirMap = "", activeFile = null, extraFiles = [], discovery = null, userMessage = "", numCtx = DEFAULT_CONTEXT_TOKENS } = {}) {

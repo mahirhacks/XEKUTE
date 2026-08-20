@@ -76,6 +76,25 @@ function buildTaskBrief({ profile, contextRoute = {}, editContext = {}, availabl
   };
 }
 
+function isReasonablyLargeAgentRequest(message = "") {
+  const value = String(message || "").trim();
+  if (!value) return false;
+  const listItems = value.match(/(?:^|\n)\s*(?:[-*]|\d+[.)])\s+\S/gm) || [];
+  // An explicit list is the clearest signal; do not let its introductory verb
+  // inflate a three-item request into a four-step task.
+  if (listItems.length) return listItems.length >= 4;
+  const actionPattern = /\b(?:add|analy[sz]e|build|change|check|configure|connect|create|debug|delete|design|edit|fix|implement|inspect|install|integrate|migrate|move|refactor|remove|rename|replace|review|run|set\s+up|test|update|verify|write)\b/i;
+  const actionClauses = value
+    .split(/(?:\r?\n|[.;]|\bthen\b|\bafter that\b|\bnext\b|\bfinally\b)/i)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause && actionPattern.test(clause));
+  if (actionClauses.length >= 4) return true;
+  const actionMatches = value.match(new RegExp(actionPattern.source, "gi")) || [];
+  if (value.length >= 160 && actionMatches.length >= 4) return true;
+  return /\b(?:build|implement|migrate|refactor|redesign|review|test)\b[\s\S]{0,80}\b(?:complete|entire|full|end[- ]to[- ]end|multiple|whole)\b/i.test(value)
+    || /\b(?:complete|entire|full|end[- ]to[- ]end|multiple|whole)\b[\s\S]{0,80}\b(?:build|implementation|migration|refactor|redesign|review|test)\b/i.test(value);
+}
+
 function canonicalizeSignatureValue(value) {
   if (Array.isArray(value)) return value.map(canonicalizeSignatureValue);
   if (!value || typeof value !== "object") return value;
@@ -520,6 +539,15 @@ async function runAgentTurn({
     targetFile: inferEditTarget(userMessage, activeFile, dirMap),
   };
   let availableTools = ToolMap.toolsForProfile(profile, undefined, tools);
+  // Plan authoring is exclusive to Plan mode. Agent mode may execute an
+  // approved plan, whose checkbox state is synchronized by update_task_list.
+  if (profile.key === "agent") {
+    availableTools = availableTools.filter((tool) => String(tool?.function?.name || "") !== "manage_plan");
+  }
+  const shouldOfferTaskList = !nested && profile.key === "agent" && (Boolean(activePlanBinding) || isReasonablyLargeAgentRequest(userMessage));
+  if (!shouldOfferTaskList) {
+    availableTools = availableTools.filter((tool) => String(tool?.function?.name || "") !== "update_task_list");
+  }
   if (profile.key === "agent" && !activePlanBinding) {
     availableTools = availableTools.filter((tool) => !INTELLIGENCE_TOOLS.has(String(tool?.function?.name || "")));
   }
@@ -586,6 +614,7 @@ async function runAgentTurn({
   let thinkingSignaled = false;
   let boundRunFinished = false;
   let completedPlanArtifact = null;
+  let workflowArtifactFromTool = null;
   // Nested delegated turns may validate against the parent's approved plan,
   // but the parent remains the only authority that commits plan actions and
   // evidence. Keep a bounded ledger for the parent to review instead of
@@ -615,7 +644,19 @@ async function runAgentTurn({
     if (!nested && activePlanBinding && intelligence?.completeRun) intelligence.completeRun(workspace, runId, status);
     if (!nested && activePlanBinding && modeWorkflow?.finishPlanRun) {
       const finished = modeWorkflow.finishPlanRun(workspace, activePlanBinding, status);
-      if (finished?.ok) completedPlanArtifact = finished.plan || null;
+      if (finished?.ok) {
+        completedPlanArtifact = finished.plan || null;
+        if (completedPlanArtifact?.tasks) {
+          sendEvent({
+            type: "task_list",
+            runId,
+            source: "approved_plan",
+            persistent: true,
+            completed: completedPlanArtifact.tasks.every((task) => ["completed", "skipped"].includes(String(task.status || "").toLowerCase())),
+            tasks: completedPlanArtifact.tasks.map((task) => ({ id: task.id, title: task.title, status: task.status === "skipped" ? "completed" : task.status })),
+          });
+        }
+      }
     }
     return completedPlanArtifact;
   };
@@ -640,8 +681,19 @@ async function runAgentTurn({
   }
 
   sendEvent({ type: "run_state", runId, state: { ...runState } });
-  const taskBrief = buildTaskBrief({ profile, contextRoute, editContext, availableTools, userMessage });
-  if (taskBrief) sendEvent({ type: "task_brief", runId, brief: taskBrief });
+  if (activePlanBinding && modeWorkflow?.readPlan) {
+    const boundPlan = modeWorkflow.readPlan(workspace, activePlanBinding.planId);
+    if (boundPlan?.tasks?.length) {
+      sendEvent({
+        type: "task_list",
+        runId,
+        source: "approved_plan",
+        persistent: true,
+        completed: false,
+        tasks: boundPlan.tasks.map((task) => ({ id: task.id, title: task.title, status: task.status === "skipped" ? "completed" : task.status })),
+      });
+    }
+  }
   if (availableTools.length) {
     sendEvent({
       type: "activity",
@@ -866,7 +918,7 @@ async function runAgentTurn({
       const shouldPersistWorkflow = profile.key === "hypothesis"
         ? ["hypothesis_creation", "hypothesis_refinement"].includes(workflowIntent)
         : profile.key === "plan" && ["assessment_planning", "plan_revision"].includes(workflowIntent);
-      const workflowArtifact = shouldPersistWorkflow
+      const workflowArtifact = workflowArtifactFromTool || (shouldPersistWorkflow
         ? modeWorkflow?.completeTurn?.(workspace, {
           mode: profile.key,
           finalText,
@@ -876,17 +928,21 @@ async function runAgentTurn({
             ? workflowIntent !== "hypothesis_refinement"
             : workflowIntent !== "plan_revision",
         }) || null
-        : null;
+        : null);
       const savedHypothesis = workflowArtifact?.hypothesis?.id;
       const savedPlan = workflowArtifact?.plan?.id;
       if (savedHypothesis && !/switch to plan mode/i.test(finalText)) finalText = `${finalText}\n\nI've completed and saved ${savedHypothesis}. Switch to Plan mode so I can build a controlled assessment plan from this hypothesis.`;
-      if (savedPlan && !/approve the plan|ready for review/i.test(finalText)) finalText = `${finalText}\n\n${savedPlan} is ready for review. Reply "approve the plan" when you want to approve its execution intent.`;
+      if (savedPlan) {
+        const verb = workflowArtifactFromTool?.operation === "update" ? "updated" : "created";
+        finalText = `The plan has been ${verb} and saved to .xekute/plans/${savedPlan}.md. It is ready for review. If you approve it, switch to Agent mode and ask me to execute the plan; I’ll work through the tasks sequentially and mark each completed task with [x].`;
+      }
       if (workingHistory.at(-1)?.role === "assistant") workingHistory[workingHistory.length - 1].content = finalText;
       AgentRuntime.finalize(runState, {
         status: "completed",
         reason: claimCheck.warnings.join(" "),
       });
       finishBoundRun("completed");
+      if (shouldOfferTaskList && !activePlanBinding) sendEvent({ type: "task_list", runId, source: "agent", completed: true, clear: true, tasks: [] });
       sendEvent({ type: "run_state", runId, state: { ...runState } });
       return {
         ok: true,
@@ -979,7 +1035,9 @@ async function runAgentTurn({
         };
       } else {
         seenThisRound.add(signature);
-        const planConstraint = modeWorkflow?.validateAction?.(workspace, activePlanBinding, toolName, tool.args || {}, intelligence, toolMetadataForName(toolName)) || { ok: true };
+        const planConstraint = ["ask_questions", "update_task_list"].includes(toolName)
+          ? { ok: true }
+          : modeWorkflow?.validateAction?.(workspace, activePlanBinding, toolName, tool.args || {}, intelligence, toolMetadataForName(toolName)) || { ok: true };
         if (!planConstraint.ok) {
           toolResult = {
             ok: false,
@@ -1001,6 +1059,19 @@ async function runAgentTurn({
               mode: profile.key,
               planBinding: activePlanBinding,
             }));
+            if (toolName === "manage_plan" && profile.key === "plan" && toolResult?.ok && ["create", "update"].includes(String(toolResult?.value?.operation || ""))) {
+              const managedPlan = toolResult?.value?.plan;
+              if (managedPlan?.id && Array.isArray(managedPlan.tasks) && managedPlan.tasks.length) {
+                const saved = modeWorkflow?.savePlan?.(workspace, { ...managedPlan, status: "ready_for_review" }) || null;
+                if (saved?.ok) {
+                  workflowArtifactFromTool = { ...saved, operation: toolResult.value.operation };
+                  toolResult = {
+                    ...toolResult,
+                    value: { ...toolResult.value, plan: saved.plan, path: saved.path },
+                  };
+                }
+              }
+            }
           } catch (error) {
             toolResult = {
               ok: false,
@@ -1011,7 +1082,29 @@ async function runAgentTurn({
           }
         }
       }
+      let taskListEvent = null;
+      if (toolName === "update_task_list" && toolResult?.ok && Array.isArray(toolResult?.value?.tasks)) {
+        if (activePlanBinding && modeWorkflow?.updatePlanTaskStatuses) {
+          const synchronized = modeWorkflow.updatePlanTaskStatuses(workspace, activePlanBinding, toolResult.value.tasks);
+          if (!synchronized?.ok) {
+            toolResult = { ok: false, error: synchronized?.error || "The approved task list could not be updated.", errorCode: synchronized?.code || "PLAN_TASK_LIST_CHANGED", retryable: false };
+          } else {
+            const tasks = synchronized.plan.tasks.map((task) => ({ id: task.id, title: task.title, status: task.status === "skipped" ? "completed" : task.status }));
+            toolResult = { ...toolResult, value: { ...toolResult.value, tasks, completed: tasks.every((task) => task.status === "completed") } };
+          }
+        }
+        if (toolResult?.ok) taskListEvent = {
+          type: "task_list",
+          runId,
+          source: activePlanBinding ? "approved_plan" : "agent",
+          persistent: Boolean(activePlanBinding),
+          completed: Boolean(toolResult.value.completed),
+          explanation: toolResult.value.explanation || "",
+          tasks: toolResult.value.tasks,
+        };
+      }
       actionResults.push(toolResult);
+      if (taskListEvent) sendEvent(taskListEvent);
       noteLongHorizonAction(longHorizonLedger, tool, toolResult);
       await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, lastTool: toolName, lastToolOk: Boolean(toolResult?.ok && !toolResult?.error), evidenceIds: AgentRuntime.evidenceIdsFromResults([toolResult]), ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
       if (toolName === "query_knowledge" && Array.isArray(toolResult?.activeTools)) {
@@ -1038,7 +1131,7 @@ async function runAgentTurn({
         }
       }
       let planAction = null;
-      if (activePlanBinding && modeWorkflow?.recordPlanAction && !INTELLIGENCE_TOOLS.has(toolName) && !KNOWLEDGE_TOOLS.has(toolName)) {
+      if (activePlanBinding && modeWorkflow?.recordPlanAction && !["ask_questions", "update_task_list"].includes(toolName) && !INTELLIGENCE_TOOLS.has(toolName) && !KNOWLEDGE_TOOLS.has(toolName)) {
         const actionRecord = {
           actionId,
           toolName,
@@ -1055,6 +1148,16 @@ async function runAgentTurn({
         };
         if (nested) provisionalPlanActions.push(actionRecord);
         else planAction = modeWorkflow.recordPlanAction(workspace, activePlanBinding, actionRecord);
+        if (!nested && planAction?.plan?.tasks) {
+          sendEvent({
+            type: "task_list",
+            runId,
+            source: "approved_plan",
+            persistent: true,
+            completed: planAction.plan.tasks.every((task) => ["completed", "skipped"].includes(String(task.status || "").toLowerCase())),
+            tasks: planAction.plan.tasks.map((task) => ({ id: task.id, title: task.title, status: task.status === "skipped" ? "completed" : task.status })),
+          });
+        }
       }
       if (activePlanBinding && intelligence?.recordRunEvidence) {
         if (nested) {
@@ -1137,6 +1240,7 @@ module.exports = {
   MAX_AGENT_ROUNDS,
   READ_ONLY_TOOL_NAMES,
   buildTaskBrief,
+  isReasonablyLargeAgentRequest,
   buildEngagementPromptContext,
   filterToolsForMode: (tools, mode, modeFamily = "xekute") => ToolMap.toolsForProfile(normalizeProfile(modeFamily, mode), undefined, tools),
   filterToolsForRoute: (tools) => Array.isArray(tools) ? tools : [],

@@ -8,6 +8,8 @@ import {
   sortHistorySessions,
 } from "./features/history/history-model.js";
 
+const ExplorerSelection = globalThis.XekuteExplorerSelection;
+
 const $ = (id) => globalThis.XekuteDom?.getById(id) || document.getElementById(id);
 const xekuteStore = globalThis.XekuteCore.createAppStore();
 const appController = new globalThis.XekuteCore.AppController(xekuteStore);
@@ -20,7 +22,9 @@ const ToolMap = globalThis.ToolMap || (() => {
     ask: ["read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"],
     hypothesis: ["read_file", "search_workspace", "inspect_environment", "manage_state", "ingest_traffic", "compare_responses", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"],
     plan: ["read_file", "search_workspace", "inspect_environment", "manage_plan", "manage_state", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"],
-    agent: null, // null = all catalog tools
+    // Agent mode receives the execution catalog but never the plan-authoring
+    // tool. Approved plan checkbox updates use the workflow task-list bridge.
+    agent: null,
   };
   const MUTATING = new Set(["apply_patch", "manage_plan", "manage_state", "manage_identity", "store_finding", "attack_graph"]);
   let catalog = []; // [{name, description, inputSchema, metadata}]
@@ -48,7 +52,9 @@ const ToolMap = globalThis.ToolMap || (() => {
     const normalized = globalThis.XekuteOperatingModes?.normalizeProfile?.(profile)?.key;
     const key = normalized || String(profile?.key || profile || "agent");
     const group = MODE_TOOL_GROUPS[key];
-    const entries = group === null || group === undefined ? catalog : catalog.filter((entry) => group.includes(entry.name));
+    const entries = group === null || group === undefined
+      ? catalog.filter((entry) => key !== "agent" || entry.name !== "manage_plan")
+      : catalog.filter((entry) => group.includes(entry.name));
     return entries.map((entry) => ({
       type: "function",
       function: { name: entry.name, description: entry.description || "", parameters: entry.inputSchema || {} },
@@ -207,7 +213,9 @@ const contextUsageHeadingValue = $("context-usage-heading-value");
 const inputBar         = $("input-bar");
 const composerEl       = inputBar?.querySelector(".composer") || null;
 const composerQuestionsEl = $("composer-questions");
+const composerTaskListEl = $("composer-task-list");
 let pendingComposerQuestions = null;
+let activeComposerTaskList = null;
 const slashCommandSuggestions = $("slash-command-suggestions");
 const selectedSlashCommandEl = $("selected-slash-command");
 const selectedSlashCommandName = $("selected-slash-command-name");
@@ -610,6 +618,8 @@ const OLLAMA_PORT = 11435;
 let rootPath     = null;
 let dirMapCache  = "";
 let selectedItem = null;
+const selectedExplorerPaths = new Set();
+let explorerSelectionAnchorPath = "";
 let workspaceClipboard = null;
 let workspaceContextTarget = null;
 const expandedTreePaths = new Set();
@@ -1504,6 +1514,7 @@ function applyActiveChatSession(session) {
     contextFilesCache = [];
     activeStreamContent = "";
     messages.innerHTML = "";
+    clearComposerTaskList();
     setChatCollapsed(true);
     return;
   }
@@ -1523,6 +1534,8 @@ function applyActiveChatSession(session) {
   localStorage.setItem(CHAT_FAMILY_KEY, chatFamily);
   if (selectedModel) localStorage.setItem("pointer:model", selectedModel);
   const liveRun = activeChatRuns.get(session.id) || null;
+  if (liveRun?.taskList) renderComposerTaskList(liveRun.taskList);
+  else clearComposerTaskList();
   if (liveRun?.viewHost) {
     messages.replaceChildren(...liveRun.viewHost.childNodes);
     liveRun.viewHost = null;
@@ -4228,9 +4241,12 @@ function closeAssessmentRepairDialog() {
 }
 
 function setNotifications(items = []) {
+  const baseItems = (Array.isArray(items) ? items : [])
+    .filter(Boolean)
+    .filter((item) => item.id !== "update-available");
   const merged = updatesState.pendingNotification
-    ? [updatesState.pendingNotification, ...(Array.isArray(items) ? items : [])]
-    : (Array.isArray(items) ? items : []);
+    ? [updatesState.pendingNotification, ...baseItems]
+    : baseItems;
   notificationItems = merged.filter(Boolean);
   if (notificationCount) {
     notificationCount.textContent = String(notificationItems.length);
@@ -4254,7 +4270,6 @@ function setNotifications(items = []) {
 
   function beginUpdateInstallFromNotification() {
     updatesState.pendingNotification = null;
-    updatesState.ignoredVersion = "";
     setNotifications(notificationItems);
     beginUpdateInstall();
   }
@@ -4263,6 +4278,7 @@ function setNotifications(items = []) {
 const updatesState = {
   availableVersion: "",
   ignoredVersion: "",
+  deferredVersion: "",
   pendingNotification: null,
   transientTimer: null,
 };
@@ -4273,7 +4289,9 @@ async function loadUpdateSettings() {
     const settings = result?.value || (result && !result.ok ? null : result);
     if (settings) {
       updatesState.ignoredVersion = String(settings.ignoredVersion || "");
+      updatesState.deferredVersion = String(settings.deferredVersion || settings.ignoredVersion || "");
       if (generalUpdatesToggle) generalUpdatesToggle.checked = settings.checkOnLaunch !== false;
+      if (updatesState.deferredVersion) showUpdateNotification(updatesState.deferredVersion);
     }
   } catch { /* bridge unavailable */ }
 }
@@ -4326,15 +4344,23 @@ function showTransientUpdateNotice(titleText, subText) {
 
 function beginUpdateInstall() {
   if (!window.api.updatesInstall) return;
+  showUpdateDownloading(updatesState.availableVersion || updatesState.deferredVersion);
+  window.api.updatesInstall().catch(() => {});
+}
+
+function showUpdateDownloading(version) {
+  showUpdateToast(version);
   if (updateToast) updateToast.classList.add("update-toast-downloading");
+  const title = updateToast?.querySelector(".update-toast-title");
+  if (title) title.textContent = "Downloading update…";
   if (updateToastInstall) updateToastInstall.hidden = true;
   if (updateToastIgnore) updateToastIgnore.hidden = true;
-  window.api.updatesInstall().catch(() => {});
 }
 
 function ignoreCurrentUpdate() {
   const version = updatesState.availableVersion;
   updatesState.ignoredVersion = version;
+  updatesState.deferredVersion = version;
   window.api.updatesIgnore?.({ version }).catch(() => {});
   hideUpdateToast();
   if (version) showUpdateNotification(version);
@@ -4344,6 +4370,7 @@ function showUpdateNotification(version) {
   const v = String(version || "");
   if (!v) return;
   updatesState.pendingNotification = {
+    id: "update-available",
     title: `Update available — XEKUTE ${v}`,
     message: "A new version has been released. Install it when you're ready.",
     action: "update-install",
@@ -4358,13 +4385,26 @@ function handleUpdateEvent(payload = {}) {
   const type = String(payload.type || "");
   if (type === "available") {
     const version = String(payload.version || "");
-    // Per-version suppression: never re-nag after Ignore (Q6). The update
-    // stays reachable through the notification center instead.
-    if (version && version === updatesState.ignoredVersion) {
+    updatesState.availableVersion = version;
+    const ignored = Boolean(payload.ignored || (version && version === updatesState.ignoredVersion));
+    // A newly released version supersedes an older ignored one. The newest
+    // release gets one normal prompt even if several intermediate versions
+    // were skipped.
+    if (!ignored && version !== updatesState.ignoredVersion) {
+      updatesState.ignoredVersion = "";
+      updatesState.deferredVersion = "";
+      updatesState.pendingNotification = null;
+      setNotifications(notificationItems);
+    }
+    if (ignored) {
+      updatesState.deferredVersion = version;
       showUpdateNotification(version);
       return;
     }
     showUpdateToast(version);
+  } else if (type === "downloading") {
+    showUpdateDownloading(payload.version || updatesState.availableVersion || updatesState.deferredVersion);
+    handleUpdateEvent({ type: "progress", percent: 0 });
   } else if (type === "progress") {
     if (!updateToast || updateToast.hidden) return;
     updateToast.classList.add("update-toast-downloading");
@@ -4383,15 +4423,42 @@ function handleUpdateEvent(payload = {}) {
     const label = updateToast.querySelector(".update-toast-progress-label");
     if (label) label.textContent = `${percent}%`;
   } else if (type === "downloaded") {
+    updatesState.ignoredVersion = "";
+    updatesState.deferredVersion = "";
+    updatesState.pendingNotification = null;
+    setNotifications(notificationItems);
     const label = updateToast?.querySelector(".update-toast-progress-label");
     if (label) label.textContent = "Installing…";
     else showTransientUpdateNotice("Installing update…", "XEKUTE will restart automatically.");
     // The main process quits the app shortly after this event.
   } else if (type === "none") {
-    // Manual check only (auto-checks are silent): brief "up to date" toast.
-    showTransientUpdateNotice("XEKUTE is up to date", "You're on the latest version.");
+    // Launch checks are silent. Explicit checks (including installing a stale
+    // deferred reminder) give the user direct feedback.
+    if (payload.manual || payload.reason === "install") {
+      updatesState.ignoredVersion = "";
+      updatesState.deferredVersion = "";
+      updatesState.pendingNotification = null;
+      setNotifications(notificationItems);
+      showTransientUpdateNotice("XEKUTE is up to date", "You're on the latest version.");
+    }
+  } else if (type === "updated") {
+    updatesState.ignoredVersion = "";
+    updatesState.deferredVersion = "";
+    updatesState.pendingNotification = null;
+    setNotifications(notificationItems);
+    showTransientUpdateNotice("XEKUTE is now up to date", `Updated successfully to version ${String(payload.version || "").trim()}.`);
+  } else if (type === "disabled") {
+    if (payload.manual || payload.reason === "install") {
+      showTransientUpdateNotice("Development build", "Production updates are disabled. Set XEKUTE_UPDATE_MOCK=1 to test the update flow.");
+    }
   } else if (type === "error") {
-    showTransientUpdateNotice("Update failed", "XEKUTE could not download or install the update. Try again from Help → Check for Updates.");
+    if (payload.phase === "download" && updatesState.availableVersion) {
+      updatesState.deferredVersion = updatesState.availableVersion;
+      showUpdateNotification(updatesState.availableVersion);
+    }
+    if (payload.manual || payload.reason === "install" || payload.phase === "download") {
+      showTransientUpdateNotice("Update failed", "XEKUTE could not download or install the update. Try again from Help → Check for Updates.");
+    }
   }
 }
 
@@ -5346,8 +5413,8 @@ function setResourceWrapLines(wrapped) {
   resourceViewerContent.classList.toggle("wrap-lines", resourceWrapLines);
   resourceViewerContent.setAttribute("wrap", resourceWrapLines ? "soft" : "off");
   resourceViewerContent.title = resourceWrapLines
-    ? "Line wrapping on · Ctrl+Z to unwrap"
-    : "Line wrapping off · Ctrl+Z to wrap";
+    ? "Line wrapping on · Alt+Z to unwrap"
+    : "Line wrapping off · Alt+Z to wrap";
   syncResourceCursorPosition();
 }
 
@@ -5427,7 +5494,7 @@ resourceViewerContent?.addEventListener("input", () => {
   syncResourceCursorPosition();
 });
 resourceViewerContent?.addEventListener("keydown", (event) => {
-  if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "z") {
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === "z") {
     event.preventDefault();
     event.stopPropagation();
     setResourceWrapLines(!resourceWrapLines);
@@ -8137,6 +8204,8 @@ async function loadWorkspace(folder) {
   guidanceContextRequestPath = folder;
   localStorage.setItem(BUG_BOUNTY_PATH_KEY, folder);
   selectedItem = null;
+  selectedExplorerPaths.clear();
+  explorerSelectionAnchorPath = "";
   expandedTreePaths.clear();
   localStorage.setItem(WORKSPACE_KEY, folder);
   setProjectFolder(folder);
@@ -8883,7 +8952,7 @@ btnNotifications?.addEventListener("click", (event) => {
   btnNotifications.setAttribute("aria-expanded", String(opening));
 });
 notificationClear?.addEventListener("click", () => {
-  updatesState.pendingNotification = null;
+  // Deferred updates remain reachable until installed or superseded.
   setNotifications([]);
 });
 document.addEventListener("click", (event) => {
@@ -9622,21 +9691,25 @@ function renderWorkspaceContextMenu() {
   if (!workspaceContextMenu) return;
   const target = workspaceContextTarget;
   const isDir = Boolean(target?.isDir);
+  const selectionCount = selectedExplorerPaths.size;
+  const multiple = selectionCount > 1;
   const setHidden = (action, hidden) => {
     const button = workspaceContextActionButton(action);
     if (button) button.hidden = Boolean(hidden);
   };
-  setHidden("open", !target);
-  setHidden("cut", !target);
-  setHidden("copy", !target);
-  setHidden("paste", !workspaceClipboard);
-  setHidden("new-file", !isDir);
-  setHidden("new-folder", !isDir);
-  setHidden("terminal", !isDir);
-  setHidden("rename", !target);
+  setHidden("open", !target || multiple);
+  setHidden("cut", !target || multiple);
+  setHidden("copy", !target || multiple);
+  setHidden("paste", !workspaceClipboard || multiple);
+  setHidden("new-file", !isDir || multiple);
+  setHidden("new-folder", !isDir || multiple);
+  setHidden("terminal", !isDir || multiple);
+  setHidden("rename", !target || multiple);
   setHidden("delete", !target);
-  workspaceContextMenu.querySelector('[data-workspace-context-separator="create"]')?.toggleAttribute("hidden", !isDir);
-  workspaceContextMenu.querySelector('[data-workspace-context-separator="clipboard"]')?.toggleAttribute("hidden", !target);
+  const deleteLabel = $("workspace-context-delete-label");
+  if (deleteLabel) deleteLabel.textContent = multiple ? `Delete ${selectionCount} Items` : "Delete";
+  workspaceContextMenu.querySelector('[data-workspace-context-separator="create"]')?.toggleAttribute("hidden", !isDir || multiple);
+  workspaceContextMenu.querySelector('[data-workspace-context-separator="clipboard"]')?.toggleAttribute("hidden", !target || multiple);
   workspaceContextMenu.querySelector('[data-workspace-context-separator="delete"]')?.toggleAttribute("hidden", !target);
 }
 
@@ -9644,7 +9717,13 @@ function openWorkspaceContextMenu(event, entry, item) {
   if (!workspaceContextMenu || !entry?.path) return;
   event.preventDefault();
   event.stopPropagation();
-  selectItem(item);
+  selectItem(item, {
+    focus: false,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+    contextMenu: true,
+  });
   workspaceContextTarget = {
     path: entry.path,
     relativePath: relativePathFromRoot(entry.path),
@@ -9966,7 +10045,8 @@ async function renderTree(dirPath, container, depth) {
 
       item.addEventListener("click", async (e) => {
         e.stopPropagation();
-        selectItem(item);
+        selectItem(item, { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey });
+        if (e.ctrlKey || e.metaKey || e.shiftKey) return;
         expanded = !expanded;
         setExpandedTreePath(entry.path, expanded);
         item.setAttribute("aria-expanded", String(expanded));
@@ -9988,7 +10068,8 @@ async function renderTree(dirPath, container, depth) {
     } else {
       item.addEventListener("click", async (e) => {
         e.stopPropagation();
-        selectItem(item);
+        selectItem(item, { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey });
+        if (e.ctrlKey || e.metaKey || e.shiftKey) return;
         await openFile(entry.path, entry.name, { focusEditor: false, preview: true });
       });
       item.addEventListener("dblclick", async (e) => {
@@ -10042,23 +10123,77 @@ async function moveDroppedTreeItem(event, { isDir = false, relativePath = "", pa
   restoreChatComposerAfterUiAction();
 }
 
-function selectItem(el, { focus = true } = {}) {
-  if (selectedItem) {
-    selectedItem.classList.remove("selected");
-    selectedItem.setAttribute("aria-selected", "false");
-    selectedItem.tabIndex = -1;
-  }
-  selectedItem = el || null;
-  if (selectedItem) {
-    selectedItem.classList.add("selected");
-    selectedItem.setAttribute("aria-selected", "true");
-    selectedItem.tabIndex = 0;
-    if (focus && document.activeElement !== selectedItem) selectedItem.focus({ preventScroll: true });
-  }
+function explorerPathKey(value = "") {
+  return normPath(String(value || ""));
 }
 
-async function rerenderExplorer({ preserveSelectionPath = selectedItem?.dataset.path || null } = {}) {
+function isVisibleExplorerItem(item) {
+  if (!item?.dataset?.path) return false;
+  let children = item.parentElement?.closest?.(".tree-children");
+  while (children) {
+    if (children.style.display === "none") return false;
+    children = children.parentElement?.closest?.(".tree-children");
+  }
+  return true;
+}
+
+function visibleExplorerItems() {
+  return [...(fileTree?.querySelectorAll?.(".tree-item[data-path]") || [])].filter(isVisibleExplorerItem);
+}
+
+function syncExplorerSelectionUI({ primaryPath = "", focus = true } = {}) {
+  const rows = [...(fileTree?.querySelectorAll?.(".tree-item[data-path]") || [])];
+  const preferred = explorerPathKey(primaryPath || selectedItem?.dataset?.path || "");
+  let primary = null;
+  for (const row of rows) {
+    const path = explorerPathKey(row.dataset.path);
+    const selected = selectedExplorerPaths.has(path);
+    row.classList.toggle("selected", selected);
+    row.setAttribute("aria-selected", String(selected));
+    row.tabIndex = -1;
+    if (selected && path === preferred) primary = row;
+  }
+  if (!primary) primary = rows.find((row) => selectedExplorerPaths.has(explorerPathKey(row.dataset.path))) || null;
+  selectedItem = primary;
+  if (!selectedItem) return;
+  selectedItem.tabIndex = 0;
+  if (focus && document.activeElement !== selectedItem) selectedItem.focus({ preventScroll: true });
+}
+
+function selectItem(el, { focus = true, ctrlKey = false, metaKey = false, shiftKey = false, contextMenu = false } = {}) {
+  if (!el?.dataset?.path) {
+    selectedExplorerPaths.clear();
+    explorerSelectionAnchorPath = "";
+    syncExplorerSelectionUI({ primaryPath: "", focus: false });
+    return;
+  }
+  const clickedPath = explorerPathKey(el.dataset.path);
+  const orderedVisiblePaths = visibleExplorerItems().map((item) => explorerPathKey(item.dataset.path));
+  const next = ExplorerSelection.nextSelection({
+    selectedPaths: [...selectedExplorerPaths],
+    anchorPath: explorerSelectionAnchorPath,
+    clickedPath,
+    orderedVisiblePaths,
+    additive: Boolean(ctrlKey || metaKey),
+    range: Boolean(shiftKey),
+    contextMenu: Boolean(contextMenu),
+  });
+  selectedExplorerPaths.clear();
+  next.selectedPaths.forEach((path) => selectedExplorerPaths.add(path));
+  explorerSelectionAnchorPath = next.anchorPath;
+  syncExplorerSelectionUI({ primaryPath: next.primaryPath, focus });
+}
+
+async function rerenderExplorer(options = {}) {
   if (!rootPath) return;
+  const explicitSelection = Object.prototype.hasOwnProperty.call(options, "preserveSelectionPath");
+  const requestedPrimary = explicitSelection
+    ? explorerPathKey(options.preserveSelectionPath || "")
+    : explorerPathKey(selectedItem?.dataset.path || "");
+  const requestedPaths = explicitSelection
+    ? (requestedPrimary ? [requestedPrimary] : [])
+    : [...selectedExplorerPaths];
+  const requestedAnchor = explicitSelection ? requestedPrimary : explorerSelectionAnchorPath;
   closeWorkspaceContextMenu();
   await renderTree(rootPath, fileTree, 0);
   // Allow dropping a dragged item onto the tree root (empty area) to move it to the project root.
@@ -10082,25 +10217,27 @@ async function rerenderExplorer({ preserveSelectionPath = selectedItem?.dataset.
       if (droppedOnItem) return; // folder-item drop handlers already fired (they stopPropagation)
       await moveDroppedTreeItem(event, { relativePath: "" });
     });
+    fileTree?.addEventListener("click", (event) => {
+      if (event.target?.closest?.(".tree-item[data-path]")) return;
+      selectItem(null);
+    });
   }
-  const selectedPath = preserveSelectionPath ? normPath(preserveSelectionPath) : null;
-  if (!selectedPath) {
-    selectItem(null);
-    return;
-  }
-  const nextSelected = [...fileTree.querySelectorAll(".tree-item")].find(
-    (item) => normPath(item.dataset.path || "") === selectedPath,
-  );
-  selectItem(nextSelected || null);
+  const availablePaths = new Set([...fileTree.querySelectorAll(".tree-item[data-path]")].map((item) => explorerPathKey(item.dataset.path)));
+  selectedExplorerPaths.clear();
+  requestedPaths.filter((path) => availablePaths.has(path)).forEach((path) => selectedExplorerPaths.add(path));
+  explorerSelectionAnchorPath = availablePaths.has(requestedAnchor)
+    ? requestedAnchor
+    : ([...selectedExplorerPaths][0] || "");
+  syncExplorerSelectionUI({ primaryPath: requestedPrimary, focus: Boolean(selectedExplorerPaths.size) });
 }
 
-function refreshWorkspaceUi({ preserveSelectionPath = selectedItem?.dataset.path || null } = {}) {
+function refreshWorkspaceUi(options = {}) {
   const workspaceAtRequest = rootPath;
   const refresh = workspaceUiRefreshQueue.catch(() => {}).then(async () => {
     if (!workspaceAtRequest || normPath(rootPath) !== normPath(workspaceAtRequest)) return;
     await refreshDirMap();
     if (normPath(rootPath) !== normPath(workspaceAtRequest)) return;
-    await rerenderExplorer({ preserveSelectionPath });
+    await rerenderExplorer(options);
   });
   workspaceUiRefreshQueue = refresh;
   return refresh;
@@ -10161,49 +10298,85 @@ function closeTabsUnderWorkspacePath(absPath, { force = false } = {}) {
   }
 }
 
-async function reconcileDeletedWorkspacePath(absPath, relPath) {
+function pathIsAtOrUnder(candidatePath, parentPath) {
+  const candidate = explorerPathKey(candidatePath);
+  const parent = explorerPathKey(parentPath);
+  return Boolean(parent) && (candidate === parent || candidate.startsWith(`${parent}/`));
+}
+
+function selectedExplorerTargets() {
+  const rows = [...(fileTree?.querySelectorAll?.(".tree-item[data-path]") || [])];
+  const byPath = new Map(rows.map((row) => [explorerPathKey(row.dataset.path), row]));
+  const targets = [...selectedExplorerPaths].map((path) => {
+    const row = byPath.get(path);
+    if (!row) return null;
+    return {
+      path,
+      relPath: relativePathFromRoot(path),
+      isDir: row.dataset.isDir === "true",
+      label: row.querySelector(".tree-name")?.textContent || basenameOf(path),
+      item: row,
+    };
+  }).filter((target) => target?.relPath);
+  return ExplorerSelection.topLevelTargets(targets);
+}
+
+async function reconcileDeletedWorkspacePaths(targets = []) {
+  const deleted = (Array.isArray(targets) ? targets : []).filter((target) => target?.path && target?.relPath);
+  if (!deleted.length) return;
   releaseWorkspaceMutationFocus();
-  closeTabsUnderWorkspacePath(absPath, { force: true });
-  clearExpandedTreePathsUnder(absPath);
-  selectItem(null);
-  contextFilesCache = contextFilesCache.filter((file) => file.path !== relPath && !file.path.startsWith(`${relPath}/`));
+  for (const target of deleted) {
+    closeTabsUnderWorkspacePath(target.path, { force: true });
+    clearExpandedTreePathsUnder(target.path);
+    for (const selectedPath of [...selectedExplorerPaths]) {
+      if (pathIsAtOrUnder(selectedPath, target.path)) selectedExplorerPaths.delete(selectedPath);
+    }
+    contextFilesCache = contextFilesCache.filter((file) => file.path !== target.relPath && !file.path.startsWith(`${target.relPath}/`));
+  }
+  if (deleted.some((target) => pathIsAtOrUnder(explorerSelectionAnchorPath, target.path))) {
+    explorerSelectionAnchorPath = [...selectedExplorerPaths][0] || "";
+  }
   syncActiveChatSession();
-  await refreshWorkspaceUi({ preserveSelectionPath: null });
+  await refreshWorkspaceUi();
+}
+
+async function reconcileDeletedWorkspacePath(absPath, relPath) {
+  await reconcileDeletedWorkspacePaths([{ path: absPath, relPath }]);
 }
 
 async function deleteSelectedExplorerItem() {
   if (!rootPath || !selectedItem || deletingExplorerItem) return;
-  const absPath = selectedItem.dataset.path;
-  const relPath = relativePathFromRoot(absPath);
-  const isDir = selectedItem.dataset.isDir === "true";
-  if (!relPath) return;
-
-  const label = selectedItem.querySelector(".tree-name")?.textContent || relPath;
-  const normalizedTarget = normPath(absPath);
-  const hasDirtyTabs = [...openTabs.entries()].some(([tabPath, tab]) => tab?.dirty && (tabPath === normalizedTarget || tabPath.startsWith(`${normalizedTarget}/`)));
+  const targets = selectedExplorerTargets();
+  if (!targets.length) return;
+  const hasDirtyTabs = [...openTabs.entries()].some(([tabPath, tab]) => tab?.dirty && targets.some((target) => pathIsAtOrUnder(tabPath, target.path)));
   const dirtyWarning = hasDirtyTabs ? "\n\nUnsaved editor changes under this path will be discarded." : "";
+  const only = targets[0];
+  const multiple = targets.length > 1;
   const confirmed = await AppDialog.confirm(
-    isDir
-      ? `Delete folder "${label}" and everything inside it?${dirtyWarning}`
-      : `Delete file "${label}"?${dirtyWarning}`,
-    { title: isDir ? "Delete folder" : "Delete file", confirmLabel: "Delete", tone: "danger" },
+    multiple
+      ? `Delete ${targets.length} selected items? Selected folders and everything inside them will be removed.${dirtyWarning}`
+      : only.isDir
+        ? `Delete folder "${only.label}" and everything inside it?${dirtyWarning}`
+        : `Delete file "${only.label}"?${dirtyWarning}`,
+    { title: multiple ? "Delete selected items" : only.isDir ? "Delete folder" : "Delete file", confirmLabel: "Delete", tone: "danger" },
   );
   if (!confirmed) return;
 
   deletingExplorerItem = true;
   try {
-    const result = await window.api.deletePath({
-      workspace: rootPath,
-      path: relPath,
-    });
-    if (result?.error) {
-      await AppDialog.alert(`Delete failed: ${result.error}`, { title: "Delete failed" });
-      return;
+    const deleted = [];
+    for (const target of targets) {
+      const result = await window.api.deletePath({ workspace: rootPath, path: target.relPath });
+      if (result?.error) {
+        await AppDialog.alert(`Could not delete ${target.label}: ${result.error}`, { title: "Delete failed" });
+        break;
+      }
+      deleted.push(target);
     }
-    if (workspaceClipboard && (workspaceClipboard.relativePath === relPath || workspaceClipboard.relativePath.startsWith(`${relPath}/`))) {
+    if (workspaceClipboard && deleted.some((target) => pathIsAtOrUnder(workspaceClipboard.relativePath, target.relPath))) {
       workspaceClipboard = null;
     }
-    await reconcileDeletedWorkspacePath(absPath, relPath);
+    await reconcileDeletedWorkspacePaths(deleted);
   } catch (error) {
     await AppDialog.alert(`Delete failed: ${error?.message || "Unexpected workspace error"}`, { title: "Delete failed" });
   } finally {
@@ -12868,10 +13041,155 @@ function agentStateKindForText(text = "") {
   return "working";
 }
 
+function isTaskListTool(tool) {
+  return toolActionName(tool) === "update_task_list";
+}
+
+function clearComposerTaskList() {
+  activeComposerTaskList = null;
+  if (composerTaskListEl) {
+    composerTaskListEl.hidden = true;
+    composerTaskListEl.innerHTML = "";
+  }
+  inputBar?.classList.remove("has-composer-task-list");
+}
+
+function renderComposerTaskList(payload = {}) {
+  if (!composerTaskListEl) return;
+  const tasks = (Array.isArray(payload.tasks) ? payload.tasks : [])
+    .filter((task) => task && String(task.title || "").trim())
+    .slice(0, 20)
+    .map((task, index) => ({
+      id: String(task.id || `task-${index + 1}`),
+      title: String(task.title || "").replace(/\s+/g, " ").trim(),
+      status: ["pending", "in_progress", "completed", "blocked"].includes(String(task.status || "")) ? String(task.status) : "pending",
+    }));
+  if (payload.clear || payload.completed || !tasks.length || tasks.every((task) => task.status === "completed")) {
+    clearComposerTaskList();
+    return;
+  }
+
+  const currentIndex = Math.max(0, tasks.findIndex((task) => ["in_progress", "blocked", "pending"].includes(task.status)));
+  const expanded = Boolean(activeComposerTaskList?.expanded);
+  activeComposerTaskList = { ...payload, tasks, currentIndex, expanded };
+  composerTaskListEl.hidden = false;
+  inputBar?.classList.add("has-composer-task-list");
+
+  const rows = tasks.map((task, index) => `
+    <div class="composer-task-list-row" data-task-status="${escapeHtml(task.status)}" data-task-index="${index}"${!expanded && index !== currentIndex ? " hidden" : ""}>
+      <span class="composer-task-list-icon" aria-hidden="true"></span>
+      <span class="composer-task-list-count">${index + 1}/${tasks.length}</span>
+      <span class="composer-task-list-title">${escapeHtml(task.title)}</span>
+    </div>
+  `).join("");
+  composerTaskListEl.innerHTML = `<button type="button" class="composer-task-list-card" aria-expanded="${String(expanded)}" aria-label="${expanded ? "Collapse" : "Expand"} task list">${rows}</button>`;
+  const card = composerTaskListEl.querySelector(".composer-task-list-card");
+  card?.addEventListener("click", () => {
+    if (!activeComposerTaskList) return;
+    activeComposerTaskList.expanded = !activeComposerTaskList.expanded;
+    renderComposerTaskList(activeComposerTaskList);
+  });
+}
+
+document.addEventListener("pointerdown", (event) => {
+  if (!activeComposerTaskList?.expanded || composerTaskListEl?.contains(event.target)) return;
+  activeComposerTaskList.expanded = false;
+  renderComposerTaskList(activeComposerTaskList);
+});
+
+function showCommandApprovalPanel({
+  command = "",
+  requestId = "",
+  onLiveState = null,
+} = {}) {
+  if (pendingComposerQuestions) return pendingComposerQuestions.promise;
+  if (!composerQuestionsEl) {
+    return Promise.resolve({ answers: [], skipped: false, requestId });
+  }
+
+  composerQuestionsEl.hidden = false;
+  composerQuestionsEl.innerHTML = "";
+  inputBar?.classList.add("has-composer-questions");
+
+  const block = document.createElement("section");
+  block.className = "agent-questions-card composer-questions-card agent-command-approval";
+  block.setAttribute("role", "group");
+  block.setAttribute("aria-label", "Command execution approval");
+  block.innerHTML = `
+    <div class="agent-questions-header">
+      <span class="agent-questions-icon codicon codicon-terminal" aria-hidden="true"></span>
+      <strong class="agent-questions-title">Allow the below command to be executed?</strong>
+    </div>
+    <div class="agent-questions-body">
+      <button type="button" class="agent-command-approval-preview" aria-expanded="false" title="Click to show the full command">
+        <code>${escapeHtml(String(command || "exec_command"))}</code>
+      </button>
+    </div>
+    <div class="agent-command-approval-actions">
+      <button type="button" class="agent-command-approval-button approve" data-command-decision="approve">Approve</button>
+      <button type="button" class="agent-command-approval-button deny" data-command-decision="deny">Deny</button>
+    </div>
+  `;
+  composerQuestionsEl.appendChild(block);
+  onLiveState?.({ kind: "question", title: "Command approval required", detail: "Waiting for your decision", meta: "PAUSED" });
+
+  const preview = block.querySelector(".agent-command-approval-preview");
+  const collapsePreview = () => {
+    preview?.setAttribute("aria-expanded", "false");
+    if (preview) preview.title = "Click to show the full command";
+  };
+  const outsidePointer = (event) => {
+    if (preview?.getAttribute("aria-expanded") === "true" && !preview.contains(event.target)) collapsePreview();
+  };
+  document.addEventListener("pointerdown", outsidePointer);
+  preview?.addEventListener("click", () => {
+    const expanded = preview.getAttribute("aria-expanded") === "true";
+    preview.setAttribute("aria-expanded", String(!expanded));
+    preview.title = expanded ? "Click to show the full command" : "Click to collapse the command";
+  });
+
+  let resolveQuestions;
+  let settled = false;
+  const promise = new Promise((resolve) => { resolveQuestions = resolve; });
+  const dismissPanel = () => {
+    document.removeEventListener("pointerdown", outsidePointer);
+    composerQuestionsEl.hidden = true;
+    composerQuestionsEl.innerHTML = "";
+    inputBar?.classList.remove("has-composer-questions");
+    pendingComposerQuestions = null;
+  };
+  const finish = (decision = "deny") => {
+    if (settled) return;
+    settled = true;
+    block.dataset.decision = decision;
+    block.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    onLiveState?.({
+      kind: decision === "approve" ? "success" : "warn",
+      title: decision === "approve" ? "Command approved" : "Command denied",
+      detail: "Resuming the agent run.",
+      meta: decision === "approve" ? "APPROVED" : "DENIED",
+    });
+    setTimeout(dismissPanel, 160);
+    resolveQuestions({
+      answers: [{ questionId: "approval", selectedOptionId: decision, freeText: "" }],
+      skipped: false,
+      requestId,
+    });
+  };
+  block.querySelectorAll("[data-command-decision]").forEach((button) => {
+    button.addEventListener("click", () => finish(button.dataset.commandDecision === "approve" ? "approve" : "deny"));
+  });
+
+  pendingComposerQuestions = { block, promise, finish };
+  return promise;
+}
+
 function showComposerQuestionsPanel({
   reason = "The agent needs your input before continuing.",
   questions = [],
   requestId = "",
+  approval = null,
+  questionnaire = null,
   onLiveState = null,
 } = {}) {
   if (pendingComposerQuestions) return pendingComposerQuestions.promise;
@@ -12884,6 +13202,10 @@ function showComposerQuestionsPanel({
   if (!visibleQuestions.length) {
     return Promise.resolve({ answers: [], skipped: true, requestId });
   }
+  if (approval?.kind === "command") {
+    return showCommandApprovalPanel({ command: approval.command, requestId, onLiveState });
+  }
+  const isToolQuestionnaire = questionnaire?.kind === "agent_questions";
 
   composerQuestionsEl.hidden = false;
   composerQuestionsEl.innerHTML = "";
@@ -12898,7 +13220,8 @@ function showComposerQuestionsPanel({
     const options = Array.isArray(question.options) ? question.options : [];
     const hasRecommended = options.some((option) => option.recommended);
     const optionsHtml = options.map((option, optionIndex) => {
-      const selectedByDefault = option.recommended || (!hasRecommended && optionIndex === 0);
+      const selectedByDefault = !isToolQuestionnaire && (option.recommended || (!hasRecommended && optionIndex === 0));
+      const inputType = question.multiple ? "checkbox" : "radio";
       if (option.freeWrite) {
         return `
           <div class="agent-questions-option is-free-write">
@@ -12910,15 +13233,16 @@ function showComposerQuestionsPanel({
       }
       return `
         <label class="agent-questions-option">
-          <input type="radio" name="agent-question-${escapeHtml(question.id)}" value="${escapeHtml(option.id)}" data-free-write="0"${selectedByDefault ? " checked" : ""}>
+          <input type="${inputType}" name="agent-question-${escapeHtml(question.id)}" value="${escapeHtml(option.id)}" data-free-write="0"${selectedByDefault ? " checked" : ""}>
           <span class="agent-questions-option-label">${escapeHtml(option.label)}</span>
-          ${option.recommended ? '<span class="agent-questions-recommended">(recommended)</span>' : ""}
+          ${option.recommended ? '<span class="agent-questions-recommended">(Recommended)</span>' : ""}
         </label>
       `;
     }).join("");
+    const displayPrompt = `${question.prompt}${question.multiple ? " (Select more than one if applicable)" : ""}`;
     return `
-      <fieldset class="agent-questions-field" data-question-id="${escapeHtml(question.id)}" data-question-index="${index}" data-question-prompt="${escapeHtml(question.prompt)}"${index === 0 ? "" : " hidden"}>
-        <legend class="agent-questions-field-legend">${escapeHtml(question.prompt)}</legend>
+      <fieldset class="agent-questions-field" data-question-id="${escapeHtml(question.id)}" data-question-index="${index}" data-question-prompt="${escapeHtml(displayPrompt)}" data-question-multiple="${String(Boolean(question.multiple))}"${index === 0 ? "" : " hidden"}>
+        <legend class="agent-questions-field-legend">${escapeHtml(displayPrompt)}</legend>
         <div class="agent-questions-options">${optionsHtml}</div>
       </fieldset>
     `;
@@ -12927,14 +13251,14 @@ function showComposerQuestionsPanel({
   block.innerHTML = `
     <div class="agent-questions-header">
       <span class="agent-questions-icon codicon codicon-question" aria-hidden="true"></span>
-      <strong class="agent-questions-title">${escapeHtml(visibleQuestions[0]?.prompt || "Need your input")}</strong>
+      <strong class="agent-questions-title">${escapeHtml(isToolQuestionnaire ? `1. ${visibleQuestions[0]?.prompt || "Need your input"}` : visibleQuestions[0]?.prompt || "Need your input")}</strong>
       <span class="agent-questions-step">1/${visibleQuestions.length}</span>
     </div>
     <div class="agent-questions-body">${questionBlocks}</div>
     <div class="agent-questions-actions">
-      <button type="button" class="agent-questions-button secondary" data-questions-action="skip">Skip</button>
       <button type="button" class="agent-questions-button icon" data-questions-action="back" aria-label="Previous question" title="Previous question" disabled><span class="codicon codicon-chevron-left" aria-hidden="true"></span></button>
       <button type="button" class="agent-questions-button icon" data-questions-action="submit" aria-label="${visibleQuestions.length > 1 ? "Next question" : "Submit answers"}" title="${visibleQuestions.length > 1 ? "Next question" : "Submit answers"}"><span class="codicon codicon-chevron-right" aria-hidden="true"></span></button>
+      <button type="button" class="agent-questions-button secondary" data-questions-action="skip">Skip</button>
     </div>
   `;
 
@@ -12963,7 +13287,10 @@ function showComposerQuestionsPanel({
     });
     const isLast = activeQuestionIndex >= questionFields.length - 1;
     const activeField = questionFields[activeQuestionIndex];
-    if (titleLabel) titleLabel.textContent = activeField?.dataset.questionPrompt || "Need your input";
+    if (titleLabel) {
+      const prompt = activeField?.dataset.questionPrompt || "Need your input";
+      titleLabel.textContent = isToolQuestionnaire ? `${activeQuestionIndex + 1}. ${prompt}` : prompt;
+    }
     if (stepLabel) stepLabel.textContent = `${activeQuestionIndex + 1}/${questionFields.length}`;
     if (backButton) backButton.disabled = activeQuestionIndex === 0;
     if (submitButton) {
@@ -12972,16 +13299,19 @@ function showComposerQuestionsPanel({
       submitButton.title = actionLabel;
     }
     if (focus) {
-      const selected = activeField?.querySelector("input[type='radio']:checked");
+      const selected = activeField?.querySelector("input:checked");
       const customText = selected?.dataset.freeWrite === "1"
         ? activeField?.querySelector(".agent-questions-freetext")
         : null;
-      (customText || selected || activeField?.querySelector("input[type='radio']"))?.focus();
+      (customText || selected || activeField?.querySelector("input[type='radio'], input[type='checkbox']"))?.focus();
     }
   };
 
   block.querySelectorAll("input[type='radio']").forEach((input) => {
-    input.addEventListener("change", syncFreeWrite);
+    input.addEventListener("change", () => {
+      syncFreeWrite();
+      if (isToolQuestionnaire && input.checked) queueMicrotask(() => submitButton?.click());
+    });
   });
   block.querySelectorAll(".agent-questions-option.is-free-write").forEach((option) => {
     const radio = option.querySelector("input[type='radio']");
@@ -13009,16 +13339,15 @@ function showComposerQuestionsPanel({
     const answers = [];
     block.querySelectorAll(".agent-questions-field").forEach((field) => {
       const questionId = field.dataset.questionId || "";
-      const selected = field.querySelector("input[type='radio']:checked");
+      const selectedInputs = [...field.querySelectorAll("input[type='radio']:checked, input[type='checkbox']:checked")];
+      const selected = selectedInputs[0];
       if (!questionId || !selected) return;
       const freeText = selected.dataset.freeWrite === "1"
         ? String(field.querySelector(".agent-questions-freetext")?.value || "").trim()
         : "";
-      answers.push({
-        questionId,
-        selectedOptionId: selected.value,
-        freeText,
-      });
+      answers.push(field.dataset.questionMultiple === "true"
+        ? { questionId, selectedOptionIds: selectedInputs.map((input) => input.value), freeText: "" }
+        : { questionId, selectedOptionId: selected.value, freeText });
     });
     return answers;
   };
@@ -13046,6 +13375,11 @@ function showComposerQuestionsPanel({
   };
 
   submitButton.addEventListener("click", () => {
+    const activeField = questionFields[activeQuestionIndex];
+    if (!activeField?.querySelector("input[type='radio']:checked, input[type='checkbox']:checked")) {
+      activeField?.querySelector("input[type='radio'], input[type='checkbox']")?.focus();
+      return;
+    }
     if (activeQuestionIndex < questionFields.length - 1) {
       activeQuestionIndex += 1;
       syncQuestionStep();
@@ -13493,6 +13827,8 @@ function createAssistantTurn() {
       requestId = "",
       file = "",
       expiresInMs = 300_000,
+      approval = null,
+      questionnaire = null,
     } = {}) {
       this.turn.classList.add("has-agent-run");
       return showComposerQuestionsPanel({
@@ -13501,6 +13837,8 @@ function createAssistantTurn() {
         requestId,
         file,
         expiresInMs,
+        approval,
+        questionnaire,
         onLiveState: (state) => this.setLiveState(state),
       });
     },
@@ -13913,6 +14251,12 @@ async function sendMessageWithAgentRuntime(options = {}) {
     // into the old assistant turn as well.
     if (payload.source === "parent_continuation") return;
 
+    if (payload.type === "task_list") {
+      run.taskList = payload.clear || payload.completed ? null : payload;
+      if (runIsVisible()) renderComposerTaskList(payload);
+      return;
+    }
+
     if (payload.type === "task_brief" && payload.brief) {
       assistant.ensureTaskBrief(payload.brief);
       const firstStep = String(payload.brief.steps?.[0]?.detail || "I’ll inspect the relevant context and determine the smallest useful next action.").trim();
@@ -14042,7 +14386,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
       assistant.finalizeThinking();
       for (const tool of tools) {
-        if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
+        if (!isAgentTerminalTool(tool) && !isTaskListTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
       }
       if (tools.length === 1) {
         assistant.setStatus(ToolParser.toolStatusLabel(tools[0]));
@@ -14065,6 +14409,11 @@ async function sendMessageWithAgentRuntime(options = {}) {
         toolName: payload.tool.toolName || payload.tool.action || payload.tool.name || "tool",
       }, { session: runSession });
       assistant.finalizeThinking();
+      if (isTaskListTool(payload.tool)) {
+        assistant.setStatus("Organizing the task list…");
+        await toolMemoryWrite;
+        return;
+      }
       if (assistant.progressEntries.has("preflight")) {
         const preflightText = assistant.progressEntries.get("preflight")?.querySelector(".agent-progress-text")?.textContent || "Context inspected.";
         assistant.setProgressUpdate("preflight", preflightText, "success");
@@ -14083,6 +14432,10 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_result" && payload.tool && payload.result) {
+      if (isTaskListTool(payload.tool)) {
+        assistant.setStatus(payload.result?.error ? "Task list update failed" : "Task list updated");
+        return;
+      }
       const uiResult = toolUiResult(payload.result);
       const summary = uiResult.error
         ? `Failed: ${uiResult.error}`
@@ -14246,6 +14599,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     syncChatRunSession(run);
     const completedInBackground = activeChatSessionId !== runSession.id;
     run.state = "complete";
+    if (run.taskList?.source === "agent" && activeChatSessionId === runSession.id) clearComposerTaskList();
     if (completedInBackground) chatSessionsNeedingAttention.add(runSession.id);
     else chatSessionsNeedingAttention.delete(runSession.id);
     if (activeChatRuns.get(runSession.id) === run) activeChatRuns.delete(runSession.id);
@@ -15135,7 +15489,7 @@ document.addEventListener("keydown", async (e) => {
   const mod = e.ctrlKey || e.metaKey;
 
   const editorSurfaceFocused = Boolean(e.target?.closest?.("#monaco-container") || document.activeElement?.closest?.("#monaco-container"));
-  if (mod && !e.altKey && !e.shiftKey && key === "z" && editorSurfaceFocused && activeTabPath) {
+  if (e.altKey && !mod && !e.shiftKey && key === "z" && editorSurfaceFocused && activeTabPath) {
     e.preventDefault();
     e.stopPropagation();
     EditorManager.toggleWordWrap?.();

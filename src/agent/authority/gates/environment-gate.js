@@ -5,6 +5,12 @@ const { allow, deny, gate } = require("./gate-utils.js");
 
 function createEnvironmentGate({ fsImpl = fs } = {}) {
   return gate("environment_gate", async ({ context, toolName, entry, runtime }) => {
+    if (entry?.metadata?.interactive === true && entry?.adapter) {
+      return allow("environment_gate", "The local operator-input provider is available without a workspace dependency.");
+    }
+    if (entry?.adapter && Array.isArray(entry?.metadata?.targetTypes) && entry.metadata.targetTypes.includes("runtime")) {
+      return allow("environment_gate", "The local runtime UI tool is available without a workspace dependency.");
+    }
     const root = String(context?.workspace?.root || "");
     if (!root || !fsImpl.existsSync(root)) return deny("environment_gate", "The active workspace is unavailable.", { code: "WORKSPACE_UNAVAILABLE" });
     if (!entry?.adapter && !runtime?.dynamicTool) return deny("environment_gate", "The selected execution provider is unavailable.", { code: "EXECUTION_PROVIDER_UNAVAILABLE" });

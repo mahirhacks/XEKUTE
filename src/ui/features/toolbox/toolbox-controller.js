@@ -30,7 +30,7 @@ const ToolParser = (() => {
   const PATCH_FENCE_RE = /```patch:([^\n`]+)\s*\n<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE\s*\n```/gi;
 
   const LOOSE_PATCH_RE = /(?:^|\n)patch:[^\n]+\n<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE/g;
-  const TOOL_NAME_PATTERN = "exec_command|read_file|search_workspace|apply_patch|inspect_environment|manage_plan|manage_state|ingest_traffic|manage_identity|replay_request|run_test_case|browser_action|compare_responses|verify_finding|store_finding|attack_graph|delegate_agent|query_assessment|expand_evidence";
+const TOOL_NAME_PATTERN = "update_task_list|exec_command|read_file|search_workspace|apply_patch|inspect_environment|manage_plan|manage_state|ingest_traffic|manage_identity|replay_request|run_test_case|browser_action|compare_responses|verify_finding|store_finding|attack_graph|delegate_agent|query_assessment|expand_evidence";
   const PSEUDO_TOOL_RE = new RegExp(`(?:"[^"\\n{}]*"\\s*}?\\s*)?(?:${TOOL_NAME_PATTERN})\\s*\\{[^}\\n]*(?:\\}|\\n|$)`, "gi");
   const PSEUDO_TOOL_CALL_RE = /(?:^|[\s"'`}>])([a-z_][a-z0-9_]*)\s*\{\s*([^}\n]*)/gi;
 

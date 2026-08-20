@@ -13,7 +13,7 @@ src/
 │   │   ├── assessment/   # browser, traffic, identity, test, finding, graph
 │   │   ├── process/      # exec_command, delegate_agent, executable resolution
 │   │   ├── workspace/    # files, search, plan, state, environment
-│   │   └── config/       # exact 21-tool registry and mode surface metadata
+│   │   └── config/       # exact 23-tool registry and mode surface metadata
 │   ├── llm/              # common stream contracts plus Ollama/OpenRouter
 │   ├── memory/           # context, failure, action, and evidence memory
 │   ├── modes/            # ask, agent, plan, hypothesis and mode registry

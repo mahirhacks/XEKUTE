@@ -1,6 +1,7 @@
 "use strict";
 
 const { isRestrictedToolContext } = require("../../../contracts/tool/execution-context");
+const { parsePlanMarkdown, renderPlanMarkdown } = require("../../../shared/plan-markdown.js");
 
 const MANAGE_PLAN_INPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -170,11 +171,14 @@ function createManagePlanTool({ fs = null, path = null } = {}) {
   function cacheKey(root, planId) { return `${workspaceKey(root)}\u0000${planId}`; }
 
   function planFile(root, planId) {
-    return realPath.join(root, ".xekute", "plan", `${planId}.json`);
+    return realPath.join(root, ".xekute", "plans", `${planId}.md`);
   }
 
-  function legacyPlanFile(root, planId) {
-    return realPath.join(root, ".xekute", "plans", `${planId}.json`);
+  function legacyPlanFiles(root, planId) {
+    return [
+      realPath.join(root, ".xekute", "plan", `${planId}.json`),
+      realPath.join(root, ".xekute", "plans", `${planId}.json`),
+    ];
   }
 
   function loadPlan(root, planId) {
@@ -182,10 +186,15 @@ function createManagePlanTool({ fs = null, path = null } = {}) {
     if (plans.has(key)) return plans.get(key);
     if (!root) return null;
     try {
-      let raw;
-      try { raw = realFs.readFileSync(planFile(root, planId), "utf8"); }
-      catch { raw = realFs.readFileSync(legacyPlanFile(root, planId), "utf8"); }
-      const parsed = JSON.parse(raw);
+      let parsed;
+      try { parsed = parsePlanMarkdown(realFs.readFileSync(planFile(root, planId), "utf8")); }
+      catch {
+        const legacy = legacyPlanFiles(root, planId).find((candidate) => realFs.existsSync(candidate));
+        if (!legacy) throw new Error("Plan not found");
+        parsed = JSON.parse(realFs.readFileSync(legacy, "utf8"));
+        persistPlan(root, parsed);
+        for (const candidate of legacyPlanFiles(root, planId)) realFs.rmSync(candidate, { force: true });
+      }
       if (parsed && parsed.id === planId) {
         plans.set(key, parsed);
         return parsed;
@@ -199,8 +208,11 @@ function createManagePlanTool({ fs = null, path = null } = {}) {
   function persistPlan(root, plan) {
     if (!root) return;
     try {
-      realFs.mkdirSync(realPath.join(root, ".xekute", "plan"), { recursive: true });
-      realFs.writeFileSync(planFile(root, plan.id), JSON.stringify(plan, null, 2), "utf8");
+      realFs.mkdirSync(realPath.join(root, ".xekute", "plans"), { recursive: true });
+      const target = planFile(root, plan.id);
+      const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
+      realFs.writeFileSync(temporary, renderPlanMarkdown(plan), "utf8");
+      realFs.renameSync(temporary, target);
     } catch (error) {
       throw error;
     }
@@ -356,6 +368,7 @@ function createManagePlanTool({ fs = null, path = null } = {}) {
     if (root) {
       try {
         realFs.rmSync(planFile(root, plan.id), { force: true });
+        for (const candidate of legacyPlanFiles(root, plan.id)) realFs.rmSync(candidate, { force: true });
       } catch (error) {
         return structuredFailure(MANAGE_ERROR_CODES.WRITE_FAILED, error.message);
       }
@@ -370,8 +383,8 @@ function createManagePlanTool({ fs = null, path = null } = {}) {
         for (const dir of [realPath.join(root, ".xekute", "plan"), realPath.join(root, ".xekute", "plans")]) {
           const entries = realFs.existsSync(dir) ? realFs.readdirSync(dir) : [];
           for (const entry of entries) {
-            if (entry.endsWith(".json")) {
-              const id = entry.replace(/\.json$/, "");
+            if (entry.endsWith(".json") || entry.endsWith(".md")) {
+              const id = entry.replace(/\.(?:json|md)$/, "");
               if (!plans.has(cacheKey(root, id))) loadPlan(root, id);
             }
           }
@@ -393,6 +406,7 @@ function createManagePlanTool({ fs = null, path = null } = {}) {
 
   const adapter = {
     name: "manage_plan",
+    description: "Create, read, revise, list, or delete structured Markdown implementation plans under .xekute/plans. Tasks are saved as ordered Markdown checkboxes.",
     inputSchema: MANAGE_PLAN_INPUT_SCHEMA,
     async execute(input, executionContext) {
       const validation = validateInput(input);
