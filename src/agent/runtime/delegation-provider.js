@@ -108,6 +108,7 @@ function createRuntimeDelegationProvider({
   registerChildRun,
   unregisterChildRun,
   recordChildSession,
+  finalizeChildContext,
   getActiveProvider = () => "",
   modeWorkflow = null,
   intelligence = null,
@@ -214,7 +215,7 @@ function createRuntimeDelegationProvider({
     };
   }
 
-  function buildRun({ input, executionContext = null, childSessionId, childInvocationId, childController, generation, operation, previousHistory = [], model = "" }) {
+  function buildRun({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation, operation, previousHistory = [], model = "" }) {
     const mutation = requestedWorkspaceMutation(input);
     const inheritedContext = executionContext || { mode, role: mode, workspace: { root: workspace }, invocationId: childInvocationId };
     const contextText = buildChildContextText(input, inheritedContext);
@@ -229,6 +230,7 @@ function createRuntimeDelegationProvider({
         toolResult = await executeToolCall({
           ...request,
           sessionId: childSessionId,
+          blockId,
           nested: true,
           authorityProfile,
           // Preserve the binding validated by the child controller so the
@@ -298,7 +300,7 @@ function createRuntimeDelegationProvider({
     let effectiveModel = String(model || selectedChildModel).trim();
     const requestedModel = effectiveModel;
     let fallbackUsed = false;
-    let runSpec = buildRun({ input, executionContext, childSessionId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel });
+    let runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel });
     sendChildEvent(childSessionId, childInvocationId, {
       type: "subagent_started",
       status: "working",
@@ -314,7 +316,7 @@ function createRuntimeDelegationProvider({
         sendChildEvent(childSessionId, childInvocationId, { type: "subagent_activity", model: fallbackModel, summary: `Selected sub-agent model was unavailable; retrying with ${fallbackModel}.` });
         fallbackUsed = true;
         effectiveModel = fallbackModel;
-        runSpec = buildRun({ input, executionContext, childSessionId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel });
+        runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel });
         result = await runSpec.run();
       }
       const runtimeStatus = String(result?.runState?.status || "").toLowerCase();
@@ -367,7 +369,44 @@ function createRuntimeDelegationProvider({
           output: outcome.output,
           metadata: outcome.metadata,
         });
-      } catch { /* Session persistence must not turn a completed child into a failed one. */ }
+      } catch (error) {
+        outcome.metadata.sessionPersistence = {
+          ok: false,
+          error: String(error?.message || "Child session persistence failed.").slice(0, MAX_SUMMARY_CHARS),
+        };
+      }
+      if (typeof finalizeChildContext === "function") {
+        try {
+          const sharedContext = await finalizeChildContext({
+            workspace,
+            sessionId: childSessionId,
+            blockId,
+            childInvocationId,
+            operation,
+            model: effectiveModel,
+            status,
+            task: String(input?.task || ""),
+            output: outcome.output,
+            metadata: outcome.metadata,
+            messages: Array.isArray(result?.appendedMessages) ? result.appendedMessages : [],
+            evidenceIds: Array.isArray(result?.evidenceIds) ? result.evidenceIds : [],
+          });
+          outcome.metadata.sharedContext = redactStructuredValue(
+            sharedContext && typeof sharedContext === "object"
+              ? sharedContext
+              : { ok: true },
+          );
+        } catch (error) {
+          // Child work remains reviewable even if shared-context consolidation
+          // fails. Surface the failure to the parent instead of silently
+          // claiming that every other agent can already see the episode.
+          outcome.metadata.sharedContext = {
+            ok: false,
+            error: String(error?.message || "Shared project context consolidation failed.").slice(0, MAX_SUMMARY_CHARS),
+            code: String(error?.code || "SHARED_CONTEXT_CONSOLIDATION_FAILED").slice(0, 120),
+          };
+        }
+      }
       return outcome;
     } catch (error) {
       const status = childController.signal.aborted ? "stopped" : "failed";
@@ -381,7 +420,41 @@ function createRuntimeDelegationProvider({
       const outcome = { status, output: { text: "", format: "text", summary: "" }, metadata: { sessionId: childSessionId, model: effectiveModel, requestedModel, fallbackUsed, error: String(error?.message || "Child agent failed.") } };
       try {
         await recordChildSession?.({ workspace, sessionId: childSessionId, blockId, childInvocationId, operation, model: effectiveModel, status: outcome.status, output: outcome.output, metadata: outcome.metadata });
-      } catch { /* Best effort only. */ }
+      } catch (persistenceError) {
+        outcome.metadata.sessionPersistence = {
+          ok: false,
+          error: String(persistenceError?.message || "Child session persistence failed.").slice(0, MAX_SUMMARY_CHARS),
+        };
+      }
+      if (typeof finalizeChildContext === "function") {
+        try {
+          const sharedContext = await finalizeChildContext({
+            workspace,
+            sessionId: childSessionId,
+            blockId,
+            childInvocationId,
+            operation,
+            model: effectiveModel,
+            status,
+            task: String(input?.task || ""),
+            output: outcome.output,
+            metadata: outcome.metadata,
+            messages: [],
+            evidenceIds: [],
+          });
+          outcome.metadata.sharedContext = redactStructuredValue(
+            sharedContext && typeof sharedContext === "object"
+              ? sharedContext
+              : { ok: true },
+          );
+        } catch (finalizationError) {
+          outcome.metadata.sharedContext = {
+            ok: false,
+            error: String(finalizationError?.message || "Shared project context consolidation failed.").slice(0, MAX_SUMMARY_CHARS),
+            code: String(finalizationError?.code || "SHARED_CONTEXT_CONSOLIDATION_FAILED").slice(0, 120),
+          };
+        }
+      }
       return outcome;
     } finally {
       cleanup?.();

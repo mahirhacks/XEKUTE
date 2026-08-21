@@ -14,6 +14,9 @@ const {
 } = require("../src/agent/runtime/delegation-provider.js");
 const { createDelegateAgentTool } = require("../src/agent/tools/process/delegate-agent.js");
 const { createExecutionContext, projectExecutionContext } = require("../src/contracts/tool/execution-context");
+const { createAssessmentIntelligenceService } = require("../src/app/services/assessment/intelligence/assessment-intelligence-service.js");
+const { createProjectMemoryStore } = require("../src/app/storage/project-memory-store.js");
+const { createContextCompiler } = require("../src/agent/memory/context/context-compiler.js");
 
 function execContext(root, overrides = {}) {
   return projectExecutionContext(createExecutionContext({
@@ -238,6 +241,90 @@ test("child receives the bounded delegation context instead of only the task tex
   assert.match(receivedContextSummary, /src\/a\.js/);
   assert.doesNotMatch(receivedContextSummary, /projectMemory/);
   assert.deepEqual(receivedProjectMemory, { revision: 9 });
+});
+
+test("child project context is finalized before the delegated result returns", async () => {
+  const order = [];
+  let finalized = null;
+  const provider = createRuntimeDelegationProvider({
+    senderId: "s",
+    runKey: "s::parent",
+    parentModel: "m",
+    workspace: "G:/ws",
+    sessionId: "parent-session-1",
+    tools: PARENT_TOOLS,
+    runAgentTurn: async () => ({
+      ok: true,
+      finalText: "Verified child result",
+      executedTools: true,
+      evidenceIds: ["e-child"],
+      appendedMessages: [{ role: "tool", tool_name: "verify_finding", content: JSON.stringify({ ok: true, summary: "Verified child result", evidenceIds: ["e-child"] }) }],
+      runState: { status: "completed" },
+    }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    executeToolCall: async () => ({ ok: true }),
+    beginChildSession: async () => ({ ok: true, sessionId: "child-shared", blockId: "block_1" }),
+    recordChildSession: async () => { order.push("persisted"); return { ok: true }; },
+    finalizeChildContext: async (input) => {
+      order.push("shared");
+      finalized = input;
+      return { ok: true, projectMemoryRevision: 12, intelligenceStatus: "ready" };
+    },
+    sendToRenderer: () => {},
+  });
+
+  const result = await provider({
+    task: "Verify the candidate finding",
+    contextPackage: { role: "agent", authority: "approve_for_me", scope: {}, identity: {}, resources: {} },
+    expectedOutput: { description: "verification", format: "text" },
+  }, execContext("G:/ws"), {});
+
+  order.push("returned");
+  assert.deepEqual(order, ["persisted", "shared", "returned"]);
+  assert.equal(finalized.sessionId, "child-shared");
+  assert.equal(finalized.blockId, "block_1");
+  assert.deepEqual(finalized.evidenceIds, ["e-child"]);
+  assert.equal(finalized.messages[0].tool_name, "verify_finding");
+  assert.deepEqual(result.metadata.sharedContext, { ok: true, projectMemoryRevision: 12, intelligenceStatus: "ready" });
+});
+
+test("assessment intelligence exposes an awaitable idle boundary for child handoffs", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-child-intelligence-"));
+  fs.mkdirSync(path.join(root, "traffic"), { recursive: true });
+  fs.writeFileSync(path.join(root, "traffic", "raw.jsonl"), `${JSON.stringify({ id: "e-child", method: "GET", url: "https://example.test/child", response: { status: 200 } })}\n`);
+  const service = createAssessmentIntelligenceService({ enableWorker: false });
+  try {
+    const building = service.start(root);
+    const settled = await service.whenIdle(root);
+    assert.equal(settled.ok, true);
+    assert.equal((await building).ok, true);
+    assert.equal(service.status(root).status, "ready");
+    assert.equal((await service.flush()).ok, true);
+  } finally {
+    await service.dispose();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an existing agent compiler sees project memory written by a newer agent", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-shared-context-"));
+  const store = createProjectMemoryStore();
+  const compiler = createContextCompiler({ projectMemoryStore: store });
+  try {
+    const before = compiler.compile({ workspace: root, sessionId: "old-agent", baseMessages: [{ role: "system", content: "System" }], history: [] });
+    assert.equal(before.memoryPacket.revision, 0);
+    store.consolidate(root, {
+      sessionId: "new-agent",
+      observations: [{ id: "shared-observation", summary: "A newer agent recorded this observation", sourceRefs: ["e-shared"] }],
+    });
+    const after = compiler.compile({ workspace: root, sessionId: "old-agent", baseMessages: [{ role: "system", content: "System" }], history: [] });
+    assert.equal(after.memoryPacket.revision, 1);
+    assert.ok(after.memoryPacket.observations.some((item) => item.id === "shared-observation"));
+    assert.ok(after.baseMessages.some((message) => /A newer agent recorded this observation/.test(message.content)));
+  } finally {
+    compiler.dispose();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("tool-less child cannot report a requested file mutation as completed", async () => {

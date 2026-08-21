@@ -96,16 +96,10 @@ function extractProjectDelta({ messages = [], events = [], sessionId = "", block
       }
       continue;
     }
-    const value = text(messageText(message), 4_000);
-    if (!value) continue;
-    if (message?.role === "assistant") {
-      const hypothesis = value.match(/(?:hypothesis|the working theory|likely explanation)\s*[:\-]\s*([\s\S]{20,2000})/i);
-      if (hypothesis) {
-        observations.push({ id: stableId("observation", hypothesis[1]), summary: text(hypothesis[1], 2_000), kind: "assistant_observation", sourceRefs: [text(message.id || "", 240)].filter(Boolean) });
-      }
-      const finding = value.match(/(?:finding|vulnerability|confirmed issue)\s*[:\-]\s*([\s\S]{20,2000})/i);
-      if (finding) findings.push({ id: stableId("finding", finding[1]), summary: text(finding[1], 2_000), status: /confirmed|verified/i.test(value) ? "verified" : "candidate", sourceRefs: [text(message.id || "", 240)].filter(Boolean) });
-    }
+    // Assistant prose is deliberately not interpreted. A model may describe a
+    // finding or a decision, but durable project intelligence accepts only
+    // trusted runtime events, verified finding state, and attributed user
+    // memories handled below.
   }
 
   for (const event of safeEvents) {

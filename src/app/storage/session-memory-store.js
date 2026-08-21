@@ -676,6 +676,31 @@ function createSessionMemoryStore({
       }
     } else if (type === "transcript") {
       if (block) appendTranscript(block, event.messages || event.transcript);
+    } else if (type === "context_capsule_checkpoint") {
+      // Capsules are encrypted along with the session document.  Do not accept
+      // a transcript here: only the main-process lifecycle capture may append.
+      if (block && event.capsule && typeof event.capsule === "object") {
+        const meta = block[RESERVED_META_KEY] || (block[RESERVED_META_KEY] = {});
+        const capsules = Array.isArray(meta.context_capsules) ? meta.context_capsules : [];
+        const hash = text(event.capsule.integrityHash || "", "", 160);
+        if (hash && !capsules.some((item) => item?.integrityHash === hash)) {
+          capsules.push(clone(event.capsule));
+          meta.context_capsules = capsules.slice(-2000);
+        }
+      }
+    } else if (type === "context_capsule_finalize") {
+      if (block) {
+        const meta = block[RESERVED_META_KEY] || (block[RESERVED_META_KEY] = {});
+        meta.context_capsule_finalized_at = timestamp();
+        meta.context_capsule_outcome = text(event.outcome || "incomplete", "incomplete", 40);
+        if (Array.isArray(event.user_records)) meta.context_user_records = clone(event.user_records).slice(0, 32);
+      }
+    } else if (type === "context_compaction_commit") {
+      // Summary and cursor move together in the same encrypted atomic write.
+      updateSessionMeta(session, {
+        contextSummary: text(event.summary || "", "", 20_000),
+        contextSummaryMeta: clone(event.meta || {}),
+      });
     } else if (type === "close") {
       const closed = new Set(project[RESERVED_META_KEY].closed_session_ids || []);
       closed.add(sessionId);
@@ -933,6 +958,45 @@ function createSessionMemoryStore({
       .then(() => ({ ok: true }));
   }
 
+  function listCapsules(rawWorkspace, { sessionId = "", throughBlockId = "", throughMessageId = "" } = {}) {
+    const resolved = resolveProject(rawWorkspace, { persist: false });
+    if (!resolved.projectId || !sessionId) return { ok: true, capsules: [], userRecords: [], blocks: [], legacyGaps: [], committedThroughMessageId: "" };
+    const loaded = readDocument(resolved.projectId, resolved.workspace);
+    const session = loaded.document?.[resolved.projectId]?.[text(sessionId, "", 240)];
+    if (!session) return { ok: false, error: "Session memory session was not found.", capsules: [], userRecords: [], blocks: [], legacyGaps: [], committedThroughMessageId: "" };
+    const blocks = sessionBlocks(session);
+    const boundaryIndex = throughBlockId
+      ? blocks.findIndex(([id]) => id === throughBlockId)
+      : throughMessageId
+        ? blocks.findIndex(([, block]) => (block?.[RESERVED_META_KEY]?.transcript || []).some((message) => String(message?.id || "") === String(throughMessageId)))
+        : blocks.length - 1;
+    let selected = boundaryIndex >= 0 ? blocks.slice(0, boundaryIndex + 1) : [];
+    // Do not compact part of a block. If the requested message is not the
+    // block's last durable message, leave that entire active block outside the
+    // atomic boundary so late tool events cannot leak into this commit.
+    if (throughMessageId && selected.length) {
+      const lastBlock = selected.at(-1)?.[1];
+      const transcript = Array.isArray(lastBlock?.[RESERVED_META_KEY]?.transcript) ? lastBlock[RESERVED_META_KEY].transcript : [];
+      const lastMessageId = String(transcript.at(-1)?.id || lastBlock?.ai_prompt_id || lastBlock?.user_prompt_id || "");
+      if (lastMessageId !== String(throughMessageId)) selected = selected.slice(0, -1);
+    }
+    const capsules = []; const userRecords = []; const blockIds = []; const legacyGaps = [];
+    for (const [id, block] of selected) {
+      blockIds.push(id);
+      const meta = block?.[RESERVED_META_KEY] || {};
+      if (Array.isArray(meta.context_capsules)) capsules.push(...clone(meta.context_capsules));
+      if (Array.isArray(meta.context_user_records)) userRecords.push(...clone(meta.context_user_records));
+      if (!Array.isArray(meta.context_capsules) || !meta.context_capsules.length) {
+        const pointer = crypto.createHash("sha256").update(JSON.stringify({ sessionId, blockId: id, transcript: meta.transcript || [] })).digest("hex");
+        legacyGaps.push({ blockId: id, transcriptPointerHash: pointer, reason: "legacy_or_unparseable_block_claims_omitted" });
+      }
+    }
+    const last = selected.at(-1)?.[1];
+    const lastTranscript = Array.isArray(last?.[RESERVED_META_KEY]?.transcript) ? last[RESERVED_META_KEY].transcript : [];
+    const committedThroughMessageId = String(lastTranscript.at(-1)?.id || last?.ai_prompt_id || last?.user_prompt_id || "");
+    return { ok: true, capsules, userRecords, blocks: blockIds, legacyGaps, committedThroughMessageId, sessionMeta: clone(session[RESERVED_META_KEY] || {}) };
+  }
+
   function remove(rawWorkspace, sessionId) {
     const resolved = resolveProject(rawWorkspace, { persist: false });
     if (!resolved.projectId) return Promise.resolve({ ok: true, removed: false });
@@ -970,6 +1034,7 @@ function createSessionMemoryStore({
     begin,
     record,
     recordSync,
+    listCapsules,
     flush,
     remove,
     deleteSession: remove,

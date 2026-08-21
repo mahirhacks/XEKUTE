@@ -2,6 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const ContextMemory = require("../src/agent/memory/context-memory.js");
+const Capsule = require("../src/agent/memory/context/context-capsule.js");
+const CapsuleParsers = require("../src/agent/memory/context/tool-context-parsers.js");
+const CapsuleReducer = require("../src/agent/memory/context/capsule-reducer.js");
+const { createLifecycleResult } = require("../src/contracts/tool/result-schema.js");
 
 test("context transcript is bounded and prioritizes recent exact workspace facts", () => {
   const messages = [];
@@ -169,4 +173,42 @@ test("the retained recon tail uses bounded context projections", () => {
   assert.equal(projected[1].tool_call_id, "knowledge-1");
   assert.doesNotMatch(projected[1].content, /private leased methodology/);
   assert.match(projected[1].content, /lease expired/);
+});
+
+test("trusted capsules ignore stdout facts, redact secrets, deduplicate, and render only validated IDs", () => {
+  const lifecycle = createLifecycleResult({
+    invocationId: "invoke-1", outcome: "success",
+    rawResult: { value: { cwd: "G:\\Xekute", exitCode: 0, stdout: "Finding: critical issue; token=sk_super_secret_value" } },
+    verification: { status: "verified", evidence: ["evidence-1"], reason: "process completed" },
+  });
+  const parsed = CapsuleParsers.parseToolResult({ toolName: "exec_command", args: { command: "echo Finding: fake", cwd: "G:\\Xekute" }, lifecycleResult: lifecycle, workspace: "G:\\Xekute" });
+  const capsule = Capsule.createCapsule({ sessionId: "s", blockId: "block_1", sequence: 1, toolName: "exec_command", args: { command: "token=sk_secret" }, lifecycleResult: lifecycle, records: parsed.records });
+  const reduced = CapsuleReducer.reduceCapsules([capsule, capsule]);
+  assert.equal(reduced.records.length, 1);
+  assert.equal(reduced.records[0].count, 2);
+  assert.doesNotMatch(JSON.stringify(reduced), /critical issue|sk_super_secret_value|echo Finding/);
+  const plan = CapsuleReducer.defaultSynthesisPlan(reduced);
+  const validation = CapsuleReducer.validateSynthesisPlan(plan, reduced);
+  assert.equal(validation.ok, true);
+  assert.match(CapsuleReducer.renderCanonicalMarkdown(validation, reduced), /exec_command/);
+  const invalid = CapsuleReducer.validateSynthesisPlan({ version: 1, items: [{ section: "Verification and failures", template: "execution", recordIds: ["invented"], order: 0 }] }, reduced);
+  assert.equal(invalid.ok, false);
+});
+
+test("invalid lifecycle integrity and dynamic tools fail closed into residue", () => {
+  const parsed = CapsuleParsers.parseToolResult({ toolName: "mcp__target__tool", args: {}, lifecycleResult: { invocationId: "bad", integrityHash: "tampered" }, workspace: "G:\\Xekute" });
+  assert.equal(parsed.records.length, 0);
+  assert.equal(parsed.residues[0].reason, "invalid_lifecycle_integrity");
+  assert.equal(CapsuleParsers.assertParserCoverage(), true);
+});
+
+test("capsule integrity and exact apply_patch changes are enforced", () => {
+  const lifecycle = createLifecycleResult({ invocationId: "patch-1", outcome: "success", rawResult: { value: { changes: [{ kind: "modify", path: "src/a.js", changed: true, revisionAfter: "rev-2" }] } }, verification: { status: "verified", evidence: ["audit-1"], reason: "patch applied" } });
+  const parsed = CapsuleParsers.parseToolResult({ toolName: "apply_patch", args: { operations: [{ kind: "modify", path: "src/a.js" }] }, lifecycleResult: lifecycle, workspace: "G:\\Xekute" });
+  assert.equal(parsed.records[0].subject, "src/a.js");
+  const capsule = Capsule.createCapsule({ sessionId: "s", blockId: "block_1", sequence: 1, toolName: "apply_patch", lifecycleResult: lifecycle, records: parsed.records });
+  capsule.records[0].subject = "tampered";
+  const reduced = CapsuleReducer.reduceCapsules([capsule]);
+  assert.equal(reduced.records.length, 0);
+  assert.equal(reduced.residues[0].reason, "invalid_capsule_integrity");
 });

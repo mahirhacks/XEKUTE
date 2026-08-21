@@ -27,17 +27,17 @@ test("context meter uses routed previews and Ollama's measured last prompt", () 
   assert.doesNotMatch(html, /class="model-edit-description"/);
 });
 
-test("context summarization has provider and renderer deadlines", () => {
+test("trusted context compaction has provider and renderer deadlines", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
 
   assert.match(renderer, /CONTEXT_SUMMARY_RENDERER_TIMEOUT_MS\s*=\s*35_000/);
-  assert.match(renderer, /awaitContextSummary\(window\.api\.summarizeContext/);
+  assert.match(renderer, /window\.api\.compactContext\(/);
   assert.match(renderer, /compactContextManually/);
   assert.match(renderer, /maybeCompactContext\(getContextUsage\(\), \{ force: true \}\)/);
-  assert.match(renderer, /transcript:\s*summaryTranscript/);
-  assert.match(renderer, /messages:\s*durableMessages/);
-  assert.doesNotMatch(renderer, /summarizeContext\(\{[\s\S]{0,500}messages:\s*newMessagesToSummarize/);
+  assert.match(renderer, /throughMessageId:\s*split\.oldMessages\.at\(-1\)\?\.id/);
+  assert.doesNotMatch(renderer, /transcript:\s*summaryTranscript/);
+  assert.doesNotMatch(renderer, /messages:\s*durableMessages/);
   assert.match(renderer, /Compression changes model-visible memory only/);
   assert.doesNotMatch(renderer, /body\.dataset\.loaded\s*=\s*"false"/);
   assert.match(renderer, /CONTEXT_POST_COMPRESSION_TARGET\s*=\s*0\.22/);
@@ -51,4 +51,7 @@ test("context summarization has provider and renderer deadlines", () => {
   assert.match(main, /maxCompletionTokens:\s*Math\.max\(420, Math\.ceil\(maxChars \/ 3\)\)/);
   assert.match(main, /responseFormat:\s*null/);
   assert.match(main, /controller\.abort\("CONTEXT_SUMMARY_TIMEOUT"\)/);
+  assert.match(main, /CONTEXT_COMPACTION_TIMEOUT_MS\s*=\s*180_000/);
+  assert.match(main, /ipcMain\.handle\("context:compact"/);
+  assert.match(main, /CapsuleReducer\.renderCanonicalMarkdown/);
 });

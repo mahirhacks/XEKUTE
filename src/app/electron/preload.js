@@ -191,6 +191,7 @@ const api = {
   runtimeModel: (payload) => ipcRenderer.invoke("ollama:runtime", payload),
   countTokens: (payload) => ipcRenderer.invoke("ollama:countTokens", payload),
   summarizeContext: (payload) => ipcRenderer.invoke("ollama:summarizeContext", payload),
+  compactContext: (payload) => ipcRenderer.invoke("context:compact", payload),
   chat: (payload) => ipcRenderer.invoke("ollama:chat", payload),
   agentRun: (payload) => ipcRenderer.invoke("agent:run", payload),
   pendingSubagentResults: (payload = {}) => ipcRenderer.invoke("agent:pendingSubagentResults", payload),

@@ -689,6 +689,19 @@
               <div id="models-settings-list" class="models-settings-list" aria-live="polite"></div>
               <button type="button" id="models-view-all" class="models-view-all" hidden>View more</button>
 
+              <section class="models-api-keys" aria-label="Context compaction">
+                <div class="models-api-row">
+                  <div><strong>Context compaction model</strong><p>Optional. Uses the active chat model when blank; the model only selects trusted record groups.</p></div>
+                  <select id="context-compaction-provider" class="models-select" aria-label="Context compaction provider"><option value="">Active provider</option><option value="ollama">Ollama</option><option value="openrouter">OpenRouter</option></select>
+                  <input id="context-compaction-model" class="models-select" list="context-compaction-models" spellcheck="false" placeholder="Use active chat model" aria-label="Context compaction model">
+                  <datalist id="context-compaction-models"></datalist>
+                </div>
+                <div class="models-api-row models-api-row-toggle">
+                  <div><strong>Allow OpenRouter fallback</strong><p>Try vetted hosted models if same-provider compaction fails. Off by default.</p></div>
+                  <label class="general-toggle" aria-label="Allow cross-provider context compaction fallback"><input id="context-compaction-cross-provider" type="checkbox"><span aria-hidden="true"></span></label>
+                </div>
+              </section>
+
               <details id="models-api-keys" class="models-api-keys" open>
                 <summary class="models-api-keys-summary"><span>API Keys</span><span class="codicon codicon-chevron-down" aria-hidden="true"></span></summary>
                 <div class="models-api-keys-body">

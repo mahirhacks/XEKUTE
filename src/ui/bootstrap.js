@@ -341,6 +341,10 @@ const llmOpenRouterConfig = $("llm-openrouter-config");
 const openRouterBaseUrl = $("openrouter-base-url");
 const openRouterModel = $("openrouter-model");
 const openRouterApiKey = $("openrouter-api-key");
+const contextCompactionModel = $("context-compaction-model");
+const contextCompactionProvider = $("context-compaction-provider");
+const contextCompactionModels = $("context-compaction-models");
+const contextCompactionCrossProvider = $("context-compaction-cross-provider");
 const llmSettingsSave = $("llm-settings-save");
 const llmSettingsTest = $("llm-settings-test");
 const llmSettingsStatus = $("llm-settings-status");
@@ -2754,6 +2758,9 @@ async function loadLlmSettings() {
   if (openRouterBaseUrl) openRouterBaseUrl.value = defaultBaseUrl;
   if (openRouterModel) openRouterModel.value = result.openrouter?.model || "";
   if (openRouterApiKey) openRouterApiKey.value = "";
+  if (contextCompactionModel) contextCompactionModel.value = result.compaction?.model || "";
+  if (contextCompactionProvider) contextCompactionProvider.value = result.compaction?.provider || "";
+  if (contextCompactionCrossProvider) contextCompactionCrossProvider.checked = Boolean(result.compaction?.allowCrossProviderFallback);
   if (llmOpenRouterKeyToggle) llmOpenRouterKeyToggle.checked = false;
   if (llmOpenRouterBaseToggle) {
     llmOpenRouterBaseToggle.checked = defaultBaseUrl !== "https://openrouter.ai/api/v1";
@@ -2810,6 +2817,9 @@ async function saveLlmSettings() {
     provider,
     baseUrl: llmOpenRouterBaseToggle?.checked ? openRouterBaseUrl?.value : "https://openrouter.ai/api/v1",
     model: openRouterModelId,
+    compactionModel: contextCompactionModel?.value || "",
+    compactionProvider: contextCompactionProvider?.value || "",
+    allowCrossProviderCompactionFallback: Boolean(contextCompactionCrossProvider?.checked),
     ...(openRouterApiKey?.value ? { apiKey: openRouterApiKey.value } : {}),
   });
   if (result?.error) {
@@ -7469,7 +7479,6 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
 
   const chatId = session.id;
   const sessionId = session.memorySessionId || session.id;
-  const model = selectedModel;
   const contextBudget = contextPlan.effectiveLimitTokens || AUTO_CONTEXT_ESTIMATE;
   const previousSummary = memoryRecord(session)?.summary || "";
   const previousCursor = String(memoryRecord(session)?.archivedThroughMessageId || "");
@@ -7478,56 +7487,31 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
     : -1;
   const newMessagesToSummarize = split.oldMessages.slice(Math.max(0, previousCursorIndex + 1));
   if (!newMessagesToSummarize.length && !force) return false;
-  const summaryTranscript = globalThis.ContextMemory?.buildMemoryTranscript(
-    previousSummary,
-    newMessagesToSummarize,
-    { contextTokens: contextBudget },
-  ) || "";
-  const durableMessages = globalThis.ContextMemory?.projectDurableMessages?.(newMessagesToSummarize) || [];
   contextCompactingSessionId = chatId;
   setContextCompactionUi(true);
   if (!isRunningChatActive()) setAgentStatus("Summarizing context...");
 
   contextCompactionPromise = (async () => {
-    let summary = "";
-    let source = "fallback";
-    let warning = "";
-
-    if (window.api?.summarizeContext && model) {
-      try {
-        const result = await awaitContextSummary(window.api.summarizeContext({
-          model,
-          provider: contextPlan.provider,
-          reasoningEffort: contextPlan.provider === "openrouter"
-            ? getModelSettings(model).reasoningEffort
-            : null,
-          contextPlan,
-          contextBudget,
-          transcript: summaryTranscript,
-          messageCount: newMessagesToSummarize.length,
-        }));
-        if (result?.ok && result.summary) {
-          summary = globalThis.ContextMemory?.normalizeSummary(
-            result.summary,
-            globalThis.ContextMemory.summaryCharLimit(contextBudget),
-          ) || String(result.summary).trim();
-          source = "model";
-        } else {
-          warning = result?.error || "Model summarization unavailable.";
-        }
-      } catch (err) {
-        warning = err?.message || "Model summarization unavailable.";
+    if (!window.api?.compactContext) return false;
+    const compacted = await window.api.compactContext({
+      workspace: rootPath,
+      sessionId,
+      throughMessageId: split.oldMessages.at(-1)?.id || "",
+      model: selectedModel,
+      contextBudget,
+      previousSummary,
+    });
+    if (!compacted?.ok || !compacted.summary) {
+      const target = chatSessions.find((item) => item.id === chatId);
+      if (target) {
+        memoryRecord(target).warning = compacted?.error || "Trusted context compaction was not available.";
+        memoryRecord(target).status = "preserved";
       }
+      return false;
     }
-
-    if (!summary) {
-      summary = globalThis.ContextMemory?.buildFallbackSummary(
-        previousSummary,
-        newMessagesToSummarize,
-        { contextTokens: contextBudget },
-      ) || previousSummary;
-    }
-    if (!summary) return false;
+    const summary = compacted.summary;
+    const source = compacted.source || "trusted_capsules";
+    const warning = "";
 
     const targetSession = chatSessions.find((item) => item.id === chatId);
     if (!targetSession) return false;
@@ -7535,7 +7519,7 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
     targetMemory.summary = summary;
     targetMemory.source = source;
     targetMemory.status = "ready";
-    targetMemory.archivedThroughMessageId = split.oldMessages.at(-1)?.id || targetMemory.archivedThroughMessageId;
+    targetMemory.archivedThroughMessageId = compacted.meta?.archivedThroughMessageId || targetMemory.archivedThroughMessageId;
     targetMemory.archivedMessageCount = split.oldMessages.length;
     targetMemory.summaryTokens = estimateTokens(summary);
     targetMemory.updatedAt = Date.now();
@@ -7543,6 +7527,7 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
     syncMemoryAliases(targetSession);
     targetSession.contextSummaryMeta = {
       ...targetSession.contextSummaryMeta,
+      ...compacted.meta,
       source,
       summarizedMessages: targetMemory.archivedMessageCount,
       updatedAt: Date.now(),
@@ -7563,16 +7548,9 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
       // so prior messages, tool cards, timestamps, and status rows stay visible.
       syncActiveChatSession();
     }
-    // Compression closes the model-visible knowledge lease. The durable
-    // project-memory write is queued in the main process and never blocks the
-    // renderer from handing control back after the summary is committed.
-    Promise.resolve(window.api?.consolidateContext?.({
-      workspace: rootPath,
-      sessionId,
-      messages: durableMessages,
-      outcome: "compressed",
-      expireKnowledge: true,
-    })).catch(() => {});
+    // The backend transaction already committed the capsule cursor and
+    // canonical summary atomically.  Only lease expiry remains asynchronous.
+    Promise.resolve(window.api?.consolidateContext?.({ workspace: rootPath, sessionId, messages: [], outcome: "compressed", expireKnowledge: true })).catch(() => {});
     return true;
   })();
 
@@ -11866,6 +11844,14 @@ function applyOllamaListResult(result) {
   }
 
   allModels = normalizeModelNames(result.models);
+  if (contextCompactionModels) {
+    contextCompactionModels.innerHTML = "";
+    for (const name of allModels) {
+      const option = document.createElement("option");
+      option.value = name;
+      contextCompactionModels.appendChild(option);
+    }
+  }
   const preferred = result.provider === "openrouter"
     ? (openRouterModel?.value || selectedModel)
     : selectedModel;
@@ -14490,6 +14476,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       rawSourceTokens: estimateMessagesTokens(runHistory),
       contextSummary: activeSession?.contextSummary || "",
       sessionId: activeSession?.memorySessionId || activeSession?.id || "",
+      blockId: activeSession?.memoryBlockId || "",
       failureMemory: activeMemory?.failureRecords || [],
       dirMap: dirMapCache,
       activeFile: runActiveFile,
