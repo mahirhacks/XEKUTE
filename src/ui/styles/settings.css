@@ -320,7 +320,8 @@
   justify-content:space-between;
   gap:24px;
 }
-.general-settings-row + .general-settings-row { border-top:1px solid #333; }
+.general-settings-row + .general-settings-row { border-top:1px solid #ffffff24; }
+.general-settings-divider { height:1px; background:#ffffff24; }
 .general-settings-row > div:first-child { min-width:0; }
 .general-toggle { position:relative; flex:0 0 auto; width:40px; height:22px; cursor:pointer; }
 .general-toggle input { position:absolute; opacity:0; pointer-events:none; }

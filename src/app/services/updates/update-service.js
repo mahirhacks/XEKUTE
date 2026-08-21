@@ -483,6 +483,7 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, updatedLa
     },
 
     getSettings: () => settingsStore.read(),
+    currentVersion: () => currentVersion,
     isChecking: () => checking,
     availableVersion: () => availableVersion,
     downloadedVersion: () => downloadedVersion,
