@@ -29,6 +29,9 @@ const ContextBudget = require("../../agent/runtime/context-budget.js");
 const { estimateTokenCount } = ContextBudget;
 const { appendAgentAction, appendHypothesis } = require("../../agent/memory/action-memory.js");
 const ContextMemory = require("../../agent/memory/context-memory.js");
+const Capsule = require("../../agent/memory/context/context-capsule.js");
+const CapsuleParsers = require("../../agent/memory/context/tool-context-parsers.js");
+const CapsuleReducer = require("../../agent/memory/context/capsule-reducer.js");
 const { createWorkspaceFiles } = require("../services/workspace/workspace-files.js");
 const { createProjectProfileStore } = require("../storage/project-profile-store.js");
 const { validateIpcRequest } = require("../../contracts/ipc/IpcContracts");
@@ -54,6 +57,15 @@ const { createExecutionContext, projectExecutionContext } = require("../../contr
 const { createTestCaseRunner } = require("../services/assessment/test-case-runner.js");
 
 const CONTEXT_SUMMARY_PROVIDER_TIMEOUT_MS = 30_000;
+const CONTEXT_COMPACTION_TIMEOUT_MS = 180_000;
+const CONTEXT_CAPSULE_ROLLOUT = process.env.XEKUTE_CONTEXT_CAPSULE_ROLLOUT === "shadow" ? "shadow" : "enforce";
+const OPENROUTER_COMPACTION_FALLBACKS = Object.freeze([
+  "openai/gpt-oss-20b",
+  "qwen/qwen3-30b-a3b-instruct-2507",
+  "deepseek/deepseek-v4-flash-0731",
+  "mistralai/mistral-small-3.2-24b-instruct",
+  "google/gemma-3-27b-it",
+]);
 
 // Build the model-facing catalog from the canonical tool registry.
 function toolCatalogFromRegistry(registry) {
@@ -102,7 +114,7 @@ function displayExecCommand(executable, args = []) {
   return [quote(executable), ...(Array.isArray(args) ? args.map(quote) : [])].join(" ").trim();
 }
 
-async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", mode = "agent", terminalHost = null, planBinding = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", delegationProvider = null }) {
+async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", blockId = "", mode = "agent", terminalHost = null, planBinding = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", delegationProvider = null }) {
   const name = toolCall?.function?.name || toolCall?.toolName || "";
   const args = toolCall?.function?.arguments || {};
   const entry = container?.toolRegistry?.get(name);
@@ -297,6 +309,27 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
         onEvent: (eventPayload) => terminalHost?.sendLifecycleEvent?.(eventPayload),
       },
     });
+    // Capture immediately after the authority pipeline while lifecycle data is
+    // still structured.  Tool output and assistant text never enter capsules.
+    if (workspace && sessionId && blockId) {
+      const lifecycleResult = result?.lifecycle || null;
+      const parsed = CapsuleParsers.parseToolResult({ toolName: name, args, lifecycleResult, workspace });
+      const capsule = Capsule.createCapsule({ sessionId, blockId, sequence: Date.now(), toolName: name, args, lifecycleResult, records: parsed.records, residues: parsed.residues });
+      await container.sessionMemoryStore().record(workspace, {
+        type: "context_capsule_checkpoint", sessionId, blockId, capsule,
+      }).catch(() => {});
+      // Shared project memory receives only the reducer's typed, eligible
+      // projection. This gives resumed, parent, and delegated agents the same
+      // ground-truth state at their next context compilation boundary.
+      const reducedCapsule = CapsuleReducer.reduceCapsules([capsule]);
+      if (!reducedCapsule.residues.length && reducedCapsule.records.length) {
+        await container.contextCompiler?.recordKeyEvent?.({
+          workspace,
+          sessionId,
+          delta: CapsuleReducer.projectDelta(reducedCapsule, { sessionId, blockId }),
+        }).catch(() => {});
+      }
+    }
     if (name === "query_knowledge" && result?.ok && sessionId && container.contextCompiler?.activateKnowledgeLease) {
       container.contextCompiler.activateKnowledgeLease({ workspace, sessionId, leaseId: result.leaseId || "", packet: result });
     }
@@ -490,8 +523,8 @@ function llmPreferences() { return readApplicationPreferences()?.llm || {}; }
 function getActiveProvider() { return normalizeProvider(llmPreferences().provider); }
 function getOpenRouterBaseUrl() { try { return normalizeBaseUrl(llmPreferences().openrouter?.baseUrl || process.env.OPENROUTER_BASE_URL || DEFAULT_OPENROUTER_BASE_URL); } catch { return DEFAULT_OPENROUTER_BASE_URL; } }
 function getOpenRouterApiKey() { const env = String(process.env.OPENROUTER_API_KEY || "").trim(); if (env) return env; const value = llmPreferences().openrouter?.apiKey; if (!value || !safeStorage.isEncryptionAvailable()) return ""; try { return safeStorage.decryptString(Buffer.from(value, "base64")); } catch { return ""; } }
-function llmSettingsSnapshot() { const preferences = readApplicationPreferences(); const ollama = preferences.ollama || {}; const openrouter = preferences.llm?.openrouter || {}; const provider = getActiveProvider(); const key = getOpenRouterApiKey(); const source = provider === "openrouter" ? (process.env.OPENROUTER_API_KEY ? "environment" : key ? "settings" : "none") : (process.env.OLLAMA_HOST ? "environment" : ollama.host ? "settings" : "default"); return { provider, ollama: { host: ollama.host || "", activeBaseUrl: getOllamaBaseUrl(), source: process.env.OLLAMA_HOST ? "environment" : ollama.host ? "settings" : "default" }, openrouter: { baseUrl: getOpenRouterBaseUrl(), hasApiKey: Boolean(key), source: process.env.OPENROUTER_API_KEY ? "environment" : key ? "settings" : "none", model: String(openrouter.model || "") }, hasApiKey: Boolean(key), source }; }
-function saveLlmSettings(payload = {}) { const preferences = readApplicationPreferences(); const provider = normalizeProvider(payload.provider || preferences.llm?.provider); const llm = { ...(preferences.llm || {}), provider, openrouter: { ...(preferences.llm?.openrouter || {}) } }; if (payload.baseUrl !== undefined) llm.openrouter.baseUrl = normalizeBaseUrl(payload.baseUrl); if (payload.model !== undefined) llm.openrouter.model = String(payload.model || "").trim(); if (payload.apiKey !== undefined) { const key = String(payload.apiKey || "").trim(); if (key) { if (!safeStorage.isEncryptionAvailable()) return { error: "Secure storage is unavailable; use OPENROUTER_API_KEY for this session.", code: "OPENROUTER_KEY_NOT_PERSISTED" }; llm.openrouter.apiKey = safeStorage.encryptString(key).toString("base64"); } else delete llm.openrouter.apiKey; } preferences.llm = llm; writeApplicationPreferences(preferences); return llmSettingsSnapshot(); }
+function llmSettingsSnapshot() { const preferences = readApplicationPreferences(); const ollama = preferences.ollama || {}; const openrouter = preferences.llm?.openrouter || {}; const compaction = preferences.llm?.compaction || {}; const provider = getActiveProvider(); const key = getOpenRouterApiKey(); const source = provider === "openrouter" ? (process.env.OPENROUTER_API_KEY ? "environment" : key ? "settings" : "none") : (process.env.OLLAMA_HOST ? "environment" : ollama.host ? "settings" : "default"); return { provider, ollama: { host: ollama.host || "", activeBaseUrl: getOllamaBaseUrl(), source: process.env.OLLAMA_HOST ? "environment" : ollama.host ? "settings" : "default" }, openrouter: { baseUrl: getOpenRouterBaseUrl(), hasApiKey: Boolean(key), source: process.env.OPENROUTER_API_KEY ? "environment" : key ? "settings" : "none", model: String(openrouter.model || "") }, compaction: { provider: ["ollama", "openrouter"].includes(compaction.provider) ? compaction.provider : "", model: String(compaction.model || ""), allowCrossProviderFallback: Boolean(compaction.allowCrossProviderFallback) }, hasApiKey: Boolean(key), source }; }
+function saveLlmSettings(payload = {}) { const preferences = readApplicationPreferences(); const provider = normalizeProvider(payload.provider || preferences.llm?.provider); const llm = { ...(preferences.llm || {}), provider, openrouter: { ...(preferences.llm?.openrouter || {}) }, compaction: { ...(preferences.llm?.compaction || {}) } }; if (payload.baseUrl !== undefined) llm.openrouter.baseUrl = normalizeBaseUrl(payload.baseUrl); if (payload.model !== undefined) llm.openrouter.model = String(payload.model || "").trim(); if (payload.compactionProvider !== undefined) llm.compaction.provider = ["ollama", "openrouter"].includes(payload.compactionProvider) ? payload.compactionProvider : ""; if (payload.compactionModel !== undefined) llm.compaction.model = String(payload.compactionModel || "").trim(); if (payload.allowCrossProviderCompactionFallback !== undefined) llm.compaction.allowCrossProviderFallback = Boolean(payload.allowCrossProviderCompactionFallback); if (payload.apiKey !== undefined) { const key = String(payload.apiKey || "").trim(); if (key) { if (!safeStorage.isEncryptionAvailable()) return { error: "Secure storage is unavailable; use OPENROUTER_API_KEY for this session.", code: "OPENROUTER_KEY_NOT_PERSISTED" }; llm.openrouter.apiKey = safeStorage.encryptString(key).toString("base64"); } else delete llm.openrouter.apiKey; } preferences.llm = llm; writeApplicationPreferences(preferences); return llmSettingsSnapshot(); }
 function writeApplicationPreferences(preferences) {
   const target = applicationPreferencesPath();
   const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
@@ -1763,6 +1796,9 @@ async function listOpenRouterModels() {
         maxCompletionTokens: Number(item.top_provider?.max_completion_tokens || item.max_output_length) || null,
         topProviderContextLength: Number(item.top_provider?.context_length) || null,
         supportedParameters: Array.isArray(item.supported_parameters) ? item.supported_parameters : [],
+        expirationDate: String(item.expiration_date || ""),
+        available: item.available !== false && item.status !== "unavailable",
+        pricing: item.pricing && typeof item.pricing === "object" ? item.pricing : {},
         reasoning: item.reasoning && typeof item.reasoning === "object" ? item.reasoning : null,
         name: String(item.name || id),
         source: "catalog",
@@ -1848,6 +1884,9 @@ async function getOpenRouterModelContexts(modelId) {
         maxCompletionTokens: Number(record.top_provider?.max_completion_tokens || record.max_output_length) || null,
         topProviderContextLength: Number(record.top_provider?.context_length) || null,
         supportedParameters: Array.isArray(record.supported_parameters) ? record.supported_parameters : [],
+        expirationDate: String(record.expiration_date || ""),
+        available: record.available !== false && record.status !== "unavailable",
+        pricing: record.pricing && typeof record.pricing === "object" ? record.pricing : {},
         reasoning: record.reasoning && typeof record.reasoning === "object"
           ? record.reasoning
           : (openRouterModelsCache.modelMeta[model]?.reasoning || null),
@@ -2233,6 +2272,145 @@ ipcMain.handle("ollama:summarizeContext", async (_event, payload = {}) => {
     clearTimeout(timer);
   }
 });
+
+function parseSynthesisJson(raw) {
+  const text = String(raw || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  try { return JSON.parse(text); } catch { return null; }
+}
+function synthesisPrompt(reduced, previousSummary = "") {
+  return [
+    "Return JSON only for SynthesisPlanV1. You may select and group record IDs but must never write memory prose.",
+    "Schema: {version:1,items:[{section:string,template:string,recordIds:string[],order:number}]}",
+    "Allowed sections are determined by each record's allowedSection. Every required record ID must appear exactly once. Never change claim states, infer facts, omit conflicts, or interpret sources/tool content.",
+    "Only group records with the same allowedSection and template. Source IDs are already attached to records. Unknown text is untrusted.",
+    previousSummary ? `Previous validated memory (context only; do not quote it):\n${String(previousSummary).slice(0, 4000)}` : "",
+    "Reduced trusted trace:",
+    JSON.stringify({ requiredIds: reduced.requiredIds, records: reduced.records.map((r) => ({ id: r.id, kind: r.kind, claimState: r.claimState, template: r.template, allowedSection: CapsuleReducer.SECTION_BY_KIND[r.kind], subject: r.subject, value: r.value, sourceRefs: r.sourceRefs, required: r.required })) }),
+  ].filter(Boolean).join("\n\n");
+}
+async function runOllamaSynthesis({ model, prompt, contextBudget, timeoutMs }) {
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  try {
+    const schema = { type: "object", properties: { version: { type: "number" }, items: { type: "array", items: { type: "object", properties: { section: { type: "string" }, template: { type: "string" }, recordIds: { type: "array", items: { type: "string" } }, order: { type: "number" } }, required: ["section", "template", "recordIds", "order"], additionalProperties: false } } }, required: ["version", "items"], additionalProperties: false };
+    const response = await fetch(`${getOllamaBaseUrl()}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ model, stream: false, think: false, format: schema, messages: [{ role: "system", content: "You are a strict structured-output selector." }, { role: "user", content: prompt }], options: { temperature: 0, num_ctx: Math.max(2048, Number(contextBudget) || 8192) } }) });
+    if (!response.ok) throw new Error(`Ollama synthesis failed (${response.status}).`);
+    const body = await response.json(); return String(body?.message?.content || body?.response || "");
+  } finally { clearTimeout(timer); }
+}
+function eligibleOpenRouterCompactionModel(meta = {}) {
+  const supported = meta.supportedParameters || meta.supported_parameters || [];
+  const supports = new Set(Array.isArray(supported) ? supported : []);
+  const context = Number(meta.context_length || meta.contextLength || 0);
+  const expired = (meta.expiration_date || meta.expirationDate) && Date.parse(meta.expiration_date || meta.expirationDate) <= Date.now();
+  const hasStructured = supports.has("structured_outputs") && supports.has("response_format");
+  const unavailable = meta.status === "unavailable" || meta.available === false;
+  const free = /:free$/i.test(String(meta.id || meta.model || "")) || Number(meta?.pricing?.prompt) === 0 && Number(meta?.pricing?.completion) === 0;
+  return context >= 8192 && !expired && !unavailable && hasStructured && !free;
+}
+function revalidateMutableCapsuleState(workspace, reduced) {
+  const gaps = []; const workspaceRoot = path.resolve(String(workspace || ""));
+  for (const record of reduced.records || []) {
+    if (record.kind !== "mutation" || record.value?.tool !== "apply_patch") continue;
+    const target = String(record.value?.target || record.subject || "").replace(/[\\/]+/g, path.sep);
+    if (!target || path.isAbsolute(target)) { gaps.push({ recordId: record.id, reason: "unrevalidatable_patch_target" }); continue; }
+    const resolved = path.resolve(workspaceRoot, target);
+    if (!(resolved === workspaceRoot || resolved.startsWith(`${workspaceRoot}${path.sep}`))) { gaps.push({ recordId: record.id, reason: "patch_target_escaped_workspace" }); continue; }
+    const exists = fs.existsSync(resolved); const operation = String(record.value?.operation || "");
+    if ((operation === "delete" && exists) || (operation !== "delete" && !exists)) gaps.push({ recordId: record.id, reason: "mutable_state_no_longer_matches" });
+  }
+  const projectMemory = container.contextCompiler?.compile?.({ workspace, sessionId: "", promptBudgetTokens: 1, history: [] })?.memory || {};
+  const intelligence = container.assessmentIntelligence?.status?.(workspace) || {};
+  const workflow = container.modeWorkflow?.loadState?.(workspace) || {};
+  return { gaps, sourceRevisions: { projectMemory: Number(projectMemory.revision) || 0, intelligenceUpdatedAt: String(intelligence?.overview?.updatedAt || ""), workflowRunId: String(workflow?.planBinding?.runId || "") } };
+}
+async function compactTrustedContext(payload = {}) {
+  const started = Date.now(); const workspace = String(payload.workspace || ""); const sessionId = String(payload.sessionId || "");
+  if (!workspace || !sessionId) return { ok: false, code: "COMPACTION_SCOPE_REQUIRED", error: "Workspace and session are required." };
+  await container.assessmentIntelligence?.flush?.().catch(() => {});
+  await container.assessmentIntelligence?.whenIdle?.(workspace).catch(() => {});
+  const snapshot = container.sessionMemoryStore().listCapsules(workspace, { sessionId, throughMessageId: payload.throughMessageId || "", throughBlockId: payload.throughBlockId || "" });
+  if (!snapshot.ok) return { ok: false, code: "CAPSULE_SNAPSHOT_FAILED", error: snapshot.error || "Could not load trusted capsules." };
+  const reduced = CapsuleReducer.reduceCapsules(snapshot.capsules, { userRecords: snapshot.userRecords });
+  if (CONTEXT_CAPSULE_ROLLOUT === "shadow") {
+    return { ok: false, code: "CONTEXT_CAPSULE_SHADOW", error: "Trusted compaction shadow run completed; existing context was preserved.", diagnostics: { parserCoverage: CapsuleParsers.assertParserCoverage(), capsules: snapshot.capsules.length, records: reduced.records.length, residues: reduced.residues.length, dedupRatio: Number((snapshot.capsules.length / Math.max(1, reduced.records.length)).toFixed(2)) } };
+  }
+  if (reduced.residues.length) return { ok: false, code: "UNRESOLVED_CAPSULE_RESIDUE", error: "Compaction stopped before unresolved capsule residue.", residues: reduced.residues.length };
+  if (!reduced.records.length) return { ok: false, code: "NO_TRUSTED_RECORDS", error: "No trusted records are available for compaction." };
+  const revalidated = revalidateMutableCapsuleState(workspace, reduced);
+  if (revalidated.gaps.length) return { ok: false, code: "MUTABLE_STATE_REVALIDATION_FAILED", error: "Compaction stopped because mutable state no longer matches its trusted capsule.", gaps: revalidated.gaps };
+  // Promote only typed eligible records through the existing project-memory
+  // path before synthesis. This is the shared, cross-agent view; transcripts
+  // and leases remain session-private.
+  const capsuleCursor = snapshot.blocks.at(-1) || "";
+  await container.contextCompiler?.recordKeyEvent?.({ workspace, sessionId, delta: CapsuleReducer.projectDelta(reduced, { sessionId, blockId: capsuleCursor }) }).catch(() => {});
+  await container.contextCompiler?.flush?.().catch(() => {});
+  const preferences = llmSettingsSnapshot(); const activeProvider = preferences.provider;
+  const compactionProvider = preferences.compaction?.provider || activeProvider;
+  const configured = preferences.compaction?.model || payload.model || (compactionProvider === "openrouter" ? preferences.openrouter?.model : payload.model);
+  let candidates = [{ provider: compactionProvider, model: configured }].filter((entry) => entry.model && (entry.provider !== "openrouter" || getOpenRouterApiKey()));
+  if (compactionProvider === "ollama") {
+    try {
+      const listed = await fetchOllamaTags(getOllamaBaseUrl());
+      if (listed.res.ok) {
+        for (const model of parseOllamaTags(listed.data).filter((model) => model !== configured).slice(0, 3)) candidates.push({ provider: "ollama", model });
+      }
+    } catch { /* selected model remains the only same-provider candidate */ }
+  }
+  if (candidates.some((entry) => entry.provider === "openrouter")) {
+    try { await listOpenRouterModels(); } catch { /* eligibility below fails closed */ }
+    candidates = candidates.filter((entry) => entry.provider !== "openrouter" || eligibleOpenRouterCompactionModel({ ...(openRouterModelsCache?.modelMeta?.[entry.model] || {}), id: entry.model }));
+  }
+  // The hidden vetted pool is same-provider fallback whenever compaction is
+  // already using OpenRouter. It is cross-provider only with explicit consent.
+  if (compactionProvider === "openrouter" && getOpenRouterApiKey()) {
+    for (const model of OPENROUTER_COMPACTION_FALLBACKS) {
+      const meta = openRouterModelsCache?.modelMeta?.[model] || {};
+      if (eligibleOpenRouterCompactionModel({ ...meta, id: model })) candidates.push({ provider: "openrouter", model });
+    }
+  }
+  if (preferences.compaction?.allowCrossProviderFallback && activeProvider === "ollama" && getOpenRouterApiKey()) {
+    try { await listOpenRouterModels(); } catch { /* runtime catalog validation below simply yields none */ }
+    for (const model of OPENROUTER_COMPACTION_FALLBACKS) {
+      const meta = openRouterModelsCache?.modelMeta?.[model] || {};
+      if (eligibleOpenRouterCompactionModel({ ...meta, id: model })) candidates.push({ provider: "openrouter", model });
+    }
+  }
+  const unique = candidates.filter((entry, index, all) => entry.model && all.findIndex((other) => other.provider === entry.provider && other.model === entry.model) === index);
+  if (!unique.length) return { ok: false, code: "NO_COMPACTION_MODEL", error: "No eligible context compaction model is configured." };
+  const attempts = []; const prompt = synthesisPrompt(reduced, payload.previousSummary || snapshot.sessionMeta?.context_summary || "");
+  for (const candidate of unique) {
+    if (Date.now() - started >= CONTEXT_COMPACTION_TIMEOUT_MS) break;
+    for (let retry = 0; retry < 2; retry += 1) {
+      const remaining = CONTEXT_COMPACTION_TIMEOUT_MS - (Date.now() - started);
+      if (remaining <= 0) break;
+      try {
+        const requestPrompt = retry ? `${prompt}\n\nYour prior JSON failed validation. Correct exactly these errors and return JSON only:\n${attempts.at(-1)?.errors?.join("; ") || "invalid output"}` : prompt;
+        const raw = candidate.provider === "openrouter"
+          ? await runOpenRouterJson({ model: candidate.model, messages: [{ role: "system", content: "Return only valid JSON matching the requested SynthesisPlanV1." }, { role: "user", content: requestPrompt }], temperature: 0, maxCompletionTokens: 4000, timeoutMs: Math.min(remaining, 60_000), responseFormat: { type: "json_object" } })
+          : await runOllamaSynthesis({ model: candidate.model, prompt: requestPrompt, contextBudget: payload.contextBudget, timeoutMs: Math.min(remaining, 60_000) });
+        const validation = CapsuleReducer.validateSynthesisPlan(parseSynthesisJson(raw), reduced);
+        attempts.push({ provider: candidate.provider, model: candidate.model, retry, errors: validation.errors });
+        // On the corrective response, invalid optional selections are dropped
+        // only when every required record is still covered by valid items.
+        const acceptableSecondPass = retry === 1 && !validation.missingRequired?.length && validation.items.length > 0;
+        if (validation.ok || acceptableSecondPass) {
+          const summary = CapsuleReducer.renderCanonicalMarkdown(validation, reduced);
+          if (!summary) throw new Error("Canonical rendering produced no durable records.");
+          const boundary = capsuleCursor;
+          const meta = { version: 1, source: "trusted_capsules", reducerVersion: reduced.version, reductionHash: reduced.reductionHash, capsuleCursor: boundary, archivedThroughMessageId: String(snapshot.committedThroughMessageId || ""), sourceRevisions: revalidated.sourceRevisions, model: candidate.model, provider: candidate.provider, attempts, coverage: { required: reduced.requiredIds.length, rendered: reduced.requiredIds.length, records: reduced.records.length, legacyGaps: snapshot.legacyGaps?.length || 0 }, legacyGaps: snapshot.legacyGaps || [], committedAt: new Date().toISOString() };
+          await container.sessionMemoryStore().record(workspace, { type: "context_compaction_commit", sessionId, summary, meta });
+          return { ok: true, summary, meta, source: "trusted_capsules" };
+        }
+        // The second pass may only drop invalid optional items; missing required
+        // coverage is never accepted and proceeds to the next model.
+        if (retry === 1 && validation.missingRequired?.length) break;
+      } catch (error) { attempts.push({ provider: candidate.provider, model: candidate.model, retry, errors: [String(error.message || error)] }); }
+    }
+  }
+  return { ok: false, code: Date.now() - started >= CONTEXT_COMPACTION_TIMEOUT_MS ? "CONTEXT_COMPACTION_TIMEOUT" : "CONTEXT_COMPACTION_MODELS_FAILED", error: "Trusted context compaction could not be validated; existing context was preserved.", attempts };
+}
+
+ipcMain.handle("context:compact", async (_event, payload = {}) => compactTrustedContext(payload));
 
 ipcMain.handle("ollama:abort", async (event, { sessionId = "" } = {}) => {
   const senderId = event.sender.id;
@@ -2826,6 +3004,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     runModelRound: (senderId, roundPayload, hooks, controllerKey) => runOllamaAgentRound(senderId, roundPayload, hooks, controllerKey),
     executeToolCall: (request) => executeToolCall({
       ...request,
+      blockId: request?.blockId || "",
       terminalHost: agentTerminalHost,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
       approvalProvider: (proposal) => requestToolApproval(event.sender, { ...proposal, sessionId: proposal?.sessionId || sessionId }),
@@ -2854,6 +3033,47 @@ async function handleAgentRun(event, payload = {}, options = {}) {
         transcript: Array.isArray(childResult.metadata?.appendedMessages) ? childResult.metadata.appendedMessages : [],
       })
       : Promise.resolve({ ok: true, skipped: true })),
+    finalizeChildContext: async (childResult = {}) => {
+      if (!childResult.workspace) return { ok: true, skipped: true };
+      const outcome = childResult.status === "completed"
+        ? "completed"
+        : childResult.status === "stopped"
+          ? "stopped"
+          : "failed";
+      const summary = String(
+        childResult.output?.text
+        || childResult.output?.summary
+        || childResult.metadata?.error
+        || childResult.task
+        || `Delegated agent ${outcome}`,
+      ).slice(0, 2_000);
+      const [memoryResult] = await Promise.all([
+        container.contextCompiler?.sealEpisode?.({
+          workspace: childResult.workspace,
+          sessionId: childResult.sessionId,
+          blockId: childResult.blockId,
+          messages: Array.isArray(childResult.messages) ? childResult.messages : [],
+          events: [{
+            type: "agent_turn_completed",
+            runId: childResult.childInvocationId || childResult.sessionId || "",
+            outcome,
+            summary,
+            evidenceIds: Array.isArray(childResult.evidenceIds) ? childResult.evidenceIds : [],
+          }],
+          outcome,
+        }) || Promise.resolve({ ok: false, code: "CONTEXT_COMPILER_UNAVAILABLE" }),
+        container.assessmentIntelligence?.flush?.() || Promise.resolve({ ok: true, skipped: true }),
+      ]);
+      await (container.assessmentIntelligence?.whenIdle?.(childResult.workspace) || Promise.resolve());
+      const intelligenceStatus = container.assessmentIntelligence?.status?.(childResult.workspace) || { ok: true, status: "unavailable" };
+      return {
+        ok: memoryResult?.ok !== false && intelligenceStatus?.ok !== false,
+        projectMemoryRevision: Number(memoryResult?.memory?.revision) || 0,
+        intelligenceStatus: String(intelligenceStatus?.status || "unknown"),
+        intelligenceUpdatedAt: String(intelligenceStatus?.overview?.updatedAt || ""),
+        sourceSessionId: String(childResult.sessionId || ""),
+      };
+    },
     sendToRenderer: sendAgentEvent,
     registerChildRun,
     unregisterChildRun,
@@ -2956,6 +3176,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }, runKey),
     executeToolCall: (request) => executeToolCall({
       ...request,
+      blockId: request?.blockId || payload.blockId || "",
       terminalHost: agentTerminalHost,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
       approvalProvider: (proposal) => requestToolApproval(event.sender, { ...proposal, sessionId }),
@@ -3025,6 +3246,18 @@ async function handleAgentRun(event, payload = {}, options = {}) {
         outcome: result?.aborted ? "stopped" : result?.ok ? "completed" : "failed",
       }).catch(() => {});
     }
+  }
+  // Finalize even stopped/failed blocks. Explicit user memories are attributed
+  // assertions, never promoted to runtime truth.
+  if (payload.workspace && sessionId && payload.blockId) {
+    const userRecords = Capsule.explicitUserRecords(payload.userMessage || "", { refs: [`user:${payload.blockId}`] });
+    await container.sessionMemoryStore().record(payload.workspace, {
+      type: "context_capsule_finalize",
+      sessionId,
+      blockId: payload.blockId,
+      outcome: result?.aborted ? "stopped" : result?.ok ? "completed" : "failed",
+      user_records: userRecords,
+    }).catch(() => {});
   }
   if (assessmentRun?.id) {
     const runtimeStatus = result?.runState?.status;

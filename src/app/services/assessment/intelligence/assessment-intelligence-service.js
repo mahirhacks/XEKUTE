@@ -61,7 +61,7 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
     if (existing && ["queued", "running"].includes(existing.status)) return Promise.resolve({ ok: true, status: existing.status, path: indexPath(root) });
     if (existing && existing.status === "paused" && !options.resume) return Promise.resolve({ ok: true, status: "paused", path: indexPath(root) });
     if (existing && existing.status === "paused") jobs.delete(root);
-    const job = { status: "queued", progress: { source: "", records: 0, total: 0 }, worker: null };
+    const job = { status: "queued", progress: { source: "", records: 0, total: 0 }, worker: null, completion: null };
     jobs.set(root, job);
     const emit = (payload) => onEvent({ workspace: root, ...payload });
     const finish = (result) => {
@@ -73,9 +73,10 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
       return result;
     };
     if (!enableWorker) {
-      return Promise.resolve().then(() => indexWorkspaceSync({ workspace: root, indexPath: indexPath(root), runId: options.runId, planId: options.planId, shouldPause: () => job.status === "paused", onProgress: (progress) => { job.status = "running"; job.progress = progress; emit({ type: "progress", progress }); } })).then(finish);
+      job.completion = Promise.resolve().then(() => indexWorkspaceSync({ workspace: root, indexPath: indexPath(root), runId: options.runId, planId: options.planId, shouldPause: () => job.status === "paused", onProgress: (progress) => { job.status = "running"; job.progress = progress; emit({ type: "progress", progress }); } })).then(finish);
+      return job.completion;
     }
-    return new Promise((resolve) => {
+    job.completion = new Promise((resolve) => {
       const worker = new Worker(path.join(__dirname, "intelligence-worker.js"), { workerData: { workspace: root, indexPath: indexPath(root), runId: options.runId || "", planId: options.planId || "" } });
       job.worker = worker;
       job.status = "running";
@@ -87,6 +88,7 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
       worker.on("exit", (code) => { if (jobs.has(root) && code !== 0) resolve(finish({ ok: false, error: `Intelligence worker exited with code ${code}`, code: "INTELLIGENCE_WORKER_EXITED" })); });
       emit({ type: "status", status: "running", path: indexPath(root) });
     });
+    return job.completion;
   }
 
   function query(workspace, input = {}) {
@@ -215,10 +217,23 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
     if (current.status !== "ready") return Promise.resolve(current);
     return start(workspace, options);
   }
+  function whenIdle(workspace) {
+    const job = jobs.get(rootOf(workspace));
+    return job?.completion || Promise.resolve(status(workspace));
+  }
   async function flush() {
-    const pending = [...evidenceJobs.values()];
-    const results = await Promise.all(pending);
-    return { ok: results.every((result) => result?.ok !== false), jobs: jobs.size, evidenceJobs: pending.length };
+    const pendingEvidence = [...evidenceJobs.values()];
+    const pendingIndexes = [...jobs.values()].map((job) => job?.completion).filter(Boolean);
+    const [evidenceResults, indexResults] = await Promise.all([
+      Promise.all(pendingEvidence),
+      Promise.all(pendingIndexes),
+    ]);
+    const results = [...evidenceResults, ...indexResults];
+    return {
+      ok: results.every((result) => result?.ok !== false),
+      jobs: pendingIndexes.length,
+      evidenceJobs: pendingEvidence.length,
+    };
   }
   async function dispose() {
     await flush();
@@ -226,7 +241,7 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
     jobs.clear();
   }
 
-  return Object.freeze({ indexPath, status, start, pause, resume, rebuild, refresh, query, expand, relatedEvidence, recordRunEvidence, recordRuntimeEvidence, completeRun, flush, dispose, setGraphProvider, knowledge, mcpRuntime });
+  return Object.freeze({ indexPath, status, start, pause, resume, rebuild, refresh, whenIdle, query, expand, relatedEvidence, recordRunEvidence, recordRuntimeEvidence, completeRun, flush, dispose, setGraphProvider, knowledge, mcpRuntime });
 }
 
 module.exports = { createAssessmentIntelligenceService };
