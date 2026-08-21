@@ -76,6 +76,8 @@ assert.deepEqual(
 assert.equal(packageJson.devDependencies.electron, "43.4.0");
 assert.equal(packageJson.dependencies["@vscode/codicons"], "0.0.45");
 assert.equal(packageJson.productName, "XEKUTE");
+assert.match(packageJson.scripts.make, /prepare:update-config/);
+assert.ok(exists("scripts/prepare-update-config.js"));
 assert.match(forgeConfig, /temp_test/);
 assert.match(forgeConfig, /graphify-out/);
 assert.match(forgeConfig, /node_modules\/node-pty/);

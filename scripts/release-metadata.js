@@ -11,6 +11,14 @@ const artifactRoot = path.join(output, "nsis");
 if (!fs.existsSync(artifactRoot)) throw new Error("Run npm run make before generating release metadata.");
 const setupExe = path.join(artifactRoot, "XEKUTESetup.exe");
 if (!fs.existsSync(setupExe)) throw new Error("XEKUTESetup.exe was not produced by the NSIS build.");
+const packagedUpdateConfig = path.join(root, "out", "XEKUTE-win32-x64", "resources", "app-update.yml");
+if (!fs.existsSync(packagedUpdateConfig)) {
+  throw new Error("Packaged app-update.yml is missing; this release would discover updates but fail to download them.");
+}
+const packagedUpdateText = fs.readFileSync(packagedUpdateConfig, "utf8");
+for (const required of ["provider:", "owner:", "repo:", "updaterCacheDirName:"]) {
+  if (!packagedUpdateText.includes(required)) throw new Error(`Packaged app-update.yml is missing ${required}`);
+}
 
 // Keep the checksum manifest aligned with the files the release workflow
 // actually publishes. In particular, never hash SHA256SUMS.txt itself and do
