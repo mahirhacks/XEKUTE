@@ -35,7 +35,13 @@ function registerUpdateIpc(ipcMain, { service }) {
     return { ok: true };
   });
 
-  ipcMain.handle("updates:settingsGet", () => ({ ok: true, value: service.getSettings() }));
+  ipcMain.handle("updates:settingsGet", () => ({
+    ok: true,
+    value: {
+      ...service.getSettings(),
+      currentVersion: String(service.currentVersion?.() || ""),
+    },
+  }));
 
   ipcMain.handle("updates:settingsSet", (_event, payload = {}) => {
     service.setSettings(payload);

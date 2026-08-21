@@ -20,6 +20,7 @@ const {
   prepareUpdateConfig,
   resolvePublishConfig,
 } = require("../scripts/prepare-update-config.js");
+const { registerUpdateIpc } = require("../src/app/ipc/updates.js");
 
 function tempSettings() {
   return createUpdateSettingsStore({ file: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "xekute-updates-")), "update-settings.json") });
@@ -206,6 +207,29 @@ test("electron-updater backend wires NSIS updater events", () => {
   ]);
   backend.quitAndInstall();
   assert.deepEqual(quitCalls, [[true, true]]);
+});
+
+test("update service exposes the installed app version without persisting it as a preference", () => {
+  const { service } = createHarness({ app: { getVersion: () => "0.3.1" } });
+  assert.equal(service.currentVersion(), "0.3.1");
+  assert.equal(Object.hasOwn(service.getSettings(), "currentVersion"), false);
+});
+
+test("update settings IPC includes the running version with the persisted update preferences", () => {
+  const handlers = new Map();
+  const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler) };
+  registerUpdateIpc(ipcMain, {
+    service: {
+      getSettings: () => ({ checkOnLaunch: true, ignoredVersion: "" }),
+      currentVersion: () => "0.3.1",
+      check() {}, install() {}, ignore() {}, setSettings() {},
+    },
+  });
+
+  assert.deepEqual(handlers.get("updates:settingsGet")(), {
+    ok: true,
+    value: { checkOnLaunch: true, ignoredVersion: "", currentVersion: "0.3.1" },
+  });
 });
 
 test("electron-updater classifies a missing packaged update config during download", () => {

@@ -288,6 +288,7 @@ const appSettingsProfilePlan = $("app-settings-profile-plan");
 const appSettingsGeneralPanel = $("app-settings-general-panel");
 const generalStatusBarToggle = $("general-status-bar-toggle");
 const generalUpdatesToggle = $("general-updates-toggle");
+const generalCurrentVersion = $("general-current-version");
 const statusbar = $("statusbar");
 const updateToast = $("update-toast");
 const updateToastVersion = $("update-toast-version");
@@ -4298,6 +4299,8 @@ async function loadUpdateSettings() {
     const result = await window.api.updatesSettingsGet?.();
     const settings = result?.value || (result && !result.ok ? null : result);
     if (settings) {
+      const currentVersion = String(settings.currentVersion || "").trim();
+      if (generalCurrentVersion) generalCurrentVersion.textContent = currentVersion ? `XEKUTE v${currentVersion}` : "Version unavailable";
       updatesState.ignoredVersion = String(settings.ignoredVersion || "");
       updatesState.deferredVersion = String(settings.deferredVersion || settings.ignoredVersion || "");
       if (generalUpdatesToggle) generalUpdatesToggle.checked = settings.checkOnLaunch !== false;
