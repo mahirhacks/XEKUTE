@@ -1501,50 +1501,43 @@
 
 .composer-input-row {
   min-width:0;
-  display:flex;
-  align-items:flex-start;
 }
 
 .composer-input-row #chat-input {
-  flex:1 1 auto;
+  display:block;
   min-width:0;
-  width:auto;
+  width:100%;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
 }
 
 .selected-slash-command {
-  flex:0 0 auto;
+  box-sizing:border-box;
   width:max-content;
-  max-width:45%;
-  min-height:23px;
-  margin:7px 0 0 9px;
-  padding:3px 4px 3px 7px;
-  display:flex;
+  max-width:100%;
+  min-height:20px;
+  margin:0;
+  padding:1px 6px;
+  display:inline-flex;
   align-items:center;
-  gap:5px;
   border:0;
   outline:0;
   border-radius:6px;
   background:rgba(215,173,43,.14);
   color:#f0c94f;
-  font:600 12px/1.2 var(--font-mono);
+  font:600 12px/18px var(--font-mono);
+  vertical-align:baseline;
+  user-select:text;
+  -webkit-user-select:text;
 }
 
 .selected-slash-command[hidden] { display:none; }
-.selected-slash-command > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.selected-slash-command button {
-  width:17px;
-  height:17px;
-  padding:0;
-  display:grid;
-  place-items:center;
-  border:0;
-  border-radius:4px;
-  background:transparent;
-  color:#c9aa50;
-  cursor:pointer;
+
+#chat-input.chat-input-empty::before {
+  content:attr(data-placeholder);
+  color:#707070;
+  pointer-events:none;
 }
-.selected-slash-command button:hover { background:rgba(215,173,43,.16); color:#ffe082; }
-.selected-slash-command button .codicon { font-size:11px; }
 
 #messages .agent-status-line[data-final="true"]:not([data-state="error"]) .agent-status-icon {
   display: none;

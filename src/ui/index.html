@@ -1205,8 +1205,7 @@
         <div class="composer">
           <div id="slash-command-suggestions" class="slash-command-suggestions" role="listbox" aria-label="Available slash commands" hidden></div>
           <div class="composer-input-row">
-            <div id="selected-slash-command" class="selected-slash-command" hidden><span id="selected-slash-command-name"></span><button type="button" id="selected-slash-command-clear" aria-label="Remove selected slash command"><span class="codicon codicon-close" aria-hidden="true"></span></button></div>
-            <textarea id="chat-input" aria-label="Chat message" placeholder="Ask, investigate, run, or search" rows="1"></textarea>
+            <div id="chat-input" contenteditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Chat message" data-placeholder="Ask, investigate, run, or search" class="chat-input-empty"><span id="selected-slash-command" class="selected-slash-command" hidden></span></div>
           </div>
           <div id="chat-input-measure" aria-hidden="true"></div>
           <div class="composer-toolbar">
@@ -1267,6 +1266,9 @@
     <button type="button" data-workspace-context-action="open" role="menuitem">
       <span class="codicon codicon-file-code"></span><span>Open</span>
     </button>
+    <button type="button" data-workspace-context-action="analyze" role="menuitem">
+      <span class="codicon codicon-search"></span><span>Analyze</span>
+    </button>
     <div class="context-menu-separator" data-workspace-context-separator="clipboard" aria-hidden="true"></div>
     <button type="button" data-workspace-context-action="cut" role="menuitem">
       <span class="codicon codicon-move"></span><span>Cut</span>
@@ -1285,14 +1287,14 @@
       <span class="codicon codicon-new-folder"></span><span>New Folder</span>
     </button>
     <button type="button" data-workspace-context-action="terminal" role="menuitem">
-      <span class="codicon codicon-terminal"></span><span>Open in Integrated Terminal</span>
+      <span class="codicon codicon-run"></span><span>Run in Integrated Terminal</span>
     </button>
     <div class="context-menu-separator" data-workspace-context-separator="delete" aria-hidden="true"></div>
     <button type="button" data-workspace-context-action="rename" role="menuitem">
       <span class="codicon codicon-edit"></span><span>Rename</span>
     </button>
     <button type="button" data-workspace-context-action="delete" role="menuitem">
-      <span class="codicon codicon-remove"></span><span id="workspace-context-delete-label">Delete</span>
+      <span class="codicon codicon-trash"></span><span id="workspace-context-delete-label">Delete</span>
     </button>
   </div>
 

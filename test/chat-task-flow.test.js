@@ -132,6 +132,9 @@ test("running chats stay navigable and signal background completion per tab", ()
   const loadStart = renderer.indexOf("function loadChatSession");
   const loadEnd = renderer.indexOf("function newChatSession", loadStart);
   const loadSession = renderer.slice(loadStart, loadEnd);
+  const scrollStart = renderer.indexOf("function scrollChatSessionIntoView");
+  const scrollEnd = renderer.indexOf("chatSessionSelect?.addEventListener", scrollStart);
+  const scrollSession = renderer.slice(scrollStart, scrollEnd);
 
   assert.match(renderer, /const activeChatRuns = new Map\(\)/);
   assert.match(renderer, /function activeSessionRun\(\)/);
@@ -144,10 +147,28 @@ test("running chats stay navigable and signal background completion per tab", ()
   assert.match(tabRenderer, /chat-tab-attention/);
   assert.doesNotMatch(tabRenderer, /streaming \|\| !chatSessions\.length/);
   assert.doesNotMatch(loadSession, /\|\| streaming/);
+  assert.doesNotMatch(scrollSession, /positionAuxiliary/);
+  const scrollCalls = [];
+  const scrollTab = {
+    dataset: { sessionId: "chat-analysis" },
+    scrollIntoView: (options) => scrollCalls.push(options),
+  };
+  const executeScroll = new Function(
+    "chatSessionSelect",
+    "activeChatSessionId",
+    "requestAnimationFrame",
+    `${scrollSession}; return scrollChatSessionIntoView;`,
+  )(
+    { querySelectorAll: () => [scrollTab] },
+    "chat-analysis",
+    (callback) => callback(),
+  );
+  assert.doesNotThrow(() => executeScroll("chat-analysis"));
+  assert.deepEqual(scrollCalls, [{ block: "nearest", inline: "nearest", behavior: "auto" }]);
   assert.match(renderer, /if \(completedInBackground\) chatSessionsNeedingAttention\.add\(runSession\.id\)/);
   assert.match(renderer, /chatSessionsNeedingAttention\.delete\(session\.id\)/);
   assert.match(renderer, /if \(isChatSessionRunning\(id\)\) return/);
-  assert.match(renderer, /if \(!text \|\| isRunningChatActive\(\)\) return/);
+  assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /eventSessionId !== runEventSessionId/);
   assert.match(renderer, /sendBtn\.disabled = !activeRunning && \(\s*delegatedLocked/);
   assert.doesNotMatch(renderer, /Another agent is running/);
@@ -163,19 +184,26 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   const parser = read("src/app/commands/command-parser.js");
 
   assert.match(html, /id="selected-slash-command"[^>]*hidden/);
-  assert.match(html, /id="chat-input"[^>]*aria-label="Chat message"/);
-  assert.match(html, /id="chat-input"[^>]*placeholder="Ask, investigate, run, or search"/);
+  assert.match(html, /id="chat-input"[^>]*contenteditable="plaintext-only"[^>]*role="textbox"[^>]*aria-label="Chat message"[^>]*data-placeholder="Ask, investigate, run, or search"/);
+  assert.match(html, /id="chat-input"[\s\S]*?id="selected-slash-command"/);
+  assert.doesNotMatch(html, /id="selected-slash-command"[^>]*contenteditable="false"/);
   assert.match(renderer, /function modePlaceholder\(/);
   assert.match(renderer, /chatInput\.placeholder = selectedSlashCommand \? "" : modePlaceholder\(\)/);
   assert.match(renderer, /chooseSlashSuggestion\(index, \{ clicked: true \}\)/);
   assert.match(renderer, /function chooseSlashSuggestion\(index = slashSuggestionIndex, \{ clicked = false \} = \{\}\)/);
   assert.match(renderer, /function effectiveChatInputValue\(\)/);
-  assert.match(renderer, /let text = effectiveChatInputValue\(\)\.trim\(\)/);
-  assert.match(html, /class="composer-input-row">[\s\S]*?id="selected-slash-command"[\s\S]*?id="chat-input"/);
-  assert.match(renderer, /e\.key === "Tab"[\s\S]*?chooseSlashSuggestion\(slashSuggestionIndex, \{ clicked: true \}\)/);
-  assert.match(renderer, /e\.key === "Backspace" && selectedSlashCommand && chatInput\.selectionStart === 0 && chatInput\.selectionEnd === 0[\s\S]*?clearSelectedSlashCommand\(\)/);
-  assert.match(chatStyles, /\.composer-input-row\s*\{[\s\S]*?display:flex/);
-  assert.match(chatStyles, /\.selected-slash-command\s*\{[\s\S]*?border:0;[\s\S]*?outline:0;[\s\S]*?background:rgba\(215,173,43,\.14\)/);
+  assert.match(renderer, /let text = hasExplicitText[\s\S]*?: effectiveChatInputValue\(\)\.trim\(\)/);
+  assert.match(html, /class="composer-input-row">[\s\S]*?id="chat-input"[\s\S]*?id="selected-slash-command"/);
+  assert.doesNotMatch(html, /selected-slash-command-clear/);
+  assert.match(renderer, /\["Tab", "Shift"\]\.includes\(e\.key\)[\s\S]*?chooseSlashSuggestion\(slashSuggestionIndex, \{ clicked: true \}\)/);
+  assert.match(renderer, /e\.key === "Backspace" && isChatInputCaretAtArgumentStart\(\)[\s\S]*?clearSelectedSlashCommand\(\)/);
+  assert.match(renderer, /function installChatInputEditorAdapter\(\)[\s\S]*?Object\.defineProperties\(chatInput[\s\S]*?value:[\s\S]*?get: \(\) => chatInputEditorValue\(\)/);
+  assert.match(renderer, /function setChatInputCaretToEnd\(\)[\s\S]*?range\.selectNodeContents\(chatInput\)/);
+  assert.match(renderer, /function reconcileSelectedSlashCommandAfterEdit\(\)[\s\S]*?tokenRemoved[\s\S]*?tokenEdited[\s\S]*?classList\.remove\("selected-slash-command"\)/);
+  assert.match(renderer, /\[contenteditable\]:not\(\[contenteditable=\\"false\\"\]\)/);
+  assert.match(chatStyles, /\.composer-input-row #chat-input\s*\{[\s\S]*?width:100%;[\s\S]*?white-space:pre-wrap/);
+  assert.match(chatStyles, /\.selected-slash-command\s*\{[\s\S]*?display:inline-flex[\s\S]*?background:rgba\(215,173,43,\.14\)[\s\S]*?user-select:text/);
+  assert.match(chatStyles, /#chat-input\.chat-input-empty::before[\s\S]*?content:attr\(data-placeholder\)/);
   assert.doesNotMatch(renderer, /name: "\/active"/);
   assert.doesNotMatch(parser, /"\/active"\s*:/);
 });
