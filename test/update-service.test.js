@@ -12,8 +12,14 @@ const {
   createMockBackend,
   nextMinorVersion,
   compareVersions,
+  normalizeUpdaterFailure,
   DEFAULT_CHECK_ON_LAUNCH,
 } = require("../src/app/services/updates/update-service.js");
+const {
+  buildUpdateConfig,
+  prepareUpdateConfig,
+  resolvePublishConfig,
+} = require("../scripts/prepare-update-config.js");
 
 function tempSettings() {
   return createUpdateSettingsStore({ file: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "xekute-updates-")), "update-settings.json") });
@@ -202,6 +208,27 @@ test("electron-updater backend wires NSIS updater events", () => {
   assert.deepEqual(quitCalls, [[true, true]]);
 });
 
+test("electron-updater classifies a missing packaged update config during download", () => {
+  const handler = {};
+  const autoUpdater = {
+    on(event, fn) { handler[event] = fn; },
+    setFeedURL() {},
+    checkForUpdates() {},
+    downloadUpdate() {},
+  };
+  const backend = createElectronUpdaterBackend({
+    autoUpdater,
+    provider: { provider: "github", owner: "mahirhacks", repo: "XEKUTE" },
+  });
+  const errors = [];
+  backend.emitter.on("error", (failure) => errors.push(failure));
+  backend.install();
+  handler.error(Object.assign(new Error("ENOENT: no such file or directory, open 'resources/app-update.yml'"), { code: "ENOENT" }));
+  assert.equal(errors[0].phase, "download");
+  assert.equal(errors[0].code, "UPDATE_CONFIG_MISSING");
+  assert.match(errors[0].userMessage, /latest XEKUTESetup\.exe once/);
+});
+
 test("install promise rejection is forwarded as an error event", async () => {
   const backend = createScriptedBackend();
   backend.install = () => Promise.reject(new Error("Please check update first"));
@@ -213,6 +240,19 @@ test("install promise rejection is forwarded as an error event", async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(events.at(-1).type, "error");
   assert.match(events.at(-1).message, /Please check update first/);
+});
+
+test("a backend download error clears the in-progress guard so install can retry", () => {
+  const { service, backend, events } = createHarness();
+  service.check();
+  backend.emitter.emit("available", { version: "0.3.0" });
+  service.install();
+  backend.emitter.emit("error", normalizeUpdaterFailure(new Error("network down"), "download"));
+  service.install();
+  assert.equal(backend.counts().installed, 2);
+  assert.equal(events.at(-2).phase, "download");
+  assert.equal(events.at(-2).code, "UPDATE_FAILED");
+  assert.equal(events.at(-1).type, "downloading");
 });
 
 test("install requested from a durable notification waits for the update check", () => {
@@ -308,4 +348,30 @@ test("stable version comparison handles skipped patch and minor releases", () =>
   assert.equal(compareVersions("0.2.12", "0.2.9"), 1);
   assert.equal(compareVersions("v1.0.0", "0.99.99"), 1);
   assert.equal(compareVersions("0.2.9", "0.2.9"), 0);
+});
+
+test("packaged updater config contains the GitHub provider and stable cache name", () => {
+  const config = buildUpdateConfig({
+    packageName: "xekute-app",
+    publish: { provider: "github", owner: "mahirhacks", repo: "XEKUTE" },
+  });
+  assert.match(config, /^provider: "github"$/m);
+  assert.match(config, /^owner: "mahirhacks"$/m);
+  assert.match(config, /^repo: "XEKUTE"$/m);
+  assert.match(config, /^updaterCacheDirName: "xekute-app-updater"$/m);
+});
+
+test("prepareUpdateConfig writes app-update.yml into prepackaged resources", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-update-config-"));
+  const resourcesDir = path.join(directory, "resources");
+  fs.mkdirSync(resourcesDir);
+  const destination = prepareUpdateConfig({ projectRoot: path.resolve(__dirname, ".."), resourcesDir });
+  assert.equal(destination, path.join(resourcesDir, "app-update.yml"));
+  assert.match(fs.readFileSync(destination, "utf8"), /updaterCacheDirName: "xekute-app-updater"/);
+});
+
+test("updater config rejects incomplete or non-GitHub publish settings", () => {
+  assert.throws(() => resolvePublishConfig({ publish: null }), /GitHub publish configuration/);
+  assert.throws(() => resolvePublishConfig({ publish: { provider: "generic", url: "https://example.test" } }), /GitHub publish configuration/);
+  assert.throws(() => resolvePublishConfig({ publish: { provider: "github", owner: "mahirhacks" } }), /owner and repository/);
 });

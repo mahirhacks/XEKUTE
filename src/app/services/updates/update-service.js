@@ -18,6 +18,35 @@ const { EventEmitter } = require("node:events");
 
 const DEFAULT_CHECK_ON_LAUNCH = true;
 
+function normalizeUpdaterFailure(error, phase = "check") {
+  const message = String(error?.message || error || "Update failed");
+  const originalCode = String(error?.code || "").trim();
+  if (/app-update\.yml/i.test(message) && /ENOENT|no such file/i.test(message)) {
+    return {
+      message,
+      code: "UPDATE_CONFIG_MISSING",
+      phase,
+      userMessage: "This installation is missing its updater configuration. Download and run the latest XEKUTESetup.exe once; automatic updates will work after that.",
+    };
+  }
+  if (/sha(?:512)?|checksum|digest/i.test(message)) {
+    return {
+      message,
+      code: originalCode || "UPDATE_INTEGRITY_FAILED",
+      phase,
+      userMessage: "The downloaded update failed its integrity check. Retry the download or install the latest verified release manually.",
+    };
+  }
+  return {
+    message,
+    code: originalCode || "UPDATE_FAILED",
+    phase,
+    userMessage: phase === "download"
+      ? "XEKUTE could not download the update. Check your connection and retry, or install the latest release manually."
+      : "XEKUTE could not check for updates. Check your connection and try again.",
+  };
+}
+
 // ── Small JSON persistence helpers ──────────────────────────────────────────
 
 function readJsonFile(file) {
@@ -77,6 +106,7 @@ function createUpdateSettingsStore({ file }) {
 function createElectronUpdaterBackend({ autoUpdater, feedUrl, provider = null, allowPrerelease = false }) {
   const emitter = new EventEmitter();
   let initialized = false;
+  let phase = "check";
 
   function init() {
     if (initialized) return;
@@ -88,25 +118,36 @@ function createElectronUpdaterBackend({ autoUpdater, feedUrl, provider = null, a
     } else if (feedUrl) {
       try { autoUpdater.setFeedURL({ provider: "generic", url: feedUrl }); } catch { /* electron-updater may use app-update.yml */ }
     }
-    autoUpdater.on("update-available", (info) =>
-      emitter.emit("available", { version: String(info?.version || ""), mock: false }));
-    autoUpdater.on("update-not-available", () => emitter.emit("none"));
-    autoUpdater.on("error", (error) =>
-      emitter.emit("error", { message: String(error?.message || error || "Update check failed") }));
+    autoUpdater.on("update-available", (info) => {
+      phase = "check";
+      emitter.emit("available", { version: String(info?.version || ""), mock: false });
+    });
+    autoUpdater.on("update-not-available", () => {
+      phase = "check";
+      emitter.emit("none");
+    });
+    autoUpdater.on("error", (error) => {
+      const failure = normalizeUpdaterFailure(error, phase);
+      phase = "check";
+      emitter.emit("error", failure);
+    });
     autoUpdater.on("download-progress", (progress) =>
       emitter.emit("progress", {
         percent: Math.max(0, Math.min(100, Math.round(Number(progress?.percent) || 0))),
         transferred: Number(progress?.transferred) || 0,
         total: Number(progress?.total) || 0,
       }));
-    autoUpdater.on("update-downloaded", (info) =>
-      emitter.emit("downloaded", { version: String(info?.version || "") }));
+    autoUpdater.on("update-downloaded", (info) => {
+      phase = "install";
+      emitter.emit("downloaded", { version: String(info?.version || "") });
+    });
   }
 
   return {
     emitter,
     check() {
       init();
+      phase = "check";
       const pending = autoUpdater.checkForUpdates();
       // electron-updater also emits `error`; consume the rejection so a
       // transient GitHub/network failure never becomes unhandled.
@@ -114,10 +155,12 @@ function createElectronUpdaterBackend({ autoUpdater, feedUrl, provider = null, a
     },
     install() {
       init();
+      phase = "download";
       return autoUpdater.downloadUpdate();
     },
     quitAndInstall() {
       init();
+      phase = "install";
       try {
         // Silent + relaunch: XEKUTE's NSIS installer has extra pages
         // (directory + shortcuts). A non-silent /S-less launch looks like
@@ -277,18 +320,18 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, updatedLa
       if (pending && typeof pending.then === "function") {
         pending.catch((error) => {
           installing = false;
-          const message = error?.message || "Update download failed";
-          log(`[updates] install rejected: ${message}`);
-          emit({ type: "error", message, version: availableVersion, phase: "download" });
+          const failure = normalizeUpdaterFailure(error, "download");
+          log(`[updates] install rejected: ${failure.message}`);
+          emit({ type: "error", ...failure, version: availableVersion });
         });
       }
       return { ok: true };
     } catch (error) {
       installing = false;
-      const message = error?.message || "Update install failed";
-      log(`[updates] install threw: ${message}`);
-      emit({ type: "error", message, version: availableVersion, phase: "download" });
-      return { ok: false, error: message };
+      const failure = normalizeUpdaterFailure(error, "download");
+      log(`[updates] install threw: ${failure.message}`);
+      emit({ type: "error", ...failure, version: availableVersion });
+      return { ok: false, error: failure.message, code: failure.code };
     }
   }
 
@@ -357,10 +400,19 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, updatedLa
   backend.emitter.on("error", (info) => {
     const context = resetCheck();
     installRequested = false;
+    if (info.phase === "download") installing = false;
     // Automatic check failures stay quiet; manual/download failures are
     // surfaced by the renderer and every later launch retries normally.
     log(`[updates] check failed: ${info.message}`);
-    emit({ type: "error", message: info.message, manual: context.manual, reason: context.reason });
+    emit({
+      type: "error",
+      message: info.message,
+      code: info.code || "UPDATE_FAILED",
+      userMessage: info.userMessage || "",
+      phase: info.phase || "check",
+      manual: context.manual,
+      reason: context.reason,
+    });
   });
 
   /* c8 ignore start -- event wiring is exercised through the public service */
@@ -446,5 +498,6 @@ module.exports = {
   createMockBackend,
   nextMinorVersion,
   compareVersions,
+  normalizeUpdaterFailure,
   DEFAULT_CHECK_ON_LAUNCH,
 };

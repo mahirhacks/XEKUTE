@@ -4467,7 +4467,10 @@ function handleUpdateEvent(payload = {}) {
       showUpdateNotification(updatesState.availableVersion);
     }
     if (payload.manual || payload.reason === "install" || payload.phase === "download") {
-      showTransientUpdateNotice("Update failed", "XEKUTE could not download or install the update. Try again from Help → Check for Updates.");
+      showTransientUpdateNotice(
+        "Update failed",
+        String(payload.userMessage || "XEKUTE could not download or install the update. Try again from Help → Check for Updates."),
+      );
     }
   }
 }
