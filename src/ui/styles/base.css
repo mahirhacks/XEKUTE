@@ -5064,6 +5064,19 @@ html.panel-resizing iframe {
 }
 .context-usage-diagnostic strong { color: var(--fg); font-weight: 500; }
 
+.context-compaction-status {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--fg-dim);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.context-compaction-status.is-working { color: #d7ba7d; }
+.context-compaction-status.is-success { color: #89d185; }
+.context-compaction-status.is-error { color: var(--error-fg); }
+
 .context-usage-measure-note {
   margin-top: 7px;
   padding-top: 7px;

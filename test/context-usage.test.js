@@ -27,17 +27,21 @@ test("context meter uses routed previews and Ollama's measured last prompt", () 
   assert.doesNotMatch(html, /class="model-edit-description"/);
 });
 
-test("trusted context compaction has provider and renderer deadlines", () => {
+test("context compaction keeps trusted validation and supports ordinary conversation fallback", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
 
   assert.match(renderer, /CONTEXT_SUMMARY_RENDERER_TIMEOUT_MS\s*=\s*35_000/);
   assert.match(renderer, /window\.api\.compactContext\(/);
+  assert.match(renderer, /\["NO_TRUSTED_RECORDS", "CAPSULE_SNAPSHOT_FAILED"\]\.includes\(compacted\?\.code\)/);
+  assert.match(renderer, /compactTranscriptFallback/);
+  assert.match(renderer, /ContextMemory\?\.projectDurableMessages\?\.\(newMessagesToSummarize\)/);
   assert.match(renderer, /compactContextManually/);
   assert.match(renderer, /maybeCompactContext\(getContextUsage\(\), \{ force: true \}\)/);
   assert.match(renderer, /throughMessageId:\s*split\.oldMessages\.at\(-1\)\?\.id/);
-  assert.doesNotMatch(renderer, /transcript:\s*summaryTranscript/);
-  assert.doesNotMatch(renderer, /messages:\s*durableMessages/);
+  assert.match(renderer, /transcript:\s*summaryTranscript/);
+  assert.match(renderer, /messages:\s*durableMessages/);
   assert.match(renderer, /Compression changes model-visible memory only/);
   assert.doesNotMatch(renderer, /body\.dataset\.loaded\s*=\s*"false"/);
   assert.match(renderer, /CONTEXT_POST_COMPRESSION_TARGET\s*=\s*0\.22/);
@@ -54,4 +58,6 @@ test("trusted context compaction has provider and renderer deadlines", () => {
   assert.match(main, /CONTEXT_COMPACTION_TIMEOUT_MS\s*=\s*180_000/);
   assert.match(main, /ipcMain\.handle\("context:compact"/);
   assert.match(main, /CapsuleReducer\.renderCanonicalMarkdown/);
+  assert.match(main, /CapsuleReducer\.defaultSynthesisPlan\(reduced\)/);
+  assert.ok(html.includes('id="context-compaction-status"'));
 });

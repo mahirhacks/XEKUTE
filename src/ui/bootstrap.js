@@ -224,6 +224,7 @@ const contextUsageFree = $("context-usage-free");
 const contextUsagePct  = $("context-usage-pct");
 const contextUsageBreakdown = $("context-usage-breakdown");
 const contextUsageDiagnostics = $("context-usage-diagnostics");
+const contextCompactionStatus = $("context-compaction-status");
 const contextUsageSource = $("context-usage-source");
 const contextUsageClose = $("context-usage-close");
 const contextUsageCompact = $("context-usage-compact");
@@ -7395,6 +7396,69 @@ function setContextCompactionUi(compacting) {
   if (sendBtn && affectsActiveChat) sendBtn.disabled = true;
 }
 
+function setContextCompactionStatus(message = "", tone = "") {
+  if (!contextCompactionStatus) return;
+  const text = String(message || "").trim();
+  contextCompactionStatus.hidden = !text;
+  contextCompactionStatus.textContent = text;
+  contextCompactionStatus.classList.toggle("is-working", tone === "working");
+  contextCompactionStatus.classList.toggle("is-success", tone === "success");
+  contextCompactionStatus.classList.toggle("is-error", tone === "error");
+}
+
+function contextCompactionErrorMessage(result, fallback = "Context compression was not available.") {
+  if (typeof result?.error === "string" && result.error.trim()) return result.error.trim();
+  if (typeof result?.error?.message === "string" && result.error.message.trim()) return result.error.message.trim();
+  return fallback;
+}
+
+async function compactTranscriptFallback({ model, contextPlan, contextBudget, previousSummary, messages }) {
+  const summaryTranscript = globalThis.ContextMemory?.buildMemoryTranscript(
+    previousSummary,
+    messages,
+    { contextTokens: contextBudget },
+  ) || "";
+  let summary = "";
+  let source = "fallback";
+  let warning = "";
+
+  if (window.api?.summarizeContext && model && summaryTranscript) {
+    try {
+      const result = await awaitContextSummary(window.api.summarizeContext({
+        model,
+        provider: contextPlan.provider,
+        reasoningEffort: contextPlan.provider === "openrouter"
+          ? getModelSettings(model).reasoningEffort
+          : null,
+        contextPlan,
+        contextBudget,
+        transcript: summaryTranscript,
+        messageCount: messages.length,
+      }));
+      if (result?.ok && result.summary) {
+        summary = globalThis.ContextMemory?.normalizeSummary(
+          result.summary,
+          globalThis.ContextMemory.summaryCharLimit(contextBudget),
+        ) || String(result.summary).trim();
+        source = "model";
+      } else {
+        warning = contextCompactionErrorMessage(result, "Model summarization was unavailable.");
+      }
+    } catch (error) {
+      warning = error?.message || "Model summarization was unavailable.";
+    }
+  }
+
+  if (!summary) {
+    summary = globalThis.ContextMemory?.buildFallbackSummary(
+      previousSummary,
+      messages,
+      { contextTokens: contextBudget },
+    ) || previousSummary;
+  }
+  return { ok: Boolean(summary), summary, source, warning };
+}
+
 function awaitContextSummary(request, timeoutMs = CONTEXT_SUMMARY_RENDERER_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -7500,11 +7564,12 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
   if (!newMessagesToSummarize.length && !force) return false;
   contextCompactingSessionId = chatId;
   setContextCompactionUi(true);
+  setContextCompactionStatus("Compressing older context…", "working");
   if (!isRunningChatActive()) setAgentStatus("Summarizing context...");
 
   contextCompactionPromise = (async () => {
     if (!window.api?.compactContext) return false;
-    const compacted = await window.api.compactContext({
+    let compacted = await window.api.compactContext({
       workspace: rootPath,
       sessionId,
       throughMessageId: split.oldMessages.at(-1)?.id || "",
@@ -7512,17 +7577,44 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
       contextBudget,
       previousSummary,
     });
+    let durableMessages = [];
+    let usedTranscriptFallback = false;
+    // A chat can legitimately have no typed tool capsules (for example Ask
+    // mode, or a split that ends before a completed tool block). Preserve the
+    // strict capsule path for validation failures, but retain the established
+    // bounded transcript summarizer for this non-security failure mode.
+    if (!compacted?.ok && ["NO_TRUSTED_RECORDS", "CAPSULE_SNAPSHOT_FAILED"].includes(compacted?.code)) {
+      compacted = await compactTranscriptFallback({
+        model: selectedModel,
+        contextPlan,
+        contextBudget,
+        previousSummary,
+        messages: newMessagesToSummarize,
+      });
+      durableMessages = globalThis.ContextMemory?.projectDurableMessages?.(newMessagesToSummarize) || [];
+      usedTranscriptFallback = Boolean(compacted?.ok);
+      if (usedTranscriptFallback) {
+        compacted.meta = { archivedThroughMessageId: split.oldMessages.at(-1)?.id || "" };
+        compacted.warning = [
+          "No eligible trusted tool records were present; compressed the bounded conversation transcript instead.",
+          compacted.warning,
+        ].filter(Boolean).join(" ");
+      }
+    }
     if (!compacted?.ok || !compacted.summary) {
+      const message = contextCompactionErrorMessage(compacted);
       const target = chatSessions.find((item) => item.id === chatId);
       if (target) {
-        memoryRecord(target).warning = compacted?.error || "Trusted context compaction was not available.";
+        memoryRecord(target).warning = message;
         memoryRecord(target).status = "preserved";
+        syncMemoryAliases(target);
       }
+      setContextCompactionStatus(message, "error");
       return false;
     }
     const summary = compacted.summary;
     const source = compacted.source || "trusted_capsules";
-    const warning = "";
+    const warning = compacted.warning || "";
 
     const targetSession = chatSessions.find((item) => item.id === chatId);
     if (!targetSession) return false;
@@ -7531,7 +7623,10 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
     targetMemory.source = source;
     targetMemory.status = "ready";
     targetMemory.archivedThroughMessageId = compacted.meta?.archivedThroughMessageId || targetMemory.archivedThroughMessageId;
-    targetMemory.archivedMessageCount = split.oldMessages.length;
+    const archivedCursorIndex = targetMemory.archivedThroughMessageId
+      ? historySnapshot.findIndex((message) => String(message?.id || "") === String(targetMemory.archivedThroughMessageId))
+      : -1;
+    targetMemory.archivedMessageCount = archivedCursorIndex >= 0 ? archivedCursorIndex + 1 : split.oldMessages.length;
     targetMemory.summaryTokens = estimateTokens(summary);
     targetMemory.updatedAt = Date.now();
     targetMemory.warning = warning;
@@ -7559,9 +7654,14 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
       // so prior messages, tool cards, timestamps, and status rows stay visible.
       syncActiveChatSession();
     }
-    // The backend transaction already committed the capsule cursor and
-    // canonical summary atomically.  Only lease expiry remains asynchronous.
-    Promise.resolve(window.api?.consolidateContext?.({ workspace: rootPath, sessionId, messages: [], outcome: "compressed", expireKnowledge: true })).catch(() => {});
+    // Trusted summaries were committed atomically by the backend. Transcript
+    // fallback uses the established bounded durable projection here; both
+    // paths also close the model-visible knowledge lease.
+    Promise.resolve(window.api?.consolidateContext?.({ workspace: rootPath, sessionId, messages: durableMessages, outcome: "compressed", expireKnowledge: true })).catch(() => {});
+    setContextCompactionStatus(
+      usedTranscriptFallback ? "Context compressed using the bounded conversation summary." : "Context compressed.",
+      "success",
+    );
     return true;
   })();
 
@@ -7569,6 +7669,7 @@ async function maybeCompactContext(usage = getContextUsage(), { force = false } 
     return await contextCompactionPromise;
   } catch (err) {
     console.error("Context compaction failed:", err);
+    setContextCompactionStatus(err?.message || "Context compression failed.", "error");
     return false;
   } finally {
     contextCompactionPromise = null;
