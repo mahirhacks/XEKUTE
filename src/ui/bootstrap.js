@@ -215,22 +215,28 @@ const inputBar         = $("input-bar");
 const composerEl       = inputBar?.querySelector(".composer") || null;
 const composerQuestionsEl = $("composer-questions");
 const composerTaskListEl = $("composer-task-list");
-let pendingComposerQuestions = null;
+const pendingComposerQuestionsBySession = new Map();
 let activeComposerTaskList = null;
 const slashCommandSuggestions = $("slash-command-suggestions");
 const selectedSlashCommandEl = $("selected-slash-command");
 const contextUsageFill = $("context-usage-fill");
 const contextUsageUsed = $("context-usage-used");
-const contextUsageFree = $("context-usage-free");
 const contextUsagePct  = $("context-usage-pct");
 const contextUsageBreakdown = $("context-usage-breakdown");
-const contextUsageDiagnostics = $("context-usage-diagnostics");
 const contextCompactionStatus = $("context-compaction-status");
 const contextUsageSource = $("context-usage-source");
 const contextUsageClose = $("context-usage-close");
 const contextUsageCompact = $("context-usage-compact");
 const contextUsageSegments = $("context-usage-segments");
-const contextUsageMeasureNote = $("context-usage-measure-note");
+const CONTEXT_USAGE_ROW_LABELS = Object.freeze({
+  system_tools: "System & Tools",
+  project_memory: "Project Memory",
+  active_workflow: "Active Workflow",
+  conversation: "Conversation",
+  project_intelligence: "Project Intelligence",
+  knowledge: "Knowledge",
+  recent_working_set: "Recent Working Set",
+});
 const contextMemoryNote = $("context-memory-note");
 const contextMemoryText = $("context-memory-text");
 const contextMemoryInspector = $("context-memory-inspector");
@@ -305,7 +311,6 @@ const projectSettingsCreate = $("project-settings-create");
 const projectSettingsOpen = $("project-settings-open");
 const projectSettingsNav = document.querySelector(".project-settings-nav");
 const projectSettingsNavButtons = [...document.querySelectorAll("[data-project-settings-target]")];
-const commandSettingsSave = $("command-settings-save");
 const commandSettingsStatus = $("command-settings-status");
 const appSettingsCommandsPanel = $("app-settings-commands-panel");
 const mcpSettingsList = $("mcp-settings-list");
@@ -321,7 +326,6 @@ const kaliAccessAcceptHostKey = $("kali-access-accept-host-key");
 const kaliAccessKeyBrowse = $("kali-access-key-browse");
 const kaliAccessOpenMcp = $("kali-access-open-mcp");
 const kaliAccessTest = $("kali-access-test");
-const kaliAccessSave = $("kali-access-save");
 const kaliAccessStatus = $("kali-access-status");
 const appSettingsAuthorityPanel = $("app-settings-authority-panel");
 const appSettingsPromptsPanel = $("app-settings-prompts-panel");
@@ -346,7 +350,6 @@ const contextCompactionModel = $("context-compaction-model");
 const contextCompactionProvider = $("context-compaction-provider");
 const contextCompactionModels = $("context-compaction-models");
 const contextCompactionCrossProvider = $("context-compaction-cross-provider");
-const llmSettingsSave = $("llm-settings-save");
 const llmSettingsTest = $("llm-settings-test");
 const llmSettingsStatus = $("llm-settings-status");
 const llmOpenRouterKeyToggle = $("llm-openrouter-key-toggle");
@@ -691,6 +694,15 @@ let quickSelection = 0;
 let quickItems = [];
 let quickSearchSeq = 0;
 let quickSearchTimer = null;
+let quickSearchRequestId = "";
+let quickSearchRenderFrame = 0;
+let quickSearchScrollFrame = 0;
+let quickSearchPendingRows = [];
+let quickSearchPendingTotal = 0;
+const QUICK_SEARCH_DEBOUNCE_MS = 225;
+const QUICK_SEARCH_ROW_HEIGHT = 53;
+const QUICK_SEARCH_OVERSCAN = 8;
+const QUICK_SEARCH_RESULT_LIMIT = 10000;
 
 const CONTEXT_OPTIONS = [AUTO_CONTEXT, "128K", "256K", "1M"];
 const OPENROUTER_CONTEXT_OPTIONS = CONTEXT_OPTIONS;
@@ -1530,6 +1542,7 @@ function applyActiveChatSession(session) {
     activeStreamContent = "";
     messages.innerHTML = "";
     clearComposerTaskList();
+    syncComposerQuestionsForActiveSession();
     setChatCollapsed(true);
     return;
   }
@@ -1551,6 +1564,7 @@ function applyActiveChatSession(session) {
   const liveRun = activeChatRuns.get(session.id) || null;
   if (liveRun?.taskList) renderComposerTaskList(liveRun.taskList);
   else clearComposerTaskList();
+  syncComposerQuestionsForActiveSession();
   if (liveRun?.viewHost) {
     messages.replaceChildren(...liveRun.viewHost.childNodes);
     liveRun.viewHost = null;
@@ -1851,6 +1865,36 @@ const GUIDANCE_KIND_DESCRIPTIONS = Object.freeze({
   skills: "Skills add focused workflows and domain knowledge the agent can use when relevant.",
   subagents: "Subagents are specialized agents for focused tasks that can be handled in parallel.",
 });
+let guidanceAutosaveTimer = null;
+let guidanceAutosavePromise = null;
+let guidanceAutosavePending = false;
+
+function queueGuidanceAutosave(delay = 650) {
+  clearTimeout(guidanceAutosaveTimer);
+  guidanceAutosavePending = true;
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Saving automatically…";
+  guidanceAutosaveTimer = setTimeout(() => { void flushGuidanceAutosave(); }, delay);
+}
+
+async function flushGuidanceAutosave() {
+  clearTimeout(guidanceAutosaveTimer);
+  guidanceAutosaveTimer = null;
+  if (guidanceAutosavePromise) {
+    guidanceAutosavePending = true;
+    await guidanceAutosavePromise;
+    return guidanceAutosavePending ? flushGuidanceAutosave() : true;
+  }
+  if (!guidanceDetailIsDirty()) {
+    guidanceAutosavePending = false;
+    return true;
+  }
+  guidanceAutosavePending = false;
+  guidanceAutosavePromise = saveGuidanceFile({ autoSave: true });
+  const saved = await guidanceAutosavePromise;
+  guidanceAutosavePromise = null;
+  if (guidanceAutosavePending) return flushGuidanceAutosave();
+  return saved;
+}
 
 function guidanceKindLabel(kind) {
   return GUIDANCE_KIND_LABELS[String(kind || "").toLowerCase()] || "Subagents";
@@ -1939,25 +1983,26 @@ function renderGuidanceDetail() {
   const kind = guidanceEntryKind(existing);
   guidanceSettingsEmpty.hidden = true;
   guidanceSettingsDetail.hidden = false;
-  guidanceSettingsDetail.innerHTML = `<article class="guidance-detail-card"><header class="guidance-detail-header"><div><span class="codicon ${GUIDANCE_KIND_ICONS[kind]}" aria-hidden="true"></span><div><span class="guidance-detail-eyebrow">${escapeHtml(guidanceScopeLabel(existing.scope))} ${guidanceKindLabel(kind).slice(0, -1)}</span><h2>${escapeHtml(existing.name || "Guidance")}</h2><p>${escapeHtml(existing.relativePath)}</p></div></div><span class="guidance-kind-badge">${escapeHtml(guidanceKindLabel(kind).slice(0, -1))}</span></header><label class="guidance-detail-content-label">Instructions<textarea id="guidance-file-content" spellcheck="false">${escapeHtml(selectedGuidanceContent)}</textarea></label><aside class="guidance-protection-note"><span class="codicon codicon-shield" aria-hidden="true"></span><p>Additive context only. It cannot grant permissions, bypass authorization, change scope, or override runtime guardrails.</p></aside><footer class="guidance-detail-actions"><button type="button" id="guidance-cancel-file" class="secondary-button">Close</button><button type="button" id="guidance-delete-file" class="secondary-button"><span class="codicon codicon-trash" aria-hidden="true"></span>Delete</button><button type="button" id="guidance-save-file" class="primary-button"><span class="codicon codicon-save" aria-hidden="true"></span>Save</button></footer></article>`;
+  guidanceSettingsDetail.innerHTML = `<article class="guidance-detail-card"><header class="guidance-detail-header"><div><span class="codicon ${GUIDANCE_KIND_ICONS[kind]}" aria-hidden="true"></span><div><span class="guidance-detail-eyebrow">${escapeHtml(guidanceScopeLabel(existing.scope))} ${guidanceKindLabel(kind).slice(0, -1)}</span><h2>${escapeHtml(existing.name || "Guidance")}</h2><p>${escapeHtml(existing.relativePath)}</p></div></div><span class="guidance-kind-badge">${escapeHtml(guidanceKindLabel(kind).slice(0, -1))}</span></header><label class="guidance-detail-content-label">Instructions<textarea id="guidance-file-content" spellcheck="false">${escapeHtml(selectedGuidanceContent)}</textarea></label><aside class="guidance-protection-note"><span class="codicon codicon-shield" aria-hidden="true"></span><p>Additive context only. It cannot grant permissions, bypass authorization, change scope, or override runtime guardrails.</p></aside><footer class="guidance-detail-actions"><button type="button" id="guidance-cancel-file" class="secondary-button">Close</button><button type="button" id="guidance-delete-file" class="secondary-button"><span class="codicon codicon-trash" aria-hidden="true"></span>Delete</button></footer></article>`;
   const contentInput = guidanceSettingsDetail.querySelector("#guidance-file-content");
   contentInput?.addEventListener("input", () => {
     selectedGuidanceContent = contentInput.value;
     if (guidanceDraft) guidanceDraft.dirty = true;
     contentInput.dataset.dirty = "true";
+    queueGuidanceAutosave();
   });
-  guidanceSettingsDetail.querySelector("#guidance-cancel-file")?.addEventListener("click", () => {
+  guidanceSettingsDetail.querySelector("#guidance-cancel-file")?.addEventListener("click", async () => {
+    if (!await flushGuidanceAutosave()) return;
     guidanceDraft = null;
     selectedGuidancePath = "";
     selectedGuidanceContent = "";
     renderGuidanceList();
   });
-  guidanceSettingsDetail.querySelector("#guidance-save-file")?.addEventListener("click", saveGuidanceFile);
   guidanceSettingsDetail.querySelector("#guidance-delete-file")?.addEventListener("click", deleteGuidanceFile);
 }
 
 async function selectGuidanceEntry(relativePath, scope = "project") {
-  if (guidanceDetailIsDirty() && !await AppDialog.confirm("Discard unsaved guidance changes?", { title: "Unsaved changes", confirmLabel: "Discard", tone: "danger" })) return;
+  if (guidanceDetailIsDirty() && !await flushGuidanceAutosave()) return;
   const selectedScope = String(scope || "project").toLowerCase() === "global" ? "global" : "project";
   const result = await window.api.guidanceRead?.({ workspace: rootPath, relativePath, scope: selectedScope });
   if (result?.error) {
@@ -2008,19 +2053,24 @@ function beginGuidanceCreate(kind = "skills") {
   if (commandSettingsStatus) commandSettingsStatus.textContent = `Ready to create a ${label} in ${guidanceScopeLabel(scope)} scope`;
 }
 
-async function saveGuidanceFile() {
+async function saveGuidanceFile({ autoSave = false } = {}) {
   const existing = customGuidanceEntries.find((entry) => guidanceEntryKey(entry) === `${selectedGuidanceScope}:${selectedGuidancePath}`);
-  if (!existing) return;
+  if (!existing) return false;
   const content = guidanceSettingsDetail?.querySelector("#guidance-file-content")?.value || "";
   const result = await window.api.guidanceSave?.({ workspace: rootPath, relativePath: selectedGuidancePath, content, scope: selectedGuidanceScope });
   if (result?.error) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = result.error;
-    return;
+    return false;
   }
-  guidanceDraft = null;
-  selectedGuidanceContent = content;
-  if (commandSettingsStatus) commandSettingsStatus.textContent = `Saved ${selectedGuidancePath}`;
-  await loadGuidanceSettings({ preserveSelection: true });
+  const contentInput = guidanceSettingsDetail?.querySelector("#guidance-file-content");
+  if (contentInput?.value === content) {
+    guidanceDraft = null;
+    selectedGuidanceContent = content;
+    contentInput.dataset.dirty = "false";
+    if (commandSettingsStatus) commandSettingsStatus.textContent = autoSave ? "All changes saved" : `Saved ${selectedGuidancePath}`;
+  }
+  if (!autoSave) await loadGuidanceSettings({ preserveSelection: true });
+  return true;
 }
 
 async function deleteGuidanceEntry(relativePath, scope = "project") {
@@ -2264,6 +2314,35 @@ function collectProjectSettings() {
   return profile;
 }
 
+let projectAutosaveTimer = null;
+let projectAutosaveRevision = 0;
+let projectAutosaveRunning = false;
+
+function queueProjectProfileAutosave(delay = 650) {
+  clearTimeout(projectAutosaveTimer);
+  projectAutosaveTimer = setTimeout(() => { void flushProjectProfileAutosave(); }, delay);
+}
+
+function scheduleProjectProfileAutosave({ immediate = false } = {}) {
+  if (!rootPath || !projectProfileData || !projectSettingsForm) return;
+  projectAutosaveRevision += 1;
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Saving automatically…";
+  queueProjectProfileAutosave(immediate ? 0 : 650);
+}
+
+async function flushProjectProfileAutosave() {
+  projectAutosaveTimer = null;
+  if (projectAutosaveRunning || !rootPath || !projectProfileData) return;
+  projectAutosaveRunning = true;
+  const revision = projectAutosaveRevision;
+  try {
+    await saveProjectProfile({ autoSave: true, revision });
+  } finally {
+    projectAutosaveRunning = false;
+    if (revision !== projectAutosaveRevision) queueProjectProfileAutosave(0);
+  }
+}
+
 function setProjectSettingsTarget(targetId, { scroll = false } = {}) {
   const fallbackTarget = projectSettingsNavButtons[0]?.dataset.projectSettingsTarget;
   const resolvedTarget = projectSettingsSections.some((section) => section.id === targetId)
@@ -2308,6 +2387,9 @@ function setProjectSettingsTarget(targetId, { scroll = false } = {}) {
 }
 
 async function loadProjectProfile() {
+  clearTimeout(projectAutosaveTimer);
+  projectAutosaveTimer = null;
+  projectAutosaveRevision = 0;
   const hasProject = Boolean(rootPath);
   if (projectSettingsUnavailable) projectSettingsUnavailable.hidden = hasProject;
   if (projectSettingsShell) projectSettingsShell.hidden = !hasProject;
@@ -2315,7 +2397,6 @@ async function loadProjectProfile() {
     projectProfileData = null;
     projectProfileExists = false;
     if (commandSettingsStatus) commandSettingsStatus.textContent = "Open a project to configure it";
-    if (commandSettingsSave) commandSettingsSave.disabled = true;
     return null;
   }
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Loading project settingsâ€¦";
@@ -2323,7 +2404,6 @@ async function loadProjectProfile() {
   if (result?.error || !result?.profile) {
     projectProfileData = null;
     projectProfileExists = false;
-    if (commandSettingsSave) commandSettingsSave.disabled = true;
     if (commandSettingsStatus) commandSettingsStatus.textContent = result?.error || "Project settings unavailable";
     return result;
   }
@@ -2332,7 +2412,6 @@ async function loadProjectProfile() {
   populateProjectSettings(projectProfileData);
   const activeTarget = projectSettingsNavButtons.find((button) => button.classList.contains("active"))?.dataset.projectSettingsTarget;
   setProjectSettingsTarget(activeTarget);
-  if (commandSettingsSave) commandSettingsSave.disabled = false;
   if (commandSettingsStatus) {
     commandSettingsStatus.textContent = projectProfileExists
       ? "Project settings loaded"
@@ -2342,7 +2421,7 @@ async function loadProjectProfile() {
   return result;
 }
 
-async function saveProjectProfile() {
+async function saveProjectProfile({ autoSave = false, revision = projectAutosaveRevision } = {}) {
   if (!rootPath || !projectSettingsForm) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = "Open a project first";
     return;
@@ -2371,9 +2450,11 @@ async function saveProjectProfile() {
   }
   projectProfileData = result.profile;
   projectProfileExists = true;
-  populateProjectSettings(projectProfileData);
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Saved outside the project folder";
-  await loadIdentitySettings();
+  if (!autoSave) populateProjectSettings(projectProfileData);
+  if (commandSettingsStatus && (!autoSave || revision === projectAutosaveRevision)) {
+    commandSettingsStatus.textContent = autoSave ? "All changes saved" : "Saved outside the project folder";
+  }
+  if (!autoSave) await loadIdentitySettings();
   await configureProxyListener();
 }
 
@@ -2430,11 +2511,7 @@ function setAppSettingsSection(section) {
   appSettingsPromptsPanel.hidden = appSettingsSection !== "prompts";
   appSettingsLlmPanel.hidden = appSettingsSection !== "llm";
   appSettingsCertificatesPanel.hidden = appSettingsSection !== "certificates";
-  const supportsWorkspaceSave = ["general", "project"].includes(appSettingsSection);
-  if (commandSettingsSave) commandSettingsSave.hidden = !supportsWorkspaceSave;
-  if (commandSettingsStatus) commandSettingsStatus.hidden = !supportsWorkspaceSave;
-  if (commandSettingsSave && appSettingsSection === "project") commandSettingsSave.disabled = !rootPath;
-  else if (commandSettingsSave && supportsWorkspaceSave) commandSettingsSave.disabled = false;
+  if (commandSettingsStatus) commandSettingsStatus.hidden = appSettingsSection !== "project";
   appSettingsSectionButtons.forEach((button) => {
     const active = button.dataset.appSettingsSection === appSettingsSection;
     button.classList.toggle("active", active);
@@ -2472,6 +2549,30 @@ function syncLlmProviderUi(provider = "ollama") {
 let modelsSettingsDisplayLimit = 10;
 const MODELS_SETTINGS_PAGE_SIZE = 10;
 let llmOpenRouterHasSavedKey = false;
+let llmAutosaveTimer = null;
+let llmAutosaveRunning = false;
+let llmAutosavePending = false;
+
+function queueLlmSettingsAutosave(delay = 500) {
+  clearTimeout(llmAutosaveTimer);
+  llmAutosavePending = true;
+  if (llmSettingsStatus) llmSettingsStatus.textContent = "Saving automatically…";
+  llmAutosaveTimer = setTimeout(() => { void flushLlmSettingsAutosave(); }, delay);
+}
+
+async function flushLlmSettingsAutosave() {
+  clearTimeout(llmAutosaveTimer);
+  llmAutosaveTimer = null;
+  if (llmAutosaveRunning) return;
+  llmAutosaveRunning = true;
+  llmAutosavePending = false;
+  try {
+    await saveLlmSettings();
+  } finally {
+    llmAutosaveRunning = false;
+    if (llmAutosavePending) queueLlmSettingsAutosave(0);
+  }
+}
 
 function loadCustomModels() {
   try {
@@ -2857,6 +2958,7 @@ async function saveLlmSettings() {
 }
 
 async function testLlmSettings() {
+  if (llmAutosaveTimer || llmAutosavePending) await flushLlmSettingsAutosave();
   if (llmSettingsStatus) llmSettingsStatus.textContent = "Testing active provider…";
   const result = await window.api.testLlmConnection?.();
   if (result?.error) {
@@ -2956,18 +3058,6 @@ async function resetCertificateDirectory() {
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Default CA location restored";
 }
 
-async function saveActiveSettingsSection() {
-  if (appSettingsSection === "general") {
-    updateGeneralSettings({ showStatusBar: generalStatusBarToggle?.checked !== false });
-    await window.api.updatesSettingsSet?.({ checkOnLaunch: generalUpdatesToggle?.checked !== false });
-    if (commandSettingsStatus) commandSettingsStatus.textContent = "Saved";
-    return;
-  }
-  if (appSettingsSection === "project") return saveProjectProfile();
-  if (appSettingsSection === "prompts") return saveGuidanceFile();
-  return undefined;
-}
-
 const MCP_KIND_DESCRIPTION = "Configure standard MCP servers using the same command, arguments, and environment fields used by other MCP clients.";
 const MCP_KIND_ICON = "codicon-plug";
 
@@ -3004,6 +3094,16 @@ function kaliAccessFormValue() {
     identityFile: kaliAccessKey?.value.trim() || "",
     acceptNewHostKey: Boolean(kaliAccessAcceptHostKey?.checked),
   };
+}
+
+let kaliAccessAutosaveTimer = null;
+function queueKaliAccessAutosave(delay = 650) {
+  clearTimeout(kaliAccessAutosaveTimer);
+  setKaliAccessStatus("Saving automatically…", "testing");
+  kaliAccessAutosaveTimer = setTimeout(() => {
+    kaliAccessAutosaveTimer = null;
+    void saveKaliAccess();
+  }, delay);
 }
 
 function renderKaliAccess(profile = {}) {
@@ -3122,7 +3222,7 @@ function authenticationSourceValue(kind = "none", id = "") {
 }
 
 function markAuthenticationSourceChanged() {
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved project changes";
+  scheduleProjectProfileAutosave({ immediate: true });
 }
 
 function reindexEngagementAccountRows() {
@@ -3197,7 +3297,7 @@ async function deleteEngagementAccountRow(row) {
   }
   row.remove();
   reindexEngagementAccountRows();
-  if (commandSettingsStatus) commandSettingsStatus.textContent = credentialId ? "Test account deleted" : "Unsaved project changes";
+  if (commandSettingsStatus) commandSettingsStatus.textContent = credentialId ? "Test account deleted" : "All changes saved";
 }
 
 function selectAuthenticationSource(kind, id) {
@@ -3380,8 +3480,8 @@ async function saveEngagementAccounts() {
       workspace,
       credential: { credentialId, label: `Test Account ${index + 1}`, username, password, role, cookie },
     });
-    if (passwordInput) passwordInput.value = "";
-    if (cookieInput) cookieInput.value = "";
+    if (passwordInput?.value === password) passwordInput.value = "";
+    if (cookieInput?.value === cookie) cookieInput.value = "";
     if (result?.ok === false || result?.error) {
       return { ok: false, error: result.error?.message || result.error || `Test Account ${index + 1} could not be saved.` };
     }
@@ -4369,6 +4469,19 @@ function setNotifications(items = []) {
     }));
   }
 
+function positionNotificationPanel() {
+  if (!notificationPanel || notificationPanel.hidden || !btnNotifications) return;
+  const anchor = btnNotifications.getBoundingClientRect();
+  const margin = 8;
+  const width = notificationPanel.offsetWidth || 320;
+  const height = notificationPanel.offsetHeight || 0;
+  const left = Math.max(margin, Math.min(anchor.right - width, window.innerWidth - width - margin));
+  const top = Math.max(margin, Math.min(anchor.bottom + 8, window.innerHeight - height - margin));
+  notificationPanel.style.left = `${Math.round(left)}px`;
+  notificationPanel.style.top = `${Math.round(top)}px`;
+  notificationPanel.style.right = "auto";
+}
+
   function beginUpdateInstallFromNotification() {
     updatesState.pendingNotification = null;
     setNotifications(notificationItems);
@@ -4408,7 +4521,7 @@ function showUpdateToast(version) {
   updatesState.availableVersion = String(version || "");
   if (updateToastVersion) updateToastVersion.textContent = updatesState.availableVersion;
   const title = updateToast.querySelector(".update-toast-title");
-  if (title) title.textContent = "A new update is available";
+  if (title) title.textContent = "New version is available";
   const sub = updateToast.querySelector(".update-toast-version");
   if (sub) sub.textContent = "";
   updateToast.classList.remove("update-toast-downloading");
@@ -7939,9 +8052,8 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
   }
   const actual = source === "actual";
   const displayCapacity = Number(modelMaxTokens || total) || total;
-  if (contextUsageHeadingValue) contextUsageHeadingValue.textContent = `Context: ${formatTokenCount(Math.round(used))} / ${capacityApproximate ? "~" : ""}${formatTokenCount(Math.round(displayCapacity))}`;
-  if (contextUsageUsed) contextUsageUsed.textContent = `${Math.round(pct * 100)}% Full`;
-  if (contextUsageFree) contextUsageFree.textContent = `${actual ? "" : "~"}${formatTokenCount(used)} / ${capacityApproximate ? "~" : ""}${formatTokenCount(total)} Tokens`;
+  if (contextUsageHeadingValue) contextUsageHeadingValue.textContent = `Context: ${formatTokenCount(Math.round(used))} / ${formatTokenCount(Math.round(displayCapacity))}`;
+  if (contextUsageUsed) contextUsageUsed.textContent = `${Math.round(pct * 100)}%`;
   if (contextUsagePct) {
     contextUsagePct.textContent = `${actual ? "Last model turn" : "Next prompt estimate"} · ${formatTokenCount(free)} free`;
   }
@@ -7962,7 +8074,8 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
       .map((section) => {
         const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
         const widthPct = Math.max((scaledTokens / Math.max(total, 1)) * 100, 1);
-        return `<span class="context-usage-segment" style="width:${widthPct}%;background:${section.color}" title="${escapeHtml(section.label)}: ~${escapeHtml(formatTokenCount(scaledTokens))}"></span>`;
+        const label = CONTEXT_USAGE_ROW_LABELS[section.key] || section.label;
+        return `<span class="context-usage-segment" style="width:${widthPct}%;background:${section.color}" title="${escapeHtml(label)}: ${escapeHtml(formatTokenCount(scaledTokens))}"></span>`;
       });
     contextUsageSegments.innerHTML = segments.join("");
   }
@@ -7974,34 +8087,13 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
           <div class="context-usage-row">
             <div class="context-usage-row-label">
               <span class="context-usage-swatch" style="background:${section.color}"></span>
-              <span>${escapeHtml(section.label)}</span>
+              <span>${escapeHtml(CONTEXT_USAGE_ROW_LABELS[section.key] || section.label)}</span>
             </div>
-            <div class="context-usage-row-value">${section.exact ? "" : "~"}${escapeHtml(formatTokenCount(scaledTokens))}</div>
+            <div class="context-usage-row-value">${escapeHtml(formatTokenCount(scaledTokens))}</div>
           </div>
         `;
       });
     contextUsageBreakdown.innerHTML = rows.join("");
-  }
-  if (contextUsageDiagnostics) {
-    const ratio = Number(compressionRatio) > 0 ? `${Number(compressionRatio).toFixed(1).replace(/\.0$/, "")}×` : "—";
-    const latency = Number.isFinite(Number(compileLatencyMs)) ? `${Math.round(Number(compileLatencyMs))} ms` : "—";
-    contextUsageDiagnostics.innerHTML = [
-      ["Compression", ratio],
-      ["Sources represented", String(Math.max(0, Number(sourcesRepresented) || 0))],
-      ["Freshness", String(freshness || "Current")],
-      ["Compile latency", latency],
-    ].map(([label, value]) => `<div class="context-usage-diagnostic"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
-  }
-  if (contextUsageMeasureNote) {
-    const providerNote = provider === "openrouter"
-      ? `OpenRouter reports the model maximum as ${modelMaxTokens ? formatTokenCount(modelMaxTokens) : "unavailable"}; XEKUTE fits prompts to the working budget shown above.`
-      : "Ollama Auto uses the loaded runtime context when available, otherwise the model catalog default from ollama show.";
-    const measuredDetail = provider === "ollama"
-      ? "Ollama's prompt_eval_count and eval_count"
-      : "the provider's measured prompt and output counts";
-    contextUsageMeasureNote.textContent = actual
-      ? `Total combines ${measuredDetail} from the last model turn. Input breakdown rows are proportional estimates. ${providerNote}${capacityApproximate ? " Capacity is still approximate." : ""}`
-      : `Preview of the next routed payload. The final total is replaced by measured prompt and output counts after the request. ${providerNote}`;
   }
   const session = activeChatSession();
   const memory = memoryRecord(session);
@@ -9089,7 +9181,6 @@ if (webclonePreviewFrame && typeof ResizeObserver !== "undefined") {
   new ResizeObserver(syncWebClonePreviewBounds).observe(webclonePreviewFrame);
 }
 $("app-settings-close")?.addEventListener("click", () => { appSettingsOverlay.hidden = true; });
-commandSettingsSave?.addEventListener("click", saveActiveSettingsSection);
 projectSettingsCreate?.addEventListener("click", createProject);
 projectSettingsOpen?.addEventListener("click", openProject);
 projectSettingsNavButtons.forEach((button) => button.addEventListener("click", () => {
@@ -9108,7 +9199,7 @@ projectSettingsNav?.addEventListener("wheel", (event) => {
 }, { passive: false });
 projectSettingsForm?.addEventListener("input", (event) => {
   if (!event.target.closest("[data-project-field]")) return;
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved project changes";
+  scheduleProjectProfileAutosave();
   if (event.target.dataset.projectField === "project.name" && projectSettingsName) {
     projectSettingsName.textContent = event.target.value.trim() || projectName(rootPath || "Project");
   }
@@ -9133,22 +9224,29 @@ mcpSettingsTabs?.addEventListener("click", (event) => {
 kaliAccessEnabled?.addEventListener("change", () => {
   document.getElementById("kali-access-panel")?.classList.toggle("is-enabled", kaliAccessEnabled.checked);
   if (kaliAccessFields) kaliAccessFields.hidden = !kaliAccessEnabled.checked;
-  if (kaliAccessEnabled.checked) setKaliAccessStatus("Enter the Kali SSH details, then test and save the connection.");
+  if (kaliAccessEnabled.checked) setKaliAccessStatus("Enter the Kali SSH details. Changes save automatically; test when ready.");
   else saveKaliAccess(null, { quiet: true });
 });
 kaliAccessForm?.addEventListener("submit", saveKaliAccess);
+kaliAccessFields?.addEventListener("input", () => queueKaliAccessAutosave());
+kaliAccessAcceptHostKey?.addEventListener("change", () => queueKaliAccessAutosave(0));
 kaliAccessTest?.addEventListener("click", testKaliAccess);
 kaliAccessOpenMcp?.addEventListener("click", () => openMcpConfig(mcpScope === "project" ? "project" : "global"));
 kaliAccessKeyBrowse?.addEventListener("click", async () => {
   const result = await window.api.kaliAccessPickIdentity?.();
-  if (result?.ok && result.filePath && kaliAccessKey) kaliAccessKey.value = result.filePath;
+  if (result?.ok && result.filePath && kaliAccessKey) {
+    kaliAccessKey.value = result.filePath;
+    queueKaliAccessAutosave(0);
+  }
 });
 btnNotifications?.addEventListener("click", (event) => {
   event.stopPropagation();
   const opening = notificationPanel?.hidden !== false;
   if (notificationPanel) notificationPanel.hidden = !opening;
   btnNotifications.setAttribute("aria-expanded", String(opening));
+  if (opening) requestAnimationFrame(positionNotificationPanel);
 });
+globalThis.addEventListener("resize", positionNotificationPanel);
 notificationClear?.addEventListener("click", () => {
   // Deferred updates remain reachable until installed or superseded.
   setNotifications([]);
@@ -9184,10 +9282,10 @@ credentialList?.addEventListener("click", (event) => {
 });
 engagementAccountAdd?.addEventListener("click", () => {
   appendEngagementAccountRow();
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved project changes";
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Account details save automatically";
 });
 engagementAccountList?.addEventListener("input", () => {
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved project changes";
+  scheduleProjectProfileAutosave();
 });
 engagementAccountList?.addEventListener("click", (event) => {
   const button = event.target.closest?.("[data-engagement-account-delete]");
@@ -9200,15 +9298,15 @@ projectAuthSource?.addEventListener("change", () => {
 });
 ollamaHostTest?.addEventListener("click", testOllamaSettings);
 ollamaHostReset?.addEventListener("click", resetOllamaSettings);
-llmSettingsSave?.addEventListener("click", saveLlmSettings);
 llmSettingsTest?.addEventListener("click", testLlmSettings);
 llmProvider?.addEventListener("change", () => {
   syncLlmProviderUi(llmProvider.value);
   if (llmSettingsStatus) {
     llmSettingsStatus.textContent = llmProvider.value === "openrouter"
-      ? "OpenRouter selected · save to make it active"
-      : "Ollama selected · save to make it active";
+      ? "OpenRouter selected · saving automatically"
+      : "Ollama selected · saving automatically";
   }
+  queueLlmSettingsAutosave(0);
 });
 llmOllamaEnableToggle?.addEventListener("change", () => {
   const provider = llmOllamaEnableToggle.checked ? "ollama" : "openrouter";
@@ -9216,13 +9314,26 @@ llmOllamaEnableToggle?.addEventListener("change", () => {
   syncLlmProviderUi(provider);
   if (llmSettingsStatus) {
     llmSettingsStatus.textContent = provider === "openrouter"
-      ? "OpenRouter selected · save to make it active"
-      : "Ollama selected · save to make it active";
+      ? "OpenRouter selected · saving automatically"
+      : "Ollama selected · saving automatically";
   }
+  queueLlmSettingsAutosave(0);
 });
 llmOpenRouterKeyToggle?.addEventListener("change", syncOpenRouterApiFieldsUi);
-llmOpenRouterBaseToggle?.addEventListener("change", syncOpenRouterApiFieldsUi);
-llmOllamaEndpointToggle?.addEventListener("change", syncOllamaApiFieldsUi);
+llmOpenRouterBaseToggle?.addEventListener("change", () => {
+  syncOpenRouterApiFieldsUi();
+  queueLlmSettingsAutosave(0);
+});
+llmOllamaEndpointToggle?.addEventListener("change", () => {
+  syncOllamaApiFieldsUi();
+  queueLlmSettingsAutosave(0);
+});
+contextCompactionProvider?.addEventListener("change", () => queueLlmSettingsAutosave(0));
+contextCompactionModel?.addEventListener("input", () => queueLlmSettingsAutosave());
+contextCompactionCrossProvider?.addEventListener("change", () => queueLlmSettingsAutosave(0));
+openRouterApiKey?.addEventListener("change", () => queueLlmSettingsAutosave(0));
+openRouterBaseUrl?.addEventListener("input", () => queueLlmSettingsAutosave());
+ollamaHostInput?.addEventListener("input", () => queueLlmSettingsAutosave());
 modelsSettingsSearch?.addEventListener("input", () => {
   modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
   renderModelsSettingsList();
@@ -9580,7 +9691,7 @@ function buildCommandItems() {
       title: "Search: Project",
       detail: rootPath ? `Search ${projectName(rootPath)}` : "Open a project first",
       icon: "codicon-search",
-      key: quickShortcutLabel("Ctrl+Shift+F"),
+      key: quickShortcutLabel("Ctrl+F"),
       disabled: !rootPath,
       run: () => openQuickPalette("search"),
     },
@@ -9673,6 +9784,27 @@ function firstSnippetLine(snippet) {
     .find(Boolean) || "";
 }
 
+function highlightExactText(text, query) {
+  const value = String(text || "");
+  const needle = String(query || "");
+  if (!needle) return escapeHtml(value);
+  const comparable = value.toLowerCase();
+  const loweredNeedle = needle.toLowerCase();
+  let cursor = 0;
+  let html = "";
+  while (cursor < value.length) {
+    const index = comparable.indexOf(loweredNeedle, cursor);
+    if (index === -1) {
+      html += escapeHtml(value.slice(cursor));
+      break;
+    }
+    html += escapeHtml(value.slice(cursor, index));
+    html += `<mark class="quick-match">${escapeHtml(value.slice(index, index + needle.length))}</mark>`;
+    cursor = index + needle.length;
+  }
+  return html;
+}
+
 function setQuickModeUi(mode) {
   const labels = {
     command: ["codicon-chevron-right", "Type a command", "Command Palette"],
@@ -9681,16 +9813,24 @@ function setQuickModeUi(mode) {
   };
   const [icon, placeholder, title] = labels[mode] || labels.command;
   quickPanel?.setAttribute("aria-label", title);
+  quickPanel?.classList.toggle("quick-panel-search", mode === "search");
   if (quickInput) quickInput.placeholder = placeholder;
   if (quickIcon) quickIcon.className = `codicon ${icon}`;
 }
 
-function renderQuickList(items, metaText = "") {
+function renderQuickList(items, metaText = "", { quietEmpty = false } = {}) {
   quickItems = items;
   quickSelection = Math.max(0, Math.min(quickSelection, quickItems.length - 1));
-  if (quickMeta) quickMeta.textContent = metaText;
+  quickPanel?.classList.toggle("quick-panel-minimal", quietEmpty);
+  if (quickMeta) {
+    quickMeta.textContent = metaText;
+    quickMeta.hidden = quietEmpty;
+  }
   if (!quickResults) return;
+  quickResults.classList.remove("is-virtualized");
   quickResults.innerHTML = "";
+  quickResults.hidden = quietEmpty;
+  if (quietEmpty) return;
 
   if (!items.length) {
     const empty = document.createElement("div");
@@ -9700,34 +9840,191 @@ function renderQuickList(items, metaText = "") {
     return;
   }
 
-  items.forEach((item, index) => {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = `quick-result${index === quickSelection ? " active" : ""}`;
-    row.innerHTML = `
-      <span class="codicon ${escapeHtml(item.icon || "codicon-chevron-right")} quick-result-icon"></span>
-      <span class="quick-result-main">
-        <span class="quick-result-title">${escapeHtml(item.title || "")}</span>
-        <span class="quick-result-detail">${escapeHtml(item.detail || "")}</span>
-      </span>
-      <span class="quick-result-key">${escapeHtml(item.key || "")}</span>
-    `;
-    row.addEventListener("mouseenter", () => {
-      quickSelection = index;
-      syncQuickSelection();
-    });
-    row.addEventListener("click", () => runSelectedQuickItem(index));
-    quickResults.appendChild(row);
+  items.forEach((item, index) => quickResults.appendChild(createQuickResultRow(item, index)));
+}
+
+function createQuickResultRow(item, index) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.dataset.quickIndex = String(index);
+  row.className = `quick-result${index === quickSelection ? " active" : ""}`;
+  row.innerHTML = `
+    <span class="codicon ${escapeHtml(item.icon || "codicon-chevron-right")} quick-result-icon"></span>
+    <span class="quick-result-main">
+      <span class="quick-result-title">${escapeHtml(item.title || "")}</span>
+      <span class="quick-result-detail">${item.detailHtml || escapeHtml(item.detail || "")}</span>
+    </span>
+    <span class="quick-result-key">${escapeHtml(item.key || "")}</span>
+  `;
+  row.addEventListener("mouseenter", () => {
+    quickSelection = index;
+    if (quickResults?.classList.contains("is-virtualized")) {
+      [...quickResults.querySelectorAll(".quick-result")].forEach((candidate) => {
+        candidate.classList.toggle("active", Number(candidate.dataset.quickIndex) === quickSelection);
+      });
+      return;
+    }
+    syncQuickSelection();
   });
+  row.addEventListener("click", () => runSelectedQuickItem(index));
+  return row;
+}
+
+function renderVirtualizedSearchResults(metaText = quickMeta?.textContent || "") {
+  quickPanel?.classList.remove("quick-panel-minimal");
+  if (quickMeta) {
+    quickMeta.hidden = false;
+    quickMeta.textContent = metaText;
+  }
+  if (!quickResults) return;
+  quickResults.hidden = false;
+  quickResults.classList.add("is-virtualized");
+  if (!quickItems.length) {
+    quickResults.replaceChildren();
+    if (String(metaText).startsWith("Searching")) return;
+    const empty = document.createElement("div");
+    empty.className = "quick-empty";
+    empty.textContent = metaText || "No exact matches";
+    quickResults.appendChild(empty);
+    return;
+  }
+
+  const viewportHeight = quickResults.clientHeight || 480;
+  const start = Math.max(0, Math.floor(quickResults.scrollTop / QUICK_SEARCH_ROW_HEIGHT) - QUICK_SEARCH_OVERSCAN);
+  const visibleCount = Math.ceil(viewportHeight / QUICK_SEARCH_ROW_HEIGHT) + (QUICK_SEARCH_OVERSCAN * 2);
+  const end = Math.min(quickItems.length, start + visibleCount);
+  let space = quickResults.querySelector(":scope > .quick-results-virtual-space");
+  if (!space) {
+    space = document.createElement("div");
+    space.className = "quick-results-virtual-space";
+    quickResults.replaceChildren(space);
+  }
+  space.style.height = `${quickItems.length * QUICK_SEARCH_ROW_HEIGHT}px`;
+  const fragment = document.createDocumentFragment();
+  for (let index = start; index < end; index += 1) {
+    const row = createQuickResultRow(quickItems[index], index);
+    row.style.top = `${index * QUICK_SEARCH_ROW_HEIGHT}px`;
+    fragment.appendChild(row);
+  }
+  space.replaceChildren(fragment);
 }
 
 function syncQuickSelection() {
   if (!quickResults) return;
-  [...quickResults.querySelectorAll(".quick-result")].forEach((row, index) => {
+  if (quickResults.classList.contains("is-virtualized")) {
+    const rowTop = quickSelection * QUICK_SEARCH_ROW_HEIGHT;
+    const rowBottom = rowTop + QUICK_SEARCH_ROW_HEIGHT;
+    let movedViewport = false;
+    if (rowTop < quickResults.scrollTop) {
+      quickResults.scrollTop = rowTop;
+      movedViewport = true;
+    }
+    else if (rowBottom > quickResults.scrollTop + quickResults.clientHeight) {
+      quickResults.scrollTop = Math.max(0, rowBottom - quickResults.clientHeight);
+      movedViewport = true;
+    }
+    if (movedViewport) {
+      renderVirtualizedSearchResults();
+      return;
+    }
+    [...quickResults.querySelectorAll(".quick-result")].forEach((row) => {
+      row.classList.toggle("active", Number(row.dataset.quickIndex) === quickSelection);
+    });
+    return;
+  }
+  [...quickResults.querySelectorAll(".quick-result")].forEach((row) => {
+    const index = Number(row.dataset.quickIndex);
     row.classList.toggle("active", index === quickSelection);
     if (index === quickSelection) row.scrollIntoView({ block: "nearest" });
   });
 }
+
+function workspaceSearchResultItem(row, query) {
+  const name = basenameOf(row.path);
+  const info = fileIconInfo(name);
+  const line = Number(row.line) || parseSnippetLine(row.snippet);
+  const column = Number(row.column) || 1;
+  const detail = row.lineText || firstSnippetLine(row.snippet);
+  return {
+    title: row.path,
+    detail,
+    detailHtml: highlightExactText(detail, query),
+    icon: `${info.icon} ${info.className}`,
+    key: `L${line}:C${column}`,
+    run: async () => {
+      await openFile(joinWorkspacePath(row.path), name, {
+        focusEditor: true,
+        preview: false,
+        line,
+        column,
+      });
+    },
+  };
+}
+
+function cancelActiveWorkspaceSearch() {
+  const requestId = quickSearchRequestId;
+  quickSearchRequestId = "";
+  if (quickSearchRenderFrame) cancelAnimationFrame(quickSearchRenderFrame);
+  if (quickSearchScrollFrame) cancelAnimationFrame(quickSearchScrollFrame);
+  quickSearchRenderFrame = 0;
+  quickSearchScrollFrame = 0;
+  quickSearchPendingRows = [];
+  quickSearchPendingTotal = 0;
+  if (requestId) void window.api.cancelWorkspaceSearch?.({ requestId });
+}
+
+function flushWorkspaceSearchRows(metaText = "") {
+  if (quickSearchRenderFrame) cancelAnimationFrame(quickSearchRenderFrame);
+  quickSearchRenderFrame = 0;
+  const query = (quickInput?.value || "").trim();
+  const rows = quickSearchPendingRows;
+  quickSearchPendingRows = [];
+  quickItems.push(...rows.map((row) => workspaceSearchResultItem(row, query)));
+  const total = quickSearchPendingTotal || quickItems.length;
+  renderVirtualizedSearchResults(metaText || `Searching… ${total.toLocaleString()} exact match${total === 1 ? "" : "es"}`);
+}
+
+window.api.onWorkspaceSearchBatch?.((payload) => {
+  if (!payload?.requestId || payload.requestId !== quickSearchRequestId || quickMode !== "search") return;
+  const rows = Array.isArray(payload.results) ? payload.results : [];
+  quickSearchPendingRows.push(...rows);
+  quickSearchPendingTotal = Number(payload.totalCount) || quickSearchPendingTotal;
+  if (payload.done) {
+    const result = payload.summary || {};
+    if (result.cancelled) return;
+    if (result.error) {
+      quickSearchPendingRows = [];
+      quickSearchPendingTotal = 0;
+      quickSearchRequestId = "";
+      renderQuickList([], result.error);
+      return;
+    }
+    const total = Number(result.totalCount) || quickSearchPendingTotal || quickItems.length;
+    const displayed = quickItems.length + quickSearchPendingRows.length;
+    const meta = result.capped
+      ? `${displayed.toLocaleString()} of ${total.toLocaleString()}+ exact matches — refine your search`
+      : result.truncated
+        ? (total > displayed
+          ? `${displayed.toLocaleString()} of ${total.toLocaleString()} exact matches — refine your search`
+          : `${total.toLocaleString()}+ exact matches — refine your search`)
+        : `${total.toLocaleString()} exact match${total === 1 ? "" : "es"}`;
+    flushWorkspaceSearchRows(meta);
+    quickSearchRequestId = "";
+    return;
+  }
+  if (!quickSearchRenderFrame) {
+    quickSearchRenderFrame = requestAnimationFrame(() => flushWorkspaceSearchRows());
+  }
+});
+
+quickResults?.addEventListener("scroll", () => {
+  if (!quickResults.classList.contains("is-virtualized") || quickSearchScrollFrame) return;
+  quickSearchScrollFrame = requestAnimationFrame(() => {
+    quickSearchScrollFrame = 0;
+    renderVirtualizedSearchResults();
+  });
+}, { passive: true });
 
 function renderCommandPalette() {
   const query = quickInput?.value || "";
@@ -9757,44 +10054,34 @@ function renderQuickFiles() {
 
 function renderWorkspaceSearch() {
   const query = (quickInput?.value || "").trim();
+  if (quickSearchTimer) clearTimeout(quickSearchTimer);
+  cancelActiveWorkspaceSearch();
+  if (query.length < 2) {
+    renderQuickList([], "", { quietEmpty: true });
+    return;
+  }
   if (!rootPath) {
     renderQuickList([], "Create or open a Target to search its workspace");
     return;
   }
-  if (quickSearchTimer) clearTimeout(quickSearchTimer);
-  if (query.length < 2) {
-    renderQuickList([], "Type at least 2 characters to search");
-    return;
-  }
 
   const seq = ++quickSearchSeq;
-  if (quickMeta) quickMeta.textContent = "Searching...";
+  const requestId = `workspace-search-${Date.now()}-${seq}`;
+  quickSearchRequestId = requestId;
+  quickItems = [];
+  quickSelection = 0;
+  if (quickResults) quickResults.scrollTop = 0;
+  renderVirtualizedSearchResults("Searching workspace…");
   quickSearchTimer = setTimeout(async () => {
-    const result = await window.api.searchWorkspace({ workspace: rootPath, query, limit: 18 });
-    if (seq !== quickSearchSeq || quickMode !== "search") return;
+    const result = await window.api.searchWorkspace({ workspace: rootPath, query, limit: QUICK_SEARCH_RESULT_LIMIT, requestId });
+    if (seq !== quickSearchSeq || quickMode !== "search" || requestId !== quickSearchRequestId) return;
     if (result?.error) {
+      quickSearchRequestId = "";
+      quickSearchPendingRows = [];
+      quickSearchPendingTotal = 0;
       renderQuickList([], result.error);
-      return;
     }
-    const items = (result.results || []).map((row) => {
-      const name = basenameOf(row.path);
-      const info = fileIconInfo(name);
-      const line = parseSnippetLine(row.snippet);
-      return {
-        title: row.path,
-        detail: firstSnippetLine(row.snippet),
-        icon: `${info.icon} ${info.className}`,
-        key: `L${line}`,
-        run: async () => {
-          await showResourcePreview(joinWorkspacePath(row.path), name, `${row.path} · line ${line}`, {
-            icon: info.icon,
-            line,
-          });
-        },
-      };
-    });
-    renderQuickList(items, `${items.length} result${items.length === 1 ? "" : "s"}`);
-  }, 120);
+  }, QUICK_SEARCH_DEBOUNCE_MS);
 }
 
 function renderQuickPalette() {
@@ -9821,6 +10108,7 @@ async function openQuickPalette(mode = "command", initialValue = "") {
 function closeQuickPalette() {
   if (quickOverlay) quickOverlay.hidden = true;
   if (quickSearchTimer) clearTimeout(quickSearchTimer);
+  cancelActiveWorkspaceSearch();
   quickSearchSeq += 1;
   quickItems = [];
   if (activeTabPath) EditorManager.focus();
@@ -11145,14 +11433,32 @@ function reorderOpenTabs(draggedPath, targetPath, { after = false } = {}) {
   return true;
 }
 
-async function openFile(filePath, fileName, { focusEditor = true, preview = false } = {}) {
+async function openFile(filePath, fileName, {
+  focusEditor = true,
+  preview = false,
+  line = 0,
+  column = 1,
+} = {}) {
   const path = normPath(filePath);
+  if (line > 0 && isMarkdownFileName(fileName) && markdownViewMode === "md") {
+    markdownViewMode = "text";
+    localStorage.setItem(MARKDOWN_VIEW_MODE_KEY, markdownViewMode);
+  }
+  if (line > 0 && fileName === "settings.config" && settingsEditorMode === "ui") {
+    settingsEditorMode = "json";
+    localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, settingsEditorMode);
+    syncSettingsEditorButtons();
+  }
   showCodeEditorWorkspace();
 
   const existingTab = openTabs.get(path);
   if (existingTab) {
     if (!preview) existingTab.preview = false;
     switchToTab(path, { focusEditor });
+    if (line > 0) {
+      await renderEditor({ focusEditor });
+      await EditorManager.revealLocation?.(path, line, column);
+    }
     return;
   }
 
@@ -11187,7 +11493,8 @@ async function openFile(filePath, fileName, { focusEditor = true, preview = fals
   }
 
   if (activeTabPath === path) {
-    renderEditor({ focusEditor });
+    await renderEditor({ focusEditor });
+    if (line > 0) await EditorManager.revealLocation?.(path, line, column);
   }
 }
 
@@ -13457,19 +13764,31 @@ document.addEventListener("pointerdown", (event) => {
   renderComposerTaskList(activeComposerTaskList);
 });
 
+function composerQuestionSessionId(sessionId = activeChatSessionId) {
+  return String(sessionId || activeChatSessionId || "");
+}
+
+function syncComposerQuestionsForActiveSession() {
+  if (!composerQuestionsEl) return;
+  const pending = pendingComposerQuestionsBySession.get(String(activeChatSessionId || "")) || null;
+  composerQuestionsEl.replaceChildren();
+  if (pending?.block) composerQuestionsEl.appendChild(pending.block);
+  composerQuestionsEl.hidden = !pending;
+  inputBar?.classList.toggle("has-composer-questions", Boolean(pending));
+}
+
 function showCommandApprovalPanel({
   command = "",
   requestId = "",
+  sessionId = activeChatSessionId,
   onLiveState = null,
 } = {}) {
-  if (pendingComposerQuestions) return pendingComposerQuestions.promise;
+  const ownerSessionId = composerQuestionSessionId(sessionId);
+  const existing = pendingComposerQuestionsBySession.get(ownerSessionId);
+  if (existing) return existing.promise;
   if (!composerQuestionsEl) {
     return Promise.resolve({ answers: [], skipped: false, requestId });
   }
-
-  composerQuestionsEl.hidden = false;
-  composerQuestionsEl.innerHTML = "";
-  inputBar?.classList.add("has-composer-questions");
 
   const block = document.createElement("section");
   block.className = "agent-questions-card composer-questions-card agent-command-approval";
@@ -13490,7 +13809,6 @@ function showCommandApprovalPanel({
       <button type="button" class="agent-command-approval-button deny" data-command-decision="deny">Deny</button>
     </div>
   `;
-  composerQuestionsEl.appendChild(block);
   onLiveState?.({ kind: "question", title: "Command approval required", detail: "Waiting for your decision", meta: "PAUSED" });
 
   const preview = block.querySelector(".agent-command-approval-preview");
@@ -13513,10 +13831,10 @@ function showCommandApprovalPanel({
   const promise = new Promise((resolve) => { resolveQuestions = resolve; });
   const dismissPanel = () => {
     document.removeEventListener("pointerdown", outsidePointer);
-    composerQuestionsEl.hidden = true;
-    composerQuestionsEl.innerHTML = "";
-    inputBar?.classList.remove("has-composer-questions");
-    pendingComposerQuestions = null;
+    if (pendingComposerQuestionsBySession.get(ownerSessionId)?.block === block) {
+      pendingComposerQuestionsBySession.delete(ownerSessionId);
+    }
+    syncComposerQuestionsForActiveSession();
   };
   const finish = (decision = "deny") => {
     if (settled) return;
@@ -13540,7 +13858,8 @@ function showCommandApprovalPanel({
     button.addEventListener("click", () => finish(button.dataset.commandDecision === "approve" ? "approve" : "deny"));
   });
 
-  pendingComposerQuestions = { block, promise, finish };
+  pendingComposerQuestionsBySession.set(ownerSessionId, { sessionId: ownerSessionId, block, promise, finish });
+  syncComposerQuestionsForActiveSession();
   return promise;
 }
 
@@ -13550,9 +13869,12 @@ function showComposerQuestionsPanel({
   requestId = "",
   approval = null,
   questionnaire = null,
+  sessionId = activeChatSessionId,
   onLiveState = null,
 } = {}) {
-  if (pendingComposerQuestions) return pendingComposerQuestions.promise;
+  const ownerSessionId = composerQuestionSessionId(sessionId);
+  const existing = pendingComposerQuestionsBySession.get(ownerSessionId);
+  if (existing) return existing.promise;
   if (!composerQuestionsEl) {
     return Promise.resolve({ answers: [], skipped: true, requestId });
   }
@@ -13563,13 +13885,9 @@ function showComposerQuestionsPanel({
     return Promise.resolve({ answers: [], skipped: true, requestId });
   }
   if (approval?.kind === "command") {
-    return showCommandApprovalPanel({ command: approval.command, requestId, onLiveState });
+    return showCommandApprovalPanel({ command: approval.command, requestId, sessionId: ownerSessionId, onLiveState });
   }
   const isToolQuestionnaire = questionnaire?.kind === "agent_questions";
-
-  composerQuestionsEl.hidden = false;
-  composerQuestionsEl.innerHTML = "";
-  inputBar?.classList.add("has-composer-questions");
 
   const block = document.createElement("section");
   block.className = "agent-questions-card composer-questions-card";
@@ -13622,7 +13940,6 @@ function showComposerQuestionsPanel({
     </div>
   `;
 
-  composerQuestionsEl.appendChild(block);
   onLiveState?.({ kind: "question", title: "Waiting for your answers", detail: reason, meta: "PAUSED" });
 
   const questionFields = [...block.querySelectorAll(".agent-questions-field")];
@@ -13713,10 +14030,10 @@ function showComposerQuestionsPanel({
   };
 
   const dismissPanel = () => {
-    composerQuestionsEl.hidden = true;
-    composerQuestionsEl.innerHTML = "";
-    inputBar?.classList.remove("has-composer-questions");
-    pendingComposerQuestions = null;
+    if (pendingComposerQuestionsBySession.get(ownerSessionId)?.block === block) {
+      pendingComposerQuestionsBySession.delete(ownerSessionId);
+    }
+    syncComposerQuestionsForActiveSession();
   };
 
   const finish = (skipped = false) => {
@@ -13754,7 +14071,8 @@ function showComposerQuestionsPanel({
   });
   block.querySelector("[data-questions-action='skip']").addEventListener("click", () => finish(true));
 
-  pendingComposerQuestions = { block, promise, finish };
+  pendingComposerQuestionsBySession.set(ownerSessionId, { sessionId: ownerSessionId, block, promise, finish });
+  syncComposerQuestionsForActiveSession();
   return promise;
 }
 
@@ -13950,8 +14268,7 @@ function finalizeSubagentSessionTab(payload = {}) {
   schedulePersistChatSessions();
 }
 
-function createAssistantTurn() {
-  const { container = messages } = arguments[0] || {};
+function createAssistantTurn({ container = messages, sessionId = activeChatSessionId } = {}) {
   const turn = document.createElement("div");
   turn.className = "chat-turn assistant";
   turn.setAttribute("aria-busy", "true");
@@ -13972,6 +14289,7 @@ function createAssistantTurn() {
 
   const assistant = {
     turn,
+    sessionId: String(sessionId || activeChatSessionId || ""),
     startedAt: Date.now(),
     finalOutcome: null,
     statusEl: null,
@@ -14202,6 +14520,7 @@ function createAssistantTurn() {
         expiresInMs,
         approval,
         questionnaire,
+        sessionId: this.sessionId,
         onLiveState: (state) => this.setLiveState(state),
       });
     },
@@ -14601,7 +14920,7 @@ async function runStaticSlashCommand(rawCommand) {
   } catch (error) {
     result = { ok: false, error: error?.message || "Slash command failed unexpectedly." };
   }
-  const assistant = createAssistantTurn();
+  const assistant = createAssistantTurn({ sessionId: activeChatSessionId });
   const message = result?.ok
     ? `${parsed.command} completed for ${result.target}.\n\nNormalized results: ${JSON.stringify(result.normalized || {})}\nOutput: ${result.output || "assessment output"}\n\n${(result.results || []).map((item) => `- ${item.tool}: ${item.status || (item.exitCode === 0 ? "completed" : `exit ${item.exitCode}`)}${item.error ? ` (${item.error})` : ""}`).join("\n")}`
     : `/${String(parsed.command || "command").replace(/^\//, "")} failed: ${result?.error || "Unknown command error"}`;
@@ -14748,7 +15067,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     runHistory = run.history;
     updateRunContextUsage();
 
-    assistant = createAssistantTurn({ container: chatRunContainer(run) });
+    assistant = createAssistantTurn({ container: chatRunContainer(run), sessionId: run.sessionId });
     run.assistant = assistant;
     assistant.contentEl.classList.add("streaming");
     assistant.setLiveState({ kind: "working", detail: "Starting" });
@@ -15261,7 +15580,7 @@ function runIsChildVisible(childSessionId = "") {
 function childAssistant(run) {
   if (!run) return null;
   if (!run.assistant) {
-    run.assistant = createAssistantTurn({ container: chatRunContainer(run) });
+    run.assistant = createAssistantTurn({ container: chatRunContainer(run), sessionId: run.sessionId });
     run.assistant.contentEl.classList.add("streaming");
   }
   return run.assistant;
@@ -15575,7 +15894,7 @@ function ensureParentContinuationRun(payload = {}) {
       parentContinuation: true,
     };
     activeChatRuns.set(parentSessionId, run);
-    run.assistant = createAssistantTurn({ container: host });
+    run.assistant = createAssistantTurn({ container: host, sessionId: parentSessionId });
     run.assistant.contentEl.classList.add("streaming");
     run.assistant.setLiveState({ kind: "working", detail: "Reviewing delegated result" });
   }
@@ -16064,7 +16383,7 @@ document.addEventListener("keydown", async (e) => {
   const quickIsOpen = quickOverlay && !quickOverlay.hidden;
   const opensQuickSurface = (e.shiftKey && key === "p")
     || (!e.shiftKey && key === "p")
-    || (e.shiftKey && key === "f");
+    || (!e.shiftKey && key === "f");
   if (quickIsOpen && !opensQuickSurface) return;
 
   if (!e.shiftKey && key === "s" && resourceCurrentFilePath) {
@@ -16085,8 +16404,9 @@ document.addEventListener("keydown", async (e) => {
     return;
   }
 
-  if (e.shiftKey && key === "f") {
+  if (!e.shiftKey && key === "f") {
     e.preventDefault();
+    e.stopPropagation();
     await openQuickPalette("search");
     return;
   }

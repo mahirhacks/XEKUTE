@@ -29,7 +29,7 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
   assert.match(renderer, /if \(editorBody\) editorBody\.hidden = true;\s*updateEditorPathBar\(\);/);
   assert.match(renderer, /if \(isInterceptorTab\(activeTab\)\) \{[\s\S]*?showSecurityWorkspaceContent\(activeTab\.securityTool \|\| ""\);/);
   assert.match(renderer, /if \(isApplicationGraphTab\(activeTab\)\) \{[\s\S]*?await showMapWorkspace\(\);/);
-  assert.match(renderer, /async function openFile\(filePath, fileName, \{ focusEditor = true, preview = false \} = \{\}\) \{[\s\S]*?showCodeEditorWorkspace\(\)/);
+  assert.match(renderer, /async function openFile\(filePath, fileName, \{[\s\S]*?focusEditor = true,[\s\S]*?preview = false,[\s\S]*?line = 0,[\s\S]*?column = 1,[\s\S]*?\} = \{\}\) \{[\s\S]*?showCodeEditorWorkspace\(\)/);
   assert.match(renderer, /item\.addEventListener\("click"[\s\S]*?selectItem\(item, \{ ctrlKey: e\.ctrlKey, metaKey: e\.metaKey, shiftKey: e\.shiftKey \}\)[\s\S]*?openFile\(entry\.path, entry\.name, \{ focusEditor: false, preview: true \}\)/);
   assert.match(renderer, /item\.addEventListener\("dblclick"[\s\S]*?selectItem\(item\)[\s\S]*?await openFile\(entry\.path, entry\.name, \{ focusEditor: true, preview: false \}\)/);
   assert.match(renderer, /function discardCleanPreviewTabs\(exceptPath = ""\)/);

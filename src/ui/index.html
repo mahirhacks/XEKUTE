@@ -73,7 +73,7 @@
     <button type="button" id="btn-top-filetree" class="topbar-icon active" title="Toggle file tree" aria-label="Toggle file tree" aria-pressed="true">
       <img class="chrome-icon" src="assets/icons/filetree_collapse_expand_icon.svg" alt="" aria-hidden="true">
     </button>
-    <button type="button" id="command-center" class="command-center" title="Search (Ctrl+Shift+F)">
+    <button type="button" id="command-center" class="command-center" title="Search (Ctrl+F)">
       <span class="codicon codicon-search"></span>
       <span>Search</span>
     </button>
@@ -82,7 +82,7 @@
       <img class="chrome-icon" src="assets/icons/notification_icon.svg" alt="" aria-hidden="true"><span id="notification-count" class="notification-count" hidden>0</span>
     </button>
     <div id="notification-panel" class="notification-panel" role="dialog" aria-label="Notifications" hidden>
-      <header><strong>Notifications</strong><button type="button" id="notification-clear" class="icon-btn" title="Clear notifications" aria-label="Clear notifications"><span class="codicon codicon-clear-all"></span></button></header>
+      <header><div class="notification-panel-heading"><span class="codicon codicon-bell" aria-hidden="true"></span><strong>Notifications</strong></div><button type="button" id="notification-clear" class="icon-btn" title="Clear notifications" aria-label="Clear notifications"><span class="codicon codicon-clear-all"></span></button></header>
       <div id="notification-list" class="notification-list"><div class="notification-empty">No notifications</div></div>
     </div>
     <button type="button" id="btn-top-terminal" class="topbar-icon active" title="Toggle terminal">
@@ -107,7 +107,7 @@
   <div id="layout">
     <nav id="activitybar" aria-label="Primary activity">
       <div class="activitybar-primary">
-        <button type="button" id="activity-search" class="activity-item" title="Search (Ctrl+Shift+F)" aria-label="Search">
+        <button type="button" id="activity-search" class="activity-item" title="Search (Ctrl+F)" aria-label="Search">
           <span class="codicon codicon-search"></span>
         </button>
         <button type="button" id="activity-bugbounty" class="activity-item active" title="Project" aria-label="Project" aria-pressed="true">
@@ -382,7 +382,7 @@
             </nav>
           </aside>
           <div class="app-settings-main">
-            <header class="app-settings-workspace-header"><div><span class="codicon codicon-settings-gear" aria-hidden="true"></span><div><strong id="app-settings-page-title">General</strong><small id="app-settings-page-subtitle"></small></div></div><div class="app-settings-workspace-actions"><span id="command-settings-status" hidden>Ready</span><button type="button" id="command-settings-save" class="primary-button" hidden><span>save</span><img src="assets/icons/save.svg" alt="" aria-hidden="true"></button></div></header>
+            <header class="app-settings-workspace-header"><div><span class="codicon codicon-settings-gear" aria-hidden="true"></span><div><strong id="app-settings-page-title">General</strong><small id="app-settings-page-subtitle"></small></div></div><div class="app-settings-workspace-actions"><span id="command-settings-status" hidden>Ready</span></div></header>
             <div class="app-settings-content">
           <section id="app-settings-general-panel" class="app-settings-panel general-settings-panel">
             <div class="general-settings-canvas">
@@ -635,7 +635,6 @@
                       <button type="button" id="kali-access-open-mcp">Open MCP JSON</button>
                       <span></span>
                       <button type="button" id="kali-access-test">Test SSH access</button>
-                      <button type="submit" id="kali-access-save" class="primary-button">Save access</button>
                     </footer>
                   </div>
                 </form>
@@ -771,7 +770,6 @@
                   </div>
 
                   <div class="models-api-actions models-api-actions-footer llm-provider-actions">
-                    <button type="button" id="llm-settings-save" class="primary-button">Save provider settings</button>
                     <button type="button" id="llm-settings-test" class="secondary-button">Test provider</button>
                   </div>
                   <p id="llm-settings-status" class="models-api-status">Ready</p>
@@ -1221,13 +1219,13 @@
               </button>
             </div>
             <div class="composer-actions">
-              <button type="button" id="context-usage-btn" class="context-ring-btn" title="Context usage" aria-expanded="false">
+              <button type="button" id="context-usage-btn" class="context-ring-btn" title="Context usage" aria-label="View context usage" aria-expanded="false">
                 <svg class="context-ring" viewBox="0 0 20 20" aria-hidden="true">
                   <circle class="context-ring-bg" cx="10" cy="10" r="8"></circle>
                   <circle id="context-ring-fill" class="context-ring-fill" cx="10" cy="10" r="8"></circle>
                 </svg>
               </button>
-              <button id="send-btn" class="send-btn" title="Send message" disabled>
+              <button id="send-btn" class="send-btn" title="Send message" aria-label="Send message" disabled>
                 <span class="codicon codicon-arrow-up"></span>
               </button>
             </div>
@@ -1248,7 +1246,7 @@
         <section><h3>Chat commands</h3><p>Type <code>/</code> in Chat to see the three best command matches. Static commands run through the local Python runner; AI commands are expanded into the Agent workflow using their configured aim, prompt, and constraints.</p></section>
         <section><h3>Authority and modes</h3><p><strong>Modes</strong> (Hypothesis, Plan, Agent, Ask) set which tools the model can call. <strong>Authority</strong> (Full Authority, Ask for Approval, Approve for me) controls scope and whether sensitive actions auto-run or need your approval. Switch both from the Chat composer.</p></section>
         <section><h3>Terminal and safety</h3><p>Use Terminal for local commands and keep testing within the authorization and scope recorded in the assessment. Tool configurations and results stay inside the current project.</p></section>
-        <section><h3>Useful shortcuts</h3><p><code>Ctrl+Shift+F</code> Search · <code>Ctrl+P</code> Quick Open · <code>Ctrl+S</code> Save · <code>Ctrl+`</code> Toggle Terminal · <code>Ctrl+=</code>/<code>Ctrl+-</code> Zoom.</p></section>
+        <section><h3>Useful shortcuts</h3><p><code>Ctrl+F</code> Search · <code>Ctrl+P</code> Quick Open · <code>Ctrl+S</code> Save · <code>Ctrl+`</code> Toggle Terminal · <code>Ctrl+=</code>/<code>Ctrl+-</code> Zoom.</p></section>
       </div>
     </section>
   </div>
@@ -1293,15 +1291,16 @@
 
   <div id="update-toast" class="update-toast" role="status" aria-label="Update available" hidden>
     <div class="update-toast-body">
-      <span class="update-toast-icon codicon codicon-cloud-download" aria-hidden="true"></span>
+      <img class="update-toast-icon" src="assets/icons/gift_update_icon.svg" alt="" aria-hidden="true">
       <div class="update-toast-text">
-        <strong class="update-toast-title">A new update is available</strong>
-        <p class="update-toast-version">XEKUTE <span id="update-toast-version"></span> is ready with new features and fixes.</p>
+        <strong class="update-toast-title">New version is available</strong>
+        <p class="update-toast-version"></p>
+        <span id="update-toast-version" hidden></span>
       </div>
     </div>
     <div class="update-toast-actions">
-      <button type="button" id="update-toast-install" class="update-toast-btn update-toast-install">Install</button>
       <button type="button" id="update-toast-ignore" class="update-toast-btn update-toast-ignore">Ignore</button>
+      <button type="button" id="update-toast-install" class="update-toast-btn update-toast-install">Install</button>
     </div>
   </div>
 
@@ -1330,27 +1329,23 @@
 
   <div id="context-usage-popover" class="context-usage-popover" hidden>
     <div class="context-usage-header">
-      <div class="context-usage-heading">Context Usage</div>
+      <div class="context-usage-heading-group">
+        <div class="context-usage-heading">Context Usage</div>
+        <button type="button" id="context-usage-compact" class="context-usage-compact-btn" title="Summarize and compress context" aria-label="Compress context"><span aria-hidden="true">&gt;&lt;</span></button>
+      </div>
       <button type="button" id="context-usage-close" class="context-usage-close" title="Close context usage">
         <span class="codicon codicon-close"></span>
       </button>
     </div>
     <div class="context-usage-summary">
       <span id="context-usage-heading-value" class="context-usage-summary-left">Context: 0 / 0</span>
-      <div class="context-usage-summary-end">
-        <button type="button" id="context-usage-compact" class="context-usage-compact-btn" title="Summarize and compress context" aria-label="Compress context"><span aria-hidden="true">&gt;&lt;</span></button>
-        <span id="context-usage-used" class="context-usage-summary-left">0% Full</span>
-        <span id="context-usage-free" class="context-usage-summary-right">~0 / 32K Tokens</span>
-      </div>
+      <span id="context-usage-used" class="context-usage-summary-left">0%</span>
     </div>
     <div class="context-usage-track">
       <div id="context-usage-fill" class="context-usage-fill"></div>
       <div id="context-usage-segments" class="context-usage-segments"></div>
     </div>
     <div id="context-usage-breakdown" class="context-usage-list"></div>
-    <div id="context-usage-diagnostics" class="context-usage-diagnostics"></div>
-    <div id="context-compaction-status" class="context-compaction-status" role="status" aria-live="polite" hidden></div>
-    <div id="context-usage-measure-note" hidden>Waiting for the first model request.</div>
   </div>
 
   <div id="chat-history-popover" class="chat-history-popover" hidden>

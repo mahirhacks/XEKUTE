@@ -744,8 +744,6 @@
 }
 .app-settings-content .llm-provider-actions button:hover:not(:disabled) { background:rgba(230,230,230,.18); color:#ededed; }
 .app-settings-content .llm-provider-actions button:focus-visible { outline:1px solid #69747a; outline-offset:2px; }
-.app-settings-content .llm-provider-actions #llm-settings-save { background:#0e639c; color:#fff; }
-.app-settings-content .llm-provider-actions #llm-settings-save:hover:not(:disabled) { background:#1177bb; color:#fff; }
 .app-settings-content .llm-provider-actions #llm-settings-test { background:#6a541d; color:#f2d782; }
 .app-settings-content .llm-provider-actions #llm-settings-test:hover:not(:disabled) { background:#806522; color:#ffe8a3; }
 .app-settings-content .certificate-security-note {

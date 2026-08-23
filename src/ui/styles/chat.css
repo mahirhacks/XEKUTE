@@ -206,34 +206,42 @@
 .agent-questions-card {
   margin: 0;
   overflow: hidden;
-  border: 1px solid #575757;
-  border-radius: 12px;
-  background: var(--bg-0);
+  border: 1px solid #303030;
+  border-radius: 10px;
+  background: #181818;
   box-shadow: none;
 }
 .agent-questions-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 10px 16px 7px;
+  min-height: 42px;
+  padding: 10px 12px 8px;
   border: 0;
 }
-.agent-questions-icon { flex: 0 0 auto; color: #a5a5a5; font-size: 12px; }
+.agent-questions-icon { flex: 0 0 auto; color: #6aaef7; font-size: 13px; }
 .agent-questions-title {
   flex: 1;
   min-width: 0;
-  color: #e1e1e1;
-  font-size: 11.5px;
-  font-weight: 400;
-  line-height: 1.35;
+  color: #e2e2e2;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
 }
-.agent-questions-step { flex: 0 0 auto; margin-left: 8px; color: #d0d0d0; font-size: 10px; }
+.agent-questions-step {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #232323;
+  color: #8a8a8a;
+  font-size: 10px;
+}
 .agent-questions-body {
   display: block;
   max-height: min(42vh, 320px);
   overflow-y: auto;
-  padding: 5px 16px 6px;
+  padding: 4px 12px 10px;
 }
 .agent-questions-field { min-width: 0; margin: 0; padding: 0; border: 0; }
 .agent-questions-field[hidden] { display: none !important; }
@@ -246,45 +254,51 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.agent-questions-options { display: grid; gap: 6px; }
+.agent-questions-options { display: grid; gap: 7px; }
 .agent-questions-option {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
-  padding: 7px 12px;
-  border: 0;
-  border-radius: 999px;
-  background: #383838;
-  color: #c7c7c7;
-  font-size: 10.5px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #303030;
+  border-radius: 8px;
+  background: #1d1d1d;
+  color: #c9c9c9;
+  font-size: 11px;
   line-height: 1.35;
   cursor: pointer;
 }
-.agent-questions-option:hover { background: #444; color: #e2e2e2; }
+.agent-questions-option:hover { border-color: #414141; background: #222; color: #e2e2e2; }
 .agent-questions-option:has(input[type="radio"]:checked),
 .agent-questions-option:has(input[type="checkbox"]:checked),
-.agent-questions-option.is-selected { background: #575757; color: #f0f0f0; }
+.agent-questions-option.is-selected {
+  border-color: #2f8cf4;
+  background: rgba(47, 140, 244, .11);
+  color: #f0f0f0;
+}
 .agent-questions-option input[type="radio"],
 .agent-questions-option input[type="checkbox"] {
   appearance: none;
   width: 13px;
   height: 13px;
   margin: 0;
-  border: 0;
+  border: 1px solid #666;
   border-radius: 50%;
-  background: #d0d0d0;
+  background: transparent;
 }
 .agent-questions-option input[type="radio"]:checked,
 .agent-questions-option input[type="checkbox"]:checked {
-    background: radial-gradient(circle, #555 0 2px, #d0d0d0 2.5px 100%);
-    box-shadow: none;
-  }
+  border-color: #2f8cf4;
+  background: radial-gradient(circle, #fff 0 2.5px, #2f8cf4 3px 100%);
+  box-shadow: none;
+}
 .agent-questions-option input[type="checkbox"] { border-radius: 3px; }
 .agent-questions-option input[type="checkbox"]:checked {
-  background: #d0d0d0;
-  box-shadow: inset 0 0 0 3px #575757;
+  border-color: #2f8cf4;
+  background: #2f8cf4;
+  box-shadow: inset 0 0 0 3px #2f8cf4;
 }
 .agent-questions-option input[type="radio"]:focus-visible,
 .agent-questions-option input[type="checkbox"]:focus-visible {
@@ -294,12 +308,12 @@
 .agent-questions-option-label { min-width: 0; }
 .agent-questions-recommended {
   justify-self: end;
-  color: #a8a8a8;
+  color: #6aaef7;
   font-size: 9.5px;
   white-space: nowrap;
 }
 .agent-questions-option:has(input[type="radio"]:checked) .agent-questions-recommended,
-.agent-questions-option:has(input[type="checkbox"]:checked) .agent-questions-recommended { color: #d6d6d6; }
+.agent-questions-option:has(input[type="checkbox"]:checked) .agent-questions-recommended { color: #8fc4fb; }
 .agent-questions-option.is-free-write {
   position: relative;
   cursor: text;
@@ -334,8 +348,8 @@
 .agent-questions-actions {
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 3px 16px 10px;
+  gap: 6px;
+  padding: 0 12px 12px;
   border: 0;
   background: transparent;
 }
@@ -343,19 +357,22 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 26px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 5px;
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
   background: transparent;
   color: #d0d0d0;
   font: 10.5px var(--font-ui);
   cursor: pointer;
 }
-.agent-questions-button[data-questions-action="skip"] { margin-left: auto; }
-.agent-questions-button.icon { width: 26px; padding: 0; }
+.agent-questions-button[data-questions-action="skip"] { order: 1; }
+.agent-questions-button[data-questions-action="back"] { order: 2; margin-left: auto; }
+.agent-questions-button[data-questions-action="submit"] { order: 3; background: #2f8cf4; color: #fff; }
+.agent-questions-button.icon { width: 28px; padding: 0; border-radius: 999px; }
 .agent-questions-button .codicon { font-size: 12px; }
-.agent-questions-button:hover:not(:disabled) { background: #3d3d3d; color: #f0f0f0; }
+.agent-questions-button:hover:not(:disabled) { border-color: #414141; background: #292929; color: #f0f0f0; }
+.agent-questions-button[data-questions-action="submit"]:hover:not(:disabled) { border-color: #419bf8; background: #419bf8; }
 .agent-questions-button:focus-visible { outline: 1px solid #888; outline-offset: 1px; }
 .agent-questions-button:disabled { cursor: default; opacity: .3; }
 .agent-questions-card[data-decision="answered"],
@@ -364,22 +381,22 @@
 .composer-questions {
   position: relative;
   z-index: 1;
-  margin-bottom: -25px;
+  margin-bottom: 8px;
 }
 .composer-questions:not([hidden]) ~ .composer {
   position: relative;
   z-index: 2;
-  border-color: #575757;
+  border-color: #3b3b3b;
 }
 #input-bar.has-composer-questions .composer {
-  border-color: #575757;
+  border-color: #3b3b3b;
   box-shadow: none;
 }
 .composer-questions-card {
   margin: 0;
   box-sizing: border-box;
   max-height: min(56vh, 440px);
-  padding-bottom: 24px;
+  padding-bottom: 0;
 }
 
 .composer-task-list {

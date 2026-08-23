@@ -38,6 +38,8 @@ test("active IPC handlers and preload methods include memory and omit removed ap
   }
   assert.doesNotMatch(main, /chat-sessions:|agent:resolveApproval/);
   assert.doesNotMatch(preload, /loadChatSessions|saveChatSessions|agentResolveApproval/);
+  assert.match(activeHandlers, /tools:cancelWorkspaceSearch/);
+  assert.match(preload, /onWorkspaceSearchBatch:[\s\S]*?tools:workspaceSearchBatch/);
 });
 
 test("renderer is a native ES-module entry and keeps the sandbox bridge boundary", () => {

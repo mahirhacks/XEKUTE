@@ -15,7 +15,7 @@ test("thinking uses one private status line and never exposes model reasoning", 
   assert.match(renderer, /thinking:\s*null,\s*\n\s*thinkingConfigured:\s*false/);
   assert.match(renderer, /return settings\?\.thinking !== false/);
   assert.doesNotMatch(renderer, /createAssistantTurn\(modelThinkingEnabled\(settings\)\)/);
-  assert.match(renderer, /function createAssistantTurn\(\)/);
+  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = activeChatSessionId \} = \{\}\)/);
   assert.match(renderer, /showPrivateReasoning\(\)/);
   assert.doesNotMatch(renderer, /assistant\.setStatus\("Thinking…"\)/);
   assert.match(renderer, /block\.className = "agent-status-line"/);
@@ -71,16 +71,15 @@ test("clarification UI is compact, hides internal metadata, and pages questions"
   assert.match(renderer, /codicon-chevron-left/);
   assert.match(renderer, /codicon-chevron-right/);
   assert.doesNotMatch(renderer, /Clarification needed|RUN PAUSED|agent-questions-reason|agent-questions-expiry/);
-    assert.match(renderer, /class="agent-questions-recommended">\(Recommended\)<\/span>/);
-    assert.match(chatStyles, /\.agent-questions-card \{[\s\S]*?background: var\(--bg-0\)/);
-    assert.match(chatStyles, /\.agent-questions-option \{[\s\S]*?grid-template-columns: 14px minmax\(0, 1fr\) auto/);
-    assert.match(chatStyles, /\.agent-questions-option\.is-selected \{ background: #575757; color: #f0f0f0; \}/);
-    assert.match(chatStyles, /\.agent-questions-field\[hidden\] \{ display: none !important; \}/);
-    assert.match(chatStyles, /\.composer-questions \{[\s\S]*?z-index: 1;[\s\S]*?margin-bottom: -25px/);
-    assert.match(chatStyles, /\.composer-questions:not\(\[hidden\]\) ~ \.composer \{[\s\S]*?z-index: 2/);
-    assert.match(chatStyles, /\.composer-questions-card \{[\s\S]*?padding-bottom: 24px/);
-    assert.match(chatStyles, /#input-bar\.has-composer-questions \.composer \{[\s\S]*?box-shadow: none/);
-  assert.doesNotMatch(chatStyles, /\.agent-questions-(?:card|option|button)[^{]*\{[^}]*#(?:75beff|7fbd91|2d5a7a)/);
+  assert.match(renderer, /class="agent-questions-recommended">\(Recommended\)<\/span>/);
+  assert.match(chatStyles, /\.agent-questions-card \{[\s\S]*?border: 1px solid #303030[\s\S]*?background: #181818/);
+  assert.match(chatStyles, /\.agent-questions-option \{[\s\S]*?grid-template-columns: 14px minmax\(0, 1fr\) auto/);
+  assert.match(chatStyles, /\.agent-questions-option\.is-selected \{[\s\S]*?border-color: #2f8cf4[\s\S]*?background: rgba\(47, 140, 244, \.11\)/);
+  assert.match(chatStyles, /\.agent-questions-field\[hidden\] \{ display: none !important; \}/);
+  assert.match(chatStyles, /\.composer-questions \{[\s\S]*?z-index: 1;[\s\S]*?margin-bottom: 8px/);
+  assert.match(chatStyles, /\.composer-questions:not\(\[hidden\]\) ~ \.composer \{[\s\S]*?z-index: 2[\s\S]*?border-color: #3b3b3b/);
+  assert.match(chatStyles, /\.composer-questions-card \{[\s\S]*?padding-bottom: 0/);
+  assert.match(chatStyles, /#input-bar\.has-composer-questions \.composer \{[\s\S]*?box-shadow: none/);
 });
 
 test("command approval shows an expandable command and resolves immediately without preselection", () => {
@@ -105,7 +104,9 @@ test("agent question tool supports recommended-first single select and explicit 
   assert.match(renderer, /isToolQuestionnaire && input\.checked\) queueMicrotask\(\(\) => submitButton\?\.click\(\)\)/);
   assert.match(renderer, /selectedOptionIds: selectedInputs\.map/);
   assert.match(renderer, /Select more than one if applicable/);
-  assert.match(chatStyles, /data-questions-action="skip"\] \{ margin-left: auto/);
+  assert.match(chatStyles, /data-questions-action="skip"\] \{ order: 1/);
+  assert.match(chatStyles, /data-questions-action="back"\] \{ order: 2; margin-left: auto/);
+  assert.match(chatStyles, /data-questions-action="submit"\] \{ order: 3; background: #2f8cf4/);
 });
 
 test("large Agent work uses a temporary collapsible composer checklist", () => {

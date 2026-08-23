@@ -715,7 +715,7 @@ function createApplicationMenu() {
       label: "Search",
       submenu: [
         { label: "Open Workspace File...", accelerator: "CmdOrCtrl+P", click: () => sendMenuAction("quick-open") },
-        { label: "Search Project...", accelerator: "CmdOrCtrl+Shift+F", click: () => sendMenuAction("workspace-search") },
+        { label: "Search Project...", accelerator: "CmdOrCtrl+F", click: () => sendMenuAction("workspace-search") },
       ],
     },
     {
@@ -1043,6 +1043,24 @@ function searchWorkspaceIndex(workspace, query, { limit = 8 } = {}) {
   return workspaceSearch.searchWorkspaceIndex(workspace, query, { limit });
 }
 
+const activeWorkspaceSearches = new Map();
+
+function workspaceSearchRequestKey(senderId, requestId) {
+  return `${Number(senderId) || 0}:${String(requestId || "")}`;
+}
+
+function cancelWorkspaceSearch(senderId, requestId = "") {
+  const exactKey = requestId ? workspaceSearchRequestKey(senderId, requestId) : "";
+  let cancelled = 0;
+  for (const [key, controller] of activeWorkspaceSearches) {
+    if ((exactKey && key !== exactKey) || (!exactKey && !key.startsWith(`${Number(senderId) || 0}:`))) continue;
+    controller.abort();
+    activeWorkspaceSearches.delete(key);
+    cancelled += 1;
+  }
+  return cancelled;
+}
+
 function findWorkspaceFiles(workspace, query, { limit = 8 } = {}) {
   return workspaceSearch.findWorkspaceFiles(workspace, query, { limit });
 }
@@ -1366,8 +1384,36 @@ ipcMain.handle("tools:indexWorkspace", async (_event, { workspace }) => {
   };
 });
 
-ipcMain.handle("tools:searchWorkspace", async (_event, { workspace, query, limit }) => {
-  return searchWorkspaceIndex(workspace, query, { limit });
+ipcMain.handle("tools:searchWorkspace", async (event, { workspace, query, limit, requestId }) => {
+  const id = String(requestId || crypto.randomUUID());
+  cancelWorkspaceSearch(event.sender.id);
+  const key = workspaceSearchRequestKey(event.sender.id, id);
+  const controller = new AbortController();
+  const abortWhenDestroyed = () => controller.abort();
+  event.sender.once("destroyed", abortWhenDestroyed);
+  activeWorkspaceSearches.set(key, controller);
+  try {
+    const result = await workspaceSearch.searchWorkspaceStream(workspace, query, {
+      limit,
+      batchSize: 100,
+      signal: controller.signal,
+      onBatch: (payload) => {
+        if (controller.signal.aborted || event.sender.isDestroyed()) return;
+        event.sender.send("tools:workspaceSearchBatch", { requestId: id, ...payload });
+      },
+    });
+    if (!event.sender.isDestroyed()) {
+      event.sender.send("tools:workspaceSearchBatch", { requestId: id, done: true, summary: result });
+    }
+    return { ...result, requestId: id };
+  } finally {
+    event.sender.removeListener("destroyed", abortWhenDestroyed);
+    if (activeWorkspaceSearches.get(key) === controller) activeWorkspaceSearches.delete(key);
+  }
+});
+
+ipcMain.handle("tools:cancelWorkspaceSearch", async (event, { requestId } = {}) => {
+  return { ok: true, cancelled: cancelWorkspaceSearch(event.sender.id, requestId) };
 });
 
 ipcMain.handle("tools:findFiles", async (_event, { workspace, query, limit }) => {

@@ -33,7 +33,7 @@ test("assistant exchange footer is rebuilt only after the entire AI chunk is idl
 });
 
 test("starting an assistant continuation clears prior exchange metadata", () => {
-  const body = sourceBetween("function createAssistantTurn()", "const BUILTIN_SLASH_COMMANDS");
+  const body = sourceBetween("function createAssistantTurn(", "const BUILTIN_SLASH_COMMANDS");
   const appendTurnAt = body.indexOf("appendChatTurn(turn, { container })");
   const removeFooterAt = body.indexOf('querySelector(".assistant-reply-footer")?.remove()');
 

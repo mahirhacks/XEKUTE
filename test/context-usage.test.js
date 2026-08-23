@@ -13,15 +13,16 @@ test("context meter uses routed previews and Ollama's measured last prompt", () 
 
   assert.match(renderer, /selectedCatalog|toolsForProfile|availableTools/i);
   assert.match(renderer, /storeLastContextUsage\(payload\.usage, \{ session: runSession, model: runModel, contextPlan: runContextPlan \}\)/);
-  assert.match(renderer, /prompt_eval_count and eval_count/);
+  assert.match(renderer, /source: \["ollama", "openrouter"\]\.includes\(stored\?\.source\) \? "actual" : "estimate"/);
   assert.match(controller, /result\?\.usage\?\.promptTokens/);
   assert.match(controller, /type: "context_usage"/);
   assert.match(controller, /selectedCatalog|toolsForProfile|availableTools/i);
   assert.match(renderer, /const CONTEXT_OPTIONS = \[AUTO_CONTEXT, "128K", "256K", "1M"\]/);
   assert.ok(runtimeModules.includes('"../../prompts/skills/context-router.js"'));
-  assert.ok(html.includes('id="context-usage-measure-note"'));
+  assert.ok(html.includes('id="context-usage-heading-value"'));
   assert.ok(html.includes('id="context-usage-breakdown"'));
   assert.ok(html.includes('id="context-usage-compact"'));
+  assert.doesNotMatch(html, /context-usage-measure-note|context-usage-diagnostics/);
   assert.doesNotMatch(html, /id="context-usage-model"/);
   assert.doesNotMatch(html, /id="context-memory-note"/);
   assert.doesNotMatch(html, /class="model-edit-description"/);
@@ -59,5 +60,5 @@ test("context compaction keeps trusted validation and supports ordinary conversa
   assert.match(main, /ipcMain\.handle\("context:compact"/);
   assert.match(main, /CapsuleReducer\.renderCanonicalMarkdown/);
   assert.match(main, /CapsuleReducer\.defaultSynthesisPlan\(reduced\)/);
-  assert.ok(html.includes('id="context-compaction-status"'));
+  assert.doesNotMatch(html, /id="context-compaction-status"|Context compressed using bounded/);
 });

@@ -217,6 +217,21 @@
     },
     focus() { editor?.focus(); },
     layout() { editor?.layout(); },
+    async revealLocation(path, line = 1, column = 1) {
+      const instance = await ready;
+      const model = models.get(path);
+      if (!model || instance.getModel() !== model) return false;
+      const lineNumber = Math.max(1, Math.min(Number(line) || 1, model.getLineCount()));
+      const maxColumn = model.getLineMaxColumn(lineNumber);
+      const position = {
+        lineNumber,
+        column: Math.max(1, Math.min(Number(column) || 1, maxColumn)),
+      };
+      instance.setPosition(position);
+      instance.revealPositionInCenter(position, globalScope.monaco.editor.ScrollType.Smooth);
+      instance.focus();
+      return true;
+    },
     toggleWordWrap() {
       wordWrapEnabled = !wordWrapEnabled;
       globalScope.localStorage?.setItem("xekute.editorWordWrap", String(wordWrapEnabled));

@@ -1,4 +1,5 @@
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
+const { Worker } = require("worker_threads");
 
 const INDEX_SKIP_DIRS = new Set([
   ".git", "node_modules", "__pycache__", ".next", "dist", "build", "out", "coverage", ".venv", "venv",
@@ -9,6 +10,18 @@ const INDEX_TEXT_EXTS = new Set([
   ".py", ".rb", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".php", ".yml", ".yaml",
   ".toml", ".xml", ".sh", ".ps1", ".bat", ".sql", ".env", ".gitignore",
 ]);
+
+const EXACT_SEARCH_MAX_RESULTS = 5000;
+const EXACT_SEARCH_MAX_FILES = 25000;
+const EXACT_SEARCH_MAX_FILE_BYTES = 5 * 1024 * 1024;
+const STREAM_SEARCH_MAX_RESULTS = 50000;
+const STREAM_SEARCH_BATCH_SIZE = 100;
+
+function normalizedResultLimit(limit, fallback = 500) {
+  const parsed = Number(limit);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(Math.trunc(parsed), EXACT_SEARCH_MAX_RESULTS));
+}
 
 function createWorkspaceSearch({ fs, path }) {
   let indexCache = null;
@@ -117,6 +130,389 @@ function createWorkspaceSearch({ fs, path }) {
     } catch {
       return null;
     }
+  }
+
+  function exactResult(rel, line, column, match, lineText) {
+    const cleanLine = String(lineText || "").replace(/[\r\n]+$/, "");
+    const normalizedPath = String(rel || "").replace(/\\/g, "/").replace(/^\.\//, "");
+    const trimmedLine = cleanLine.trim();
+    const matchIndex = trimmedLine.toLowerCase().indexOf(String(match || "").toLowerCase());
+    const previewStart = trimmedLine.length > 360 ? Math.max(0, matchIndex - 140) : 0;
+    const previewEnd = Math.min(trimmedLine.length, previewStart + 360);
+    const preview = `${previewStart ? "…" : ""}${trimmedLine.slice(previewStart, previewEnd)}${previewEnd < trimmedLine.length ? "…" : ""}`;
+    return {
+      path: normalizedPath,
+      line,
+      column,
+      match,
+      lineText: preview,
+      snippet: `${line}: ${preview}`,
+    };
+  }
+
+  function tryRipgrepExactSearch(root, query, limit) {
+    const args = [
+      "--json",
+      "--fixed-strings",
+      "--ignore-case",
+      "--line-number",
+      "--column",
+      "--hidden",
+      "--no-ignore",
+      "--sort",
+      "path",
+      "--max-filesize",
+      "5M",
+    ];
+    for (const dir of INDEX_SKIP_DIRS) args.push("-g", `!**/${dir}/**`);
+    args.push("--", query, ".");
+
+    let result;
+    try {
+      result = spawnSync("rg", args, {
+        cwd: root,
+        encoding: "utf8",
+        windowsHide: true,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    } catch {
+      return null;
+    }
+    if (result.error?.code === "ENOENT") return null;
+    if (![0, 1, null].includes(result.status)) return null;
+
+    const matches = [];
+    let totalCount = 0;
+    for (const rawLine of String(result.stdout || "").split(/\r?\n/)) {
+      if (!rawLine) continue;
+      let event;
+      try {
+        event = JSON.parse(rawLine);
+      } catch {
+        continue;
+      }
+      if (event?.type !== "match") continue;
+      const data = event.data || {};
+      const rel = data.path?.text || "";
+      const lineNumber = Number(data.line_number) || 1;
+      const lineText = data.lines?.text || "";
+      for (const occurrence of data.submatches || []) {
+        totalCount += 1;
+        if (matches.length >= limit) continue;
+        matches.push(exactResult(
+          rel,
+          lineNumber,
+          Number(occurrence.start) + 1,
+          occurrence.match?.text || query,
+          lineText,
+        ));
+      }
+    }
+
+    return {
+      matches,
+      totalCount,
+      truncated: totalCount > matches.length || Boolean(result.error),
+    };
+  }
+
+  function fallbackExactSearch(root, query, limit) {
+    const matches = [];
+    let totalCount = 0;
+    let filesScanned = 0;
+    let scanTruncated = false;
+    const needle = query.toLowerCase();
+
+    function walk(dir) {
+      if (filesScanned >= EXACT_SEARCH_MAX_FILES) {
+        scanTruncated = true;
+        return;
+      }
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const entry of entries) {
+        if (filesScanned >= EXACT_SEARCH_MAX_FILES) {
+          scanTruncated = true;
+          return;
+        }
+        if (entry.isSymbolicLink?.()) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (!INDEX_SKIP_DIRS.has(entry.name)) walk(full);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        filesScanned += 1;
+
+        let stat;
+        let buffer;
+        try {
+          stat = fs.statSync(full);
+          if (stat.size > EXACT_SEARCH_MAX_FILE_BYTES) continue;
+          buffer = fs.readFileSync(full);
+        } catch {
+          continue;
+        }
+        if (buffer.includes(0)) continue;
+        const lines = buffer.toString("utf8").replace(/\r\n/g, "\n").split("\n");
+        const rel = path.relative(root, full).replace(/\\/g, "/");
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const lineText = lines[lineIndex];
+          const comparable = lineText.toLowerCase();
+          let from = 0;
+          while (from <= comparable.length - needle.length) {
+            const columnIndex = comparable.indexOf(needle, from);
+            if (columnIndex === -1) break;
+            totalCount += 1;
+            if (matches.length < limit) {
+              matches.push(exactResult(
+                rel,
+                lineIndex + 1,
+                columnIndex + 1,
+                lineText.slice(columnIndex, columnIndex + query.length),
+                lineText,
+              ));
+            }
+            from = columnIndex + Math.max(needle.length, 1);
+          }
+        }
+      }
+    }
+
+    walk(root);
+    return {
+      matches,
+      totalCount,
+      truncated: totalCount > matches.length || scanTruncated,
+      scanTruncated,
+    };
+  }
+
+  function streamRipgrepExactSearch(root, query, {
+    limit,
+    batchSize,
+    signal,
+    onBatch,
+  }) {
+    const args = [
+      "--json",
+      "--fixed-strings",
+      "--ignore-case",
+      "--line-number",
+      "--column",
+      "--hidden",
+      "--no-ignore",
+      "--sort",
+      "path",
+      "--max-filesize",
+      "5M",
+    ];
+    for (const dir of INDEX_SKIP_DIRS) args.push("-g", `!**/${dir}/**`);
+    args.push("--", query, ".");
+
+    return new Promise((resolve) => {
+      let child;
+      try {
+        child = spawn("rg", args, { cwd: root, windowsHide: true });
+      } catch {
+        resolve(null);
+        return;
+      }
+
+      let settled = false;
+      let buffer = "";
+      let batch = [];
+      let totalCount = 0;
+      let emittedCount = 0;
+      let filesScanned = 0;
+      let capped = false;
+      let cancelled = Boolean(signal?.aborted);
+
+      const emitBatch = () => {
+        if (!batch.length || cancelled) return;
+        const rows = batch;
+        batch = [];
+        try {
+          onBatch?.({ results: rows, totalCount, filesScanned });
+        } catch {
+          // A renderer disappearing must not keep the search process alive.
+        }
+      };
+
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener?.("abort", abort);
+        if (!cancelled) emitBatch();
+        resolve(value);
+      };
+
+      const stopChild = () => {
+        if (!child?.killed) {
+          try { child.kill(); } catch { /* process already exited */ }
+        }
+      };
+
+      const abort = () => {
+        cancelled = true;
+        stopChild();
+      };
+
+      const acceptEvent = (event) => {
+        if (event?.type === "begin") {
+          filesScanned += 1;
+          return;
+        }
+        if (event?.type !== "match" || capped || cancelled) return;
+        const data = event.data || {};
+        const rel = data.path?.text || "";
+        const lineNumber = Number(data.line_number) || 1;
+        const lineText = data.lines?.text || "";
+        for (const occurrence of data.submatches || []) {
+          if (totalCount >= STREAM_SEARCH_MAX_RESULTS) {
+            capped = true;
+            stopChild();
+            break;
+          }
+          totalCount += 1;
+          if (emittedCount < limit) {
+            batch.push(exactResult(
+              rel,
+              lineNumber,
+              Number(occurrence.start) + 1,
+              occurrence.match?.text || query,
+              lineText,
+            ));
+            emittedCount += 1;
+            if (batch.length >= batchSize) emitBatch();
+          }
+        }
+      };
+
+      const consume = (flush = false) => {
+        const lines = buffer.split(/\r?\n/);
+        buffer = flush ? "" : (lines.pop() || "");
+        for (const rawLine of lines) {
+          if (!rawLine) continue;
+          try { acceptEvent(JSON.parse(rawLine)); } catch { /* incomplete diagnostic line */ }
+        }
+      };
+
+      child.stdout?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk) => {
+        buffer += chunk;
+        consume(false);
+      });
+      child.stderr?.resume();
+      child.once("error", (error) => {
+        if (error?.code === "ENOENT") finish(null);
+        else finish(null);
+      });
+      child.once("close", () => {
+        consume(true);
+        finish({
+          ok: true,
+          mode: "exact",
+          query,
+          count: emittedCount,
+          totalCount,
+          filesScanned,
+          truncated: capped || totalCount > emittedCount,
+          capped,
+          cancelled,
+        });
+      });
+
+      signal?.addEventListener?.("abort", abort, { once: true });
+      if (cancelled) abort();
+    });
+  }
+
+  function streamFallbackWorker(root, query, {
+    limit,
+    batchSize,
+    signal,
+    onBatch,
+  }) {
+    return new Promise((resolve) => {
+      const worker = new Worker(path.join(__dirname, "workspace-search-worker.js"), {
+        workerData: {
+          root,
+          query,
+          limit,
+          batchSize,
+          maxResults: STREAM_SEARCH_MAX_RESULTS,
+          maxFiles: EXACT_SEARCH_MAX_FILES,
+          maxFileBytes: EXACT_SEARCH_MAX_FILE_BYTES,
+          skipDirs: [...INDEX_SKIP_DIRS],
+        },
+      });
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener?.("abort", abort);
+        resolve(value);
+      };
+      const abort = () => {
+        void worker.terminate();
+        finish({
+          ok: true,
+          mode: "exact",
+          query,
+          count: 0,
+          totalCount: 0,
+          truncated: false,
+          capped: false,
+          cancelled: true,
+        });
+      };
+      worker.on("message", (message) => {
+        if (message?.type === "batch") onBatch?.(message.payload);
+        else if (message?.type === "done") finish(message.payload);
+      });
+      worker.once("error", (error) => finish({ error: error.message || "Workspace search worker failed" }));
+      worker.once("exit", (code) => {
+        if (!settled && code !== 0) finish({ error: `Workspace search worker exited with code ${code}` });
+      });
+      signal?.addEventListener?.("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+    });
+  }
+
+  async function searchWorkspaceStream(workspace, query, {
+    limit = STREAM_SEARCH_MAX_RESULTS,
+    batchSize = STREAM_SEARCH_BATCH_SIZE,
+    signal,
+    onBatch,
+    forceFallback = false,
+  } = {}) {
+    const cleanQuery = String(query || "").trim();
+    if (!cleanQuery) return { error: "Empty search query" };
+    const resolved = resolveWorkspaceTarget(workspace);
+    if (resolved.error) return resolved;
+    const boundedLimit = Math.max(1, Math.min(Number(limit) || STREAM_SEARCH_MAX_RESULTS, STREAM_SEARCH_MAX_RESULTS));
+    const boundedBatchSize = Math.max(10, Math.min(Number(batchSize) || STREAM_SEARCH_BATCH_SIZE, 500));
+    if (signal?.aborted) return { ok: true, cancelled: true, count: 0, totalCount: 0 };
+
+    const ripgrepResult = forceFallback ? null : await streamRipgrepExactSearch(resolved.root, cleanQuery, {
+        limit: boundedLimit,
+        batchSize: boundedBatchSize,
+        signal,
+        onBatch,
+      });
+    if (ripgrepResult) return ripgrepResult;
+    return streamFallbackWorker(resolved.root, cleanQuery, {
+      limit: boundedLimit,
+      batchSize: boundedBatchSize,
+      signal,
+      onBatch,
+    });
   }
 
   function listProjectFiles(workspace) {
@@ -280,54 +676,23 @@ function createWorkspaceSearch({ fs, path }) {
     };
   }
 
-  function searchWorkspaceIndex(workspace, query, { limit = 8 } = {}) {
+  function searchWorkspaceIndex(workspace, query, { limit = 500 } = {}) {
     const cleanQuery = String(query || "").trim();
     if (!cleanQuery) return { error: "Empty search query" };
-    const index = getWorkspaceIndex(workspace);
-    if (index.error) return index;
-
-    const qTokens = tokenize(cleanQuery);
-    const qSet = new Set(qTokens);
-    const totalDocs = Math.max(index.docs.length, 1);
-    const graphByFile = new Map(index.graph.map((entry) => [entry.file, entry]));
-
-    const scored = index.docs.map((doc) => {
-      let score = fuzzyPathScore(doc.path, qTokens);
-      for (const token of qSet) {
-        const tf = doc.counts.get(token) || 0;
-        if (!tf) continue;
-        const idf = Math.log(1 + totalDocs / (1 + (index.df.get(token) || 0)));
-        score += (tf / doc.tokenCount) * idf * 1300;
-      }
-
-      const lower = doc.content.toLowerCase();
-      const phrase = cleanQuery.toLowerCase();
-      if (lower.includes(phrase)) score += 18;
-
-      const graph = graphByFile.get(doc.path);
-      for (const token of qSet) {
-        if (graph?.symbols?.some((symbol) => symbol.toLowerCase() === token)) score += 20;
-        else if (graph?.symbols?.some((symbol) => symbol.toLowerCase().includes(token))) score += 10;
-      }
-
-      return { doc, score };
-    })
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score || a.doc.path.localeCompare(b.doc.path))
-      .slice(0, Math.max(1, Math.min(limit, 20)));
-
-    const results = scored.map(({ doc, score }) => ({
-      path: doc.path,
-      score: Number(score.toFixed(3)),
-      snippet: formatSnippet(doc.content, cleanQuery),
-    }));
+    const resolved = resolveWorkspaceTarget(workspace);
+    if (resolved.error) return resolved;
+    const resultLimit = normalizedResultLimit(limit);
+    const exact = tryRipgrepExactSearch(resolved.root, cleanQuery, resultLimit)
+      || fallbackExactSearch(resolved.root, cleanQuery, resultLimit);
 
     return {
       ok: true,
-      mode: "search",
+      mode: "exact",
       query: cleanQuery,
-      count: results.length,
-      results,
+      count: exact.matches.length,
+      totalCount: exact.totalCount,
+      truncated: exact.truncated,
+      results: exact.matches,
     };
   }
 
@@ -337,6 +702,7 @@ function createWorkspaceSearch({ fs, path }) {
     listProjectFiles,
     buildWorkspaceIndex,
     searchWorkspaceIndex,
+    searchWorkspaceStream,
     findWorkspaceFiles,
     takeLimited,
   };

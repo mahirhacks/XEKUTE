@@ -216,8 +216,11 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(renderer, /onIdentityPersistence\?\.\(\(event\) => \{\s*if \(appSettingsSection !== "project"\) return;/);
   assert.ok(html.includes("<strong>Security Workbench</strong>"));
   assert.ok(!html.includes("Intercept, replay, and test authorized HTTP traffic."));
-  assert.match(html, /id="llm-settings-save"[^>]*>Save provider settings<\/button>/);
+  assert.doesNotMatch(html, /id="(?:command-settings-save|llm-settings-save|kali-access-save)"/);
   assert.match(html, /id="llm-settings-test"[^>]*>Test provider<\/button>/);
+  assert.match(renderer, /function scheduleProjectProfileAutosave\([\s\S]*?queueProjectProfileAutosave\(immediate \? 0 : 650\)/);
+  assert.match(renderer, /function queueLlmSettingsAutosave\([\s\S]*?flushLlmSettingsAutosave/);
+  assert.match(renderer, /projectSettingsForm\?\.addEventListener\("input"[\s\S]*?scheduleProjectProfileAutosave\(\)/);
   assert.ok(html.includes('id="models-settings-search"'));
   assert.match(html, /class="models-catalog-section"[\s\S]*?id="models-catalog-title">Available models/);
   assert.match(html, /class="models-context-settings-body"/);
@@ -306,7 +309,6 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(settingsStyles, /@container app-settings \(max-width: 780px\)[\s\S]*\.app-settings-sidebar \{[\s\S]*width:64px/);
   assert.match(settingsStyles, /grid-template-columns:auto minmax\(0,1fr\)/);
   assert.match(settingsStyles, /\.llm-provider-actions button[\s\S]*border:0[\s\S]*border-radius:999px/);
-  assert.match(settingsStyles, /#llm-settings-save \{[\s\S]*background:#0e639c/);
   assert.match(settingsStyles, /#llm-settings-test \{[\s\S]*background:#6a541d/);
   assert.match(settingsStyles, /\.certificate-security-note \{[\s\S]*display:block[\s\S]*border:0[\s\S]*background:transparent/);
   assert.match(chatStyles, /\.model-pill \{[\s\S]*border-radius: 999px[\s\S]*background: transparent/);
@@ -321,7 +323,7 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(renderer, /activateProjectWorkspace/);
   assert.match(renderer, /modeFamily/);
   assert.doesNotMatch(renderer, /approvalGranted/);
-  assert.match(renderer, /saveActiveSettingsSection/);
+  assert.doesNotMatch(renderer, /saveActiveSettingsSection|commandSettingsSave|llmSettingsSave|kaliAccessSave\?\.addEventListener/);
 });
 
 test("Scout Map is a dedicated buildable behavior-graph workspace", () => {
