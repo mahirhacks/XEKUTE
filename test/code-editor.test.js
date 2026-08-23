@@ -10,12 +10,14 @@ const editor = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features
 const failureMemory = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "memory", "failure-memory.js"), "utf8");
 const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
 const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
 
 test("workspace files open in the Monaco-powered center editor", () => {
   assert.match(html, /monaco-editor\/min\/vs\/loader\.js/);
 assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "runtime-modules.js"), "utf8"), /features\/editor\/editor-controller\.js/);
   assert.doesNotMatch(html, /id="editor-(?:tab-bar|body)" class="ide-internal"/);
   assert.match(html, /id="markdown-preview" class="markdown-file-preview assistant-reply"/);
+  assert.match(html, /id="editor-empty">\s*<img src="\.\.\/\.\.\/xekute_icon\.png" alt="" class="resource-viewer-empty-logo">\s*<\/div>/);
   assert.match(renderer, /const EditorManager = globalThis\.XekuteEditorManager/);
   assert.match(renderer, /const TerminalManager = globalThis\.XekuteTerminalManager/);
   assert.match(renderer, /path: SETTINGS_TAB_PATH[\s\S]*?preview: false[\s\S]*?special: "settings"/);
@@ -98,6 +100,13 @@ test("workspace context menu renames files and folders without discarding open e
   assert.match(renderer, /function remapOpenTabsUnderWorkspacePath\(sourceAbsolute, destinationAbsolute\)/);
   assert.match(renderer, /tab\.path = nextPath;[\s\S]*?tab\.diskPath = nextPath/);
   assert.match(renderer, /if \(action === "rename"\)/);
+});
+
+test("workspace editor accepts text files up to 5 MB", () => {
+  assert.match(projectIpc, /const MAX_EDITABLE_FILE_BYTES = 5 \* 1024 \* 1024;/);
+  assert.match(projectIpc, /stat\.size > MAX_EDITABLE_FILE_BYTES/);
+  assert.match(projectIpc, /File too large to edit \(> 5 MB\)/);
+  assert.doesNotMatch(projectIpc, /File too large to edit \(> 500 KB\)|stat\.size > 500_000/);
 });
 
 test("workspace context menu runs only supported code files in the integrated terminal", () => {

@@ -321,6 +321,7 @@ function createIdentityVault({
       createdAt: text(source.createdAt || timestamp(), "", 80),
       updatedAt: text(source.updatedAt || timestamp(), "", 80),
       passwordSet: Boolean(source.payload || source.passwordSet),
+      cookieSet: Boolean(source.cookieSet),
     };
   }
 
@@ -432,9 +433,57 @@ function createIdentityVault({
       username,
       role: text(source.role || "user", "user", 120).trim() || "user",
       notes: text(source.notes, "", 1_000),
+      cookieSet: Boolean(secretText(source.cookie, "", MAX_HEADER_VALUE)),
       createdAt,
       updatedAt: createdAt,
-      payload: encrypt({ username, password }),
+      payload: encrypt({ username, password, cookie: secretText(source.cookie, "", MAX_HEADER_VALUE) }),
+    };
+    const written = writeVault(projectId, vault);
+    if (!written.ok) return written;
+    return { ok: true, value: { credential: publicCredential(vault.credentials[credentialId]), projectId } };
+  }
+
+  function saveCredential(workspace, input = {}) {
+    const migration = migrateLegacy(workspace);
+    if (!migration.ok) return migration;
+    if (!secureStorageAvailable()) return error("SECURE_STORAGE_UNAVAILABLE", "Secure identity storage is unavailable; test credentials were not persisted.");
+    const source = isRecord(input) ? input : {};
+    const username = text(source.username, "", 500).trim();
+    if (!username) return error("CREDENTIAL_USERNAME_REQUIRED", "A test account username is required.");
+    const projectId = projectIdFor(workspace, true);
+    if (!projectId) return error("IDENTITY_PROJECT_REQUIRED", "A project workspace is required.");
+    const loaded = readVault(projectId);
+    if (!loaded.ok) return loaded;
+    const vault = loaded.vault;
+    vault.credentials = vault.credentials || {};
+    let credentialId = text(source.credentialId || source.id, "", 120).trim();
+    if (credentialId && !SAFE_ID.test(credentialId)) return error("CREDENTIAL_INVALID_ID", "credentialId must contain only letters, numbers, dots, underscores, or hyphens.");
+    if (!credentialId) {
+      if (Object.keys(vault.credentials).length >= MAX_CREDENTIALS) return error("CREDENTIAL_LIMIT_REACHED", `A project may contain at most ${MAX_CREDENTIALS} test credentials.`);
+      const entropy = typeof crypto.randomBytes === "function" ? crypto.randomBytes(8).toString("hex") : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      credentialId = `credential-${entropy}`.slice(0, 120);
+    }
+    const existing = vault.credentials[credentialId] || null;
+    let existingSecret = {};
+    if (existing?.payload) {
+      try { existingSecret = decrypt(existing.payload) || {}; }
+      catch (decryptError) { return error("CREDENTIAL_SECRET_UNAVAILABLE", decryptError.message, { credentialId }); }
+    }
+    const password = secretText(source.password, "", MAX_CREDENTIAL_PASSWORD) || secretText(existingSecret.password, "", MAX_CREDENTIAL_PASSWORD);
+    if (!password) return error("CREDENTIAL_PASSWORD_REQUIRED", "A test account password is required.");
+    const suppliedCookie = secretText(source.cookie, "", MAX_HEADER_VALUE);
+    const cookie = suppliedCookie || secretText(existingSecret.cookie, "", MAX_HEADER_VALUE);
+    const savedAt = timestamp();
+    vault.credentials[credentialId] = {
+      credentialId,
+      label: text(source.label, existing?.label || "Test account", 240).trim() || "Test account",
+      username,
+      role: text(source.role, existing?.role || "", 120).trim(),
+      notes: text(existing?.notes, "", 1_000),
+      cookieSet: Boolean(cookie),
+      createdAt: existing?.createdAt || savedAt,
+      updatedAt: savedAt,
+      payload: encrypt({ username, password, cookie }),
     };
     const written = writeVault(projectId, vault);
     if (!written.ok) return written;
@@ -599,6 +648,7 @@ function createIdentityVault({
     list,
     listCredentials,
     createCredential,
+    saveCredential,
     readCredential,
     removeCredential,
     update,

@@ -162,6 +162,7 @@ test("project workspace exposes a plain folder flow and professional project set
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   const settingsStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "settings.css"), "utf8");
+  const layoutRevampStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
   const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
   assert.ok(html.includes(">Core<"));
   assert.ok(html.includes(">Scoute<"));
@@ -178,27 +179,38 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.ok(html.includes('id="app-settings-commands-panel"'));
   assert.ok(html.includes('id="mcp-settings-list"'));
   assert.ok(html.includes('id="mcp-settings-tabs"'));
+  assert.match(html, /class="guidance-customize-page tools-settings-page"/);
   assert.ok(html.includes('data-app-settings-section="commands"'));
   assert.ok(html.includes('data-app-settings-section="project"'));
   assert.ok(html.includes('data-app-settings-section="authority"'));
   assert.ok(html.includes('data-app-settings-section="prompts"'));
+  assert.match(html, /class="guidance-customize-page rules-settings-page"/);
   assert.ok(html.includes('data-app-settings-section="certificates"'));
   assert.ok(html.includes('id="app-settings-authority-panel"'));
   assert.ok(html.includes('id="app-settings-certificates-panel"'));
+  assert.match(html, /class="certificate-settings-content browser-network-page"/);
   assert.match(html, /id="security-proxy-browser"[\s\S]*?codicon-globe/);
   assert.match(renderer, /proxyBrowserLaunch\(\{ assessmentPath, identityId:/);
   assert.match(renderer, /setSecurityHistoryVisible\(true\)/);
   const engagementMarkup = html.slice(html.indexOf('id="project-settings-engagement"'), html.indexOf('id="project-settings-authorization"'));
   const certificateMarkup = html.slice(html.indexOf('id="app-settings-certificates-panel"'));
-  assert.match(engagementMarkup, /id="identity-list"/);
-  assert.match(engagementMarkup, /id="credential-new-username"/);
-  assert.match(engagementMarkup, /id="credential-new-password"[^>]*type="password"/);
-  assert.match(engagementMarkup, /id="project-auth-source"/);
+  assert.match(engagementMarkup, /id="engagement-account-list"/);
+  assert.match(engagementMarkup, /id="engagement-account-add"[^>]*>Add more \+<\/button>/);
+  assert.match(engagementMarkup, /Authentication Accounts/);
+  assert.match(engagementMarkup, /Contacts &amp; Reporting/);
+  assert.doesNotMatch(engagementMarkup, /identity-runtime-status|identity-list|credential-list|credential-new-|project-auth-source|Browser identity sessions|Import auth state/);
   assert.match(engagementMarkup, /data-project-field="engagement\.executionModel"/);
   assert.match(engagementMarkup, /Shared browser state is not exported to command-line scanners/);
-  assert.match(engagementMarkup, /Store up to 100 operator-managed test accounts/);
-  assert.match(renderer, /credentialCreate\.textContent = credentials\.length \? "Add another" : "Add credential"/);
-  assert.match(baseStyles, /\.project-authentication-card \{ margin:14px 0; \}/);
+  assert.match(renderer, /function saveEngagementAccounts\(\)/);
+  assert.match(renderer, /window\.api\.credentialSave/);
+  assert.doesNotMatch(renderer, /while \(engagementAccountList\.children\.length < 2\)/);
+  assert.match(renderer, /engagementAccountAdd\?\.addEventListener\("click", \(\) => \{\s*appendEngagementAccountRow\(\)/);
+  assert.match(renderer, /function reindexEngagementAccountRows\(\)[\s\S]*?const accountNumber = index \+ 1;[\s\S]*?heading\.textContent = accountLabel;[\s\S]*?setAttribute\("aria-label", `\$\{accountLabel\} \$\{input\.dataset\.accountField\}`\)/);
+  assert.match(renderer, /function deleteEngagementAccountRow\(row\)[\s\S]*?window\.api\.credentialDelete\(\{ workspace, credentialId \}\)[\s\S]*?row\.remove\(\);[\s\S]*?reindexEngagementAccountRows\(\)/);
+  assert.match(layoutRevampStyles, /\.engagement-account-header \{[\s\S]*?justify-content: space-between/);
+  assert.match(layoutRevampStyles, /\.engagement-account-delete \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none/);
+  assert.match(layoutRevampStyles, /\.engagement-account-row:hover > \.engagement-account-header \.engagement-account-delete,[\s\S]*?opacity: 1;[\s\S]*?pointer-events: auto/);
+  assert.match(layoutRevampStyles, /\.engagement-account-grid \{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.doesNotMatch(certificateMarkup, /id="identity-list"|id="credential-list"|Identity sessions|Authentication accounts/);
   assert.match(renderer, /onIdentityStatus\?\.\(\(snapshot\) => \{\s*if \(appSettingsSection !== "project"\) return;/);
   assert.match(renderer, /onIdentityPersistence\?\.\(\(event\) => \{\s*if \(appSettingsSection !== "project"\) return;/);
@@ -207,6 +219,19 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(html, /id="llm-settings-save"[^>]*>Save provider settings<\/button>/);
   assert.match(html, /id="llm-settings-test"[^>]*>Test provider<\/button>/);
   assert.ok(html.includes('id="models-settings-search"'));
+  assert.match(html, /class="models-catalog-section"[\s\S]*?id="models-catalog-title">Available models/);
+  assert.match(html, /class="models-context-settings-body"/);
+  assert.match(html, /Providers &amp; API keys/);
+  assert.match(html, /id="llm-openrouter-config" class="models-api-provider-block" hidden/);
+  assert.match(renderer, /function syncLlmProviderUi\(provider = "ollama"\)[\s\S]*?llmOllamaConfig\.hidden = active !== "ollama";[\s\S]*?llmOpenRouterConfig\.hidden = active !== "openrouter";/);
+  assert.match(html, /class="models-api-keys models-context-settings"[\s\S]*?id="context-compaction-model"[\s\S]*?id="context-compaction-cross-provider"/);
+  assert.match(settingsStyles, /\.app-settings-content #context-compaction-model:-webkit-autofill,[\s\S]*?-webkit-text-fill-color:#e1e1e1 !important;[\s\S]*?-webkit-box-shadow:0 0 0 1000px #181818 inset !important;/);
+  assert.match(settingsStyles, /\.app-settings-content \.models-context-settings \{[\s\S]*?display:flex;[\s\S]*?flex-direction:column;[\s\S]*?gap:12px;/);
+  assert.match(layoutRevampStyles, /#app-settings-llm-panel \.models-settings-list \{[\s\S]*?border: 0 !important;[\s\S]*?border-radius: 12px;[\s\S]*?background: #1b1b1b;/);
+  assert.match(layoutRevampStyles, /#app-settings-llm-panel \.models-context-settings-body,[\s\S]*?flex-direction: column;[\s\S]*?gap: 12px;/);
+  assert.match(layoutRevampStyles, /#app-settings-prompts-panel, #app-settings-commands-panel\) \.guidance-scope-tabs \{[\s\S]*?border-radius: 999px;[\s\S]*?background: #1b1b1b;/);
+  assert.match(layoutRevampStyles, /#app-settings-commands-panel \.mcp-connection-editor \{[\s\S]*?margin-top: 42px;[\s\S]*?border-radius: 12px;[\s\S]*?background: #1b1b1b;/);
+  assert.match(layoutRevampStyles, /#app-settings-certificates-panel \.certificate-settings-card \{[\s\S]*?border: 0 !important;[\s\S]*?border-radius: 12px;[\s\S]*?background: #1b1b1b;/);
   assert.ok(html.includes('id="models-settings-list"'));
   assert.ok(html.includes('id="models-explore-subagent"'));
   assert.match(html, /id="app-settings-authority-panel"[\s\S]*?class="agent-subagent-settings"[\s\S]*?id="models-explore-subagent"/);
@@ -219,7 +244,7 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(baseStyles, /width: 84px;/);
   assert.match(baseStyles, /height: 84px;/);
   assert.match(baseStyles, /opacity: 0\.25;/);
-  assert.ok(html.includes('class="guidance-customize-page"'));
+  assert.match(html, /class="guidance-customize-page (?:tools|rules)-settings-page"/);
   assert.ok(html.includes("Tools &amp; MCPs"));
   assert.ok(html.includes('data-chat-mode="hypothesis"'));
   assert.ok(html.includes('data-chat-mode="plan"'));
@@ -274,9 +299,9 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(settingsStyles, /\.app-settings-tabs button \{[\s\S]*height:auto;[\s\S]*min-height:31px;/);
   assert.match(settingsStyles, /\.app-settings-content > \.app-settings-panel \{[\s\S]*margin:0 auto;/);
   assert.match(settingsStyles, /\.project-toggle-grid > label::before[\s\S]*width:30px[\s\S]*height:18px/);
-  assert.match(settingsStyles, /\.project-toggle-grid > label:has\(input:checked\)::before[\s\S]*background:#45a86b/);
+  assert.match(settingsStyles, /\.project-toggle-grid > label:has\(input:checked\)::before[\s\S]*background:#2f8cf4/);
   assert.match(settingsStyles, /\.project-toggle-grid > label:has\(input:checked\)::after[\s\S]*transform:translateX\(12px\)/);
-  assert.match(settingsStyles, /\.authority-super-option\.selected[\s\S]*background:#242a2c/);
+  assert.match(settingsStyles, /\.agent-subagent-settings \{[\s\S]*background:var\(--settings-panel\)/);
   assert.match(settingsStyles, /#app-settings-prompts-panel[\s\S]*grid-template-columns:240px/);
   assert.match(settingsStyles, /@container app-settings \(max-width: 780px\)[\s\S]*\.app-settings-sidebar \{[\s\S]*width:64px/);
   assert.match(settingsStyles, /grid-template-columns:auto minmax\(0,1fr\)/);
@@ -286,7 +311,7 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(settingsStyles, /\.certificate-security-note \{[\s\S]*display:block[\s\S]*border:0[\s\S]*background:transparent/);
   assert.match(chatStyles, /\.model-pill \{[\s\S]*border-radius: 999px[\s\S]*background: transparent/);
   assert.equal((settingsStyles.match(/^\.app-settings-workspace \{/gm) || []).length, 1);
-  assert.match(renderer, /saveAuthoritySettings/);
+  assert.doesNotMatch(renderer, /saveAuthoritySettings|renderAuthoritySettings/);
   assert.match(renderer, /renderMcpSettings/);
   assert.match(renderer, /openMcpConfig/);
   assert.match(renderer, /loadMcpSettings/);
@@ -413,6 +438,7 @@ test("professional assessment schemas cover scope, evidence, services, findings,
   assert.ok("authorization" in settings);
   assert.equal("authorizationGate" in settings, false);
   assert.ok("authority" in settings);
+  assert.ok(Object.values(settings.authority.permissions).every((enabled) => enabled === true));
   assert.ok("upstreamProxy" in settings);
   assert.ok("intruder" in settings);
   assert.ok("logging" in settings);
@@ -427,6 +453,17 @@ test("settings UI controls map to real settings.config fields", () => {
     const value = settingPath.split(".").reduce((current, key) => current?.[key], settings);
     assert.notEqual(value, undefined, `${settingPath} must exist in settings.config`);
   }
+});
+
+test("project settings tabs map vertical wheel movement to horizontal scrolling", () => {
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
+  assert.match(renderer, /projectSettingsNav\?\.addEventListener\("wheel"/);
+  assert.match(renderer, /projectSettingsNav\.scrollLeft \+ delta/);
+  assert.match(renderer, /projectSettingsNav\.scrollTo\(\{ left: 0, behavior \}\)/);
+  assert.match(styles, /scroll-snap-type:\s*x mandatory/);
+  assert.match(styles, /scroll-snap-align:\s*start/);
+  assert.match(styles, /@container app-settings \(max-width: 1120px\)[\s\S]*?\.app-settings-content \.project-settings-nav\s*\{[\s\S]*?min-height:\s*48px/);
 });
 
 test("all Scope files use the visual JSON editor and Custom actions are hover-revealed", () => {

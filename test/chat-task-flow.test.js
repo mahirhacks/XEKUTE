@@ -38,7 +38,9 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(controller, /isReasonablyLargeAgentRequest/);
   assert.match(renderer, /const filePath = String\(result\.path/);
   assert.match(renderer, /chatSessionSelect\?\.addEventListener\("wheel"/);
-  assert.match(renderer, /chatSessionSelect\.scrollLeft - event\.deltaY/);
+  assert.match(renderer, /chatSessionSelect\.scrollLeft \+ delta/);
+  assert.match(renderer, /editorTabBar\?\.addEventListener\("wheel"/);
+  assert.match(renderer, /editorTabBar\.scrollLeft \+ delta/);
   assert.match(renderer, /behavior: force \? "smooth" : "auto"/);
   assert.match(styles, /\.agent-task-brief/);
   assert.match(chatStyles, /\.agent-task-brief\s*\{[\s\S]*?display: none !important/);

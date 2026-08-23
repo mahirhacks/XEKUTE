@@ -185,6 +185,7 @@ const quickInput       = $("quick-input");
 const quickMeta        = $("quick-meta");
 const quickResults     = $("quick-results");
 const chatHeader       = $("chat-header");
+const btnTopFileTree  = $("btn-top-filetree");
 const btnTopTerminal  = $("btn-top-terminal");
 const btnTopChat      = $("btn-top-chat");
 const btnTopSettings  = $("btn-top-settings");
@@ -302,6 +303,7 @@ const projectSettingsName = $("project-settings-name");
 const projectSettingsRoot = $("project-settings-root");
 const projectSettingsCreate = $("project-settings-create");
 const projectSettingsOpen = $("project-settings-open");
+const projectSettingsNav = document.querySelector(".project-settings-nav");
 const projectSettingsNavButtons = [...document.querySelectorAll("[data-project-settings-target]")];
 const commandSettingsSave = $("command-settings-save");
 const commandSettingsStatus = $("command-settings-status");
@@ -322,7 +324,6 @@ const kaliAccessTest = $("kali-access-test");
 const kaliAccessSave = $("kali-access-save");
 const kaliAccessStatus = $("kali-access-status");
 const appSettingsAuthorityPanel = $("app-settings-authority-panel");
-const authoritySettingsContent = $("authority-settings-content");
 const appSettingsPromptsPanel = $("app-settings-prompts-panel");
 const guidanceSettingsList = $("guidance-settings-list");
 const guidanceSettingsEmpty = $("guidance-settings-empty");
@@ -395,6 +396,8 @@ const credentialNewPassword = $("credential-new-password");
 const credentialNewRole = $("credential-new-role");
 const credentialCreate = $("credential-create");
 const credentialList = $("credential-list");
+const engagementAccountList = $("engagement-account-list");
+const engagementAccountAdd = $("engagement-account-add");
 const appSettingsSectionButtons = [...document.querySelectorAll("[data-app-settings-section]")];
 
 const APP_SETTINGS_SECTION_META = Object.freeze({
@@ -1801,7 +1804,7 @@ function showSecurityWorkspaceContent(tool = "") {
 
 const AUTHORITY_DEFAULTS = Object.freeze({
   superMode: "ask",
-  permissions: {
+  permissions: Object.freeze({
     workspaceRead: true,
     workspaceWrite: true,
     workspaceDelete: true,
@@ -1815,12 +1818,12 @@ const AUTHORITY_DEFAULTS = Object.freeze({
     mapBuild: true,
     evidenceManagement: true,
     passiveRecon: true,
-    activeRecon: false,
-    automatedScanning: false,
-    exploitValidation: false,
-    customScripts: false,
-    sensitiveDataAccess: false,
-  },
+    activeRecon: true,
+    automatedScanning: true,
+    exploitValidation: true,
+    customScripts: true,
+    sensitiveDataAccess: true,
+  }),
 });
 
 const AUTHORITY_SUPER_LABELS = Object.freeze({
@@ -1829,42 +1832,13 @@ const AUTHORITY_SUPER_LABELS = Object.freeze({
   full: "Full Authority",
 });
 
-const AUTHORITY_GROUPS = [
-  ["Workspace", "Files, local processes, and terminal.", [
-    ["workspaceRead", "Read workspace files", ""],
-    ["workspaceWrite", "Create and edit files", ""],
-    ["workspaceDelete", "Delete files and folders", ""],
-    ["commandExecution", "Run local commands", ""],
-    ["backgroundProcesses", "Start background processes", ""],
-    ["terminalAccess", "Use terminal capabilities", ""],
-    ["customScripts", "Run custom scripts", ""],
-  ]],
-  ["Network and Traffic", "Requests, interception, and research.", [
-    ["webResearch", "Web research", ""],
-    ["outboundHttp", "Send HTTP requests", ""],
-    ["proxyInterception", "Control proxy interception", ""],
-    ["trafficCapture", "Capture request/response traffic", ""],
-    ["sensitiveDataAccess", "Read unredacted sensitive data", ""],
-  ]],
-  ["Assessment", "Evidence, graph, and passive discovery.", [
-    ["mapBuild", "Build and query the Map", ""],
-    ["evidenceManagement", "Manage evidence and findings", ""],
-    ["passiveRecon", "Run passive reconnaissance", ""],
-  ]],
-  ["Sensitive Testing", "Probing and vulnerability validation.", [
-    ["activeRecon", "Run active reconnaissance", ""],
-    ["automatedScanning", "Run automated scanners", "Nmap, ffuf, Nuclei, Nikto, Katana."],
-    ["exploitValidation", "Validate exploit hypotheses", "Explicitly authorized checks in Test mode."],
-  ]],
-];
-
 function normalizeAuthoritySettings(value) {
   const input = value && typeof value === "object" ? value : {};
   const requestedSuperMode = input.superMode;
   const superMode = ["full", "ask", "approve"].includes(requestedSuperMode) ? requestedSuperMode : AUTHORITY_DEFAULTS.superMode;
   return {
     superMode,
-    permissions: { ...AUTHORITY_DEFAULTS.permissions, ...(input.permissions && typeof input.permissions === "object" ? input.permissions : {}) },
+    permissions: { ...AUTHORITY_DEFAULTS.permissions },
   };
 }
 
@@ -2179,7 +2153,6 @@ async function persistAuthoritySettings() {
       }
     }
     syncAuthorityLabel();
-    if (appSettingsSection === "authority") renderAuthoritySettings();
   } catch (error) {
     addErrorMessage(error?.message || "Failed to save authority settings");
   }
@@ -2301,10 +2274,29 @@ function setProjectSettingsTarget(targetId, { scroll = false } = {}) {
   projectSettingsSections.forEach((section) => {
     section.hidden = section.id !== resolvedTarget;
   });
+  let activeButton = null;
   projectSettingsNavButtons.forEach((button) => {
     const active = button.dataset.projectSettingsTarget === resolvedTarget;
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
+    if (active) activeButton = button;
+  });
+
+  requestAnimationFrame(() => {
+    if (!projectSettingsNav || !activeButton) return;
+    const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    const behavior = scroll && !reducedMotion ? "smooth" : "auto";
+    if (activeButton === projectSettingsNavButtons[0]) {
+      projectSettingsNav.scrollTo({ left: 0, behavior });
+      return;
+    }
+    const navBounds = projectSettingsNav.getBoundingClientRect();
+    const buttonBounds = activeButton.getBoundingClientRect();
+    if (buttonBounds.left < navBounds.left) {
+      projectSettingsNav.scrollBy({ left: buttonBounds.left - navBounds.left, behavior });
+    } else if (buttonBounds.right > navBounds.right) {
+      projectSettingsNav.scrollBy({ left: buttonBounds.right - navBounds.right, behavior });
+    }
   });
 
   if (scroll) {
@@ -2355,6 +2347,16 @@ async function saveProjectProfile() {
     if (commandSettingsStatus) commandSettingsStatus.textContent = "Open a project first";
     return;
   }
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Saving authentication accounts…";
+  const accountsResult = await saveEngagementAccounts();
+  if (!accountsResult.ok) {
+    if (commandSettingsStatus) commandSettingsStatus.textContent = accountsResult.error || "Authentication accounts could not be saved";
+    return;
+  }
+  const currentAuthentication = projectProfileData?.engagement?.authenticationSelection || { kind: "none", id: "" };
+  if (currentAuthentication.kind === "none" && accountsResult.credentialIds[0]) {
+    setProjectFieldValue(projectProfileData, "engagement.authenticationSelection", { kind: "credential", id: accountsResult.credentialIds[0] });
+  }
   const profile = collectProjectSettings();
   if (!profile.project?.name?.trim()) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = "Project name is required";
@@ -2371,6 +2373,7 @@ async function saveProjectProfile() {
   projectProfileExists = true;
   populateProjectSettings(projectProfileData);
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Saved outside the project folder";
+  await loadIdentitySettings();
   await configureProxyListener();
 }
 
@@ -2427,7 +2430,7 @@ function setAppSettingsSection(section) {
   appSettingsPromptsPanel.hidden = appSettingsSection !== "prompts";
   appSettingsLlmPanel.hidden = appSettingsSection !== "llm";
   appSettingsCertificatesPanel.hidden = appSettingsSection !== "certificates";
-  const supportsWorkspaceSave = ["project", "authority"].includes(appSettingsSection);
+  const supportsWorkspaceSave = ["general", "project"].includes(appSettingsSection);
   if (commandSettingsSave) commandSettingsSave.hidden = !supportsWorkspaceSave;
   if (commandSettingsStatus) commandSettingsStatus.hidden = !supportsWorkspaceSave;
   if (commandSettingsSave && appSettingsSection === "project") commandSettingsSave.disabled = !rootPath;
@@ -2444,7 +2447,6 @@ function setAppSettingsSection(section) {
   if (appSettingsSection === "commands") loadMcpSettings();
   if (appSettingsSection === "authority") {
     renderExploreSubagentSelect();
-    renderAuthoritySettings();
   }
   if (appSettingsSection === "prompts") loadGuidanceSettings({ preserveSelection: true });
   if (appSettingsSection === "llm") {
@@ -2462,8 +2464,8 @@ function syncLlmProviderUi(provider = "ollama") {
   if (llmProvider) llmProvider.value = active;
   if (llmProviderOllama) llmProviderOllama.checked = active === "ollama";
   if (llmProviderOpenRouter) llmProviderOpenRouter.checked = active === "openrouter";
-  if (llmOllamaConfig) llmOllamaConfig.hidden = false;
-  if (llmOpenRouterConfig) llmOpenRouterConfig.hidden = false;
+  if (llmOllamaConfig) llmOllamaConfig.hidden = active !== "ollama";
+  if (llmOpenRouterConfig) llmOpenRouterConfig.hidden = active !== "openrouter";
   if (llmOllamaEnableToggle) llmOllamaEnableToggle.checked = active === "ollama";
 }
 
@@ -2954,54 +2956,16 @@ async function resetCertificateDirectory() {
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Default CA location restored";
 }
 
-function renderAuthoritySettings() {
-  if (!authoritySettingsContent) return;
-  authoritySettingsData = normalizeAuthoritySettings(authoritySettingsData);
-  const mode = authoritySettingsData.superMode;
-  const superOptions = [
-    ["full", "Full Authority", "Saved as a workspace preference; runtime still uses the configured scope.", "", "danger"],
-    ["ask", "Ask for Approval", "Saved as a workspace preference; runtime still uses the configured scope.", "", "warning"],
-    ["approve", "Approve for me", "Saved as a workspace preference; runtime still uses the configured scope.", "", ""],
-  ];
-  const fullRestricted = false;
-  const superRestricted = false;
-  const modeSummary = "This selection is UI metadata only. Tool execution uses the active mode and configured filesystem/network scope.";
-  const groups = AUTHORITY_GROUPS.map(([title, description, permissions]) => `<section class="authority-group"><header><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description)}</p></header>${permissions.map(([key, label, detail]) => {
-    const effective = authoritySettingsData.permissions[key] !== false;
-    return `<label class="authority-permission"><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail || "Stored as a workspace UI preference.")}</small></span><input type="checkbox" data-authority-permission="${key}" ${effective ? "checked" : ""}></label>`;
-  }).join("")}</section>`).join("");
-  authoritySettingsContent.innerHTML = `<div class="authority-intro"><div><span class="codicon codicon-shield" aria-hidden="true"></span><div><h2>Agent preference</h2><p>These labels and switches are saved for workspace organization. Runtime tool access is determined by the active mode and configured filesystem/network scope.</p></div></div></div><div class="authority-super-grid">${superOptions.map(([key, label, description, override, tone]) => `<label class="authority-super-option ${tone}${mode === key ? " selected" : ""}"><input type="radio" name="authority-super" value="${key}" ${mode === key ? "checked" : ""}><strong>${label}</strong><small>${description}</small><em>${override}</em></label>`).join("")}</div><div class="authority-override-summary">${modeSummary}</div><div class="authority-groups">${groups}</div>`;
-  authoritySettingsContent.querySelectorAll('input[name="authority-super"]').forEach((input) => input.addEventListener("change", () => {
-    authoritySettingsData.superMode = input.value;
-    commandSettingsStatus.textContent = "Unsaved authority changes";
-    syncAuthorityLabel();
-    renderAuthoritySettings();
-  }));
-  authoritySettingsContent.querySelectorAll("[data-authority-permission]").forEach((input) => input.addEventListener("change", () => {
-    authoritySettingsData.permissions[input.dataset.authorityPermission] = input.checked;
-    commandSettingsStatus.textContent = "Unsaved authority changes";
-  }));
-  syncAuthorityLabel();
-}
-
-async function saveAuthoritySettings() {
-  authoritySettingsData = normalizeAuthoritySettings(authoritySettingsData);
-  localStorage.setItem(AUTHORITY_SETTINGS_KEY, JSON.stringify(authoritySettingsData, null, 2));
-  if (assessmentSettingsCache && assessmentPath && !assessmentSettingsVirtual) {
-    const result = await saveAssessmentSettings({ ...assessmentSettingsCache, authority: authoritySettingsData });
-    if (result?.error) {
-      if (commandSettingsStatus) commandSettingsStatus.textContent = result.error;
-      return;
-    }
-  }
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Saved";
-}
-
 async function saveActiveSettingsSection() {
+  if (appSettingsSection === "general") {
+    updateGeneralSettings({ showStatusBar: generalStatusBarToggle?.checked !== false });
+    await window.api.updatesSettingsSet?.({ checkOnLaunch: generalUpdatesToggle?.checked !== false });
+    if (commandSettingsStatus) commandSettingsStatus.textContent = "Saved";
+    return;
+  }
   if (appSettingsSection === "project") return saveProjectProfile();
   if (appSettingsSection === "prompts") return saveGuidanceFile();
-  if (appSettingsSection === "authority") return saveAuthoritySettings();
-  return saveAuthoritySettings();
+  return undefined;
 }
 
 const MCP_KIND_DESCRIPTION = "Configure standard MCP servers using the same command, arguments, and environment fields used by other MCP clients.";
@@ -3161,6 +3125,81 @@ function markAuthenticationSourceChanged() {
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved project changes";
 }
 
+function reindexEngagementAccountRows() {
+  if (!engagementAccountList) return;
+  [...engagementAccountList.querySelectorAll(".engagement-account-row")].forEach((row, index) => {
+    const accountNumber = index + 1;
+    const accountLabel = `Test Account ${accountNumber}`;
+    row.dataset.accountNumber = String(accountNumber);
+    const heading = row.querySelector(".engagement-account-title");
+    if (heading) heading.textContent = accountLabel;
+    const deleteButton = row.querySelector("[data-engagement-account-delete]");
+    if (deleteButton) {
+      deleteButton.setAttribute("aria-label", `Delete ${accountLabel}`);
+      deleteButton.title = `Delete ${accountLabel}`;
+    }
+    row.querySelectorAll("[data-account-field]").forEach((input) => {
+      input.setAttribute("aria-label", `${accountLabel} ${input.dataset.accountField}`);
+    });
+  });
+}
+
+function appendEngagementAccountRow(credential = {}, index = engagementAccountList?.children.length || 0) {
+  if (!engagementAccountList) return null;
+  const row = document.createElement("article");
+  row.className = "engagement-account-row";
+  if (credential.credentialId) row.dataset.credentialId = credential.credentialId;
+  row.innerHTML = `<header class="engagement-account-header"><h4 class="engagement-account-title">Test Account ${index + 1}</h4><button type="button" class="engagement-account-delete" data-engagement-account-delete aria-label="Delete Test Account ${index + 1}" title="Delete Test Account ${index + 1}"><span class="codicon codicon-trash" aria-hidden="true"></span></button></header><div class="engagement-account-grid"><input type="text" data-account-field="username" aria-label="Test Account ${index + 1} username" placeholder="username" maxlength="500" autocomplete="username" value="${escapeHtml(credential.username || "")}"><input type="password" data-account-field="password" aria-label="Test Account ${index + 1} password" placeholder="${credential.passwordSet ? "password saved" : "password"}" maxlength="4096" autocomplete="new-password"><input type="text" data-account-field="role" aria-label="Test Account ${index + 1} role" placeholder="Role (Optional)" maxlength="120" autocomplete="off" value="${escapeHtml(credential.role || "")}"><input type="password" data-account-field="cookie" aria-label="Test Account ${index + 1} cookie" placeholder="${credential.cookieSet ? "Cookie saved (Optional)" : "Cookie (Optional)"}" maxlength="32768" autocomplete="off"></div>`;
+  engagementAccountList.appendChild(row);
+  reindexEngagementAccountRows();
+  return row;
+}
+
+function renderEngagementAccounts(credentials = [], { error = "", disabled = false } = {}) {
+  if (!engagementAccountList) return;
+  engagementAccountList.innerHTML = "";
+  if (error) {
+    engagementAccountList.innerHTML = `<p class="engagement-account-error">${escapeHtml(error)}</p>`;
+    if (engagementAccountAdd) engagementAccountAdd.disabled = true;
+    return;
+  }
+  credentials.forEach((credential, index) => appendEngagementAccountRow(credential, index));
+  engagementAccountList.querySelectorAll("input").forEach((input) => { input.disabled = disabled; });
+  engagementAccountList.querySelectorAll("[data-engagement-account-delete]").forEach((button) => { button.disabled = disabled; });
+  if (engagementAccountAdd) engagementAccountAdd.disabled = disabled;
+}
+
+async function deleteEngagementAccountRow(row) {
+  if (!row || !engagementAccountList?.contains(row)) return;
+  const accountNumber = [...engagementAccountList.querySelectorAll(".engagement-account-row")].indexOf(row) + 1;
+  const credentialId = String(row.dataset.credentialId || "").trim();
+  if (credentialId) {
+    const workspace = identityWorkspacePath();
+    if (!workspace || !window.api.credentialDelete) {
+      if (commandSettingsStatus) commandSettingsStatus.textContent = "Encrypted account storage is unavailable";
+      return;
+    }
+    if (!window.confirm(`Delete Test Account ${accountNumber}?`)) return;
+    try {
+      const result = await window.api.credentialDelete({ workspace, credentialId });
+      if (result?.ok === false || result?.error) {
+        if (commandSettingsStatus) commandSettingsStatus.textContent = result.error?.message || result.error || "Test account could not be deleted";
+        return;
+      }
+      if (projectAuthSource?.value === `credential:${credentialId}`) {
+        projectAuthSource.value = "none";
+        markAuthenticationSourceChanged();
+      }
+    } catch (error) {
+      if (commandSettingsStatus) commandSettingsStatus.textContent = error?.message || "Test account could not be deleted";
+      return;
+    }
+  }
+  row.remove();
+  reindexEngagementAccountRows();
+  if (commandSettingsStatus) commandSettingsStatus.textContent = credentialId ? "Test account deleted" : "Unsaved project changes";
+}
+
 function selectAuthenticationSource(kind, id) {
   if (!projectAuthSource) return;
   projectAuthSource.value = authenticationSourceValue(kind, id);
@@ -3232,6 +3271,7 @@ function renderIdentitySettings(snapshot = identitySettingsSnapshot) {
       ? credentials.map((credential) => `<article class="identity-row credential-row" data-credential-id="${escapeHtml(credential.credentialId)}"><div class="identity-row-main"><strong>${escapeHtml(credential.label || credential.credentialId)}</strong><small>${escapeHtml(credential.credentialId)} · ${escapeHtml(credential.username || "username unavailable")} · ${escapeHtml(credential.role || "user")} · password ${credential.passwordSet ? "saved" : "not set"}</small></div><div class="identity-row-actions"><button type="button" data-credential-action="select" data-credential-id="${escapeHtml(credential.credentialId)}">Use</button><button type="button" data-credential-action="delete" data-credential-id="${escapeHtml(credential.credentialId)}">Delete</button></div></article>`).join("")
       : "<p class=\"identity-empty\">No test credentials configured.</p>";
   }
+  renderEngagementAccounts(credentials, { error: credentialListError || identityListError, disabled: secureStorageUnavailable });
   return { identityListError, credentialListError, secureStorageUnavailable, missingSelectionReset };
 }
 
@@ -3312,6 +3352,46 @@ async function createCredentialFromSettings() {
   } finally {
     if (credentialNewPassword) credentialNewPassword.value = "";
   }
+}
+
+async function saveEngagementAccounts() {
+  if (!engagementAccountList) return { ok: true, credentialIds: [] };
+  const workspace = identityWorkspacePath();
+  if (!workspace || !window.api.credentialSave) return { ok: false, error: "Encrypted account storage is unavailable." };
+  const rows = [...engagementAccountList.querySelectorAll(".engagement-account-row")];
+  const credentialIds = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const credentialId = String(row.dataset.credentialId || "").trim();
+    const usernameInput = row.querySelector('[data-account-field="username"]');
+    const passwordInput = row.querySelector('[data-account-field="password"]');
+    const roleInput = row.querySelector('[data-account-field="role"]');
+    const cookieInput = row.querySelector('[data-account-field="cookie"]');
+    const username = String(usernameInput?.value || "").trim();
+    const password = String(passwordInput?.value || "");
+    const role = String(roleInput?.value || "").trim();
+    const cookie = String(cookieInput?.value || "");
+    if (!credentialId && !username && !password && !role && !cookie) continue;
+    if (!username || (!credentialId && !password)) {
+      usernameInput?.focus();
+      return { ok: false, error: `Test Account ${index + 1} requires a username and password.` };
+    }
+    const result = await window.api.credentialSave({
+      workspace,
+      credential: { credentialId, label: `Test Account ${index + 1}`, username, password, role, cookie },
+    });
+    if (passwordInput) passwordInput.value = "";
+    if (cookieInput) cookieInput.value = "";
+    if (result?.ok === false || result?.error) {
+      return { ok: false, error: result.error?.message || result.error || `Test Account ${index + 1} could not be saved.` };
+    }
+    const savedId = String(result?.value?.credential?.credentialId || credentialId);
+    if (savedId) {
+      row.dataset.credentialId = savedId;
+      credentialIds.push(savedId);
+    }
+  }
+  return { ok: true, credentialIds };
 }
 
 async function handleCredentialAction(action, credentialId) {
@@ -4117,6 +4197,9 @@ function setSidebarCollapsed(collapsed) {
 function syncSidebarActivity() {
   const projectActive = !sidebarCollapsed
     && currentSidebarView === "project";
+  btnTopFileTree?.classList.toggle("active", projectActive);
+  btnTopFileTree?.classList.toggle("inactive", !projectActive);
+  btnTopFileTree?.setAttribute("aria-pressed", String(projectActive));
   activityExplorer?.classList.toggle("active", projectActive);
   activityExplorer?.setAttribute("aria-pressed", String(projectActive));
   activityBugBounty?.classList.toggle("active", projectActive);
@@ -6583,16 +6666,30 @@ function scrollChatSessionIntoView(sessionId = activeChatSessionId) {
   });
 }
 
-// Keep the session strip scrollbar-free while preserving deliberate wheel
-// navigation: wheel up moves tabs right, wheel down moves tabs left.
+// Keep both tab strips scrollbar-free while mapping wheel up to left and wheel
+// down to right. Horizontal trackpad gestures retain their natural direction.
 chatSessionSelect?.addEventListener("wheel", (event) => {
-  if (event.ctrlKey || !event.deltaY) return;
+  if (event.ctrlKey) return;
+  const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+  if (!delta) return;
   const maxScrollLeft = Math.max(0, chatSessionSelect.scrollWidth - chatSessionSelect.clientWidth);
   if (!maxScrollLeft) return;
-  const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, chatSessionSelect.scrollLeft - event.deltaY));
+  const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, chatSessionSelect.scrollLeft + delta));
   if (nextScrollLeft === chatSessionSelect.scrollLeft) return;
   event.preventDefault();
   chatSessionSelect.scrollLeft = nextScrollLeft;
+}, { passive: false });
+
+editorTabBar?.addEventListener("wheel", (event) => {
+  if (event.ctrlKey) return;
+  const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+  if (!delta) return;
+  const maxScrollLeft = Math.max(0, editorTabBar.scrollWidth - editorTabBar.clientWidth);
+  if (!maxScrollLeft) return;
+  const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, editorTabBar.scrollLeft + delta));
+  if (nextScrollLeft === editorTabBar.scrollLeft) return;
+  event.preventDefault();
+  editorTabBar.scrollLeft = nextScrollLeft;
 }, { passive: false });
 
 function loadChatSession(id) {
@@ -8998,6 +9095,17 @@ projectSettingsOpen?.addEventListener("click", openProject);
 projectSettingsNavButtons.forEach((button) => button.addEventListener("click", () => {
   setProjectSettingsTarget(button.dataset.projectSettingsTarget, { scroll: true });
 }));
+projectSettingsNav?.addEventListener("wheel", (event) => {
+  if (event.ctrlKey) return;
+  const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+  if (!delta) return;
+  const maxScrollLeft = Math.max(0, projectSettingsNav.scrollWidth - projectSettingsNav.clientWidth);
+  if (!maxScrollLeft) return;
+  const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, projectSettingsNav.scrollLeft + delta));
+  if (nextScrollLeft === projectSettingsNav.scrollLeft) return;
+  event.preventDefault();
+  projectSettingsNav.scrollLeft = nextScrollLeft;
+}, { passive: false });
 projectSettingsForm?.addEventListener("input", (event) => {
   if (!event.target.closest("[data-project-field]")) return;
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved project changes";
@@ -9073,6 +9181,18 @@ credentialList?.addEventListener("click", (event) => {
   const button = event.target.closest?.("[data-credential-action]");
   if (!button) return;
   handleCredentialAction(button.dataset.credentialAction || "", button.dataset.credentialId || "");
+});
+engagementAccountAdd?.addEventListener("click", () => {
+  appendEngagementAccountRow();
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved project changes";
+});
+engagementAccountList?.addEventListener("input", () => {
+  if (commandSettingsStatus) commandSettingsStatus.textContent = "Unsaved project changes";
+});
+engagementAccountList?.addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-engagement-account-delete]");
+  if (!button || button.disabled) return;
+  deleteEngagementAccountRow(button.closest(".engagement-account-row"));
 });
 projectAuthSource?.addEventListener("change", () => {
   markAuthenticationSourceChanged();
@@ -11628,7 +11748,8 @@ function getChatInputMaxHeight() {
 
 function getChatInputDefaultHeight() {
   const { line, padTop, padBot } = getChatInputMetrics();
-  return Math.ceil(padTop + padBot + line);
+  const declaredMinHeight = parseFloat(getComputedStyle(chatInput).minHeight) || 0;
+  return Math.ceil(Math.max(padTop + padBot + line, declaredMinHeight));
 }
 
 function resizeChatInput() {
@@ -12276,12 +12397,6 @@ authorityMenu?.addEventListener("click", async (e) => {
     await setAuthoritySuperMode(mode);
     return;
   }
-  if (e.target.closest("#authority-open-settings")) {
-    e.preventDefault();
-    e.stopPropagation();
-    closeAuthorityMenu();
-    openAppSettings("authority");
-  }
 });
 
 modelMenu?.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -12522,9 +12637,11 @@ function attachAssistantCopyButton(contentEl) {
   button.title = "Copy";
 
   const swapIcon = (icon) => {
-    button.querySelector(".codicon").className = `codicon ${icon}`;
+    button.innerHTML = icon === "codicon-copy"
+      ? '<img class="chat-action-icon" src="assets/icons/copy_icon.svg" alt="" aria-hidden="true">'
+      : `<span class="codicon ${icon}" aria-hidden="true"></span>`;
   };
-  button.innerHTML = `<span class="codicon codicon-copy" aria-hidden="true"></span>`;
+  swapIcon("codicon-copy");
   button.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -12698,9 +12815,12 @@ function createToolCard(tool, { pending = false } = {}) {
   card.dataset.runningLabel = toolRunningMessage(tool);
   card.dataset.state = pending ? "queued" : "running";
   const detail = fileAction ? "" : ToolParser.toolCardDetail(tool);
+  const iconMarkup = fileAction
+    ? '<img class="tool-card-icon tool-card-file-icon" src="assets/icons/chat_read_edit_file_icon.svg" alt="" aria-hidden="true">'
+    : `<span class="codicon ${toolIconClass(tool)} tool-card-icon"></span>`;
   card.innerHTML = `
     <div class="tool-card-header">
-      <span class="codicon ${toolIconClass(tool)} tool-card-icon"></span>
+      ${iconMarkup}
       <span class="tool-card-file">${escapeHtml(card.dataset.runningLabel)}</span>
       <span class="tool-card-badge">${escapeHtml(detail)}</span>
       <span class="tool-card-status running"></span>
@@ -12958,7 +13078,7 @@ function createCommandTimelineRow(tool, { state = "running" } = {}) {
   const summary = document.createElement("summary");
   summary.className = "agent-command-summary";
   summary.innerHTML = `
-    <span class="codicon codicon-terminal agent-command-shell" aria-hidden="true"></span>
+    <img class="codicon-terminal agent-command-shell" src="assets/icons/shell_icon.svg" alt="" aria-hidden="true">
     <span class="agent-command-label"></span>
     <span class="codicon codicon-chevron-right agent-command-chevron" aria-hidden="true"></span>
   `;
@@ -14254,7 +14374,10 @@ function chatInputEditorValue() {
 
 function syncChatInputEmptyState() {
   if (!chatInput) return;
-  chatInput.classList.toggle("chat-input-empty", !selectedSlashCommand && !chatInputEditorValue());
+  const editorValue = chatInputEditorValue();
+  const isEmpty = !selectedSlashCommand && !editorValue.replace(/[\r\n\u200b]/g, "");
+  if (isEmpty && chatInput.childNodes.length) chatInput.replaceChildren();
+  chatInput.classList.toggle("chat-input-empty", isEmpty);
 }
 
 function renderChatInputEditorValue(value = "") {
@@ -15042,6 +15165,10 @@ sendBtn.addEventListener("click", () => {
 
 btnTopTerminal?.addEventListener("click", () => {
   setTerminalCollapsed(!terminalCollapsed);
+});
+
+btnTopFileTree?.addEventListener("click", () => {
+  activateSidebarView("project");
 });
 
 btnTopChat?.addEventListener("click", () => {
@@ -16222,17 +16349,24 @@ makeDraggable(sidebarResize, (e) => {
   sidebarResize.setAttribute("aria-valuenow", String(Math.round(sidebar.offsetWidth)));
 });
 
-const CHAT_MIN_WIDTH = 300;
+const CHAT_MIN_VIEWPORT_RATIO = 0.2;
+
+function chatViewportMinWidth() {
+  return Math.floor(window.innerWidth * CHAT_MIN_VIEWPORT_RATIO);
+}
 
 function chatViewportMaxWidth() {
-  return Math.max(CHAT_MIN_WIDTH, Math.floor(window.innerWidth * 0.5));
+  return Math.max(chatViewportMinWidth(), Math.floor(window.innerWidth * 0.5));
 }
 
 function syncChatResizeLimit({ clamp = false } = {}) {
+  const min = chatViewportMinWidth();
   const max = chatViewportMaxWidth();
+  chatResize?.setAttribute("aria-valuemin", String(min));
   chatResize?.setAttribute("aria-valuemax", String(max));
-  if (clamp && chatPane && chatPane.offsetWidth > max) {
-    chatPane.style.width = `${max}px`;
+  if (clamp && chatPane && !chatPane.classList.contains("collapsed")) {
+    const width = Math.min(max, Math.max(min, chatPane.offsetWidth));
+    chatPane.style.width = `${width}px`;
     chatResize?.setAttribute("aria-valuenow", String(Math.round(chatPane.offsetWidth)));
   }
   return max;
@@ -16241,7 +16375,7 @@ function syncChatResizeLimit({ clamp = false } = {}) {
 syncChatResizeLimit({ clamp: true });
 
 makeDraggable(chatResize, (e) => {
-  const min = CHAT_MIN_WIDTH, max = chatViewportMaxWidth();
+  const min = chatViewportMinWidth(), max = chatViewportMaxWidth();
   const w = window.innerWidth - e.clientX;
   chatPane.style.width = Math.min(max, Math.max(min, w)) + "px";
   chatResize.setAttribute("aria-valuenow", String(Math.round(chatPane.offsetWidth)));
@@ -16499,6 +16633,7 @@ terminalResize.addEventListener("keydown", (event) => {
 
 function installSeparatorKeyboard(handle, { orientation, minimum, maximum, read, write, step = 8, reset }) {
   if (!handle) return;
+  const readMinimum = () => typeof minimum === "function" ? minimum() : minimum;
   const sync = () => handle.setAttribute("aria-valuenow", String(Math.round(read())));
   sync();
   handle.addEventListener("keydown", (event) => {
@@ -16507,11 +16642,11 @@ function installSeparatorKeyboard(handle, { orientation, minimum, maximum, read,
     let next = read();
     if (event.key === decrement) next -= step;
     else if (event.key === increment) next += step;
-    else if (event.key === "Home") next = minimum;
+    else if (event.key === "Home") next = readMinimum();
     else if (event.key === "End") next = maximum();
     else return;
     event.preventDefault();
-    write(Math.max(minimum, Math.min(maximum(), next)));
+    write(Math.max(readMinimum(), Math.min(maximum(), next)));
     sync();
   });
   handle.addEventListener("dblclick", () => {
@@ -16524,13 +16659,17 @@ installSeparatorKeyboard(sidebarResize, {
   orientation: "vertical", minimum: 200, maximum: () => 360,
   read: () => sidebar.offsetWidth,
   write: (value) => { sidebar.style.width = `${value}px`; },
-  reset: () => { sidebar.style.width = "240px"; },
+  reset: () => { sidebar.style.width = "244px"; },
 });
 installSeparatorKeyboard(chatResize, {
-  orientation: "vertical", minimum: CHAT_MIN_WIDTH, maximum: chatViewportMaxWidth,
+  orientation: "vertical", minimum: chatViewportMinWidth, maximum: chatViewportMaxWidth,
   read: () => chatPane.offsetWidth,
   write: (value) => { chatPane.style.width = `${value}px`; resizeChatInput(); },
-  reset: () => { chatPane.style.width = "400px"; resizeChatInput(); },
+  reset: () => {
+    const width = Math.min(chatViewportMaxWidth(), Math.max(chatViewportMinWidth(), 513));
+    chatPane.style.width = `${width}px`;
+    resizeChatInput();
+  },
 });
 installSeparatorKeyboard(securityWorkbenchResize, {
   orientation: "horizontal", minimum: WORKBENCH_MIN_H,

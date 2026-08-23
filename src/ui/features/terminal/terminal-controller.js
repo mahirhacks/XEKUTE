@@ -26,10 +26,10 @@ const TerminalManager = (() => {
   let shellProfiles = [];
 
   const xtermTheme = {
-    background: "#181818",
+    background: "#121212",
     foreground: "#cccccc",
     cursor: "#cccccc",
-    cursorAccent: "#181818",
+    cursorAccent: "#121212",
     selectionBackground: "#3b3b3b",
     selectionInactiveBackground: "#303030",
     scrollbarSliderBackground: "transparent",

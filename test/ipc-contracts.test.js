@@ -32,7 +32,7 @@ test("active IPC handlers and preload methods include memory and omit removed ap
   const projectIpc = read("src/app/ipc/project.js");
   const activeHandlers = `${main}\n${projectIpc}`;
   const preload = read("src/app/electron/preload.js");
-  for (const channel of ["agent:run", "project:create", "session-memory:load", "session-memory:begin", "session-memory:event", "session-memory:delete", "session-memory:flush", "mcp:read", "mcp:ensure", "kali-access:get", "kali-access:save", "kali-access:test", "kali-access:pickIdentity", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialDelete", "proxy:browserLaunch", "proxy:browserStatus"]) {
+  for (const channel of ["agent:run", "project:create", "session-memory:load", "session-memory:begin", "session-memory:event", "session-memory:delete", "session-memory:flush", "mcp:read", "mcp:ensure", "kali-access:get", "kali-access:save", "kali-access:test", "kali-access:pickIdentity", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialSave", "settings:credentialDelete", "proxy:browserLaunch", "proxy:browserStatus"]) {
     assert.match(activeHandlers, new RegExp(channel.replace(/[-:]/g, "\\$&")), `active IPC modules must register ${channel}`);
     assert.match(preload, new RegExp(channel.replace(/[-:]/g, "\\$&")), `preload must bridge ${channel}`);
   }

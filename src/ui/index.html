@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="styles/base.css" />
   <link rel="stylesheet" href="styles/chat.css" />
   <link rel="stylesheet" href="styles/settings.css" />
+  <link rel="stylesheet" href="styles/layout-revamp.css" />
 </head>
 <body>
   <div id="app-shell">
@@ -20,7 +21,7 @@
     </div>
     <nav id="app-menu" aria-label="Application menu">
       <div class="app-menu-item">
-        <button type="button" class="app-menu-button" data-menu="files" aria-haspopup="true" aria-expanded="false">Files</button>
+        <button type="button" class="app-menu-button" data-menu="files" aria-haspopup="true" aria-expanded="false">File</button>
         <div class="app-menu-dropdown" data-menu-panel="files" role="menu" hidden>
           <button type="button" data-action="create-project" role="menuitem">Create New Project</button>
           <button type="button" data-action="open-project" role="menuitem">Open Existing Project</button>
@@ -69,26 +70,29 @@
         </div>
       </div>
     </nav>
+    <button type="button" id="btn-top-filetree" class="topbar-icon active" title="Toggle file tree" aria-label="Toggle file tree" aria-pressed="true">
+      <img class="chrome-icon" src="assets/icons/filetree_collapse_expand_icon.svg" alt="" aria-hidden="true">
+    </button>
     <button type="button" id="command-center" class="command-center" title="Search (Ctrl+Shift+F)">
       <span class="codicon codicon-search"></span>
       <span>Search</span>
     </button>
     <div class="app-topbar-spacer"></div>
     <button type="button" id="btn-notifications" class="topbar-icon notification-button" title="Notifications" aria-haspopup="dialog" aria-expanded="false">
-      <span class="codicon codicon-bell"></span><span id="notification-count" class="notification-count" hidden>0</span>
+      <img class="chrome-icon" src="assets/icons/notification_icon.svg" alt="" aria-hidden="true"><span id="notification-count" class="notification-count" hidden>0</span>
     </button>
     <div id="notification-panel" class="notification-panel" role="dialog" aria-label="Notifications" hidden>
       <header><strong>Notifications</strong><button type="button" id="notification-clear" class="icon-btn" title="Clear notifications" aria-label="Clear notifications"><span class="codicon codicon-clear-all"></span></button></header>
       <div id="notification-list" class="notification-list"><div class="notification-empty">No notifications</div></div>
     </div>
     <button type="button" id="btn-top-terminal" class="topbar-icon active" title="Toggle terminal">
-      <span class="codicon codicon-terminal"></span>
+      <img class="chrome-icon" src="assets/icons/terminal_collapse_expand_icon.svg" alt="" aria-hidden="true">
     </button>
     <button type="button" id="btn-top-chat" class="topbar-icon active" title="Toggle AI chat">
-      <span class="codicon codicon-comment-discussion"></span>
+      <img class="chrome-icon" src="assets/icons/chat_collapse_expand_icon.svg" alt="" aria-hidden="true">
     </button>
     <button type="button" id="btn-top-settings" class="topbar-icon" title="XEKUTE Settings">
-      <span class="codicon codicon-settings-gear"></span>
+      <img class="chrome-icon" src="assets/icons/settings_icon.svg" alt="" aria-hidden="true">
     </button>
     <button type="button" id="btn-window-minimize" class="window-control" title="Minimize">
       <span class="codicon codicon-chrome-minimize"></span>
@@ -358,27 +362,27 @@
         <section id="app-settings-workspace" class="app-settings-workspace" aria-label="XEKUTE Settings" hidden>
           <aside class="app-settings-sidebar">
             <div class="app-settings-profile"><span class="app-settings-avatar">X</span><div><strong id="app-settings-profile-name">Local workspace</strong><small id="app-settings-profile-plan">XEKUTE</small></div></div>
-            <label class="app-settings-search"><span class="codicon codicon-search" aria-hidden="true"></span><input id="app-settings-search" type="search" placeholder="Search settings  Ctrl+F" autocomplete="off" spellcheck="false" aria-label="Search settings"></label>
+            <label class="app-settings-search"><span class="codicon codicon-search" aria-hidden="true"></span><input id="app-settings-search" type="search" placeholder="Search settings" autocomplete="off" spellcheck="false" aria-label="Search settings"></label>
             <nav class="app-settings-tabs" aria-label="Settings sections">
               <div class="app-settings-nav-group">
                 <button type="button" class="active" data-app-settings-section="general" aria-label="General" aria-pressed="true"><span class="codicon codicon-settings-gear"></span><span>General</span></button>
-                <button type="button" data-app-settings-section="project" aria-label="Project" aria-pressed="false"><span class="codicon codicon-folder-library"></span><span>Project</span></button>
+                <button type="button" data-app-settings-section="project" aria-label="Project" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/project_file_icon.svg" alt="" aria-hidden="true"><span>Project</span></button>
               </div>
               <div class="app-settings-nav-divider" aria-hidden="true"></div>
               <div class="app-settings-nav-group">
-                <button type="button" data-app-settings-section="authority" aria-label="Agents" aria-pressed="false"><span class="codicon codicon-shield"></span><span>Agents</span></button>
+                <button type="button" data-app-settings-section="authority" aria-label="Agents" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/agents_icon.svg" alt="" aria-hidden="true"><span>Agents</span></button>
               </div>
               <div class="app-settings-nav-divider" aria-hidden="true"></div>
               <div class="app-settings-nav-group">
-                <button type="button" data-app-settings-section="llm" aria-label="Models" aria-pressed="false"><span class="codicon codicon-hubot"></span><span>Models</span></button>
-                <button type="button" data-app-settings-section="prompts" aria-label="Rules, Skills, Subagents" aria-pressed="false"><span class="codicon codicon-symbol-keyword"></span><span>Rules, Skills, Subagents</span></button>
-                <button type="button" data-app-settings-section="commands" aria-label="Tools and MCPs" aria-pressed="false"><span class="codicon codicon-tools"></span><span>Tools &amp; MCPs</span></button>
-                <button type="button" data-app-settings-section="certificates" aria-label="Browser &amp; Network" aria-pressed="false"><span class="codicon codicon-globe"></span><span>Browser &amp; Network</span></button>
+                <button type="button" data-app-settings-section="llm" aria-label="Models" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/models_icon.svg" alt="" aria-hidden="true"><span>Models</span></button>
+                <button type="button" data-app-settings-section="prompts" aria-label="Rules, Skills, Subagents" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/rulesnskillnsubagent_icon.svg" alt="" aria-hidden="true"><span>Rules, Skills, Subagents</span></button>
+                <button type="button" data-app-settings-section="commands" aria-label="Tools and MCPs" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/tools_icon.svg" alt="" aria-hidden="true"><span>Tools &amp; MCPs</span></button>
+                <button type="button" data-app-settings-section="certificates" aria-label="Browser &amp; Network" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/browse.svg" alt="" aria-hidden="true"><span>Browser &amp; Network</span></button>
               </div>
             </nav>
           </aside>
           <div class="app-settings-main">
-            <header class="app-settings-workspace-header"><div><span class="codicon codicon-settings-gear" aria-hidden="true"></span><div><strong id="app-settings-page-title">General</strong><small id="app-settings-page-subtitle"></small></div></div><div class="app-settings-workspace-actions"><span id="command-settings-status" hidden>Ready</span><button type="button" id="command-settings-save" class="primary-button" hidden><span class="codicon codicon-save"></span>Save</button></div></header>
+            <header class="app-settings-workspace-header"><div><span class="codicon codicon-settings-gear" aria-hidden="true"></span><div><strong id="app-settings-page-title">General</strong><small id="app-settings-page-subtitle"></small></div></div><div class="app-settings-workspace-actions"><span id="command-settings-status" hidden>Ready</span><button type="button" id="command-settings-save" class="primary-button" hidden><span>save</span><img src="assets/icons/save.svg" alt="" aria-hidden="true"></button></div></header>
             <div class="app-settings-content">
           <section id="app-settings-general-panel" class="app-settings-panel general-settings-panel">
             <div class="general-settings-canvas">
@@ -418,12 +422,12 @@
                 <button type="button" data-project-settings-target="project-settings-authorization"><span class="codicon codicon-verified"></span>Authorization</button>
                 <button type="button" data-project-settings-target="project-settings-scope"><span class="codicon codicon-target"></span>Scope &amp; ROE</button>
                 <button type="button" data-project-settings-target="project-settings-context"><span class="codicon codicon-book"></span>Context</button>
-                <button type="button" data-project-settings-target="project-settings-data"><span class="codicon codicon-lock"></span>Data handling</button>
+                <button type="button" data-project-settings-target="project-settings-data"><span class="codicon codicon-lock"></span>Data Handling</button>
                 <aside class="project-storage-note"><span class="codicon codicon-shield"></span><p>Saved in protected XEKUTE app data. The project folder stays untouched.</p></aside>
               </aside>
               <main id="project-settings-form" class="project-settings-form">
                 <section id="project-settings-overview" class="project-settings-section">
-                  <header><div><span class="codicon codicon-dashboard"></span><div><h2>Project overview</h2><p>Identify this engagement clearly across operators, clients, and reporting.</p></div></div><span class="project-settings-badge">App-managed</span></header>
+                  <header><div><span class="codicon codicon-dashboard"></span><div><h2>Project Overview</h2><p>Identify this engagement clearly across operators, clients, and reporting.</p></div></div><span class="project-settings-badge">App-managed</span></header>
                   <div class="project-settings-card">
                     <div class="project-field-grid">
                       <label class="wide">Project name<input data-project-field="project.name" maxlength="240" autocomplete="off"></label>
@@ -437,17 +441,17 @@
                 </section>
 
                 <section id="project-settings-engagement" class="project-settings-section">
-                  <header><div><span class="codicon codicon-organization"></span><div><h2>Professional engagement</h2><p>Record who owns the work, why it is being performed, and what must be delivered.</p></div></div></header>
+                  <header><div><span class="codicon codicon-organization"></span><div><h2>Professional Engagement</h2><p>Record who owns the work, why it is being performed, and what must be delivered.</p></div></div></header>
                   <div class="project-settings-card">
                     <div class="project-field-grid">
                       <label>Engagement name<input data-project-field="engagement.name"></label>
-                      <label>Client / asset owner<input data-project-field="engagement.clientOrOwner"></label>
+                      <label>Client/Asset Owner<input data-project-field="engagement.clientOrOwner"></label>
                       <label>Program name<input data-project-field="engagement.programName"></label>
-                      <label>Platform / portal<input data-project-field="engagement.platform"></label>
+                      <label>Platform/Portal<input data-project-field="engagement.platform"></label>
                       <label>Engagement type<select data-project-field="engagement.engagementType"><option value="penetration-test">Penetration test</option><option value="bug-bounty">Bug bounty</option><option value="vulnerability-assessment">Vulnerability assessment</option><option value="red-team">Red team</option><option value="security-review">Security review</option></select></label>
                       <label>Environment<select data-project-field="engagement.environment"><option value="production">Production</option><option value="staging">Staging</option><option value="development">Development</option><option value="mixed">Mixed</option></select></label>
                       <label>Methodology<input data-project-field="engagement.methodology" placeholder="OWASP WSTG / PTES / client standard"></label>
-                      <label>Timezone<input data-project-field="engagement.timezone" placeholder="UTC or Asia/Kuala_Lumpur"></label>
+                      <label>Time Zone<input data-project-field="engagement.timezone" placeholder="UTC or Asia/Kuala_Lumpur"></label>
                       <label class="wide">Execution path<select data-project-field="engagement.executionModel"><option value="operator_choice">Ask me when browser state changes the approach</option><option value="browser_bound">Use the shared browser for stateful or JS-gated work</option><option value="standard">Use normal scoped tools</option></select><small>This is operator guidance. Shared browser state is not exported to command-line scanners.</small></label>
                       <label>Start date<input type="date" data-project-field="engagement.startDate"></label>
                       <label>End date<input type="date" data-project-field="engagement.endDate"></label>
@@ -456,43 +460,28 @@
                       <label>Deliverables <small>One per line</small><textarea data-project-field="engagement.deliverables" data-project-kind="array" rows="5" placeholder="Technical report&#10;Executive summary&#10;Retest memo"></textarea></label>
                    </div>
                   </div>
-                  <section class="identity-settings-card project-authentication-card">
-                    <header><span class="codicon codicon-account"></span><div><h2>Authentication accounts</h2><p>Keep browser sessions and test-user credentials with this engagement. Choose one source for the project, or leave it anonymous.</p></div></header>
-                    <div class="identity-runtime-row"><span id="identity-runtime-status">Checking browser runtime…</span><button type="button" id="identity-refresh" class="secondary-button">Refresh</button></div>
-                    <div class="authentication-source-row">
-                      <label for="project-auth-source">Authentication source for this project<select id="project-auth-source" aria-label="Authentication source for this project"><option value="none">None (anonymous)</option></select></label>
-                      <p>Only the selected reference is saved in project settings. Passwords and browser session material remain encrypted and are never sent to the agent.</p>
-                    </div>
-                    <div class="authentication-subsection">
-                      <div class="authentication-subsection-heading"><div><h3>Browser identity sessions</h3><p>Use an operator-controlled login window or import an encrypted browser state.</p></div></div>
-                      <div class="identity-create-row"><input id="identity-new-id" type="text" placeholder="Identity ID (account-a)" maxlength="120" autocomplete="off"><input id="identity-new-name" type="text" placeholder="Display name" maxlength="240" autocomplete="off"><input id="identity-new-role" type="text" placeholder="Role (user/admin)" maxlength="120" autocomplete="off"><button type="button" id="identity-create" class="primary-button">Add identity</button></div>
-                      <div id="identity-list" class="identity-list"><p class="identity-empty">No identities configured.</p></div>
-                      <div class="identity-import-row"><select id="identity-import-target" aria-label="Identity to import into"><option value="">Select identity</option></select><select id="identity-import-format" aria-label="Authentication import format"><option value="storage_state_file">Playwright storage state JSON</option><option value="cookies_file">Cookie JSON</option><option value="headers">Origin-bound headers</option></select><textarea id="identity-import-data" rows="3" placeholder="For headers: JSON object or array of { origin, headers } entries"></textarea><button type="button" id="identity-import" class="secondary-button">Import auth state</button></div>
-                    </div>
-                    <div class="authentication-subsection credential-settings-subsection">
-                      <div class="authentication-subsection-heading"><div><h3>Test user credentials</h3><p>Store up to 100 operator-managed test accounts. Each saved account stays in the list so you can add and select another. Passwords are masked here and encrypted at rest.</p></div></div>
-                      <div class="credential-create-row"><input id="credential-new-id" type="text" placeholder="Reference ID (optional)" maxlength="120" autocomplete="off"><input id="credential-new-label" type="text" placeholder="Account label (Account A)" maxlength="240" autocomplete="off"><input id="credential-new-username" type="text" placeholder="Username" maxlength="500" autocomplete="username"><input id="credential-new-password" type="password" placeholder="Password" maxlength="4096" autocomplete="new-password"><input id="credential-new-role" type="text" placeholder="Role (user/admin)" maxlength="120" autocomplete="off"><button type="button" id="credential-create" class="primary-button">Add credential</button></div>
-                      <div id="credential-list" class="credential-list"><p class="identity-empty">No test credentials configured.</p></div>
-                    </div>
-                    <p id="identity-settings-status" class="identity-settings-status">Ready</p>
+                  <section class="engagement-subsection engagement-authentication-accounts" aria-labelledby="engagement-authentication-title">
+                    <h3 id="engagement-authentication-title">Authentication Accounts</h3>
+                    <div id="engagement-account-list" class="engagement-account-list"></div>
+                    <button type="button" id="engagement-account-add" class="engagement-account-add">Add more +</button>
                   </section>
                   <div class="project-settings-card">
-                    <h3>Contacts and reporting</h3>
+                    <h3>Contacts &amp; Reporting</h3>
                     <div class="project-field-grid">
-                      <label>Primary contact<input data-project-field="contacts.primary" placeholder="Name, role, email, phone"></label>
-                      <label>Emergency contact<input data-project-field="contacts.emergency" placeholder="24/7 stop-test contact"></label>
+                      <label>Primary Contact<input data-project-field="contacts.primary"></label>
+                      <label>Emergency Contact<input data-project-field="contacts.emergency"></label>
                       <label>Escalation window<input data-project-field="contacts.escalationWindow" placeholder="Business hours / immediate for critical"></label>
-                      <label>Report recipients <small>One per line</small><textarea data-project-field="contacts.reportRecipients" data-project-kind="array" rows="3"></textarea></label>
-                      <label class="wide">Notification preferences<textarea data-project-field="contacts.notificationPreferences" rows="3" placeholder="Critical finding and operational-impact communication rules"></textarea></label>
+                      <label>Report Recipients<input data-project-field="contacts.reportRecipients" data-project-kind="array"></label>
+                      <label class="wide">Notification Preferences<textarea data-project-field="contacts.notificationPreferences" rows="4"></textarea></label>
                     </div>
                   </div>
                 </section>
 
                 <section id="project-settings-authorization" class="project-settings-section">
-                  <header><div><span class="codicon codicon-verified"></span><div><h2>Authorization and review</h2><p>Record the engagement authorization and review metadata. Runtime tool access is determined by the active mode and configured scope.</p></div></div></header>
+                  <header><div><span class="codicon codicon-verified"></span><div><h2>Authorization &amp; Review</h2><p>Record the engagement authorization and review metadata. Runtime tool access is determined by the active mode and configured scope.</p></div></div></header>
                   <div class="project-settings-card project-critical-card">
                     <div class="project-toggle-grid">
-                      <label><input type="checkbox" data-project-field="authorization.confirmed" data-project-kind="boolean"><span><strong>Written authorization confirmed</strong><small>Confirms the named owner has authorized this work.</small></span></label>
+                      <label><input type="checkbox" data-project-field="authorization.confirmed" data-project-kind="boolean"><span><strong>Written Authorization Confirmed</strong><small>Confirms the named owner has authorized this work.</small></span></label>
                       <label><input type="checkbox" data-project-field="review.scopeReviewed" data-project-kind="boolean"><span><strong>In-scope targets reviewed</strong><small>Every target and wildcard has been checked.</small></span></label>
                       <label><input type="checkbox" data-project-field="review.exclusionsConfirmed" data-project-kind="boolean"><span><strong>Exclusions confirmed</strong><small>Out-of-scope and third-party assets are understood.</small></span></label>
                       <label><input type="checkbox" data-project-field="review.thirdPartyRiskReviewed" data-project-kind="boolean"><span><strong>Third-party risk reviewed</strong><small>Ownership and dependent services have been considered.</small></span></label>
@@ -511,7 +500,7 @@
                 </section>
 
                 <section id="project-settings-scope" class="project-settings-section">
-                  <header><div><span class="codicon codicon-target"></span><div><h2>Scope and Rules of Engagement</h2><p>Define a strict allowlist, exclusions, operating limits, techniques, and emergency stops.</p></div></div></header>
+                  <header><div><span class="codicon codicon-target"></span><div><h2>Scope &amp; Rules of Engagement</h2><p>Define a strict allowlist, exclusions, operating limits, techniques, and emergency stops.</p></div></div></header>
                   <div class="project-settings-card">
                     <h3>Scope boundaries</h3>
                     <div class="project-field-grid">
@@ -548,7 +537,7 @@
                 </section>
 
                 <section id="project-settings-context" class="project-settings-section">
-                  <header><div><span class="codicon codicon-book"></span><div><h2>Application and engagement context</h2><p>Keep the context useful to operators and AI without generating or importing a pen_context file.</p></div></div></header>
+                  <header><div><span class="codicon codicon-book"></span><div><h2>Application &amp; Engagement Context</h2><p>Keep the context useful to operators and AI without generating or importing a pen_context file.</p></div></div></header>
                   <div class="project-settings-card">
                     <div class="project-field-grid">
                       <label class="wide">Background<textarea data-project-field="context.background" rows="4" placeholder="Business purpose, history, and why this assessment is happening"></textarea></label>
@@ -567,7 +556,7 @@
                 </section>
 
                 <section id="project-settings-data" class="project-settings-section">
-                  <header><div><span class="codicon codicon-lock"></span><div><h2>Evidence and data handling</h2><p>Document how sensitive assessment material must be collected, stored, retained, and removed.</p></div></div></header>
+                  <header><div><span class="codicon codicon-lock"></span><div><h2>Evidence &amp; Data Handling</h2><p>Document how sensitive assessment material must be collected, stored, retained, and removed.</p></div></div></header>
                   <div class="project-settings-card">
                     <div class="project-toggle-grid">
                       <label><input type="checkbox" data-project-field="dataHandling.collectMinimumNecessary" data-project-kind="boolean"><span><strong>Collect minimum necessary data</strong><small>Avoid retaining unrelated client or personal data.</small></span></label>
@@ -585,7 +574,7 @@
             </div>
           </section>
           <section id="app-settings-commands-panel" class="app-settings-panel guidance-settings-panel" hidden>
-            <div class="guidance-customize-page">
+            <div class="guidance-customize-page tools-settings-page">
               <header class="guidance-page-header">
                 <div class="guidance-page-heading">
                   <span class="codicon codicon-tools" aria-hidden="true"></span>
@@ -658,10 +647,9 @@
               <h2>Sub-agent model</h2>
               <select id="models-explore-subagent" class="models-select" aria-label="Sub-agent model"></select>
             </section>
-            <div id="authority-settings-content"></div>
           </section>
           <section id="app-settings-prompts-panel" class="app-settings-panel guidance-settings-panel" hidden>
-            <div class="guidance-customize-page">
+            <div class="guidance-customize-page rules-settings-page">
               <header class="guidance-page-header">
                 <div class="guidance-page-heading">
                   <span class="codicon codicon-symbol-keyword" aria-hidden="true"></span>
@@ -682,32 +670,38 @@
           </section>
           <section id="app-settings-llm-panel" class="app-settings-panel models-settings-panel" hidden>
             <div class="models-customize-page">
-              <header class="models-page-header">
-                <h2>Models</h2>
-              </header>
-
-              <div class="models-search-row">
-                <input id="models-settings-search" type="text" spellcheck="false" placeholder="Add or search model" aria-label="Add or search model">
-                <button type="button" id="models-settings-refresh" class="models-refresh-btn" title="Refresh models" aria-label="Refresh models"><span class="codicon codicon-refresh"></span></button>
-              </div>
-              <div id="models-settings-list" class="models-settings-list" aria-live="polite"></div>
-              <button type="button" id="models-view-all" class="models-view-all" hidden>View more</button>
-
-              <section class="models-api-keys" aria-label="Context compaction">
-                <div class="models-api-row">
-                  <div><strong>Context compaction model</strong><p>Optional. Uses the active chat model when blank; the model only selects trusted record groups.</p></div>
-                  <select id="context-compaction-provider" class="models-select" aria-label="Context compaction provider"><option value="">Active provider</option><option value="ollama">Ollama</option><option value="openrouter">OpenRouter</option></select>
-                  <input id="context-compaction-model" class="models-select" list="context-compaction-models" spellcheck="false" placeholder="Use active chat model" aria-label="Context compaction model">
-                  <datalist id="context-compaction-models"></datalist>
+              <section class="models-catalog-section" aria-labelledby="models-catalog-title">
+                <header class="settings-redesign-section-heading">
+                  <div><h3 id="models-catalog-title">Available models</h3><p>Choose the models shown in chat and agent model selectors.</p></div>
+                </header>
+                <div class="models-search-row">
+                  <input id="models-settings-search" type="text" spellcheck="false" placeholder="Add or search model" aria-label="Add or search model">
+                  <button type="button" id="models-settings-refresh" class="models-refresh-btn" title="Refresh models" aria-label="Refresh models"><span class="codicon codicon-refresh"></span></button>
                 </div>
-                <div class="models-api-row models-api-row-toggle">
-                  <div><strong>Allow OpenRouter fallback</strong><p>Try vetted hosted models if same-provider compaction fails. Off by default.</p></div>
-                  <label class="general-toggle" aria-label="Allow cross-provider context compaction fallback"><input id="context-compaction-cross-provider" type="checkbox"><span aria-hidden="true"></span></label>
+                <div id="models-settings-list" class="models-settings-list" aria-live="polite"></div>
+                <button type="button" id="models-view-all" class="models-view-all" hidden>View more</button>
+              </section>
+
+              <section class="models-api-keys models-context-settings" aria-label="Context compaction">
+                <header class="settings-redesign-section-heading">
+                  <div><h3>Context compaction</h3><p>Control how long conversations are condensed when they approach the model limit.</p></div>
+                </header>
+                <div class="models-context-settings-body">
+                  <div class="models-api-row">
+                    <div><strong>Context compaction model</strong><p>Optional. Uses the active chat model when blank; the model only selects trusted record groups.</p></div>
+                    <select id="context-compaction-provider" class="models-select" aria-label="Context compaction provider"><option value="">Active provider</option><option value="ollama">Ollama</option><option value="openrouter">OpenRouter</option></select>
+                    <input id="context-compaction-model" class="models-select" list="context-compaction-models" spellcheck="false" placeholder="Use active chat model" aria-label="Context compaction model">
+                    <datalist id="context-compaction-models"></datalist>
+                  </div>
+                  <div class="models-api-row models-api-row-toggle">
+                    <div><strong>Allow OpenRouter fallback</strong><p>Try vetted hosted models if same-provider compaction fails. Off by default.</p></div>
+                    <label class="general-toggle" aria-label="Allow cross-provider context compaction fallback"><input id="context-compaction-cross-provider" type="checkbox"><span aria-hidden="true"></span></label>
+                  </div>
                 </div>
               </section>
 
               <details id="models-api-keys" class="models-api-keys" open>
-                <summary class="models-api-keys-summary"><span>API Keys</span><span class="codicon codicon-chevron-down" aria-hidden="true"></span></summary>
+                <summary class="models-api-keys-summary"><span><strong>Providers &amp; API keys</strong><small>Configure the active inference provider and its connection details.</small></span><span class="codicon codicon-chevron-down" aria-hidden="true"></span></summary>
                 <div class="models-api-keys-body">
                   <div class="models-api-row">
                     <div>
@@ -722,7 +716,7 @@
                   <input type="radio" name="llm-provider" id="llm-provider-ollama" value="ollama" hidden aria-hidden="true">
                   <input type="radio" name="llm-provider" id="llm-provider-openrouter" value="openrouter" hidden aria-hidden="true">
 
-                  <div id="llm-openrouter-config" class="models-api-provider-block">
+                  <div id="llm-openrouter-config" class="models-api-provider-block" hidden>
                     <div class="models-api-row models-api-row-toggle">
                       <div>
                         <strong>OpenRouter API Key</strong>
@@ -786,8 +780,8 @@
             </div>
           </section>
           <section id="app-settings-certificates-panel" class="app-settings-panel certificate-settings-panel" hidden>
-            <div class="certificate-settings-content">
-              <header><span class="codicon codicon-verified-filled" aria-hidden="true"></span><div><h2>Proxy CA certificate</h2><p>XEKUTE uses one shared certificate authority for every assessment. Install its public certificate only in browsers and systems dedicated to authorized testing.</p></div></header>
+            <div class="certificate-settings-content browser-network-page">
+              <header class="settings-redesign-section-heading"><div><h3>Proxy certificate</h3><p>XEKUTE uses one shared certificate authority for every assessment. Install it only in browsers and systems dedicated to authorized testing.</p></div></header>
               <section class="certificate-settings-card">
                 <div class="certificate-setting-heading"><div><strong>Central CA storage folder</strong><small>All assessment proxy listeners use this location. The private key is never copied into an assessment.</small></div><span id="certificate-location-badge" class="certificate-location-badge">Default</span></div>
                 <div class="certificate-location-row"><input id="certificate-directory" type="text" readonly aria-label="Central CA storage folder"><button type="button" id="certificate-browse" class="secondary-button"><span class="codicon codicon-folder-opened"></span>Choose folder</button></div>
@@ -950,8 +944,7 @@
         <div id="editor-path-bar" class="editor-path-bar" hidden><span id="editor-path-label" class="editor-path-label"></span></div>
         <div id="editor-body" hidden>
           <div id="editor-empty">
-            <span class="codicon codicon-files"></span>
-            <p>Select a file from the explorer to open it.</p>
+            <img src="../../xekute_icon.png" alt="" class="resource-viewer-empty-logo">
           </div>
           <div id="editor-view" hidden>
             <div id="settings-editor-toolbar" class="settings-editor-toolbar" hidden>
@@ -1176,7 +1169,7 @@
       </section>
     </div>
 
-    <div id="chat-resize" class="sash-v" role="separator" tabindex="0" aria-label="Resize chat panel" aria-orientation="vertical" aria-valuemin="300" aria-valuemax="520" aria-valuenow="400"></div>
+    <div id="chat-resize" class="sash-v" role="separator" tabindex="0" aria-label="Resize chat panel" aria-orientation="vertical" aria-valuemin="384" aria-valuemax="960" aria-valuenow="513"></div>
 
     <aside id="chat-pane">
       <div id="chat-header">
@@ -1192,7 +1185,7 @@
             <span class="codicon codicon-ellipsis"></span>
           </button>
           <button type="button" id="btn-chat-collapse" class="icon-btn chat-session-action" title="Collapse chat">
-            <span class="codicon codicon-layout-sidebar-right"></span>
+            <img class="chrome-icon" src="assets/icons/chat_collapse_expand_icon.svg" alt="" aria-hidden="true">
           </button>
         </div>
       </div>
@@ -1411,11 +1404,6 @@
         <span class="codicon codicon-shield authority-menu-option-icon" aria-hidden="true"></span>
         <span class="authority-menu-option-copy"><span class="authority-menu-option-label">Approve for me</span></span>
         <span class="codicon codicon-check authority-menu-option-check" aria-hidden="true"></span>
-      </button>
-      <div class="model-menu-divider"></div>
-      <button type="button" id="authority-open-settings" class="model-add-btn">
-        <span class="codicon codicon-settings-gear"></span>
-        Open Agents settings
       </button>
     </div>
   </div>

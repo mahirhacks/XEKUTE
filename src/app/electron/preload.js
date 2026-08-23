@@ -140,6 +140,7 @@ const api = {
   identityImport: (payload = {}) => ipcRenderer.invoke("settings:identityImport", payload),
   credentialsGet: (payload = {}) => ipcRenderer.invoke("settings:credentialsGet", payload),
   credentialCreate: (payload = {}) => ipcRenderer.invoke("settings:credentialCreate", payload),
+  credentialSave: (payload = {}) => ipcRenderer.invoke("settings:credentialSave", payload),
   credentialDelete: (payload = {}) => ipcRenderer.invoke("settings:credentialDelete", payload),
   ollamaSettings: () => ipcRenderer.invoke("settings:ollamaGet"),
   setOllamaHost: (payload = {}) => ipcRenderer.invoke("settings:ollamaSet", payload),

@@ -620,9 +620,9 @@
 .chat-mode-menu {
   width: 174px;
   padding: 4px;
-  border: 1px solid #454545;
+  border: 1px solid var(--revamp-divider, var(--border));
   border-radius: 8px;
-  background: #252526;
+  background: var(--revamp-surface, var(--bg-0));
   box-shadow: 0 12px 32px rgba(0, 0, 0, .52);
 }
 
@@ -1156,9 +1156,13 @@
 }
 
 #terminal-resize:hover::after,
-#terminal-resize.dragging::after,
-#terminal-resize.collapsed-hint::after {
+#terminal-resize.dragging::after {
   background: #666666 !important;
+}
+
+#terminal-resize.collapsed-hint::after {
+  height: 1px;
+  background: var(--border) !important;
 }
 
 #terminal-header {
