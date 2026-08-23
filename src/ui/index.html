@@ -1321,8 +1321,21 @@
       <div class="quick-input-row">
         <span id="quick-icon" class="codicon codicon-chevron-right"></span>
         <input id="quick-input" type="text" autocomplete="off" spellcheck="false" />
+        <button id="quick-search-help" class="quick-search-help" type="button" title="Advanced search" aria-label="Show advanced search help" aria-expanded="false">
+          <span class="codicon codicon-filter"></span>
+        </button>
       </div>
-      <div id="quick-meta" class="quick-meta"></div>
+      <div id="quick-search-suggestions" class="quick-search-suggestions" role="listbox" aria-label="Advanced search suggestions" hidden></div>
+      <div id="quick-search-assist" class="quick-search-assist" hidden>
+        <div class="quick-search-assist-heading">
+          <span>VAPT search presets</span>
+          <span class="quick-search-assist-hint">AND · OR · NOT · quotes · Ctrl+Space autocomplete</span>
+        </div>
+        <div id="quick-search-presets" class="quick-search-presets"></div>
+        <div id="quick-search-reference" class="quick-search-reference"></div>
+      </div>
+      <div id="quick-search-chips" class="quick-search-chips" hidden></div>
+      <div id="quick-meta" class="quick-meta" aria-live="polite"></div>
       <div id="quick-results" class="quick-results"></div>
     </div>
   </div>

@@ -3903,6 +3903,7 @@ html.panel-resizing iframe {
 }
 
 .quick-panel {
+  position: relative;
   width: min(720px, calc(100vw - 40px));
   max-height: min(620px, calc(100vh - 100px));
   display: flex;
@@ -3912,6 +3913,215 @@ html.panel-resizing iframe {
   border: 1px solid #454545;
   border-radius: 8px;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+
+.quick-search-help,
+.quick-search-suggestions,
+.quick-search-assist,
+.quick-search-chips {
+  display: none;
+}
+
+.quick-panel-search .quick-search-help {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #777;
+  cursor: pointer;
+}
+
+.quick-panel-search .quick-search-help:hover,
+.quick-panel-search .quick-search-help[aria-expanded="true"] {
+  border-color: #353535;
+  background: #222;
+  color: #a8cfff;
+}
+
+.quick-panel-search .quick-search-help .codicon {
+  width: auto;
+  color: inherit;
+  font-size: 13px;
+}
+
+.quick-panel-search .quick-search-suggestions:not([hidden]) {
+  position: absolute;
+  z-index: 5;
+  top: 45px;
+  left: 44px;
+  right: 42px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid #343434;
+  border-radius: 8px;
+  background: #171717;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .5);
+}
+
+.quick-search-suggestion {
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #d3d3d3;
+  text-align: left;
+  cursor: pointer;
+}
+
+.quick-search-suggestion:hover,
+.quick-search-suggestion.active {
+  background: rgba(47, 140, 244, .14);
+}
+
+.quick-search-suggestion code {
+  color: #83b9f6;
+  font: 11px var(--font-mono);
+}
+
+.quick-search-suggestion span {
+  overflow: hidden;
+  color: #8b8b8b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-panel-search .quick-search-assist:not([hidden]) {
+  display: block;
+  flex: 0 0 auto;
+  max-height: min(430px, calc(100vh - 160px));
+  overflow-y: auto;
+  padding: 12px 14px 13px;
+  border-bottom: 1px solid #2d2d2d;
+  background: #151515;
+}
+
+.quick-search-assist-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+  color: #d3d3d3;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.quick-search-assist-hint {
+  color: #696969;
+  font-weight: 400;
+}
+
+.quick-search-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.quick-search-preset {
+  min-height: 27px;
+  padding: 5px 9px;
+  border: 1px solid #303030;
+  border-radius: 14px;
+  background: #1c1c1c;
+  color: #bcbcbc;
+  font: 11px var(--font-ui);
+  cursor: pointer;
+}
+
+.quick-search-preset:hover {
+  border-color: #397fc9;
+  background: rgba(47, 140, 244, .1);
+  color: #dcebff;
+}
+
+.quick-search-reference {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #282828;
+}
+
+.quick-search-reference span {
+  min-width: 0;
+  overflow: hidden;
+  color: #747474;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-search-reference code {
+  color: #9fc8f8;
+  font: 10px var(--font-mono);
+}
+
+@media (max-width: 620px) {
+  .quick-search-reference {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.quick-panel-search .quick-search-chips:not([hidden]) {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  min-height: 31px;
+  overflow-x: auto;
+  padding: 5px 12px;
+  border-bottom: 1px solid #292929;
+  scrollbar-width: none;
+}
+
+.quick-search-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-search-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  min-height: 21px;
+  padding: 2px 7px;
+  border: 1px solid #303b48;
+  border-radius: 11px;
+  background: #19222c;
+  color: #a8caf1;
+  font: 10px var(--font-mono);
+  cursor: pointer;
+}
+
+.quick-search-chip:hover {
+  border-color: #478acb;
+}
+
+.quick-search-chip .codicon {
+  width: auto;
+  color: #71849a;
+  font-size: 10px;
+}
+
+.quick-meta.quick-meta-error {
+  color: #f28b82;
 }
 
 .quick-panel.quick-panel-minimal {

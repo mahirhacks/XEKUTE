@@ -1,5 +1,6 @@
 const { spawn, spawnSync } = require("child_process");
 const { Worker } = require("worker_threads");
+const { hasAdvancedSyntax, OPERATOR_DEFINITIONS } = require("./advanced-search.js");
 
 const INDEX_SKIP_DIRS = new Set([
   ".git", "node_modules", "__pycache__", ".next", "dist", "build", "out", "coverage", ".venv", "venv",
@@ -14,8 +15,10 @@ const INDEX_TEXT_EXTS = new Set([
 const EXACT_SEARCH_MAX_RESULTS = 5000;
 const EXACT_SEARCH_MAX_FILES = 25000;
 const EXACT_SEARCH_MAX_FILE_BYTES = 5 * 1024 * 1024;
+const ADVANCED_STRUCTURED_MAX_FILE_BYTES = 64 * 1024 * 1024;
 const STREAM_SEARCH_MAX_RESULTS = 50000;
 const STREAM_SEARCH_BATCH_SIZE = 100;
+const ADVANCED_SEARCH_TIMEOUT_MS = 45_000;
 
 function normalizedResultLimit(limit, fallback = 500) {
   const parsed = Number(limit);
@@ -438,6 +441,7 @@ function createWorkspaceSearch({ fs, path }) {
     batchSize,
     signal,
     onBatch,
+    advanced = false,
   }) {
     return new Promise((resolve) => {
       const worker = new Worker(path.join(__dirname, "workspace-search-worker.js"), {
@@ -449,21 +453,36 @@ function createWorkspaceSearch({ fs, path }) {
           maxResults: STREAM_SEARCH_MAX_RESULTS,
           maxFiles: EXACT_SEARCH_MAX_FILES,
           maxFileBytes: EXACT_SEARCH_MAX_FILE_BYTES,
+          structuredMaxFileBytes: ADVANCED_STRUCTURED_MAX_FILE_BYTES,
           skipDirs: [...INDEX_SKIP_DIRS],
+          advanced,
         },
       });
       let settled = false;
+      let timeout = null;
       const finish = (value) => {
         if (settled) return;
         settled = true;
+        if (timeout) clearTimeout(timeout);
         signal?.removeEventListener?.("abort", abort);
         resolve(value);
       };
+      if (advanced) {
+        timeout = setTimeout(() => {
+          void worker.terminate();
+          finish({
+            error: "Advanced search exceeded 45 seconds. Add source:, path:, ext:, or date filters and try again.",
+            code: "WORKSPACE_SEARCH_TIMEOUT",
+            mode: "advanced",
+            query,
+          });
+        }, ADVANCED_SEARCH_TIMEOUT_MS);
+      }
       const abort = () => {
         void worker.terminate();
         finish({
           ok: true,
-          mode: "exact",
+          mode: advanced ? "advanced" : "exact",
           query,
           count: 0,
           totalCount: 0,
@@ -499,6 +518,17 @@ function createWorkspaceSearch({ fs, path }) {
     const boundedLimit = Math.max(1, Math.min(Number(limit) || STREAM_SEARCH_MAX_RESULTS, STREAM_SEARCH_MAX_RESULTS));
     const boundedBatchSize = Math.max(10, Math.min(Number(batchSize) || STREAM_SEARCH_BATCH_SIZE, 500));
     if (signal?.aborted) return { ok: true, cancelled: true, count: 0, totalCount: 0 };
+
+    const advanced = hasAdvancedSyntax(cleanQuery);
+    if (advanced) {
+      return streamFallbackWorker(resolved.root, cleanQuery, {
+        limit: boundedLimit,
+        batchSize: boundedBatchSize,
+        signal,
+        onBatch,
+        advanced: true,
+      });
+    }
 
     const ripgrepResult = forceFallback ? null : await streamRipgrepExactSearch(resolved.root, cleanQuery, {
         limit: boundedLimit,
@@ -705,9 +735,11 @@ function createWorkspaceSearch({ fs, path }) {
     searchWorkspaceStream,
     findWorkspaceFiles,
     takeLimited,
+    searchOperators: () => OPERATOR_DEFINITIONS.map((entry) => ({ ...entry, values: entry.values ? [...entry.values] : [] })),
   };
 }
 
 module.exports = {
   createWorkspaceSearch,
+  hasAdvancedSyntax,
 };

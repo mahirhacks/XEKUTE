@@ -184,6 +184,12 @@ const quickIcon        = $("quick-icon");
 const quickInput       = $("quick-input");
 const quickMeta        = $("quick-meta");
 const quickResults     = $("quick-results");
+const quickSearchHelp  = $("quick-search-help");
+const quickSearchAssist = $("quick-search-assist");
+const quickSearchPresets = $("quick-search-presets");
+const quickSearchReference = $("quick-search-reference");
+const quickSearchSuggestions = $("quick-search-suggestions");
+const quickSearchChips = $("quick-search-chips");
 const chatHeader       = $("chat-header");
 const btnTopFileTree  = $("btn-top-filetree");
 const btnTopTerminal  = $("btn-top-terminal");
@@ -699,10 +705,45 @@ let quickSearchRenderFrame = 0;
 let quickSearchScrollFrame = 0;
 let quickSearchPendingRows = [];
 let quickSearchPendingTotal = 0;
+let quickSearchSourceCounts = {};
+let quickSearchSuggestionItems = [];
+let quickSearchSuggestionSelection = 0;
+let quickSearchSuggestionRange = null;
 const QUICK_SEARCH_DEBOUNCE_MS = 225;
 const QUICK_SEARCH_ROW_HEIGHT = 53;
 const QUICK_SEARCH_OVERSCAN = 8;
 const QUICK_SEARCH_RESULT_LIMIT = 10000;
+
+const ADVANCED_SEARCH_OPERATORS = [
+  ["source", "traffic, findings, JavaScript, evidence, tools, map", ["traffic", "finding", "javascript", "evidence", "tool", "map", "asset", "code"]],
+  ["path", "workspace path with * or ** wildcards"], ["file", "file name"], ["ext", "file extension", ["js", "ts", "json", "jsonl", "md", "txt"]],
+  ["size", "file size comparison, e.g. >500KB"], ["after", "record/file after an ISO date"], ["before", "record/file before an ISO date"],
+  ["case", "case-sensitive matching", ["true", "false"]], ["regex", "bounded regular expression"], ["decode", "search decoded content", ["url", "base64", "html", "unicode", "jwt", "auto"]], ["normalized", "normalized URL and whitespace", ["true", "false"]],
+  ["host", "request host"], ["scheme", "URL scheme", ["https", "http", "wss", "ws"]], ["port", "request port"],
+  ["method", "HTTP method", ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]], ["status", "HTTP code, 2xx range, or comparison"],
+  ["endpoint", "concrete or normalized endpoint"], ["param", "path, query, form, or JSON parameter"], ["header", "request or response header"], ["cookie", "cookie name or value"], ["mime", "response content type"],
+  ["request", "request-only text"], ["response", "response-only text"], ["in-scope", "project scope decision", ["true", "false"]], ["asset", "asset, target, host, or URL"],
+  ["identity", "capture identity id, label, or role"], ["authenticated", "authenticated or anonymous", ["true", "false"]],
+  ["severity", "finding severity", ["critical", "high", "medium", "low", "info"]], ["confidence", "finding confidence comparison"], ["verified", "verified findings", ["true", "false"]],
+  ["finding-status", "finding workflow status", ["open", "confirmed", "in_progress", "resolved", "false_positive"]], ["cwe", "CWE identifier"], ["owasp", "OWASP category"], ["tag", "tag or risk label"], ["tool", "capture or scanner tool"], ["evidence", "evidence reference"],
+  ["url", "URL in JavaScript artifacts"], ["symbol", "function, class, or assigned symbol"], ["secret", "likely secret material", ["true", "false"]],
+  ["secret-type", "detected secret family", ["jwt", "aws-access-key", "private-key", "bearer-token", "github-token", "stripe-key", "api-key"]],
+  ["sink", "security-sensitive code sink", ["dom-xss", "code-execution", "command-execution", "sql", "redirect"]], ["source-map", "source-map reference", ["true", "false"]],
+  ["same", "correlate a shared dimension", ["endpoint", "param", "resource", "status", "response"]], ["different", "require a differing dimension", ["value", "identity", "status", "body", "headers"]],
+  ["compare", "cross-record comparison", ["identity", "response"]], ["changed", "changed response dimension", ["status", "body", "headers", "value"]], ["response.diff", "require a response difference", ["true", "false"]],
+  ["risk", "VAPT correlation preset", ["idor", "bola", "auth-bypass"]], ["reachable-from", "graph reachability origin"], ["connected-to", "direct graph neighbor"],
+].map(([name, description, values = []]) => ({ name, description, values }));
+
+const ADVANCED_SEARCH_PRESETS = [
+  { label: "IDOR candidates", query: "risk:idor same:endpoint compare:identity" },
+  { label: "BOLA candidates", query: "risk:bola same:endpoint same:param different:value compare:identity" },
+  { label: "Auth bypass", query: "risk:auth-bypass same:endpoint compare:identity" },
+  { label: "JavaScript secrets", query: "source:javascript secret:true" },
+  { label: "Source maps", query: "source:javascript source-map:true" },
+  { label: "Server errors", query: "source:traffic status:5xx" },
+  { label: "High-confidence findings", query: "source:finding severity:(critical,high) confidence:>=0.8" },
+  { label: "Auth headers", query: "source:traffic (header:authorization OR cookie:session)" },
+];
 
 const CONTEXT_OPTIONS = [AUTO_CONTEXT, "128K", "256K", "1M"];
 const OPENROUTER_CONTEXT_OPTIONS = CONTEXT_OPTIONS;
@@ -9784,25 +9825,203 @@ function firstSnippetLine(snippet) {
     .find(Boolean) || "";
 }
 
-function highlightExactText(text, query) {
+function highlightExactText(text, query, highlights = []) {
   const value = String(text || "");
-  const needle = String(query || "");
-  if (!needle) return escapeHtml(value);
+  const needles = [...new Set((highlights.length ? highlights : [query]).map(String).filter(Boolean))]
+    .filter((needle) => needle.length <= 200)
+    .sort((a, b) => b.length - a.length);
+  if (!needles.length) return escapeHtml(value);
   const comparable = value.toLowerCase();
-  const loweredNeedle = needle.toLowerCase();
   let cursor = 0;
   let html = "";
   while (cursor < value.length) {
-    const index = comparable.indexOf(loweredNeedle, cursor);
-    if (index === -1) {
+    let foundIndex = -1;
+    let foundNeedle = "";
+    for (const needle of needles) {
+      const index = comparable.indexOf(needle.toLowerCase(), cursor);
+      if (index !== -1 && (foundIndex === -1 || index < foundIndex || index === foundIndex && needle.length > foundNeedle.length)) {
+        foundIndex = index;
+        foundNeedle = needle;
+      }
+    }
+    if (foundIndex === -1) {
       html += escapeHtml(value.slice(cursor));
       break;
     }
-    html += escapeHtml(value.slice(cursor, index));
-    html += `<mark class="quick-match">${escapeHtml(value.slice(index, index + needle.length))}</mark>`;
-    cursor = index + needle.length;
+    html += escapeHtml(value.slice(cursor, foundIndex));
+    html += `<mark class="quick-match">${escapeHtml(value.slice(foundIndex, foundIndex + foundNeedle.length))}</mark>`;
+    cursor = foundIndex + foundNeedle.length;
   }
   return html;
+}
+
+function setQuickSearchAssistVisible(visible) {
+  const show = Boolean(visible && quickMode === "search");
+  if (quickSearchAssist) quickSearchAssist.hidden = !show;
+  if (quickSearchHelp) quickSearchHelp.setAttribute("aria-expanded", String(show));
+  if (show) {
+    if (quickSearchSuggestions) quickSearchSuggestions.hidden = true;
+    quickPanel?.classList.remove("quick-panel-minimal");
+  }
+  if (quickResults?.classList.contains("is-virtualized")) requestAnimationFrame(() => renderVirtualizedSearchResults());
+}
+
+function initializeAdvancedSearchHelp() {
+  if (quickSearchPresets && !quickSearchPresets.childElementCount) {
+    for (const preset of ADVANCED_SEARCH_PRESETS) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "quick-search-preset";
+      button.textContent = preset.label;
+      button.title = preset.query;
+      button.addEventListener("click", () => {
+        if (!quickInput) return;
+        quickInput.value = preset.query;
+        setQuickSearchAssistVisible(false);
+        quickSelection = 0;
+        renderWorkspaceSearch();
+        quickInput.focus();
+        quickInput.setSelectionRange(quickInput.value.length, quickInput.value.length);
+      });
+      quickSearchPresets.appendChild(button);
+    }
+  }
+  if (quickSearchReference && !quickSearchReference.childElementCount) {
+    for (const operator of ADVANCED_SEARCH_OPERATORS) {
+      const row = document.createElement("span");
+      row.title = `${operator.name}: ${operator.description}`;
+      row.innerHTML = `<code>${escapeHtml(operator.name)}:</code> ${escapeHtml(operator.description)}`;
+      quickSearchReference.appendChild(row);
+    }
+  }
+}
+
+function advancedSearchTokenRange() {
+  if (!quickInput) return null;
+  const cursor = quickInput.selectionStart ?? quickInput.value.length;
+  let start = cursor;
+  while (start > 0 && !/[\s(),]/.test(quickInput.value[start - 1])) start -= 1;
+  return { start, end: cursor, value: quickInput.value.slice(start, cursor) };
+}
+
+function applyQuickSearchSuggestion(index = quickSearchSuggestionSelection) {
+  const suggestion = quickSearchSuggestionItems[index];
+  const range = quickSearchSuggestionRange;
+  if (!suggestion || !range || !quickInput) return false;
+  quickInput.setRangeText(suggestion.insert, range.start, range.end, "end");
+  quickSearchSuggestions.hidden = true;
+  quickSearchSuggestionItems = [];
+  quickSearchSuggestionRange = null;
+  quickSelection = 0;
+  renderWorkspaceSearch();
+  quickInput.focus();
+  return true;
+}
+
+function renderQuickSearchSuggestions({ force = false } = {}) {
+  if (!quickSearchSuggestions || quickMode !== "search" || !quickSearchAssist?.hidden) {
+    if (quickSearchSuggestions) quickSearchSuggestions.hidden = true;
+    return;
+  }
+  const tokenRange = advancedSearchTokenRange();
+  const rawToken = tokenRange?.value || "";
+  const token = rawToken.replace(/^-/, "");
+  const colon = token.indexOf(":");
+  let items = [];
+  let range = tokenRange;
+  if (colon >= 0) {
+    const name = token.slice(0, colon).toLowerCase();
+    const typed = token.slice(colon + 1).toLowerCase();
+    const operator = ADVANCED_SEARCH_OPERATORS.find((entry) => entry.name === name);
+    if (operator?.values?.length) {
+      const complete = operator.values.some((value) => value.toLowerCase() === typed);
+      items = complete && !force ? [] : operator.values.filter((value) => !typed || value.toLowerCase().startsWith(typed)).slice(0, 8)
+        .map((value) => ({ label: value, description: `${name}: value`, insert: value }));
+      range = { start: tokenRange.start + rawToken.indexOf(":") + 1, end: tokenRange.end };
+    }
+  } else if (force || token.length >= 2) {
+    items = ADVANCED_SEARCH_OPERATORS.filter((entry) => !token || entry.name.startsWith(token.toLowerCase())).slice(0, 8)
+      .map((entry) => ({ label: `${entry.name}:`, description: entry.description, insert: `${rawToken.startsWith("-") ? "-" : ""}${entry.name}:` }));
+  }
+  quickSearchSuggestionItems = items;
+  quickSearchSuggestionSelection = 0;
+  quickSearchSuggestionRange = range;
+  quickSearchSuggestions.replaceChildren();
+  if (!items.length) {
+    quickSearchSuggestions.hidden = true;
+    return;
+  }
+  items.forEach((item, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `quick-search-suggestion${index === 0 ? " active" : ""}`;
+    button.innerHTML = `<code>${escapeHtml(item.label)}</code><span>${escapeHtml(item.description)}</span>`;
+    button.addEventListener("mouseenter", () => {
+      quickSearchSuggestionSelection = index;
+      [...quickSearchSuggestions.children].forEach((child, childIndex) => child.classList.toggle("active", childIndex === index));
+    });
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => applyQuickSearchSuggestion(index));
+    quickSearchSuggestions.appendChild(button);
+  });
+  quickSearchSuggestions.hidden = false;
+}
+
+function extractAdvancedSearchChips(query) {
+  const names = ADVANCED_SEARCH_OPERATORS.map((entry) => entry.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).sort((a, b) => b.length - a.length).join("|");
+  const pattern = new RegExp(`(^|[\\s(])(-?(?:${names})):(\\([^)]*\\)|"(?:\\\\.|[^"])*"|'(?:\\\\.|[^'])*'|[^\\s)]+)`, "gi");
+  const chips = [];
+  for (const match of String(query || "").matchAll(pattern)) {
+    const leading = match[1]?.length || 0;
+    chips.push({ label: `${match[2]}:${match[3]}`, start: match.index + leading, end: match.index + match[0].length });
+  }
+  return chips;
+}
+
+function renderAdvancedSearchChips() {
+  if (!quickSearchChips) return;
+  quickSearchChips.replaceChildren();
+  const chips = quickMode === "search" ? extractAdvancedSearchChips(quickInput?.value || "") : [];
+  quickSearchChips.hidden = !chips.length;
+  for (const chip of chips) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quick-search-chip";
+    button.title = "Remove this filter";
+    button.innerHTML = `<span>${escapeHtml(chip.label)}</span><span class="codicon codicon-close"></span>`;
+    button.addEventListener("click", () => {
+      if (!quickInput) return;
+      let start = chip.start;
+      let end = chip.end;
+      if (quickInput.value[start - 1] === "(" && quickInput.value[end] === ")") {
+        start -= 1;
+        end += 1;
+      }
+      const precedingConnector = quickInput.value.slice(0, start).match(/\s+(?:AND|OR)\s*$/);
+      const followingConnector = quickInput.value.slice(end).match(/^\s*(?:AND|OR)\s+/);
+      if (precedingConnector) start -= precedingConnector[0].length;
+      else if (followingConnector) end += followingConnector[0].length;
+      else if (start > 0 && /\s/.test(quickInput.value[start - 1])) start -= 1;
+      else if (/\s/.test(quickInput.value[end] || "")) end += 1;
+      quickInput.setRangeText("", start, end, "end");
+      renderWorkspaceSearch();
+      quickInput.focus();
+    });
+    quickSearchChips.appendChild(button);
+  }
+}
+
+function formattedSearchSources(counts = {}) {
+  const labels = { correlation: "Authorization", traffic: "Traffic", finding: "Findings", javascript: "JavaScript", evidence: "Evidence", tool: "Tools", map: "Map", asset: "Assets", code: "Code", workspace: "Files" };
+  return Object.entries(counts).filter(([, count]) => Number(count) > 0).sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 5).map(([source, count]) => `${labels[source] || source} ${Number(count).toLocaleString()}`).join(" · ");
+}
+
+function setQuickSearchMeta(text, { error = false } = {}) {
+  if (!quickMeta) return;
+  quickMeta.hidden = false;
+  quickMeta.textContent = text;
+  quickMeta.classList.toggle("quick-meta-error", error);
 }
 
 function setQuickModeUi(mode) {
@@ -9814,6 +10033,11 @@ function setQuickModeUi(mode) {
   const [icon, placeholder, title] = labels[mode] || labels.command;
   quickPanel?.setAttribute("aria-label", title);
   quickPanel?.classList.toggle("quick-panel-search", mode === "search");
+  if (mode === "search") initializeAdvancedSearchHelp();
+  else setQuickSearchAssistVisible(false);
+  if (quickSearchHelp) quickSearchHelp.hidden = mode !== "search";
+  if (quickSearchChips && mode !== "search") quickSearchChips.hidden = true;
+  if (quickSearchSuggestions && mode !== "search") quickSearchSuggestions.hidden = true;
   if (quickInput) quickInput.placeholder = placeholder;
   if (quickIcon) quickIcon.className = `codicon ${icon}`;
 }
@@ -9825,6 +10049,7 @@ function renderQuickList(items, metaText = "", { quietEmpty = false } = {}) {
   if (quickMeta) {
     quickMeta.textContent = metaText;
     quickMeta.hidden = quietEmpty;
+    quickMeta.classList.remove("quick-meta-error");
   }
   if (!quickResults) return;
   quickResults.classList.remove("is-virtualized");
@@ -9875,6 +10100,7 @@ function renderVirtualizedSearchResults(metaText = quickMeta?.textContent || "")
   if (quickMeta) {
     quickMeta.hidden = false;
     quickMeta.textContent = metaText;
+    quickMeta.classList.remove("quick-meta-error");
   }
   if (!quickResults) return;
   quickResults.hidden = false;
@@ -9941,16 +10167,21 @@ function syncQuickSelection() {
 
 function workspaceSearchResultItem(row, query) {
   const name = basenameOf(row.path);
+  const sourceIcons = { correlation: "codicon-shield", traffic: "codicon-globe", finding: "codicon-warning", evidence: "codicon-archive", map: "codicon-type-hierarchy", asset: "codicon-server", tool: "codicon-tools" };
   const info = fileIconInfo(name);
   const line = Number(row.line) || parseSnippetLine(row.snippet);
   const column = Number(row.column) || 1;
-  const detail = row.lineText || firstSnippetLine(row.snippet);
-  return {
-    title: row.path,
+  const matchDetail = row.lineText || firstSnippetLine(row.snippet);
+  const detail = row.title && row.title !== row.path ? `${row.path} · ${matchDetail}` : matchDetail;
+  const sourceLabel = row.source && !["workspace", "code"].includes(row.source)
+    ? `${String(row.source).replace(/^./, (char) => char.toUpperCase())} · `
+    : "";
+  const item = {
+    title: row.title || row.path,
     detail,
     detailHtml: highlightExactText(detail, query),
-    icon: `${info.icon} ${info.className}`,
-    key: `L${line}:C${column}`,
+    icon: `${sourceIcons[row.source] || info.icon} ${info.className}`,
+    key: row.key || `${sourceLabel}L${line}:C${column}`,
     run: async () => {
       await openFile(joinWorkspacePath(row.path), name, {
         focusEditor: true,
@@ -9960,6 +10191,10 @@ function workspaceSearchResultItem(row, query) {
       });
     },
   };
+  if (Array.isArray(row.highlights) && row.highlights.length || row.match) {
+    item.detailHtml = highlightExactText(detail, query, Array.isArray(row.highlights) ? row.highlights : [row.match]);
+  }
+  return item;
 }
 
 function cancelActiveWorkspaceSearch() {
@@ -9971,6 +10206,7 @@ function cancelActiveWorkspaceSearch() {
   quickSearchScrollFrame = 0;
   quickSearchPendingRows = [];
   quickSearchPendingTotal = 0;
+  quickSearchSourceCounts = {};
   if (requestId) void window.api.cancelWorkspaceSearch?.({ requestId });
 }
 
@@ -9982,7 +10218,9 @@ function flushWorkspaceSearchRows(metaText = "") {
   quickSearchPendingRows = [];
   quickItems.push(...rows.map((row) => workspaceSearchResultItem(row, query)));
   const total = quickSearchPendingTotal || quickItems.length;
-  renderVirtualizedSearchResults(metaText || `Searching… ${total.toLocaleString()} exact match${total === 1 ? "" : "es"}`);
+  const sources = formattedSearchSources(quickSearchSourceCounts);
+  const exactMatchLabel = `exact match${total === 1 ? "" : "es"}`;
+  renderVirtualizedSearchResults(metaText || `Searching… ${total.toLocaleString()} ${sources ? `matches · ${sources}` : exactMatchLabel}`);
 }
 
 window.api.onWorkspaceSearchBatch?.((payload) => {
@@ -9990,6 +10228,7 @@ window.api.onWorkspaceSearchBatch?.((payload) => {
   const rows = Array.isArray(payload.results) ? payload.results : [];
   quickSearchPendingRows.push(...rows);
   quickSearchPendingTotal = Number(payload.totalCount) || quickSearchPendingTotal;
+  if (payload.sourceCounts && typeof payload.sourceCounts === "object") quickSearchSourceCounts = { ...payload.sourceCounts };
   if (payload.done) {
     const result = payload.summary || {};
     if (result.cancelled) return;
@@ -9997,19 +10236,29 @@ window.api.onWorkspaceSearchBatch?.((payload) => {
       quickSearchPendingRows = [];
       quickSearchPendingTotal = 0;
       quickSearchRequestId = "";
-      renderQuickList([], result.error);
+      quickItems = [];
+      if (quickResults) {
+        quickResults.replaceChildren();
+        quickResults.hidden = true;
+      }
+      const column = Number(result.position) >= 0 ? ` at column ${Number(result.position) + 1}` : "";
+      setQuickSearchMeta(`Query error${column}: ${result.error}`, { error: true });
       return;
     }
+    if (result.sourceCounts && typeof result.sourceCounts === "object") quickSearchSourceCounts = { ...result.sourceCounts };
     const total = Number(result.totalCount) || quickSearchPendingTotal || quickItems.length;
     const displayed = quickItems.length + quickSearchPendingRows.length;
+    const kind = result.mode === "advanced" ? (result.correlation ? "authorization candidate" : "result") : "exact match";
+    const sources = formattedSearchSources(quickSearchSourceCounts);
+    const skipped = Number(result.skippedLargeFiles) > 0 ? ` · ${Number(result.skippedLargeFiles).toLocaleString()} oversized file${Number(result.skippedLargeFiles) === 1 ? "" : "s"} skipped` : "";
     const meta = result.capped
-      ? `${displayed.toLocaleString()} of ${total.toLocaleString()}+ exact matches — refine your search`
+      ? `${displayed.toLocaleString()} of ${total.toLocaleString()}+ ${kind}${displayed === 1 ? "" : "es"} — refine your search`
       : result.truncated
         ? (total > displayed
-          ? `${displayed.toLocaleString()} of ${total.toLocaleString()} exact matches — refine your search`
-          : `${total.toLocaleString()}+ exact matches — refine your search`)
-        : `${total.toLocaleString()} exact match${total === 1 ? "" : "es"}`;
-    flushWorkspaceSearchRows(meta);
+          ? `${displayed.toLocaleString()} of ${total.toLocaleString()} ${kind}${total === 1 ? "" : "es"} — refine your search`
+          : `${total.toLocaleString()}+ ${kind}${total === 1 ? "" : "es"} — refine your search`)
+        : `${total.toLocaleString()} ${kind}${total === 1 ? "" : "es"}`;
+    flushWorkspaceSearchRows(`${meta}${sources ? ` · ${sources}` : ""}${skipped}`);
     quickSearchRequestId = "";
     return;
   }
@@ -10056,6 +10305,8 @@ function renderWorkspaceSearch() {
   const query = (quickInput?.value || "").trim();
   if (quickSearchTimer) clearTimeout(quickSearchTimer);
   cancelActiveWorkspaceSearch();
+  renderAdvancedSearchChips();
+  renderQuickSearchSuggestions();
   if (query.length < 2) {
     renderQuickList([], "", { quietEmpty: true });
     return;
@@ -10071,6 +10322,7 @@ function renderWorkspaceSearch() {
   quickItems = [];
   quickSelection = 0;
   if (quickResults) quickResults.scrollTop = 0;
+  quickSearchSourceCounts = {};
   renderVirtualizedSearchResults("Searching workspace…");
   quickSearchTimer = setTimeout(async () => {
     const result = await window.api.searchWorkspace({ workspace: rootPath, query, limit: QUICK_SEARCH_RESULT_LIMIT, requestId });
@@ -10079,7 +10331,12 @@ function renderWorkspaceSearch() {
       quickSearchRequestId = "";
       quickSearchPendingRows = [];
       quickSearchPendingTotal = 0;
-      renderQuickList([], result.error);
+      if (quickResults) {
+        quickResults.replaceChildren();
+        quickResults.hidden = true;
+      }
+      const column = Number(result.position) >= 0 ? ` at column ${Number(result.position) + 1}` : "";
+      setQuickSearchMeta(`Query error${column}: ${result.error}`, { error: true });
     }
   }, QUICK_SEARCH_DEBOUNCE_MS);
 }
@@ -10095,7 +10352,7 @@ async function openQuickPalette(mode = "command", initialValue = "") {
   quickMode = mode;
   quickSelection = 0;
   setQuickModeUi(mode);
-  if (rootPath && !dirMapCache) await refreshDirMap();
+  if (mode === "file" && rootPath && !dirMapCache) await refreshDirMap();
   quickInput.value = initialValue;
   quickOverlay.hidden = false;
   renderQuickPalette();
@@ -10111,6 +10368,8 @@ function closeQuickPalette() {
   cancelActiveWorkspaceSearch();
   quickSearchSeq += 1;
   quickItems = [];
+  setQuickSearchAssistVisible(false);
+  if (quickSearchSuggestions) quickSearchSuggestions.hidden = true;
   if (activeTabPath) EditorManager.focus();
   else chatInput?.focus();
 }
@@ -10128,27 +10387,62 @@ quickInput?.addEventListener("input", () => {
 });
 
 quickInput?.addEventListener("keydown", (e) => {
+  const suggestionsOpen = quickSearchSuggestions && !quickSearchSuggestions.hidden && quickSearchSuggestionItems.length;
+  if (quickMode === "search" && e.ctrlKey && e.code === "Space") {
+    e.preventDefault();
+    renderQuickSearchSuggestions({ force: true });
+    return;
+  }
   if (e.key === "Escape") {
     e.preventDefault();
+    if (suggestionsOpen) {
+      quickSearchSuggestions.hidden = true;
+      quickSearchSuggestionItems = [];
+      return;
+    }
+    if (quickSearchAssist && !quickSearchAssist.hidden) {
+      setQuickSearchAssistVisible(false);
+      return;
+    }
     closeQuickPalette();
     return;
   }
   if (e.key === "ArrowDown") {
     e.preventDefault();
+    if (suggestionsOpen) {
+      quickSearchSuggestionSelection = (quickSearchSuggestionSelection + 1) % quickSearchSuggestionItems.length;
+      [...quickSearchSuggestions.children].forEach((child, index) => child.classList.toggle("active", index === quickSearchSuggestionSelection));
+      return;
+    }
     quickSelection = quickItems.length ? (quickSelection + 1) % quickItems.length : 0;
     syncQuickSelection();
     return;
   }
   if (e.key === "ArrowUp") {
     e.preventDefault();
+    if (suggestionsOpen) {
+      quickSearchSuggestionSelection = (quickSearchSuggestionSelection - 1 + quickSearchSuggestionItems.length) % quickSearchSuggestionItems.length;
+      [...quickSearchSuggestions.children].forEach((child, index) => child.classList.toggle("active", index === quickSearchSuggestionSelection));
+      return;
+    }
     quickSelection = quickItems.length ? (quickSelection - 1 + quickItems.length) % quickItems.length : 0;
     syncQuickSelection();
+    return;
+  }
+  if ((e.key === "Enter" || e.key === "Tab") && suggestionsOpen) {
+    e.preventDefault();
+    applyQuickSearchSuggestion();
     return;
   }
   if (e.key === "Enter") {
     e.preventDefault();
     runSelectedQuickItem();
   }
+});
+
+quickSearchHelp?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setQuickSearchAssistVisible(quickSearchAssist?.hidden !== false);
 });
 
 quickOverlay?.addEventListener("mousedown", (e) => {
