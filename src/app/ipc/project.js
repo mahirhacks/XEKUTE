@@ -6,6 +6,8 @@ const crypto = require("node:crypto");
 const { createMcpConfigService } = require("../services/assessment/knowledge/mcp-config-service.js");
 const { createKaliAccessService } = require("../services/assessment/knowledge/kali-access-service.js");
 
+const MAX_EDITABLE_FILE_BYTES = 5 * 1024 * 1024;
+
 /* Project-facing IPC registration. The Electron composition root supplies
  * stateful services; this module owns only feature handler registration. */
 function registerProjectIpc({
@@ -146,8 +148,8 @@ ipcMain.handle("fs:readdir", async (_event, dirPath) => {
 ipcMain.handle("fs:readFile", async (_event, filePath) => {
   try {
     const stat = fs.statSync(filePath);
-    if (stat.size > 500_000) {
-      return { error: "File too large to edit (> 500 KB)" };
+    if (stat.size > MAX_EDITABLE_FILE_BYTES) {
+      return { error: "File too large to edit (> 5 MB)" };
     }
     const content = fs.readFileSync(filePath, "utf8");
     return { content };
@@ -993,6 +995,31 @@ ipcMain.handle("settings:credentialCreate", async (_event, { workspace = "", cre
     input = null;
   }
 });
+ipcMain.handle("settings:credentialSave", async (_event, { workspace = "", credential = {} } = {}) => {
+  let input = credential && typeof credential === "object" ? {
+    credentialId: credential.credentialId,
+    label: credential.label,
+    username: credential.username,
+    password: credential.password,
+    role: credential.role,
+    cookie: credential.cookie,
+  } : {};
+  try {
+    const result = container.identityVault?.().saveCredential(workspace, input) || { ok: false, error: "Identity vault is unavailable.", code: "IDENTITY_VAULT_UNAVAILABLE" };
+    if (result.ok) emitIdentityStatus(workspace);
+    return result;
+  } finally {
+    if (credential && typeof credential === "object") {
+      credential.password = "";
+      credential.cookie = "";
+    }
+    if (input) {
+      input.password = "";
+      input.cookie = "";
+    }
+    input = null;
+  }
+});
 ipcMain.handle("settings:credentialDelete", async (_event, { workspace = "", credentialId = "" } = {}) => {
   const result = container.identityVault?.().removeCredential(workspace, credentialId) || { ok: false, error: "Identity vault is unavailable.", code: "IDENTITY_VAULT_UNAVAILABLE" };
   if (result.ok) emitIdentityStatus(workspace);
@@ -1059,6 +1086,7 @@ ipcMain.handle("workspace:unwatch", async (event) => {
 }
 
 module.exports = Object.freeze({
+  MAX_EDITABLE_FILE_BYTES,
   channels: Object.freeze([
     "fs:openFolder", "fs:openFile", "fs:readdir", "fs:readFile", "fs:writeFile", "fs:mkdir",
     "fs:deletePath", "fs:copyPath", "fs:movePath", "project:create", "project-profile:get",
@@ -1092,7 +1120,7 @@ module.exports = Object.freeze({
     "settings:identitiesGet", "settings:identityCreate", "settings:identityUpdate",
     "settings:identityDelete", "settings:identityLoginStart", "settings:identityLoginSave",
     "settings:identityLoginCancel", "settings:identityImport", "settings:identityRuntime",
-    "settings:identityStatus", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialDelete",
+    "settings:identityStatus", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialSave", "settings:credentialDelete",
   ]),
   registerProjectIpc,
 });

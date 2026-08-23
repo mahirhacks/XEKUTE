@@ -140,6 +140,7 @@ const api = {
   identityImport: (payload = {}) => ipcRenderer.invoke("settings:identityImport", payload),
   credentialsGet: (payload = {}) => ipcRenderer.invoke("settings:credentialsGet", payload),
   credentialCreate: (payload = {}) => ipcRenderer.invoke("settings:credentialCreate", payload),
+  credentialSave: (payload = {}) => ipcRenderer.invoke("settings:credentialSave", payload),
   credentialDelete: (payload = {}) => ipcRenderer.invoke("settings:credentialDelete", payload),
   ollamaSettings: () => ipcRenderer.invoke("settings:ollamaGet"),
   setOllamaHost: (payload = {}) => ipcRenderer.invoke("settings:ollamaSet", payload),
@@ -168,6 +169,12 @@ const api = {
   deleteFile: (payload) => ipcRenderer.invoke("tools:deleteFile", payload),
   indexWorkspace: (payload) => ipcRenderer.invoke("tools:indexWorkspace", payload),
   searchWorkspace: (payload) => ipcRenderer.invoke("tools:searchWorkspace", payload),
+  cancelWorkspaceSearch: (payload) => ipcRenderer.invoke("tools:cancelWorkspaceSearch", payload),
+  onWorkspaceSearchBatch: (cb) => {
+    const listener = (_event, payload) => cb(payload ?? {});
+    ipcRenderer.on("tools:workspaceSearchBatch", listener);
+    return () => ipcRenderer.removeListener("tools:workspaceSearchBatch", listener);
+  },
   findFiles: (payload) => ipcRenderer.invoke("tools:findFiles", payload),
   runCommand: (payload) => ipcRenderer.invoke("tools:runCommand", payload),
   startProcess: (payload) => ipcRenderer.invoke("tools:startProcess", payload),

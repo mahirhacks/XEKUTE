@@ -89,9 +89,9 @@
           { token: "type", foreground: "4EC9B0" },
         ],
         colors: {
-          "editor.background": "#181818",
+          "editor.background": "#121212",
           "editor.foreground": "#D4D4D4",
-          "editor.lineHighlightBackground": "#202020",
+          "editor.lineHighlightBackground": "#181818",
           "editor.selectionBackground": "#264F78",
           "editor.inactiveSelectionBackground": "#3A3D41",
           "editorCursor.foreground": "#AEAFAD",
@@ -99,13 +99,16 @@
           "editorLineNumber.activeForeground": "#C6C6C6",
           "editorIndentGuide.background1": "#404040",
           "editorIndentGuide.activeBackground1": "#707070",
-          "editorGutter.background": "#181818",
+          "editorGutter.background": "#121212",
           "editorWidget.background": "#252526",
           "editorWidget.border": "#454545",
           "editorSuggestWidget.background": "#252526",
           "editorSuggestWidget.border": "#454545",
           "editorSuggestWidget.selectedBackground": "#04395E",
-          "minimap.background": "#181818",
+          "minimap.background": "#121212",
+          "editorStickyScroll.background": "#121212",
+          "editorStickyScrollHover.background": "#1C1C1C",
+          "editorOverviewRuler.background": "#121212",
           "scrollbarSlider.background": "#79797966",
           "scrollbarSlider.hoverBackground": "#646464B3",
         },
@@ -214,6 +217,21 @@
     },
     focus() { editor?.focus(); },
     layout() { editor?.layout(); },
+    async revealLocation(path, line = 1, column = 1) {
+      const instance = await ready;
+      const model = models.get(path);
+      if (!model || instance.getModel() !== model) return false;
+      const lineNumber = Math.max(1, Math.min(Number(line) || 1, model.getLineCount()));
+      const maxColumn = model.getLineMaxColumn(lineNumber);
+      const position = {
+        lineNumber,
+        column: Math.max(1, Math.min(Number(column) || 1, maxColumn)),
+      };
+      instance.setPosition(position);
+      instance.revealPositionInCenter(position, globalScope.monaco.editor.ScrollType.Smooth);
+      instance.focus();
+      return true;
+    },
     toggleWordWrap() {
       wordWrapEnabled = !wordWrapEnabled;
       globalScope.localStorage?.setItem("xekute.editorWordWrap", String(wordWrapEnabled));

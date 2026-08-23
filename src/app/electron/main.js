@@ -715,7 +715,7 @@ function createApplicationMenu() {
       label: "Search",
       submenu: [
         { label: "Open Workspace File...", accelerator: "CmdOrCtrl+P", click: () => sendMenuAction("quick-open") },
-        { label: "Search Project...", accelerator: "CmdOrCtrl+Shift+F", click: () => sendMenuAction("workspace-search") },
+        { label: "Search Project...", accelerator: "CmdOrCtrl+F", click: () => sendMenuAction("workspace-search") },
       ],
     },
     {
@@ -1043,6 +1043,24 @@ function searchWorkspaceIndex(workspace, query, { limit = 8 } = {}) {
   return workspaceSearch.searchWorkspaceIndex(workspace, query, { limit });
 }
 
+const activeWorkspaceSearches = new Map();
+
+function workspaceSearchRequestKey(senderId, requestId) {
+  return `${Number(senderId) || 0}:${String(requestId || "")}`;
+}
+
+function cancelWorkspaceSearch(senderId, requestId = "") {
+  const exactKey = requestId ? workspaceSearchRequestKey(senderId, requestId) : "";
+  let cancelled = 0;
+  for (const [key, controller] of activeWorkspaceSearches) {
+    if ((exactKey && key !== exactKey) || (!exactKey && !key.startsWith(`${Number(senderId) || 0}:`))) continue;
+    controller.abort();
+    activeWorkspaceSearches.delete(key);
+    cancelled += 1;
+  }
+  return cancelled;
+}
+
 function findWorkspaceFiles(workspace, query, { limit = 8 } = {}) {
   return workspaceSearch.findWorkspaceFiles(workspace, query, { limit });
 }
@@ -1366,8 +1384,36 @@ ipcMain.handle("tools:indexWorkspace", async (_event, { workspace }) => {
   };
 });
 
-ipcMain.handle("tools:searchWorkspace", async (_event, { workspace, query, limit }) => {
-  return searchWorkspaceIndex(workspace, query, { limit });
+ipcMain.handle("tools:searchWorkspace", async (event, { workspace, query, limit, requestId }) => {
+  const id = String(requestId || crypto.randomUUID());
+  cancelWorkspaceSearch(event.sender.id);
+  const key = workspaceSearchRequestKey(event.sender.id, id);
+  const controller = new AbortController();
+  const abortWhenDestroyed = () => controller.abort();
+  event.sender.once("destroyed", abortWhenDestroyed);
+  activeWorkspaceSearches.set(key, controller);
+  try {
+    const result = await workspaceSearch.searchWorkspaceStream(workspace, query, {
+      limit,
+      batchSize: 100,
+      signal: controller.signal,
+      onBatch: (payload) => {
+        if (controller.signal.aborted || event.sender.isDestroyed()) return;
+        event.sender.send("tools:workspaceSearchBatch", { requestId: id, ...payload });
+      },
+    });
+    if (!event.sender.isDestroyed()) {
+      event.sender.send("tools:workspaceSearchBatch", { requestId: id, done: true, summary: result });
+    }
+    return { ...result, requestId: id };
+  } finally {
+    event.sender.removeListener("destroyed", abortWhenDestroyed);
+    if (activeWorkspaceSearches.get(key) === controller) activeWorkspaceSearches.delete(key);
+  }
+});
+
+ipcMain.handle("tools:cancelWorkspaceSearch", async (event, { requestId } = {}) => {
+  return { ok: true, cancelled: cancelWorkspaceSearch(event.sender.id, requestId) };
 });
 
 ipcMain.handle("tools:findFiles", async (_event, { workspace, query, limit }) => {
@@ -2376,8 +2422,24 @@ async function compactTrustedContext(payload = {}) {
     }
   }
   const unique = candidates.filter((entry, index, all) => entry.model && all.findIndex((other) => other.provider === entry.provider && other.model === entry.model) === index);
-  if (!unique.length) return { ok: false, code: "NO_COMPACTION_MODEL", error: "No eligible context compaction model is configured." };
   const attempts = []; const prompt = synthesisPrompt(reduced, payload.previousSummary || snapshot.sessionMeta?.context_summary || "");
+  const commitTrustedPlan = async (validation, { model = "", provider = "deterministic" } = {}) => {
+    const summary = CapsuleReducer.renderCanonicalMarkdown(validation, reduced);
+    if (!summary) throw new Error("Canonical rendering produced no durable records.");
+    const boundary = capsuleCursor;
+    const meta = { version: 1, source: "trusted_capsules", reducerVersion: reduced.version, reductionHash: reduced.reductionHash, capsuleCursor: boundary, archivedThroughMessageId: String(snapshot.committedThroughMessageId || ""), sourceRevisions: revalidated.sourceRevisions, model, provider, attempts, coverage: { required: reduced.requiredIds.length, rendered: reduced.requiredIds.length, records: reduced.records.length, legacyGaps: snapshot.legacyGaps?.length || 0 }, legacyGaps: snapshot.legacyGaps || [], committedAt: new Date().toISOString() };
+    await container.sessionMemoryStore().record(workspace, { type: "context_compaction_commit", sessionId, summary, meta });
+    return { ok: true, summary, meta, source: "trusted_capsules" };
+  };
+  // The model only groups already-validated record IDs; it never authors the
+  // durable prose. If no eligible synthesis model exists, the reducer's exact
+  // one-record-per-item plan is a safe and deterministic compaction path.
+  if (!unique.length) {
+    const validation = CapsuleReducer.validateSynthesisPlan(CapsuleReducer.defaultSynthesisPlan(reduced), reduced);
+    if (!validation.ok) return { ok: false, code: "NO_COMPACTION_MODEL", error: "No eligible context compaction model is configured.", validationErrors: validation.errors };
+    attempts.push({ provider: "deterministic", model: "", retry: 0, errors: [], reason: "no_eligible_model" });
+    return commitTrustedPlan(validation);
+  }
   for (const candidate of unique) {
     if (Date.now() - started >= CONTEXT_COMPACTION_TIMEOUT_MS) break;
     for (let retry = 0; retry < 2; retry += 1) {
@@ -2394,18 +2456,18 @@ async function compactTrustedContext(payload = {}) {
         // only when every required record is still covered by valid items.
         const acceptableSecondPass = retry === 1 && !validation.missingRequired?.length && validation.items.length > 0;
         if (validation.ok || acceptableSecondPass) {
-          const summary = CapsuleReducer.renderCanonicalMarkdown(validation, reduced);
-          if (!summary) throw new Error("Canonical rendering produced no durable records.");
-          const boundary = capsuleCursor;
-          const meta = { version: 1, source: "trusted_capsules", reducerVersion: reduced.version, reductionHash: reduced.reductionHash, capsuleCursor: boundary, archivedThroughMessageId: String(snapshot.committedThroughMessageId || ""), sourceRevisions: revalidated.sourceRevisions, model: candidate.model, provider: candidate.provider, attempts, coverage: { required: reduced.requiredIds.length, rendered: reduced.requiredIds.length, records: reduced.records.length, legacyGaps: snapshot.legacyGaps?.length || 0 }, legacyGaps: snapshot.legacyGaps || [], committedAt: new Date().toISOString() };
-          await container.sessionMemoryStore().record(workspace, { type: "context_compaction_commit", sessionId, summary, meta });
-          return { ok: true, summary, meta, source: "trusted_capsules" };
+          return commitTrustedPlan(validation, candidate);
         }
         // The second pass may only drop invalid optional items; missing required
         // coverage is never accepted and proceeds to the next model.
         if (retry === 1 && validation.missingRequired?.length) break;
       } catch (error) { attempts.push({ provider: candidate.provider, model: candidate.model, retry, errors: [String(error.message || error)] }); }
     }
+  }
+  const deterministic = CapsuleReducer.validateSynthesisPlan(CapsuleReducer.defaultSynthesisPlan(reduced), reduced);
+  if (deterministic.ok) {
+    attempts.push({ provider: "deterministic", model: "", retry: 0, errors: [], reason: "synthesis_models_failed" });
+    return commitTrustedPlan(deterministic);
   }
   return { ok: false, code: Date.now() - started >= CONTEXT_COMPACTION_TIMEOUT_MS ? "CONTEXT_COMPACTION_TIMEOUT" : "CONTEXT_COMPACTION_MODELS_FAILED", error: "Trusted context compaction could not be validated; existing context was preserved.", attempts };
 }

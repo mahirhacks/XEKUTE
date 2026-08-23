@@ -337,7 +337,7 @@
   background:#ddd;
   transition:transform .14s ease;
 }
-.general-toggle input:checked + span { background:#4a8f69; }
+.general-toggle input:checked + span { background:#2f8cf4; }
 .general-toggle input:checked + span::after { transform:translateX(18px); background:#fff; }
 #statusbar.settings-hidden { display:none !important; }
 
@@ -374,20 +374,25 @@
   z-index:4;
   min-width:0;
   margin:0 0 22px;
-  padding:0 0 12px;
+  padding:0;
+  overflow:hidden;
+  border:0;
+  background:linear-gradient(to bottom,var(--settings-bg) 0,var(--settings-bg) calc(100% - 10px),rgba(24,24,24,0) 100%);
+}
+.app-settings-content .project-settings-nav-track {
   display:flex;
   align-items:center;
   gap:5px;
+  width:100%;
   overflow-x:auto;
   overflow-y:hidden;
-  border:0;
-  background:linear-gradient(to bottom,var(--settings-bg) 0,var(--settings-bg) calc(100% - 10px),rgba(24,24,24,0) 100%);
   scrollbar-width:none;
+  -ms-overflow-style:none;
 }
-.app-settings-content .project-settings-nav::-webkit-scrollbar { display:none; }
+.app-settings-content .project-settings-nav-track::-webkit-scrollbar { display:none; width:0; height:0; }
 .project-settings-identity,
 .project-storage-note { display:none; }
-.app-settings-content .project-settings-nav > button {
+.app-settings-content .project-settings-nav-track > button {
   flex:0 0 auto;
   width:auto;
   min-height:31px;
@@ -403,13 +408,13 @@
   cursor:pointer;
   transition:background .12s ease,border-color .12s ease,color .12s ease;
 }
-.app-settings-content .project-settings-nav > button:hover { background:#232323; color:#e5e5e5; }
-.app-settings-content .project-settings-nav > button.active {
+.app-settings-content .project-settings-nav-track > button:hover { background:#232323; color:#e5e5e5; }
+.app-settings-content .project-settings-nav-track > button.active {
   border-color:#3b3b3b;
   background:#2a2a2a;
   color:#f1f1f1;
 }
-.app-settings-content .project-settings-nav > button .codicon { width:14px; color:#9ba5ab; font-size:13px; }
+.app-settings-content .project-settings-nav-track > button .codicon { width:14px; color:#9ba5ab; font-size:13px; }
 
 .app-settings-content .project-settings-form {
   width:100%;
@@ -573,7 +578,7 @@
   box-shadow:0 1px 2px rgba(0,0,0,.3);
   transition:transform .14s ease,background .14s ease;
 }
-.app-settings-content .project-toggle-grid > label:has(input:checked)::before { background:#45a86b; }
+.app-settings-content .project-toggle-grid > label:has(input:checked)::before { background:#2f8cf4; }
 .app-settings-content .project-toggle-grid > label:has(input:checked)::after { transform:translateX(12px); background:#fff; }
 .app-settings-content .project-toggle-grid > label:focus-within { border-color:#69747a; box-shadow:0 0 0 1px rgba(158,172,180,.16); }
 .app-settings-content .project-toggle-grid strong,
@@ -583,13 +588,9 @@
 .app-settings-content .project-capability-grid { margin:14px 0 0; }
 
 /* Other settings panels keep their feature-specific base styles but share the canvas. */
-.app-settings-content .authority-settings-panel > div,
 .app-settings-content .certificate-settings-content { width:100%; padding:0 0 40px; }
 .app-settings-content .certificate-settings-content > header { display:none; }
 .app-settings-content .guidance-settings-panel { border:1px solid var(--settings-border); border-radius:12px; background:#1d1d1d; }
-.app-settings-content .authority-group,
-.app-settings-content .authority-super-option,
-.app-settings-content .authority-override-summary,
 .app-settings-content .llm-provider-option,
 .app-settings-content .certificate-settings-card { border-radius:9px; }
 
@@ -656,80 +657,6 @@
   color:#ededed;
   font:500 13px/1.35 var(--font-ui);
 }
-.app-settings-content .authority-settings-panel > div { width:100%; padding:0 0 44px; }
-.app-settings-content .authority-intro { margin:0 0 14px; }
-.app-settings-content .authority-intro > div { display:flex; align-items:flex-start; gap:11px; }
-.app-settings-content .authority-intro > div > .codicon { margin-top:3px; color:#a2abb0; font-size:15px; }
-.app-settings-content .authority-intro h2 { margin:0; color:#ededed; font:600 17px/1.3 var(--font-ui); }
-.app-settings-content .authority-intro p { max-width:700px; margin:5px 0 0; color:#8f8f8f; font:11px/1.5 var(--font-ui); }
-.app-settings-content .authority-super-grid { gap:12px; margin-bottom:12px; }
-.app-settings-content .authority-super-option {
-  min-height:88px;
-  padding:14px 16px;
-  border:1px solid var(--settings-border);
-  border-radius:12px;
-  background:var(--settings-panel);
-  box-shadow:0 1px 0 rgba(255,255,255,.015);
-}
-.app-settings-content .authority-super-option:hover { border-color:#4a4a4a; background:#242424; }
-.app-settings-content .authority-super-option.selected { border-color:#4c5a5f; background:#242a2c; box-shadow:none; }
-.app-settings-content .authority-super-option.danger.selected { border-color:#5c4b42; background:#29231f; }
-.app-settings-content .authority-super-option strong { margin-bottom:5px; color:#ededed; font:600 13px var(--font-ui); }
-.app-settings-content .authority-super-option small { color:#969696; font:10px/1.4 var(--font-ui); }
-.app-settings-content .authority-super-option em { display:none; }
-.app-settings-content .authority-super-option:has(input:focus-visible) { outline:1px solid #69747a; outline-offset:2px; }
-.app-settings-content .authority-override-summary {
-  margin-bottom:12px;
-  padding:10px 14px;
-  border:1px solid var(--settings-border);
-  border-radius:10px;
-  background:var(--settings-panel);
-  color:#aaa;
-  font:11px/1.45 var(--font-ui);
-}
-.app-settings-content .authority-override-summary strong { color:#dedede; }
-.app-settings-content .authority-override-summary.warning,
-.app-settings-content .authority-override-summary.danger { border-color:#4c4636; background:#211f1b; }
-.app-settings-content .authority-groups { gap:12px; }
-.app-settings-content .authority-group { border:1px solid var(--settings-border); border-radius:12px; background:var(--settings-panel); }
-.app-settings-content .authority-group > header { padding:10px 16px; border-bottom:1px solid var(--settings-border); background:transparent; }
-.app-settings-content .authority-group h3 { color:#dedede; font:600 12px var(--font-ui); }
-.app-settings-content .authority-group p { margin-top:2px; color:#858585; font:10px/1.4 var(--font-ui); }
-.app-settings-content .authority-permission { min-height:44px; padding:8px 16px; border-bottom:1px solid #2c2c2c; }
-.app-settings-content .authority-permission strong { color:#d5d5d5; font:600 11px var(--font-ui); }
-.app-settings-content .authority-permission small { display:none; }
-.app-settings-content .authority-permission input {
-  appearance:none;
-  position:relative;
-  width:32px;
-  height:18px;
-  margin:0;
-  border:0;
-  border-radius:999px;
-  outline:0;
-  background:#4a4a4a;
-  cursor:pointer;
-  transition:background .14s ease;
-}
-.app-settings-content .authority-permission input::after {
-  content:"";
-  position:absolute;
-  top:2px;
-  left:2px;
-  width:14px;
-  height:14px;
-  border-radius:50%;
-  background:#e7e7e7;
-  box-shadow:0 1px 2px rgba(0,0,0,.3);
-  transition:transform .14s ease,background .14s ease;
-}
-.app-settings-content .authority-permission input:checked { background:#45a86b; }
-.app-settings-content .authority-permission input:checked::after { transform:translateX(14px); background:#fff; }
-.app-settings-content .authority-permission input:focus-visible { outline:1px solid #69747a; outline-offset:3px; }
-.app-settings-content .authority-permission input:disabled { opacity:.65; cursor:default; }
-.app-settings-content .authority-permission.overridden { opacity:.7; }
-.app-settings-content .authority-effective { margin-left:6px; color:#9aa4a8; font:600 8px var(--font-ui); }
-
 .app-settings-content > #app-settings-prompts-panel {
   min-height:620px;
   display:grid;
@@ -817,8 +744,6 @@
 }
 .app-settings-content .llm-provider-actions button:hover:not(:disabled) { background:rgba(230,230,230,.18); color:#ededed; }
 .app-settings-content .llm-provider-actions button:focus-visible { outline:1px solid #69747a; outline-offset:2px; }
-.app-settings-content .llm-provider-actions #llm-settings-save { background:#0e639c; color:#fff; }
-.app-settings-content .llm-provider-actions #llm-settings-save:hover:not(:disabled) { background:#1177bb; color:#fff; }
 .app-settings-content .llm-provider-actions #llm-settings-test { background:#6a541d; color:#f2d782; }
 .app-settings-content .llm-provider-actions #llm-settings-test:hover:not(:disabled) { background:#806522; color:#ffe8a3; }
 .app-settings-content .certificate-security-note {
@@ -844,8 +769,6 @@
   .app-settings-content { padding:0 20px 38px; }
   .app-settings-content > #app-settings-prompts-panel { grid-template-columns:200px minmax(0,1fr); }
   .app-settings-content .guidance-detail-grid { grid-template-columns:1fr; }
-  .app-settings-content .authority-super-grid,
-  .app-settings-content .authority-groups { grid-template-columns:1fr; }
 }
 
 @media (max-width:560px) {
@@ -1194,7 +1117,7 @@
 .app-settings-content .kali-access-switch input { position:absolute; opacity:0; pointer-events:none; }
 .app-settings-content .kali-access-switch > span { position:relative; width:30px; height:16px; border-radius:999px; background:#4a4a4a; transition:background .15s ease; }
 .app-settings-content .kali-access-switch > span::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:#ddd; transition:transform .15s ease; }
-.app-settings-content .kali-access-switch input:checked + span { background:#41667a; }
+.app-settings-content .kali-access-switch input:checked + span { background:#2f8cf4; }
 .app-settings-content .kali-access-switch input:checked + span::after { transform:translateX(14px); }
 .app-settings-content .kali-access-switch input:focus-visible + span { outline:1px solid #8ca9b8; outline-offset:2px; }
 .app-settings-content .mcp-connection-editor h3 { margin:0; color:#eee; font:600 15px/1.3 var(--font-ui); }
@@ -1325,6 +1248,22 @@
   border-color:#69747a;
   box-shadow:0 0 0 1px rgba(158,172,180,.16);
 }
+.app-settings-content #context-compaction-model {
+  color-scheme:dark;
+  background-color:#181818;
+  color:#e1e1e1;
+  caret-color:#e1e1e1;
+}
+.app-settings-content #context-compaction-model:-webkit-autofill,
+.app-settings-content #context-compaction-model:-webkit-autofill:hover,
+.app-settings-content #context-compaction-model:-webkit-autofill:focus,
+.app-settings-content #context-compaction-model:-webkit-autofill:active {
+  background-color:#181818 !important;
+  color:#e1e1e1 !important;
+  -webkit-text-fill-color:#e1e1e1 !important;
+  -webkit-box-shadow:0 0 0 1000px #181818 inset !important;
+  caret-color:#e1e1e1;
+}
 .app-settings-content .models-search-row {
   position:relative;
   margin:22px 0 0;
@@ -1440,6 +1379,11 @@
   margin-top:28px;
   border:0;
 }
+.app-settings-content .models-context-settings {
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
 .app-settings-content .models-api-keys-summary {
   min-height:36px;
   padding:8px 4px;
@@ -1550,9 +1494,6 @@
   .general-settings-card,
   .project-settings-card,
   .identity-settings-card,
-  .authority-super-option,
-  .authority-override-summary,
-  .authority-group,
   .guidance-settings-panel,
   .guidance-detail-form,
   .guidance-detail-card,
@@ -1567,4 +1508,3 @@
   outline:1px solid #69747a;
   outline-offset:2px;
 }
-

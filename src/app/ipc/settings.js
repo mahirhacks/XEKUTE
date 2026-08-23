@@ -8,6 +8,6 @@ module.exports = Object.freeze({
     "settings:identitiesGet", "settings:identityCreate", "settings:identityUpdate",
     "settings:identityDelete", "settings:identityLoginStart", "settings:identityLoginSave",
     "settings:identityLoginCancel", "settings:identityImport", "settings:identityRuntime",
-    "settings:identityStatus", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialDelete",
+    "settings:identityStatus", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialSave", "settings:credentialDelete",
   ]),
 });
