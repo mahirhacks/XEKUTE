@@ -121,12 +121,21 @@ function normalizeEntry(filePath, root, source) {
   const relative = pathDefault.relative(root, filePath).replace(/\\/g, "/");
   const stem = normalizeSkillId(pathDefault.basename(filePath));
   const metadata = parsed.metadata || {};
+  const declaredId = normalizeSkillId(metadata.id || "");
+  const id = declaredId || stem;
   const aliases = [...new Set([stem, ...(Array.isArray(metadata.aliases) ? metadata.aliases : [])].map(normalizeSkillId).filter(Boolean))];
   return {
-    id: stem,
+    id,
+    declaredId,
     stableId: stableId(relative),
     title: clean(metadata.title || stem.replace(/[_-]+/g, " "), 240),
     phase: clean(metadata.phase || "general", 120).toLowerCase(),
+    summary: clean(metadata.summary || metadata.description || "", 1_200),
+    category: clean(metadata.category || "general", 120).toLowerCase(),
+    level: clean(metadata.level || "standard", 40).toLowerCase(),
+    signals: [...new Set((Array.isArray(metadata.signals) ? metadata.signals : []).map((item) => clean(item, 120)).filter(Boolean))].slice(0, 80),
+    technologies: [...new Set((Array.isArray(metadata.technologies) ? metadata.technologies : []).map((item) => clean(item, 120)).filter(Boolean))].slice(0, 80),
+    advanceOf: normalizeSkillId(metadata.advance_of || metadata.advanceOf || ""),
     aliases,
     relatedSkills: [...new Set([...(Array.isArray(metadata.related_skills) ? metadata.related_skills : []), ...(Array.isArray(metadata.related) ? metadata.related : [])].map(normalizeSkillId).filter(Boolean))].slice(0, 50),
     mcp: normalizeMcpMappings(metadata),
@@ -137,11 +146,25 @@ function normalizeEntry(filePath, root, source) {
   };
 }
 
+// Read-only compatibility projections keep older assessment queries useful
+// while the on-disk library remains Markdown-first and vulnerability-focused.
+const LEGACY_COMPAT_ENTRIES = Object.freeze([
+  { id: "passive_recon", aliases: ["passive_recon", "passive-recon"], title: "Passive recon", phase: "recon", summary: "Passive discovery from supplied and permitted public evidence.", category: "recon", level: "standard", signals: ["passive", "certificates", "dns"], technologies: ["web"], body: "## Workflow\nUse certificates, DNS, metadata, and supplied traffic before active requests.\n\n## Verification rules\nPreserve source and confidence.\n\n## Evidence to collect\nRecord source URLs and timestamps.", source: "compatibility/passive_recon.md" },
+  { id: "recon-passive", aliases: ["recon-passive"], title: "Passive recon", phase: "recon", summary: "Passive discovery compatibility view.", category: "recon", level: "standard", signals: ["passive", "certificates"], technologies: ["web"], body: "## Workflow\nReview certificates and public metadata.\n\n## Verification rules\nDo not treat passive data as authorization.", source: "compatibility/recon-passive.md" },
+  { id: "recon-active", aliases: ["recon-active"], title: "Active recon", phase: "recon", summary: "Active discovery compatibility view.", category: "recon", level: "standard", signals: ["active", "enumeration", "service"], technologies: ["web"], body: "## Workflow\nConfirm one authorized service or route at a time.\n\n## Verification rules\nRespect scope and rate gates.", source: "compatibility/recon-active.md" },
+].map((entry) => Object.freeze({ ...entry, stableId: stableId(entry.source), relatedSkills: [], mcp: [], sourceHash: stableId(entry.body), metadataError: "" })));
+
 function validateEntry(entry) {
   const errors = [];
   if (!entry?.id) errors.push("missing skill id");
   if (!entry?.title) errors.push("missing title");
   if (!entry?.phase) errors.push("missing phase");
+  if (entry?.source?.startsWith("libraries/")) {
+    if (!entry?.declaredId) errors.push("missing frontmatter id");
+    if (entry?.declaredId && entry.declaredId !== normalizeSkillId(entry.source)) errors.push("frontmatter id must match the Markdown filename");
+    if (!entry?.summary) errors.push("missing summary");
+  }
+  if (entry?.level && !["standard", "advanced", "specialist"].includes(entry.level)) errors.push("unsupported level");
   if (entry?.metadataError) errors.push(entry.metadataError);
   return errors;
 }
@@ -165,7 +188,7 @@ function createSkillKnowledgeGraph({ fs = fsDefault, path = pathDefault, library
     const loaded = [];
     const seen = new Set();
     try {
-      for (const filePath of walkMarkdown(fs, path, libraryRoot)) {
+      for (const filePath of walkMarkdown(fs, path, libraryRoot).sort((a, b) => a.localeCompare(b))) {
         const entry = normalizeEntry(filePath, libraryRoot, fs.readFileSync(filePath, "utf8"));
         const validation = validateEntry(entry);
         if (validation.length) { error = `${entry.source}: ${validation.join("; ")}`; continue; }
@@ -175,17 +198,29 @@ function createSkillKnowledgeGraph({ fs = fsDefault, path = pathDefault, library
       }
     } catch (cause) { error = cause.message; }
     entries = loaded.sort((a, b) => a.id.localeCompare(b.id));
+    const knownIds = new Set(entries.map((entry) => entry.id));
+    const knownAliases = new Set(entries.flatMap((entry) => [entry.id, ...entry.aliases]));
+    for (const entry of entries) {
+      const relationships = [...entry.relatedSkills, entry.advanceOf].filter(Boolean);
+      const broken = relationships.filter((relationship) => !knownIds.has(relationship) && !knownAliases.has(relationship));
+      if (broken.length && !error) error = `${entry.source}: unknown related skill reference(s): ${[...new Set(broken)].join(", ")}`;
+    }
     return entries;
   }
   function find(input = {}) {
     const all = load();
     const exact = normalizeSkillId(input.skill || "");
-    if (exact) return all.filter((entry) => entry.id === exact || entry.aliases.includes(exact));
+    if (exact) {
+      const matches = all.filter((entry) => entry.id === exact || entry.aliases.includes(exact));
+      if (matches.length) return matches;
+      return LEGACY_COMPAT_ENTRIES.filter((entry) => entry.id === exact || entry.aliases.includes(exact));
+    }
     const phase = clean(input.phase || "", 120).toLowerCase();
     const query = clean(input.query || "", 4_000).toLowerCase();
     const terms = query.split(/\s+/).filter(Boolean).slice(0, 24);
-    return all.map((entry) => {
-      const haystack = `${entry.id} ${entry.title} ${entry.phase} ${entry.aliases.join(" ")} ${entry.body}`.toLowerCase();
+    const searchable = phase === "recon" ? [...all, ...LEGACY_COMPAT_ENTRIES] : all;
+    return searchable.map((entry) => {
+      const haystack = `${entry.id} ${entry.title} ${entry.summary} ${entry.category} ${entry.level} ${entry.signals.join(" ")} ${entry.technologies.join(" ")} ${entry.phase} ${entry.aliases.join(" ")} ${entry.body}`.toLowerCase();
       const score = (phase && entry.phase === phase ? 10 : 0) + terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0);
       return { entry, score };
     }).filter((item) => (!phase || item.entry.phase === phase) && (!terms.length || item.score > 0)).sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id)).map((item) => item.entry);
@@ -208,6 +243,12 @@ function createSkillKnowledgeGraph({ fs = fsDefault, path = pathDefault, library
         stableId: entry.stableId,
         title: entry.title,
         phase: entry.phase,
+        summary: entry.summary,
+        category: entry.category,
+        level: entry.level,
+        signals: entry.signals,
+        technologies: entry.technologies,
+        advanceOf: entry.advanceOf,
         aliases: entry.aliases,
         relatedSkills: entry.relatedSkills,
         methodology: entry.body,
@@ -244,6 +285,12 @@ function createSkillKnowledgeGraph({ fs = fsDefault, path = pathDefault, library
         stableId: entry.stableId,
         title: entry.title,
         phase: entry.phase,
+        summary: entry.summary,
+        category: entry.category,
+        level: entry.level,
+        signals: entry.signals,
+        technologies: entry.technologies,
+        advanceOf: entry.advanceOf,
         aliases: entry.aliases,
         relatedSkills: entry.relatedSkills,
         methodology: entry.body,
@@ -311,7 +358,7 @@ function createSkillKnowledgeGraph({ fs = fsDefault, path = pathDefault, library
     return clean(collected.join("\n"), 2_000);
   }
   function invalidate() { entries = null; error = null; }
-  function list() { return load().map((entry) => ({ id: entry.id, title: entry.title, phase: entry.phase, aliases: entry.aliases, source: entry.source, mcpServers: entry.mcp.map((mapping) => mapping.server) })); }
+  function list() { return load().map((entry) => ({ id: entry.id, title: entry.title, summary: entry.summary, phase: entry.phase, category: entry.category, level: entry.level, signals: entry.signals, technologies: entry.technologies, advanceOf: entry.advanceOf, aliases: entry.aliases, relatedSkills: entry.relatedSkills, source: entry.source, sourceHash: entry.sourceHash, mcpServers: entry.mcp.map((mapping) => mapping.server) })); }
   function validation() {
     load();
     return { ok: !error, error: error || "", skills: entries ? entries.length : 0 };

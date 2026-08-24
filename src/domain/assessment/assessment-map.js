@@ -13,7 +13,7 @@ function defaultDomainExtractor() {
 
 const DEFAULT_LIMITS = Object.freeze({ maxBytes: 100 * 1024 * 1024, maxRecords: 50000 });
 const MAP_SCHEMA_VERSION = 5;
-const MAP_BUILDER_VERSION = "0.7.0";
+const MAP_BUILDER_VERSION = "0.8.0";
 const STATIC_EXTENSIONS = new Set([
   "css", "js", "mjs", "map", "png", "jpg", "jpeg", "gif", "svg", "ico", "webp",
   "woff", "woff2", "ttf", "eot", "mp3", "mp4", "webm", "avi", "mov",
@@ -538,7 +538,7 @@ function decorateGraphForAgent(graph) {
   return graph;
 }
 
-function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligence = null, javascriptArtifacts = null, graphStore = null, now = () => new Date(), domainExtractor } = {}) {
+function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligence = null, javascriptArtifacts = null, webArtifacts = null, graphStore = null, now = () => new Date(), domainExtractor } = {}) {
   if (!crypto?.createHash || !crypto?.createHmac || !crypto?.randomBytes) throw new TypeError("crypto hashing, HMAC, and random bytes are required");
   const registrableDomain = typeof domainExtractor === "function" ? domainExtractor : defaultDomainExtractor();
   const hash = (value, length = 20) => crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, length);
@@ -1444,6 +1444,69 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligen
         }
       }
 
+      // Pass 8: project the generic web-artifact manifest. JavaScript already
+      // has a richer typed projection above, so it is skipped here to avoid
+      // duplicate script nodes. HTML, CSS, source maps, manifests, JSON,
+      // GraphQL, and YAML remain first-class, provenance-linked graph nodes.
+      let webManifest = { artifacts: [], contentHash: "" };
+      try {
+        if (webArtifacts?.readManifest) webManifest = webArtifacts.readManifest(verified.root);
+        else {
+          const manifestTarget = path.join(verified.root, "traffic", "artifacts", "web", "manifest.json");
+          if (fs.existsSync(manifestTarget)) webManifest = JSON.parse(fs.readFileSync(manifestTarget, "utf8"));
+        }
+      } catch { webManifest = { artifacts: [], contentHash: "", error: "unreadable" }; }
+      const webNodes = new Map();
+      for (const artifact of Array.isArray(webManifest.artifacts) ? webManifest.artifacts : []) {
+        if (!/^[a-f0-9]{64}$/i.test(String(artifact.sha256 || "")) || String(artifact.type || "").toLowerCase() === "javascript") continue;
+        const firstUrl = (artifact.urls || []).find((entry) => entry?.url)?.url || "";
+        let label = `${artifact.type || "web"} ${artifact.sha256.slice(0, 12)}`;
+        let artifactHost = "";
+        try {
+          const parsed = new URL(firstUrl);
+          label = parsed.pathname.split("/").filter(Boolean).at(-1) || label;
+          artifactHost = parsed.hostname.toLowerCase();
+        } catch { /* Keep hash-based label. */ }
+        const node = {
+          id: stableNodeId("web-artifact", artifact.sha256),
+          canonicalKey: artifact.sha256,
+          type: "WebArtifact",
+          artifactType: String(artifact.type || "unknown").slice(0, 40),
+          label,
+          host: artifactHost,
+          observationType: "discovered",
+          confidence: 1,
+          contentHash: `sha256:${artifact.sha256}`,
+          byteLength: Number(artifact.byteLength) || 0,
+          urlCount: (artifact.urls || []).length,
+          referenceCount: (artifact.references || []).length,
+          endpointCount: (artifact.endpoints || []).length,
+          importCount: (artifact.imports || []).length,
+          sourceMapCount: (artifact.sourceMaps || []).length,
+          urls: (artifact.urls || []).map((entry) => ({ url: entry.url, source: entry.source, statusCode: entry.statusCode || null })).slice(0, 100),
+          signals: artifact.signals || {},
+          sourceRef: artifact.objectPath || "",
+        };
+        const factors = [];
+        if (node.endpointCount) factors.push(priorityFactor("downloadable_endpoints", "Downloadable artifact declares endpoints", Math.min(16, node.endpointCount * 2)));
+        if (node.referenceCount) factors.push(priorityFactor("artifact_references", "Artifact references additional resources", Math.min(10, node.referenceCount)));
+        if (node.artifactType === "html") factors.push(priorityFactor("html_entrypoint", "HTML artifact may expose application entry points", 5));
+        applyPriority(node, factors);
+        node.riskTags = factors.map((factor) => factor.id);
+        node.priorityEvidence = "discovered";
+        webNodes.set(artifact.sha256, node);
+        auxiliaryNodes.push(node);
+        for (const entry of artifact.urls || []) {
+          if (!entry?.url) continue;
+          const artifactRoute = ensureRoute(entry.url, "GET", { discoveredBy: entry.source || "web-artifact", confidence: 0.94, methodConfidence: 0.98 });
+          if (artifactRoute) addEdge(artifactRoute.id, node.id, "SERVES_ARTIFACT", 0.96, "", { observationType: "discovered", provenance: { location: "web.manifest", extractor: "content-addressed-artifact", selector: artifact.sha256 } });
+        }
+        for (const reference of [...(artifact.references || []), ...(artifact.endpoints || []).map((item) => item.url), ...(artifact.sourceMaps || [])]) {
+          const target = resolveReferencedRoute(reference, "GET", { discoveredBy: "web-artifact-reference", confidence: 0.76, methodConfidence: 0.82 });
+          if (target) addEdge(node.id, target.id, "REFERENCES_ARTIFACT", 0.76, "", { observationType: "discovered", provenance: { location: "web.artifact", extractor: "bounded-artifact-reference", selector: String(reference).slice(0, 240) } });
+        }
+      }
+
       for (const route of routeMap.values()) {
         calculateRoutePriority(route);
         const host = ensureHost(route.host);
@@ -1800,9 +1863,10 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligen
         { pass: 5, name: "correlate-objects", processed: edges.filter((edge) => edge.type === "SHARES_OBJECT").length, failed: 0 },
         { pass: 6, name: "aggregate-workflows", processed: edges.filter((edge) => edge.type === "FOLLOWED_BY").length, failed: 0 },
         { pass: 7, name: "project-javascript-artifacts", processed: javascriptNodes.size, failed: javascriptManifest.error ? 1 : 0 },
-        { pass: 8, name: "project-typed-entities", processed: typedNodes.length - javascriptNodes.size, failed: 0 },
-        { pass: 9, name: "derive-application-state-model", processed: stateModel.states.length + stateModel.actions.length + stateModel.workflows.length, failed: 0 },
-        { pass: 10, name: "validate-integrity-and-provenance", processed: verification.checkedNodes + verification.checkedEdges, failed: verification.issueCount },
+        { pass: 8, name: "project-web-artifacts", processed: webNodes.size, failed: webManifest.error ? 1 : 0 },
+        { pass: 9, name: "project-typed-entities", processed: typedNodes.length - javascriptNodes.size - webNodes.size, failed: 0 },
+        { pass: 10, name: "derive-application-state-model", processed: stateModel.states.length + stateModel.actions.length + stateModel.workflows.length, failed: 0 },
+        { pass: 11, name: "validate-integrity-and-provenance", processed: verification.checkedNodes + verification.checkedEdges, failed: verification.issueCount },
       ];
       const graph = {
         kind: "xekute-application-behavior-map",
@@ -1826,6 +1890,9 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligen
           javascriptManifestPath: "traffic/artifacts/javascript/manifest.json",
           javascriptSnapshotHash: javascriptManifest.contentHash || "",
           javascriptArtifacts: javascriptNodes.size,
+          webManifestPath: "traffic/artifacts/web/manifest.json",
+          webSnapshotHash: webManifest.contentHash || "",
+          webArtifacts: webNodes.size,
         },
         passReports,
         stats: {
@@ -1842,6 +1909,7 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligen
           highPriorityRoutes: routes.filter((route) => (route.priorityScore ?? route.riskScore) >= PRIORITY_HIGH_THRESHOLD).length,
           highRiskRoutes: routes.filter((route) => (route.priorityScore ?? route.riskScore) >= PRIORITY_HIGH_THRESHOLD).length,
           javascriptArtifacts: javascriptNodes.size,
+          webArtifacts: webNodes.size,
           identities: typedNodes.filter((node) => node.type === "Identity").length,
           parameters: typedNodes.filter((node) => node.type === "Parameter").length,
           responseVariantNodes: typedNodes.filter((node) => node.type === "ResponseVariant").length,

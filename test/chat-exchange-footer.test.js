@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const bootstrapSource = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
 
 function functionBody(name, nextName) {
   const pattern = new RegExp(`function ${name}\\([^]*?\\r?\\n}\\r?\\n\\r?\\nfunction ${nextName}\\(`);
@@ -63,4 +64,15 @@ test("restored exchanges attach metadata after text and tool-only assistant turn
   assert.ok(exchangePassAt > renderAllAt, "the complete restored exchange must render before metadata placement");
   assert.ok(attachAt > exchangePassAt);
   assert.ok(replaceAt > attachAt, "the finalized exchange should enter the visible transcript with its footer last");
+});
+
+test("assistant footer keeps copy visible and reveals time only on hover", () => {
+  const footerStyles = baseStyles.match(/\.assistant-reply-footer \{[\s\S]*?\.chat-empty-state \{/);
+  assert.ok(footerStyles, "Could not find assistant footer styles");
+  const source = footerStyles[0];
+  assert.match(source, /padding: 2px 3px/);
+  assert.match(source, /border: 1px solid transparent/);
+  assert.match(source, /background: transparent/);
+  assert.match(source, /\.assistant-reply-time \{[^]*?opacity: 0;[^]*?visibility: hidden/);
+  assert.match(source, /\.chat-exchange:hover \.assistant-reply-time,[\s\S]*?\.chat-exchange:focus-within \.assistant-reply-time[\s\S]*?opacity: 1;[\s\S]*?visibility: visible/);
 });

@@ -833,29 +833,33 @@ const JSONL_TEMPLATES = {
   ".xekute/logs/tool-output.jsonl": { recordType: "pointer-tool-output-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "tool", "version", "command", "target", "exitCode", "outputPath", "sha256", "redacted", "truncated"] },
 };
 
-const REPORT_TEMPLATE = `# Security Assessment Report
+const REPORT_TEMPLATE = `# VAPT Security Assessment Report
 
-## Document Control
+## Title and Document Control
 
-## Executive Summary
-
-## Engagement Authorization
+## Engagement Metadata and Authorization
 
 ## Scope and Exclusions
 
 ## Rules of Engagement
 
+## Executive Summary
+
 ## Methodology
 
 ## Attack Surface Summary
 
-## Findings Summary
+## Findings Summary by Severity and Status
 
 ## Detailed Findings
 
-## Risk and Business Impact
+## Business and Technical Risk
 
-## Remediation Roadmap
+## Positive Security Observations
+
+## Coverage, Blocked Tests, and Untested Areas
+
+## Prioritized Remediation Roadmap
 
 ## Retest Results
 
@@ -863,7 +867,7 @@ const REPORT_TEMPLATE = `# Security Assessment Report
 
 ## Evidence Index
 
-## Appendix
+## Appendices and Framework Mappings
 `;
 
 function isPlainObject(value) {
@@ -964,6 +968,22 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
         throw replaceError;
       }
     }
+  }
+  function atomicWriteText(target, value) {
+    const temporary = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+    const backup = `${target}.bak`;
+    const serialized = String(value || "");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(temporary, serialized, { encoding: "utf8", flag: "w", mode: 0o600 });
+    if (fs.existsSync(target)) fs.copyFileSync(target, backup);
+    try { fs.renameSync(temporary, target); }
+    catch (error) {
+      if (!fs.existsSync(target)) throw error;
+      fs.unlinkSync(target);
+      try { fs.renameSync(temporary, target); }
+      catch (replaceError) { if (fs.existsSync(backup)) fs.copyFileSync(backup, target); throw replaceError; }
+    }
+    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
   }
   function projectRedactionMarker(root) {
     const target = path.join(root, "Map", ".correlation-key");
@@ -1372,11 +1392,22 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
     const runs = readJson("runs/runs.json");
     const evidence = readJsonl(verification.root, "evidence/index.jsonl", { limit: 500 });
     const stamp = now().toISOString();
-    const safeTitle = String(engagement.engagement?.name || verification.name || "Security Assessment");
-    const findingRows = (findings.findings || []).map((finding) => `| ${finding.id || ""} | ${String(finding.title || "").replace(/\|/g, "\\|")} | ${finding.severity || ""} | ${finding.confidence || ""} | ${finding.status || ""} | ${(finding.evidence || []).join(", ")} |`);
+    const markdownCell = (value, fallback = "") => String(value == null || value === "" ? fallback : value).replace(/[\r\n]+/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+    const safeTitle = markdownCell(engagement.engagement?.name || verification.name || "Security Assessment", "Security Assessment").slice(0, 240);
+    const findingRows = (findings.findings || []).map((finding) => `| ${markdownCell(finding.id)} | ${markdownCell(finding.title)} | ${markdownCell(finding.severity)} | ${markdownCell(finding.confidence)} | ${markdownCell(finding.status)} | ${markdownCell((finding.evidence || []).join(", "), "none")} |`);
+    const confirmedFindings = (findings.findings || []).filter((finding) => ["confirmed", "verified"].includes(String(finding.status || "").toLowerCase()));
     const coverageItems = Array.isArray(coverage.matrix) ? coverage.matrix : [];
     const positiveControls = coverageItems.filter((item) => item.status === "passed");
     const untestedItems = coverageItems.filter((item) => ["not-tested", "in-progress", "blocked"].includes(item.status));
+    const endpoints = readJson("enumeration/endpoints.json");
+    const services = readJson("vulnerability-scans/services.json");
+    const severityCounts = (findings.findings || []).reduce((counts, finding) => {
+      const severity = String(finding.severity || "unrated").toLowerCase();
+      counts[severity] = (counts[severity] || 0) + 1;
+      return counts;
+    }, {});
+    const evidenceRows = (evidence.records || []).map((record) => `| ${markdownCell(record.id)} | ${markdownCell(record.filePath || record.source || "not recorded")} | ${markdownCell(record.sha256 || "not recorded")} |`);
+    const scopeTargets = (scope.targets || []).map((target) => markdownCell(typeof target === "string" ? target : target?.value || target?.url || target?.host || "not recorded"));
     const details = (findings.findings || []).flatMap((finding) => [
       `### ${finding.id || "Unnumbered"}: ${finding.title || "Untitled finding"}`,
       "",
@@ -1397,25 +1428,41 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
     const report = [
       `# ${safeTitle}`,
       "",
-      `Generated: ${stamp}`,
-      `Assessment status: ${engagement.status || "draft"}`,
+      "## Title and Document Control",
+      "",
+      `- Document type: VAPT security assessment report`,
+      `- Generated: ${stamp}`,
+      `- Assessment status: ${markdownCell(engagement.status, "draft")}`,
+      `- Current editable file: report/report.md`,
+      "",
+      "## Engagement Metadata and Authorization",
+      "",
+      `- Engagement name: ${markdownCell(engagement.engagement?.name, safeTitle)}`,
+      `- Authorization confirmed: ${engagement.authorization?.confirmed ? "yes" : "no"}`,
+      `- Scope reviewed: ${engagement.scopeReview?.reviewed ? "yes" : "no"}`,
+      `- Exclusions confirmed: ${engagement.scopeReview?.exclusionsConfirmed ? "yes" : "no"}`,
+      `- Client/contact: ${markdownCell(engagement.contacts?.client || engagement.engagement?.client, "not recorded")}`,
+      "",
+      "## Scope and Exclusions",
+      "",
+      ...(scopeTargets.length ? scopeTargets.map((target) => `- In scope: ${target}`) : ["- In-scope targets: not recorded"]),
+      `- Excluded assets: ${(readJson("scope/out-of-scope.json").assets || []).length}`,
+      "",
+      "## Rules of Engagement",
+      "",
+      `- Testing windows: ${markdownCell((engagement.rulesOfEngagement?.testingWindows || []).join(", "), "not configured")}`,
+      `- Rate/concurrency: ${engagement.rulesOfEngagement?.requestsPerSecond || 0} req/s, ${engagement.rulesOfEngagement?.maximumConcurrency || 1} concurrent`,
+      `- Stop conditions: ${markdownCell((engagement.rulesOfEngagement?.stopConditions || []).join(", "), "not recorded")}`,
       "",
       "## Executive Summary",
       "",
       `- In-scope targets: ${(scope.targets || []).length}`,
       `- Discovered assets: ${(assets.assets || []).length}`,
       `- Findings: ${(findings.findings || []).length}`,
+      `- Verified findings: ${confirmedFindings.length}`,
       `- Evidence records: ${evidence.records?.length || 0}`,
       `- Runs: ${(runs.runs || []).length}`,
       `- Coverage tested: ${coverage.summary?.tested || 0}/${coverage.summary?.total || 0}`,
-      "",
-      "## Authorization and Rules of Engagement",
-      "",
-      `- Authorization confirmed: ${engagement.authorization?.confirmed ? "yes" : "no"}`,
-      `- Scope reviewed: ${engagement.scopeReview?.reviewed ? "yes" : "no"}`,
-      `- Exclusions confirmed: ${engagement.scopeReview?.exclusionsConfirmed ? "yes" : "no"}`,
-      `- Testing windows: ${(engagement.rulesOfEngagement?.testingWindows || []).join(", ") || "not configured"}`,
-      `- Rate/concurrency: ${engagement.rulesOfEngagement?.requestsPerSecond || 0} req/s, ${engagement.rulesOfEngagement?.maximumConcurrency || 1} concurrent`,
       "",
       "## Methodology",
       "",
@@ -1424,20 +1471,38 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
       "- MITRE ATT&CK mappings are supplemental adversary context and do not prove application-testing coverage.",
       "- Scanner output is treated as a lead until reproduction, evidence, false-positive review, and any required independent verification pass.",
       "",
-      "## Findings",
+      "## Attack Surface Summary",
+      "",
+      `- Assets: ${(assets.assets || []).length}`,
+      `- In-scope targets: ${(scope.targets || []).length}`,
+      `- Recorded endpoints: ${(endpoints.endpoints || []).length}`,
+      `- Services: ${(services.services || []).length}`,
+      "",
+      "## Findings Summary by Severity and Status",
+      "",
+      `- Severity counts: ${Object.entries(severityCounts).sort(([left], [right]) => left.localeCompare(right)).map(([severity, count]) => `${severity}=${count}`).join(", ") || "none recorded"}`,
       "",
       "| ID | Title | Severity | Confidence | Status | Evidence |",
       "| --- | --- | --- | --- | --- | --- |",
-      ...(findingRows.length ? findingRows : ["| â€” | No findings recorded | â€” | â€” | â€” | â€” |"]),
+      ...(findingRows.length ? findingRows : ["| none | No findings recorded | unrated | not recorded | not recorded | none |"]),
+      "",
+      "## Confirmed Findings",
+      "",
+      ...(confirmedFindings.length ? confirmedFindings.map((finding) => `- ${markdownCell(finding.id, "Unnumbered")}: ${markdownCell(finding.title, "Untitled finding")} (${markdownCell(finding.severity, "unrated")}; evidence: ${markdownCell((finding.evidence || []).join(", "), "none")})`) : ["- No verified findings are recorded."]),
       "",
       "## Detailed Findings",
       "",
       ...(details.length ? details : ["No detailed findings were recorded.", ""]),
-      "## Positive Control Observations",
+      "## Business and Technical Risk",
       "",
-      ...(positiveControls.length ? positiveControls.map((item) => `- ${item.id || item.control || "procedure"}: no issue was observed under the recorded procedure and tested conditions (evidence: ${(item.evidenceIds || []).join(", ") || "not linked"}).`) : ["- No passed control observations are recorded."]),
+      "- Technical severity, business impact, exploit preconditions, confidence, and verifier status are reported separately.",
+      ...(confirmedFindings.length ? confirmedFindings.map((finding) => `- ${markdownCell(finding.id, "Unnumbered")}: technical impact=${markdownCell(finding.impact?.technical || finding.technicalImpact, "not recorded")}; business impact=${markdownCell(finding.impact?.business || finding.businessImpact, "not recorded")}.`) : ["- No verified business or technical risk is recorded."]),
       "",
-      "## Coverage",
+      "## Positive Security Observations",
+      "",
+      ...(positiveControls.length ? positiveControls.map((item) => `- ${markdownCell(item.id || item.control, "procedure")}: no issue was observed under the recorded procedure and tested conditions (evidence: ${markdownCell((item.evidenceIds || []).join(", "), "not linked")}).`) : ["- No passed control observations are recorded."]),
+      "",
+      "## Coverage, Blocked Tests, and Untested Areas",
       "",
       `- Tested: ${coverage.summary?.tested || 0}`,
       `- Passed: ${coverage.summary?.passed || 0}`,
@@ -1446,22 +1511,20 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
       `- Not applicable: ${coverage.summary?.notApplicable || 0}`,
       `- Not tested: ${coverage.summary?.notTested || 0}`,
       "",
-      "### Untested and blocked areas",
+      ...(untestedItems.length ? untestedItems.map((item) => `- ${markdownCell(item.id || item.control, "coverage item")}: ${markdownCell(item.status, "not recorded")}${item.reason ? ` - ${markdownCell(item.reason)}` : ""}`) : ["- No matrix-level gaps are recorded; verify checklist-level coverage separately."]),
       "",
-      ...(untestedItems.length ? untestedItems.map((item) => `- ${item.id || item.control || "coverage item"}: ${item.status}${item.reason ? ` â€” ${item.reason}` : ""}`) : ["- No matrix-level gaps are recorded; verify checklist-level coverage separately."]),
+      "## Prioritized Remediation Roadmap",
       "",
-      "## Risk Methodology and Remediation Priorities",
-      "",
-      "- New findings use CVSS 4.0 where sufficient metrics exist; legacy CVSS 3.1 records remain identified as legacy.",
       "- Prioritize verified critical/high findings first, then exposed medium findings and systemic control gaps. Informational and low observations remain context-dependent.",
-      "- Technical severity, business impact, exploit preconditions, confidence, and verifier status are reported separately.",
+      ...(confirmedFindings.length ? confirmedFindings.map((finding) => `- ${markdownCell(finding.id, "Unnumbered")}: ${markdownCell(finding.remediation?.recommendation || (typeof finding.remediation === "string" ? finding.remediation : ""), "Remediation not recorded")}`) : ["- No verified remediation items are recorded."]),
       "",
-      "## Retest Status",
+      "## Retest Results",
       "",
       `- Findings requiring retest: ${(findings.findings || []).filter((finding) => ["retest-required", "remediated"].includes(finding.status)).length}`,
       `- Closed after retest: ${(findings.findings || []).filter((finding) => finding.status === "closed").length}`,
+      "- Retest evidence and status: not recorded unless linked to a finding above.",
       "",
-      "## Limitations and Retest Notes",
+      "## Limitations",
       "",
       `- Untested coverage items: ${coverage.summary?.notTested || 0}`,
       `- Blocked coverage items: ${coverage.summary?.blocked || 0}`,
@@ -1469,14 +1532,33 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
       "- This export is generated from current local records; validate scope, evidence integrity, disclosure state, and retest status before client delivery.",
       "- A passed procedure or no-issue observation means only that no issue was observed under the documented tested conditions. It does not guarantee the absence of vulnerabilities.",
       "",
+      "## Evidence Index",
+      "",
+      "| Evidence ID | File/source | SHA-256 |",
+      "| --- | --- | --- |",
+      ...(evidenceRows.length ? evidenceRows : ["| none | No evidence records are available | not recorded |"]),
+      "",
+      "## Appendices and Framework Mappings",
+      "",
+      "- Framework mappings are taken from finding classification records and the assessment coverage matrix.",
+      `- WSTG/ASVS/CWE/ CAPEC/ MITRE references recorded: ${(findings.findings || []).flatMap((finding) => [...(finding.classification?.cweIds || []), ...(finding.classification?.wstgIds || []), ...(finding.classification?.asvsIds || []), ...(finding.classification?.capecIds || []), ...(finding.classification?.mitreTechniqueIds || [])]).filter(Boolean).length}`,
+      "",
     ].join("\n");
     try {
-      const exportDir = path.join(verification.root, "report", "exports");
+      const reportDir = path.join(verification.root, "report");
+      const exportDir = path.join(reportDir, "exports");
+      atomicWriteText(path.join(reportDir, "report.md"), report);
       fs.mkdirSync(exportDir, { recursive: true });
-      const fileName = `report-${stamp.replace(/[:.]/g, "-")}.md`;
-      const target = path.join(exportDir, fileName);
-      fs.writeFileSync(target, report, "utf8");
-      return { ok: true, path: path.relative(verification.root, target).replace(/\\/g, "/"), generatedAt: stamp, summary: { findings: (findings.findings || []).length, evidence: evidence.records?.length || 0, assets: (assets.assets || []).length, runs: (runs.runs || []).length } };
+      const fileName = `vapt-report-${stamp.replace(/[:.]/g, "-")}.md`;
+      let target = path.join(exportDir, fileName);
+      let collision = 1;
+      while (fs.existsSync(target)) {
+        target = path.join(exportDir, `${fileName.slice(0, -3)}-${collision}.md`);
+        collision += 1;
+      }
+      atomicWriteText(target, report);
+      const exportPath = path.relative(verification.root, target).replace(/\\/g, "/");
+      return { ok: true, path: exportPath, exportPath, workingPath: "report/report.md", generatedAt: stamp, summary: { findings: (findings.findings || []).length, evidence: evidence.records?.length || 0, assets: (assets.assets || []).length, runs: (runs.runs || []).length } };
     } catch (error) { return { error: error.message, code: "REPORT_GENERATION_FAILED" }; }
   }
 

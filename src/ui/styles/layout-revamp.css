@@ -160,6 +160,10 @@ body,
   font-size: 25px;
 }
 
+#activity-search .codicon {
+  font-size: 25px;
+}
+
 #sidebar {
   width: var(--revamp-sidebar-width);
   background: var(--revamp-panel);
@@ -297,6 +301,7 @@ body,
 #terminal-body,
 #terminal-viewport,
 #terminal-empty,
+#terminal-tabs-list,
 .terminal-instance,
 .terminal-instance .xterm,
 .terminal-instance .xterm-viewport,
@@ -359,6 +364,17 @@ body,
   display: none !important;
 }
 
+/* Built-in workspace pages are easier to distinguish from ordinary files
+   when several tabs are open. Their renderer assigns the page-specific
+   Codicon; regular file-tab icons remain intentionally hidden. */
+.editor-tab.special-workspace-tab .tab-icon {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: currentColor;
+}
+
 .tab-label {
   flex: 0 1 auto;
   font-size: 16px;
@@ -415,6 +431,8 @@ body,
   width: var(--revamp-chat-width);
   min-width: 20vw;
   max-width: 50vw;
+  container-name: chat-pane;
+  container-type: inline-size;
   background: var(--revamp-panel);
   border-left: 0;
 }
@@ -633,7 +651,8 @@ body,
 }
 
 .chat-mode-button {
-  min-width: 100px;
+  min-width: 0;
+  width: fit-content;
   background: var(--revamp-control) !important;
   color: var(--revamp-text) !important;
   opacity: 1 !important;
@@ -650,6 +669,25 @@ body,
 
 #model-label {
   max-width: 130px;
+}
+
+@container chat-pane (max-width: 440px) {
+  #chat-mode-button,
+  #authority-picker {
+    width: 24px;
+    min-width: 24px;
+    max-width: 24px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+
+  #chat-mode-button-label,
+  #authority-label,
+  #chat-mode-button .chat-mode-chevron,
+  #authority-picker .authority-chevron {
+    display: none;
+  }
 }
 
 .context-ring-btn {
@@ -1788,6 +1826,7 @@ body,
   min-height: 62px;
   border: 0 !important;
   border-bottom: 1px solid #2a2a2a !important;
+  background: #1b1b1b;
 }
 
 .app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry-row:last-child {
@@ -1800,15 +1839,24 @@ body,
   padding: 12px 15px;
 }
 
-.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry:hover,
-.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry:focus-visible,
+.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry-row:has(.guidance-entry:hover),
+.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry-row:has(.guidance-entry:focus-visible),
 .app-settings-content #app-settings-commands-panel .mcp-add-row:hover:not(:disabled),
 .app-settings-content #app-settings-commands-panel .mcp-add-row:focus-visible {
   background: #222;
 }
 
-.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry.active {
+.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry:hover,
+.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry:focus-visible {
+  background: transparent;
+}
+
+.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry-row:has(.guidance-entry.active) {
   background: #232323;
+}
+
+.app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry.active {
+  background: transparent;
   box-shadow: inset 2px 0 #858585;
 }
 

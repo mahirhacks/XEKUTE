@@ -56,6 +56,7 @@ const ToolPort = require(path.join(root, "src/contracts/tool/tool-port.js"));
 const ModeRegistry = require(path.join(root, "src/agent/modes/mode-registry.js"));
 const ScopePolicy = require(path.join(root, "src/agent/authority/scope/scope-policy.js"));
 const { createSkillKnowledgeGraph } = require(path.join(root, "src/app/services/assessment/knowledge/skill-knowledge-graph.js"));
+const { createSpecialSkillRegistry } = require(path.join(root, "src/agent/special-skills/registry.js"));
 
 assert.match(main, /sandbox:\s*true/);
 assert.match(main, /contextIsolation:\s*true/);
@@ -161,6 +162,13 @@ for (const required of [
   "src/app/services/assessment/knowledge/assessment-knowledge-engine.js",
   "src/app/services/assessment/knowledge/skill-knowledge-graph.js",
   "src/app/services/assessment/knowledge/mcp-runtime.js",
+  "src/agent/special-skills/registry.js",
+  "src/agent/special-skills/loader.js",
+  "src/agent/special-skills/runner.js",
+  "src/agent/special-skills/schema.js",
+  "src/agent/special-skills/pentest/pipeline.js",
+  "src/agent/special-skills/pentest/state-store.js",
+  "src/domain/assessment/web-artifact-store.js",
   "src/app/storage/project-memory-store.js",
   "src/agent/memory/context/context-compiler.js",
   "src/app/storage/session-memory-store.js",
@@ -265,11 +273,28 @@ assert.ok(fs.existsSync(path.join(root, "temp_test")), "temp_test harness must r
 const skillGraph = createSkillKnowledgeGraph({ libraryRoot: path.join(sourceRoot, "prompts", "skills") });
 const skillValidation = skillGraph.validation();
 assert.equal(skillValidation.ok, true, `skill knowledge graph must validate: ${skillValidation.error || "unknown error"}`);
-for (const requiredSkill of [
-  "vapt_cycle", "preflight", "scope_validation", "passive_recon", "active_recon", "osint", "enumeration",
-  "attack_surface_mapping", "traffic_analysis", "service_analysis", "technology_fingerprinting", "identity_session_analysis",
-  "authentication_testing", "authorization_testing", "input_validation", "business_logic_testing", "vulnerability_analysis",
-  "exploitation", "post_exploitation", "verification", "finding_documentation", "reporting", "retest",
-]) assert.ok(skillGraph.list().some((skill) => skill.id === requiredSkill), `skill ${requiredSkill} must be discoverable`);
+const requiredKnowledgeSkills = [
+  "idor", "bola", "xss", "csrf", "ssrf", "sqli", "auth_logic", "business_logic", "payment_logic", "user_account_logic",
+  "graphql", "file_upload", "path_traversal", "sensitive_data_exposure",
+];
+for (const requiredSkill of requiredKnowledgeSkills) assert.ok(skillGraph.list().some((skill) => skill.id === requiredSkill), `knowledge skill ${requiredSkill} must be discoverable`);
+assert.ok(!exists("src/prompts/skills/cyber-library.js"), "the JavaScript cyber-library mirror must remain removed");
+assert.ok(!exists("src/prompts/skills/vapt-skill-library.js"), "the legacy JavaScript VAPT library adapter must remain removed");
+assert.equal(sourceFiles("src/prompts/skills/libraries").some((file) => file.endsWith(".js")), false, "vulnerability library must contain Markdown only");
+
+const specialSkillRegistry = createSpecialSkillRegistry({ root: path.join(sourceRoot, "agent", "special-skills") });
+assert.deepEqual(
+  specialSkillRegistry.list().map((skill) => skill.command),
+  ["/create-rule", "/create-skill", "/create-subagent", "/pentest", "/report"],
+  "the shipped special-skill registry must contain exactly the five built-ins",
+);
+assert.deepEqual(specialSkillRegistry.diagnostics(), [], "shipped special-skill packages must validate without diagnostics");
+const pentestSkill = specialSkillRegistry.list().find((skill) => skill.id === "pentest");
+assert.ok(pentestSkill.requiredTools.includes("manage_pentest"), "the pentest package must declare its scoped orchestration capability");
+assert.ok(exists("src/agent/special-skills/pentest/orchestrator.js"), "the pentest production orchestrator must exist");
+const electronMain = read("src/app/electron/main.js");
+assert.match(electronMain, /pentestOrchestrator\.initialize\(/, "\/pentest must initialize the production orchestrator");
+assert.match(electronMain, /pentestOrchestrator\.observeToolResult\(/, "material pentest tool results must resynchronize the orchestrator");
+assert.match(electronMain, /executeManagePentest\(/, "the manage_pentest capability must execute through the main-process authority pipeline");
 
 console.log("XEKUTE production architecture invariants verified.");

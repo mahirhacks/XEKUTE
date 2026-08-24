@@ -124,19 +124,57 @@ function guidanceRoots({ workspace = "", scope = "project", globalRoot = "" } = 
   return roots;
 }
 
-function summarizeGuidanceFile(absolute) {
+function summarizeGuidanceSource(source) {
+  const summary = String(source || "")
+    .slice(0, 900)
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s*#+\s*/gm, "")
+    .replace(/[*_`>-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return summary.length > 220 ? `${summary.slice(0, 217).trimEnd()}...` : summary;
+}
+
+function readGuidanceFile(absolute) {
+  let handle = null;
   try {
-    const source = fs.readFileSync(absolute, "utf8").slice(0, 900);
-    const summary = source
-      .replace(/```[\s\S]*?```/g, " ")
-      .replace(/^\s*#+\s*/gm, "")
-      .replace(/[*_`>-]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    return summary.length > 220 ? `${summary.slice(0, 217).trimEnd()}...` : summary;
+    handle = fs.openSync(absolute, "r");
+    const stat = fs.fstatSync(handle);
+    if (!stat.isFile() || stat.size > MAX_GUIDANCE_FILE_BYTES) return null;
+    return {
+      source: fs.readFileSync(handle, "utf8"),
+      size: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+    };
   } catch {
-    return "";
+    return null;
+  } finally {
+    if (handle !== null) {
+      try { fs.closeSync(handle); } catch { /* ignore a cleanup failure */ }
+    }
   }
+}
+
+function skillActivationCommand(source, fileName = "") {
+  const text = String(source || "");
+  const activationHeading = /^\s{0,3}#{1,6}\s+activation\s*#*\s*$/im;
+  const headingMatch = activationHeading.exec(text);
+  if (headingMatch) {
+    const sectionStart = headingMatch.index + headingMatch[0].length;
+    const remainder = text.slice(sectionStart);
+    const nextHeading = /^\s{0,3}#{1,6}\s+/m.exec(remainder);
+    const section = nextHeading ? remainder.slice(0, nextHeading.index) : remainder;
+    const explicit = section.match(/\/[a-z0-9][a-z0-9_-]*/i);
+    if (explicit) return explicit[0].toLowerCase();
+  }
+
+  const baseName = path.basename(String(fileName || ""), path.extname(String(fileName || "")));
+  const slug = baseName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug ? `/${slug}` : "";
 }
 
 function walkGuidanceDirectory(descriptor, output, relative = "") {
@@ -155,7 +193,9 @@ function walkGuidanceDirectory(descriptor, output, relative = "") {
       walkGuidanceDirectory(descriptor, output, path.posix.join(relative, entry.name));
       continue;
     }
-    if (!stat.isFile() || !isGuidanceFile(absolute) || stat.size > MAX_GUIDANCE_FILE_BYTES) continue;
+    if (!stat.isFile() || !isGuidanceFile(absolute)) continue;
+    const file = readGuidanceFile(absolute);
+    if (!file) continue;
     output.push({
       scope: descriptor.scope,
       kind: displayKind(descriptor.kind),
@@ -163,9 +203,10 @@ function walkGuidanceDirectory(descriptor, output, relative = "") {
       legacy: descriptor.legacy,
       relativePath,
       name: entry.name,
-      summary: summarizeGuidanceFile(absolute),
-      size: stat.size,
-      updatedAt: stat.mtime.toISOString(),
+      summary: summarizeGuidanceSource(file.source),
+      activation: displayKind(descriptor.kind) === "skills" ? skillActivationCommand(file.source, entry.name) : "",
+      size: file.size,
+      updatedAt: file.updatedAt,
     });
   }
 }
@@ -287,5 +328,6 @@ module.exports = {
   normalizeKind,
   normalizeScope,
   readGuidanceEntry,
+  skillActivationCommand,
   writeGuidanceFile,
 };

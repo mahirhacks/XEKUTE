@@ -7,8 +7,14 @@ const {
   formatWorkspaceGuidance,
   listGuidanceEntries,
   listWorkspaceGuidance,
+  skillActivationCommand,
   writeGuidanceFile,
 } = require("../src/app/services/guidance/custom-guidance.js");
+
+test("custom skill activation uses the declared operator with a filename fallback", () => {
+  assert.equal(skillActivationCommand("## Activation\n\nActivates with `/Find-Targets`.", "fallback.md"), "/find-targets");
+  assert.equal(skillActivationCommand("# Skill without an activation section", "HTTP review.md"), "/http-review");
+});
 
 test("project guidance loads only supported custom skill, rule, and instruction files", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-guidance-"));
@@ -16,7 +22,7 @@ test("project guidance loads only supported custom skill, rule, and instruction 
     fs.mkdirSync(path.join(root, "custom", "skills"), { recursive: true });
     fs.mkdirSync(path.join(root, "custom", "rules"), { recursive: true });
     fs.mkdirSync(path.join(root, "custom", "instructions"), { recursive: true });
-    fs.writeFileSync(path.join(root, "custom", "skills", "triage.md"), "Prefer evidence-backed triage.", "utf8");
+    fs.writeFileSync(path.join(root, "custom", "skills", "triage.md"), "# Triage\n\n## Activation\n\n`/evidence-triage`\n\nPrefer evidence-backed triage.", "utf8");
     fs.writeFileSync(path.join(root, "custom", "rules", "roe.yaml"), "- Ask before active testing", "utf8");
     fs.writeFileSync(path.join(root, "custom", "instructions", "report.txt"), "Use concise headings.", "utf8");
     fs.writeFileSync(path.join(root, "custom", "instructions", "ignored.js"), "not guidance", "utf8");
@@ -27,6 +33,7 @@ test("project guidance loads only supported custom skill, rule, and instruction 
       "custom/rules/roe.yaml",
       "custom/skills/triage.md",
     ]);
+    assert.equal(entries.find((entry) => entry.name === "triage.md")?.activation, "/evidence-triage");
     const context = formatWorkspaceGuidance(root, entries);
     assert.match(context, /XEKUTE USER-PROVIDED GUIDANCE/);
     assert.match(context, /triage\.md/);

@@ -23,7 +23,7 @@ const { toolResultContentForModel } = require("../runtime/result-projector.js");
 const { redactSecrets } = require("../../shared/secret-redaction.js");
 
 const MAX_AGENT_ROUNDS = Tunables.MAX_AGENT_ROUNDS;
-const READ_ONLY_TOOL_NAMES = new Set(ToolMap.MODE_TOOL_GROUPS.ask);
+const READ_ONLY_TOOL_NAMES = new Set(ToolMap.READ_ONLY_TOOL_NAMES);
 const EMPTY_SEND_EVENT = () => {};
 const EMPTY_EXECUTE_TOOL = async () => ({
   ok: false,
@@ -403,6 +403,7 @@ function buildPromptMessages({
   numCtx,
   editContext,
   workflowPacket,
+  specialSkillPrompt = "",
 }) {
   const depth = contextRoute.kind === "conversation" ? "compact" : "operational";
   const base = [{
@@ -411,6 +412,7 @@ function buildPromptMessages({
       mode: profile.key,
       modeFamily: profile.family,
       depth,
+      specializedGuidance: specialSkillPrompt,
     }),
   }];
   if (contextRoute.includeProjectContext && workspace) {
@@ -496,6 +498,7 @@ async function runAgentTurn({
   modeWorkflow = null,
   intelligence = null,
   planBinding = null,
+  specialSkill = null,
   signal = null,
   sendEvent = EMPTY_SEND_EVENT,
   runModelRound,
@@ -519,12 +522,12 @@ async function runAgentTurn({
   const workflowDecision = modeWorkflow?.classify?.({ mode: profile.key, message: userMessage, workspace }) || { action: "continue" };
   let activePlanBinding = planBinding || modeWorkflow?.loadState?.(workspace)?.planBinding || null;
   let workflowImmediate = "";
-  if (workflowDecision.action === "recommend_switch" || workflowDecision.action === "ask_plan_choice") {
+  if (workflowDecision.action === "review_required") {
     workflowImmediate = workflowDecision.message;
   } else if (workflowDecision.action === "approve_plan") {
     const approval = modeWorkflow.approvePlan(workspace, workflowDecision.planId, "local-user");
     workflowImmediate = approval.ok
-      ? "The plan has been approved and its execution hash has been recorded. Switch to Agent mode to execute it."
+      ? "The plan has been approved and its execution hash has been recorded. You can ask me to execute it in the current mode."
       : String(approval.error || "The plan could not be approved.");
   } else if (workflowDecision.action === "bind_plan") {
     const binding = modeWorkflow.bindPlan(workspace, workflowDecision.planId, runId);
@@ -535,24 +538,29 @@ async function runAgentTurn({
   }
   const editContext = {
     isEditRequest: isEditRequest(userMessage),
-    requiresMutation: isEditRequest(userMessage) && profile.key !== "ask" && profile.key !== "hypothesis",
+    requiresMutation: isEditRequest(userMessage),
     targetFile: inferEditTarget(userMessage, activeFile, dirMap),
   };
   let availableTools = ToolMap.toolsForProfile(profile, undefined, tools);
-  // Plan authoring is exclusive to Plan mode. Agent mode may execute an
-  // approved plan, whose checkbox state is synchronized by update_task_list.
-  if (profile.key === "agent") {
-    availableTools = availableTools.filter((tool) => String(tool?.function?.name || "") !== "manage_plan");
+  // A special skill may declare a narrowly scoped runtime capability (for
+  // example, the retained creation skills' create_guidance writer).  These
+  // definitions are injected for the current turn only and are deliberately
+  // not part of the canonical mode/tool inventory.
+  const specialCapabilities = new Set([
+    ...(Array.isArray(specialSkill?.manifest?.requiredTools) ? specialSkill.manifest.requiredTools : []),
+    ...(Array.isArray(specialSkill?.manifest?.requiredCapabilities) ? specialSkill.manifest.requiredCapabilities : []),
+  ].map((value) => String(value || "").trim()).filter(Boolean));
+  if (specialCapabilities.size && Array.isArray(tools)) {
+    for (const tool of tools) {
+      const name = String(tool?.function?.name || "");
+      if (specialCapabilities.has(name) && !availableTools.some((candidate) => candidate?.function?.name === name)) {
+        availableTools.push(tool);
+      }
+    }
   }
   const shouldOfferTaskList = !nested && profile.key === "agent" && (Boolean(activePlanBinding) || isReasonablyLargeAgentRequest(userMessage));
   if (!shouldOfferTaskList) {
     availableTools = availableTools.filter((tool) => String(tool?.function?.name || "") !== "update_task_list");
-  }
-  if (profile.key === "agent" && !activePlanBinding) {
-    availableTools = availableTools.filter((tool) => !INTELLIGENCE_TOOLS.has(String(tool?.function?.name || "")));
-  }
-  if (profile.key === "agent" && activePlanBinding) {
-    availableTools = availableTools.filter((tool) => String(tool?.function?.name || "") !== "query_assessment");
   }
   let allowedNames = new Set(availableTools.map((tool) => tool?.function?.name).filter(Boolean));
   const workflowPacket = modeWorkflow?.contextPacket?.(workspace, profile.key, intelligence) || null;
@@ -576,6 +584,7 @@ async function runAgentTurn({
     numCtx,
     editContext,
     workflowPacket: contextCompiler ? null : workflowPacket,
+    specialSkillPrompt: specialSkill?.prompt || "",
   });
   const compiledContext = contextCompiler?.compile?.({
     workspace,
@@ -915,26 +924,27 @@ async function runAgentTurn({
       });
       if (claimCheck.text && claimCheck.text !== finalText) finalText = claimCheck.text;
       const workflowIntent = String(workflowDecision.intent || "");
-      const shouldPersistWorkflow = profile.key === "hypothesis"
-        ? ["hypothesis_creation", "hypothesis_refinement"].includes(workflowIntent)
-        : profile.key === "plan" && ["assessment_planning", "plan_revision"].includes(workflowIntent);
+      const hypothesisArtifact = ["hypothesis_creation", "hypothesis_refinement"].includes(workflowIntent);
+      const planArtifact = ["assessment_planning", "plan_revision"].includes(workflowIntent);
+      const shouldPersistWorkflow = hypothesisArtifact || planArtifact;
       const workflowArtifact = workflowArtifactFromTool || (shouldPersistWorkflow
         ? modeWorkflow?.completeTurn?.(workspace, {
           mode: profile.key,
+          artifactType: hypothesisArtifact ? "hypothesis" : "plan",
           finalText,
           evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
           outcome: "completed",
-          newArtifact: profile.key === "hypothesis"
+          newArtifact: hypothesisArtifact
             ? workflowIntent !== "hypothesis_refinement"
             : workflowIntent !== "plan_revision",
         }) || null
         : null);
       const savedHypothesis = workflowArtifact?.hypothesis?.id;
       const savedPlan = workflowArtifact?.plan?.id;
-      if (savedHypothesis && !/switch to plan mode/i.test(finalText)) finalText = `${finalText}\n\nI've completed and saved ${savedHypothesis}. Switch to Plan mode so I can build a controlled assessment plan from this hypothesis.`;
+      if (savedHypothesis) finalText = `${finalText}\n\nI've completed and saved ${savedHypothesis}. You can keep working with it in the current mode.`;
       if (savedPlan) {
         const verb = workflowArtifactFromTool?.operation === "update" ? "updated" : "created";
-        finalText = `The plan has been ${verb} and saved to .xekute/plans/${savedPlan}.md. It is ready for review. If you approve it, switch to Agent mode and ask me to execute the plan; I’ll work through the tasks sequentially and mark each completed task with [x].`;
+        finalText = `The plan has been ${verb} and saved to .xekute/plans/${savedPlan}.md. It is ready for review. If you approve it, ask me to execute it in this mode; I’ll work through the tasks sequentially and mark each completed task with [x].`;
       }
       if (workingHistory.at(-1)?.role === "assistant") workingHistory[workingHistory.length - 1].content = finalText;
       AgentRuntime.finalize(runState, {
@@ -1015,8 +1025,8 @@ async function runAgentTurn({
       if (!allowedNames.has(toolName)) {
         toolResult = {
           ok: false,
-          error: toolName + " is not available in " + profileKey(profile) + " mode.",
-          errorCode: "MODE_TOOL_UNAVAILABLE",
+          error: toolName + " is not available for this turn.",
+          errorCode: "TOOL_UNAVAILABLE",
           retryable: false,
         };
       } else if (seenThisRound.has(signature)) {
@@ -1059,7 +1069,7 @@ async function runAgentTurn({
               mode: profile.key,
               planBinding: activePlanBinding,
             }));
-            if (toolName === "manage_plan" && profile.key === "plan" && toolResult?.ok && ["create", "update"].includes(String(toolResult?.value?.operation || ""))) {
+            if (toolName === "manage_plan" && toolResult?.ok && ["create", "update"].includes(String(toolResult?.value?.operation || ""))) {
               const managedPlan = toolResult?.value?.plan;
               if (managedPlan?.id && Array.isArray(managedPlan.tasks) && managedPlan.tasks.length) {
                 const saved = modeWorkflow?.savePlan?.(workspace, { ...managedPlan, status: "ready_for_review" }) || null;

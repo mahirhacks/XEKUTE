@@ -17,10 +17,10 @@
   }
 
   const MODES = Object.freeze({
-    hypothesis: defineProfile("hypothesis", "Hypothesis", "assess", "Read context and form grounded hypotheses only."),
-    plan: defineProfile("plan", "Plan", "plan", "Create and revise plans; read and write workspace files."),
+    hypothesis: defineProfile("hypothesis", "Hypothesis", "assess", "Emphasize grounded hypotheses while honoring the user's requested actions."),
+    plan: defineProfile("plan", "Plan", "plan", "Emphasize structured planning while honoring the user's requested actions."),
     agent: defineProfile("agent", "Agent", "active", "Execute, observe, verify, and report within configured scope."),
-    ask: defineProfile("ask", "Ask", "observe", "Analyze evidence and answer with read-only tools."),
+    ask: defineProfile("ask", "Ask", "observe", "Emphasize direct answers while honoring the user's requested actions."),
   });
 
   // Input aliases normalize older UI payloads to the four public mode IDs.
@@ -54,25 +54,15 @@
     Object.values(MODES).map((profile) => [profile.id, profile]),
   ));
 
-  const READ_ONLY_CAPABILITIES = new Set(["observe", "assess", "verify", "report"]);
+  const READ_ONLY_CAPABILITIES = new Set();
 
-  const MODE_TOOL_GROUPS = Object.freeze({
-    ask: Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"]),
-    agent: Object.freeze([
-      "ask_questions", "update_task_list", "exec_command", "read_file", "search_workspace", "apply_patch", "inspect_environment",
-      "manage_state", "ingest_traffic", "manage_identity", "replay_request",
-      "run_test_case", "browser_action", "compare_responses", "verify_finding", "store_finding",
-      "attack_graph", "delegate_agent", "query_assessment", "expand_evidence",
-      "query_knowledge", "web_research",
-    ]),
-    hypothesis: Object.freeze([
-      "ask_questions", "read_file", "search_workspace", "inspect_environment", "manage_state",
-      "ingest_traffic", "compare_responses", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research",
-    ]),
-    plan: Object.freeze([
-      "ask_questions", "read_file", "search_workspace", "inspect_environment", "manage_plan", "manage_state", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research",
-    ]),
-  });
+  const ALL_MODE_TOOLS = Object.freeze([
+    "ask_questions", "update_task_list", "exec_command", "read_file", "search_workspace", "apply_patch", "inspect_environment",
+    "manage_plan", "manage_state", "ingest_traffic", "manage_identity", "replay_request", "run_test_case", "browser_action",
+    "compare_responses", "verify_finding", "store_finding", "attack_graph", "delegate_agent", "query_assessment",
+    "expand_evidence", "query_knowledge", "web_research",
+  ]);
+  const MODE_TOOL_GROUPS = Object.freeze({ ask: ALL_MODE_TOOLS, agent: ALL_MODE_TOOLS, hypothesis: ALL_MODE_TOOLS, plan: ALL_MODE_TOOLS });
 
   function normalizeProfile(familyOrProfile = "agent", mode = "agent") {
     const objectProfile = familyOrProfile && typeof familyOrProfile === "object" ? familyOrProfile : null;

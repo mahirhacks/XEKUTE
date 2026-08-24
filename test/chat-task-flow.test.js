@@ -9,13 +9,12 @@ test("only reasonably large Agent tasks receive the temporary checklist surface"
   const controller = read("src/agent/controller/agent-controller.js");
   const modes = read("src/agent/modes/mode-registry.js");
   assert.match(controller, /function isReasonablyLargeAgentRequest\(/);
-  assert.match(controller, /profile\.key === "agent"[\s\S]*?!== "manage_plan"/);
   assert.match(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
   assert.match(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
   assert.match(controller, /sendEvent\(\{ type: "task_list"/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
-  assert.match(modes, /plan: Object\.freeze\(\[[\s\S]*?"manage_plan"/);
-  assert.doesNotMatch(modes.match(/agent: Object\.freeze\(\[[\s\S]*?\]\),/)?.[0] || "", /"manage_plan"/);
+  assert.match(modes, /const MODE_TOOL_GROUPS = Object\.freeze\(\{ ask: ALL_MODE_TOOLS, agent: ALL_MODE_TOOLS, hypothesis: ALL_MODE_TOOLS, plan: ALL_MODE_TOOLS \}\)/);
+  assert.match(modes, /"manage_plan"/);
 });
 
 test("chat keeps runtime plans internal and renders a compact activity feed", () => {

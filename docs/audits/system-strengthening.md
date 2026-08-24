@@ -211,8 +211,9 @@ src/
   of owning a second copy of the prompt.
 - The unreachable legacy prompt branches were removed from `agent-prompt.js`
   and the deprecated prompt archive was removed from the browser Toolbox.
-- The runtime still enforces authority, scope, Rules of Engagement, mode,
-  approvals, and evidence gates independently of editable prompt wording.
+- The runtime still enforces authority, scope, Rules of Engagement, approvals,
+  and evidence gates independently of editable prompt wording. The selected
+  chat mode changes working style and never gates capabilities.
 - Structural tests and production verification now assert the folder boundary
   and browser script load order so prompt and policy concerns cannot silently
   collapse back together.

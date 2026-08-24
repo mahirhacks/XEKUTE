@@ -1,13 +1,13 @@
 {
   "name": "xekute-app",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
   "main": "src/app/electron/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electronmon --inspect=5858 . --dev",
-    "test": "node --test",
+    "test": "node --test --test-concurrency=2",
     "migrate:chat-memory": "node scripts/migrate-chat-memory.js",
     "migrate:assessment-workflow": "node scripts/migrate-assessment-workflow.js",
     "verify:production": "node scripts/verify-production.js",

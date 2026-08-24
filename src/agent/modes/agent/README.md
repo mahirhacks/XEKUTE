@@ -1,5 +1,5 @@
 # Agent mode
 
-Full canonical tool surface for scoped execution. The registry is the single
-source of truth for the 17 exposed tools; this folder is reserved for
-agent-specific mode behavior, not authority policy.
+Execution-focused access to the same canonical tool surface as every other
+mode. The registry is the single source of truth; this folder is reserved for
+agent-specific response behavior, not authority or mode-switch policy.

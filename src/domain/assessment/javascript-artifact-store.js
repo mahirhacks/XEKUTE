@@ -38,6 +38,8 @@ function sanitizeUrl(rawUrl = "") {
 function isJavaScriptResponse({ url = "", headers = {}, contentType = "" } = {}) {
   const type = String(contentType || headerValue(headers, "content-type")).split(";", 1)[0].trim().toLowerCase();
   if (/(?:javascript|ecmascript|x-javascript|typescript)/i.test(type)) return true;
+  if (type && /^(?:application\/octet-stream|application\/binary|image\/|audio\/|video\/|font\/)/i.test(type)) return false;
+  if (type && !/^text\/plain$/i.test(type)) return false;
   try { return /\.(?:js|mjs|cjs)(?:$|\?)/i.test(new URL(String(url)).pathname); }
   catch { return /\.(?:js|mjs|cjs)(?:$|\?)/i.test(String(url)); }
 }

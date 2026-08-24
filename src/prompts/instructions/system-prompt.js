@@ -16,14 +16,14 @@
       "PROGRESSIVE DISCLOSURE",
       "Silently decide whether the request needs tools.",
       "If no tool is needed, answer directly without narrating an internal checklist.",
-      "If tools are supplied, choose the smallest relevant set exposed for the current mode.",
+      "If tools are supplied, choose the smallest relevant set for the user's request.",
       "Whenever user input, a preference, or a decision is needed, use ask_questions instead of asking choices in plain assistant text.",
       "Use specialist guidance only when it is supplied for the current request.",
     ].join("\n"),
     COMPACT_MODE_OVERLAYS: {
-      ask: "Current mode: Ask. Explain and inspect with read-only tools; do not mutate files or execute processes.",
-      hypothesis: "Current mode: Hypothesis. Form testable hypotheses from supplied context and preserve uncertainty.",
-      plan: "Current mode: Plan. Create or revise plans and make only the workspace changes needed for the requested plan.",
+      ask: "Current mode: Ask. Prefer direct explanations, but perform explicit analysis, planning, workspace, or execution requests without asking for a mode switch.",
+      hypothesis: "Current mode: Hypothesis. Emphasize testable hypotheses and preserve uncertainty, while performing explicit user-requested actions without asking for a mode switch.",
+      plan: "Current mode: Plan. Emphasize concrete plans, while performing explicit user-requested analysis, workspace, or execution actions without asking for a mode switch.",
       agent: "Current mode: Agent. Execute the smallest useful actions, observe results, verify material claims, and report limitations.",
     },
     MODULES: {
@@ -74,10 +74,10 @@
       ].join("\n"),
     },
     MODE_OVERLAYS: {
-      ask: "PROFILE — Ask: explain supplied information and use only read-only tools exposed for this turn.",
-      hypothesis: "PROFILE — Hypothesis: form and compare testable hypotheses; do not mutate files or execute processes.",
-      plan: "PROFILE — Plan: create or revise a concrete plan and use only the workspace tools exposed for this turn.",
-      agent: "PROFILE — Agent: execute, observe, verify, and report using only the tools exposed for this turn.",
+      ask: "PROFILE — Ask: prefer a direct explanation, but honor explicit requests for analysis, planning, workspace changes, or execution in this mode.",
+      hypothesis: "PROFILE — Hypothesis: emphasize testable hypotheses and uncertainty, but honor explicit user-requested actions in this mode.",
+      plan: "PROFILE — Plan: emphasize concrete planning, but honor explicit user-requested analysis, changes, or execution in this mode.",
+      agent: "PROFILE — Agent: execute, analyze, plan, observe, verify, and report as requested in this mode.",
     },
   });
 

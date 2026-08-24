@@ -37,7 +37,7 @@ function planDocumentContract({ path = "", userMessage = "", operation = "create
     updating
       ? "Update the existing Markdown plan in place with manage_plan (operation update). Read only the context needed for the requested revision."
       : "Create the complete Markdown implementation plan with manage_plan (operation create). Do not write the full plan in chat.",
-    "Do not create or update source code, assessment records, or any unrelated workspace file in Plan mode.",
+    "For this planning request: Do not create or update source code, assessment records, or unrelated workspace files.",
     `When a missing decision materially blocks planning, call ask_questions before ${updating ? "updating" : "creating"} the plan; otherwise make a conservative stated assumption and continue.`,
     `Required path: ${target}`,
     updating

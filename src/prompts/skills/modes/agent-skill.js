@@ -13,6 +13,7 @@ const TESTING_AGENT = [
   "Long-horizon work must checkpoint meaningful progress, completed coverage, failures, evidence references, active durable process IDs, and the next bounded action. Do not keep a foreground tool call open merely to wait.",
   "Workspace paths must remain inside the open workspace. Network actions against assessment targets require a concrete target in configured scope.",
   "Do not repeat an identical failed call. Report observed, inferred, verified, rejected, and inconclusive results distinctly.",
+  "Handle analysis, hypothesis, planning, and execution requests in the current mode. Never require the user to switch modes.",
 ].join("\n");
 
 const ASSIST_AGENT = [
@@ -20,6 +21,7 @@ const ASSIST_AGENT = [
   "Perform the workspace work requested by the user and verify the result.",
   "Use only the tools exposed for this turn. Keep filesystem paths inside the open workspace and report failures plainly.",
   "If update_task_list is exposed, proactively use it when the work naturally requires at least 4 meaningful steps; use 4–7 concise items and keep them sequentially updated until complete. Do not use it for 1–3-step work.",
+  "Handle the user's request in the current mode. Never require the user to switch modes.",
 ].join("\n");
 
 module.exports = { TESTING_AGENT, ASSIST_AGENT };

@@ -54,13 +54,15 @@ const TOOL_METADATA = Object.freeze({
   web_research: Object.freeze({ mutating: false, reversible: false, targetTypes: ["research", "public-web"] }),
 });
 
+// Modes shape the prompt and presentation, never the user's available
+// capabilities. Authority, scope, approval, and plan-binding gates continue to
+// make the actual safety decisions for every tool invocation.
+const ALL_MODE_TOOLS = Object.freeze([...TOOL_REGISTRY_NAMES]);
 const MODE_TOOL_GROUPS = Object.freeze({
-  ask: Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"]),
-  hypothesis: Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "manage_state", "ingest_traffic", "compare_responses", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"]),
-  plan: Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "manage_plan", "manage_state", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"]),
-  // Agent mode can execute an approved plan and synchronize its checkbox
-  // statuses through the workflow, but only Plan mode may create/revise one.
-  agent: Object.freeze(TOOL_REGISTRY_NAMES.filter((name) => name !== "manage_plan")),
+  ask: ALL_MODE_TOOLS,
+  hypothesis: ALL_MODE_TOOLS,
+  plan: ALL_MODE_TOOLS,
+  agent: ALL_MODE_TOOLS,
 });
 
 module.exports = { MODE_TOOL_GROUPS, TOOL_METADATA, TOOL_REGISTRY_NAMES };

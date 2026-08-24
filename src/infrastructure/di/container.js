@@ -9,6 +9,7 @@ const { createWebCloneService } = require("../../app/services/research/webclone.
 const { createAssessmentWorkspace } = require("../../domain/assessment/assessment-workspace");
 const { createAssessmentMap } = require("../../domain/assessment/assessment-map");
 const { createJavascriptArtifactStore } = require("../../domain/assessment/javascript-artifact-store.js");
+const { createWebArtifactStore } = require("../../domain/assessment/web-artifact-store.js");
 const { createGraphBuildService } = require("../../app/services/assessment/traffic-graph/graph-build-service.js");
 const { createJavascriptCollector } = require("../../app/services/assessment/traffic-graph/javascript-collector.js");
 const { buildIntruderRequests, createSecurityHttpWorkbench } = require("../../interceptor/http-workbench.js");
@@ -242,11 +243,13 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     promptDefaults: () => require("../../agent/runtime/prompt-compiler.js").defaults(),
   });
   const javascriptArtifacts = createJavascriptArtifactStore({ fs, path, crypto });
-  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligence: assessmentIntelligence, javascriptArtifacts });
+  const webArtifacts = createWebArtifactStore({ fs, path, crypto });
+  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligence: assessmentIntelligence, javascriptArtifacts, webArtifacts });
   assessmentIntelligence.setGraphProvider?.(assessmentMap);
   const graphBuildService = createGraphBuildService({
     assessmentMap,
     javascriptArtifacts,
+    webArtifacts,
     onEvent: (event) => {
       const win = getMainWindow();
       if (win && !win.isDestroyed()) win.webContents.send("assessment:graphStatus", event);
@@ -254,6 +257,7 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
   });
   const javascriptCollector = createJavascriptCollector({
     artifacts: javascriptArtifacts,
+    webArtifacts,
     assessmentMap,
     authorizeUrl: (target, { workspace, initialUrl, redirect } = {}) => {
       const projectProfile = projectProfileStore().read(workspace)?.profile || null;
@@ -439,6 +443,7 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     assessmentWorkspace,
     assessmentMap,
     javascriptArtifacts,
+    webArtifacts,
     javascriptCollector,
     graphBuildService,
     assessmentIntelligence,
