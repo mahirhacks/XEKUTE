@@ -16,9 +16,17 @@ function safeRelative(root, candidate, path = pathDefault) {
 }
 
 function readText(file, fs = fsDefault) {
-  const stat = fs.statSync(file);
-  if (!stat.isFile() || stat.size > MAX_SKILL_FILE_BYTES) throw Object.assign(new Error("Special-skill resource is missing or too large."), { code: "SPECIAL_SKILL_RESOURCE_INVALID" });
-  return fs.readFileSync(file, "utf8");
+  let handle = null;
+  try {
+    handle = fs.openSync(file, "r");
+    const stat = fs.fstatSync(handle);
+    if (!stat.isFile() || stat.size > MAX_SKILL_FILE_BYTES) throw Object.assign(new Error("Special-skill resource is missing or too large."), { code: "SPECIAL_SKILL_RESOURCE_INVALID" });
+    return fs.readFileSync(handle, "utf8");
+  } finally {
+    if (handle !== null) {
+      try { fs.closeSync(handle); } catch { /* preserve the read or validation result */ }
+    }
+  }
 }
 
 function loadPackage(packageRoot, { fs = fsDefault, path = pathDefault } = {}) {

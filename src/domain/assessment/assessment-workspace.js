@@ -1392,7 +1392,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), promptDef
     const runs = readJson("runs/runs.json");
     const evidence = readJsonl(verification.root, "evidence/index.jsonl", { limit: 500 });
     const stamp = now().toISOString();
-    const markdownCell = (value, fallback = "") => String(value == null || value === "" ? fallback : value).replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|");
+    const markdownCell = (value, fallback = "") => String(value == null || value === "" ? fallback : value).replace(/[\r\n]+/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
     const safeTitle = markdownCell(engagement.engagement?.name || verification.name || "Security Assessment", "Security Assessment").slice(0, 240);
     const findingRows = (findings.findings || []).map((finding) => `| ${markdownCell(finding.id)} | ${markdownCell(finding.title)} | ${markdownCell(finding.severity)} | ${markdownCell(finding.confidence)} | ${markdownCell(finding.status)} | ${markdownCell((finding.evidence || []).join(", "), "none")} |`);
     const confirmedFindings = (findings.findings || []).filter((finding) => ["confirmed", "verified"].includes(String(finding.status || "").toLowerCase()));
