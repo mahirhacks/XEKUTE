@@ -109,3 +109,6 @@ test/*
 !test/plan-markdown.test.js
 !test/update-task-list.test.js
 !test/chat-exchange-footer.test.js
+!test/special-skill-capabilities.test.js
+!test/special-skill-platform.test.js
+!test/vulnerability-library.test.js

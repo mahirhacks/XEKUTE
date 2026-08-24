@@ -46,8 +46,8 @@ test("the temporary task-list tool is exposed only for reasonably large Agent re
   await run("Implement the following:\n- inspect the updater\n- fix notification state\n- update the tests\n- verify packaging");
   assert.equal(seen[0].includes("update_task_list"), false);
   assert.equal(seen[1].includes("update_task_list"), true);
-  assert.equal(seen[0].includes("manage_plan"), false);
-  assert.equal(seen[1].includes("manage_plan"), false);
+  assert.equal(seen[0].includes("manage_plan"), true);
+  assert.equal(seen[1].includes("manage_plan"), true);
 });
 
 test("a large Agent task publishes checklist updates and removes the checklist on completion", async () => {
@@ -467,14 +467,14 @@ test("passive scan requests route cyber tools in testing mode", () => {
   assert.ok(route.cyberCapabilities.includes("active"));
 });
 
-test("passive scan in read-only modes routes cyber research without active capability", () => {
+test("passive scan routing is not reduced by the selected mode", () => {
   const route = ContextRouter.routeRequest({
     text: "can you run a basic passive scan?",
     hasWorkspace: true,
     mode: "ask",
   });
   assert.deepEqual(route.toolCategories, ["cyber"]);
-  assert.ok(!route.cyberCapabilities.includes("active"));
+  assert.ok(route.cyberCapabilities.includes("active"));
 });
 
 test("project prompt context merges workspace scope files with app-managed profile", () => {
@@ -544,8 +544,9 @@ test("scope questions in an open project inject project settings and scope guida
   assert.match(prompt, /app\.example\.com/);
   assert.match(prompt, /filesystem and network scope separately/i);
   assert.match(prompt, /UNTRUSTED CONTEXT DATA/);
-  assert.ok(Array.isArray(roundPayload.tools) && roundPayload.tools.length > 0, "ask mode exposes its read-only tool set");
-  assert.ok(roundPayload.tools.every((tool) => ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"].includes(tool.function?.name)), "ask tools are read-only");
+  assert.ok(Array.isArray(roundPayload.tools) && roundPayload.tools.length > 0, "ask mode exposes the canonical tool set");
+  assert.ok(roundPayload.tools.some((tool) => tool.function?.name === "query_assessment"), "ask mode can analyze assessment evidence");
+  assert.ok(roundPayload.tools.some((tool) => tool.function?.name === "exec_command"), "ask mode can honor explicit action requests");
   assert.equal(result.contextRoute.includeProjectContext, true);
 });
 
@@ -588,8 +589,8 @@ test("mode prompts stay distinct while the tool surface is registry-backed", () 
   assert.match(askPrompt, /PROFILE — Ask/);
   assert.match(ModeSkills.render("agent"), /tools/i);
   assert.match(planPrompt, /PROFILE — Plan/i);
-  assert.match(planPrompt, /workspace tools/i);
-  assert.match(askPrompt, /read-only tools/i);
+  assert.match(planPrompt, /honor explicit user-requested/i);
+  assert.match(askPrompt, /honor explicit requests/i);
   assert.match(askPrompt, /inconclusive/i);
   assert.match(hypothesisPrompt, /PROFILE — Hypothesis/i);
   assert.match(askPrompt, /Runtime scope checks are enforced/i);

@@ -312,7 +312,7 @@ test("unchanged input rebuilds idempotently with stable snapshot and builder met
   const second = map.build(root).graph;
   assert.deepEqual(second, first);
   assert.equal(first.schemaVersion, 5);
-  assert.equal(first.builderVersion, "0.7.0");
+  assert.equal(first.builderVersion, "0.8.0");
   assert.match(first.source.snapshotHash, /^sha256:[0-9a-f]{64}$/);
   assert.equal(first.source.failedCount, 1);
   assert.ok(first.source.warnings.some((warning) => warning.includes("malformed")));

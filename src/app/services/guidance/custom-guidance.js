@@ -139,6 +139,28 @@ function summarizeGuidanceFile(absolute) {
   }
 }
 
+function skillActivationCommand(source, fileName = "") {
+  const text = String(source || "");
+  const activationHeading = /^\s{0,3}#{1,6}\s+activation\s*#*\s*$/im;
+  const headingMatch = activationHeading.exec(text);
+  if (headingMatch) {
+    const sectionStart = headingMatch.index + headingMatch[0].length;
+    const remainder = text.slice(sectionStart);
+    const nextHeading = /^\s{0,3}#{1,6}\s+/m.exec(remainder);
+    const section = nextHeading ? remainder.slice(0, nextHeading.index) : remainder;
+    const explicit = section.match(/\/[a-z0-9][a-z0-9_-]*/i);
+    if (explicit) return explicit[0].toLowerCase();
+  }
+
+  const baseName = path.basename(String(fileName || ""), path.extname(String(fileName || "")));
+  const slug = baseName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug ? `/${slug}` : "";
+}
+
 function walkGuidanceDirectory(descriptor, output, relative = "") {
   if (output.length >= MAX_GUIDANCE_FILES || !fs.existsSync(descriptor.directory)) return;
   let entries = [];
@@ -156,6 +178,8 @@ function walkGuidanceDirectory(descriptor, output, relative = "") {
       continue;
     }
     if (!stat.isFile() || !isGuidanceFile(absolute) || stat.size > MAX_GUIDANCE_FILE_BYTES) continue;
+    let source = "";
+    try { source = fs.readFileSync(absolute, "utf8"); } catch { continue; }
     output.push({
       scope: descriptor.scope,
       kind: displayKind(descriptor.kind),
@@ -164,6 +188,7 @@ function walkGuidanceDirectory(descriptor, output, relative = "") {
       relativePath,
       name: entry.name,
       summary: summarizeGuidanceFile(absolute),
+      activation: displayKind(descriptor.kind) === "skills" ? skillActivationCommand(source, entry.name) : "",
       size: stat.size,
       updatedAt: stat.mtime.toISOString(),
     });
@@ -287,5 +312,6 @@ module.exports = {
   normalizeKind,
   normalizeScope,
   readGuidanceEntry,
+  skillActivationCommand,
   writeGuidanceFile,
 };

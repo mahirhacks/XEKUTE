@@ -72,14 +72,15 @@ Safety modes and policy checks are defense-in-depth controls; they do not replac
 
 ### Commands
 
-XEKUTE currently includes configurable workflows for:
+XEKUTE ships five parameterless in-chat special skills:
 
-- `/passive` - passive public-source reconnaissance.
-- `/active` - authorized active reconnaissance.
-- `/endpoint` - page and endpoint discovery.
-- `/webclone` - authorized public-site inventory and cloning.
+- `/pentest` - run the adaptive, scope-aware assessment lifecycle.
+- `/report` - generate the evidence-linked VAPT Markdown report.
+- `/create-rule` - create user-authored project or global rules.
+- `/create-skill` - create user-authored guidance.
+- `/create-subagent` - create a bounded subagent profile.
 
-Commands can use static Python orchestration or an AI-assisted role. Output locations, rate limits, threads, wordlists, advanced JSON options, and custom commands can be configured in XEKUTE Settings. The AI assistant can also run any of the supported security tools directly through `run_security_tool` with typed, policy-controlled adapters — including Amass, Subfinder, theHarvester, Nmap, Naabu, Masscan, httpx, Katana, ffuf, Gobuster, WAFW00F, Hping3, Nuclei, Nikto, testssl.sh, and SQLmap — gated by the enabled authority capabilities (passive recon, active recon, automated scanning, exploit validation).
+Trailing text is conversational context, never a CLI flag or positional parameter. User-authored prompt aliases remain configurable in Settings, while assessment pages and policy-controlled tools remain available directly to the agent and UI.
 
 XEKUTE does **not** bundle most third-party security binaries. Install only the tools you need and ensure their executables are available on `PATH`. On Windows, some tools may be easier to run through WSL. Each third-party tool remains subject to its own license and installation requirements.
 

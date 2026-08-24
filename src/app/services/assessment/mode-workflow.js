@@ -384,9 +384,9 @@ function createAssessmentModeWorkflow() {
     }
   }
 
-  function completeTurn(workspace, { mode = "", finalText = "", evidenceIds = [], outcome = "completed", newArtifact = false } = {}) {
+  function completeTurn(workspace, { mode = "", artifactType = "", finalText = "", evidenceIds = [], outcome = "completed", newArtifact = false } = {}) {
     if (outcome !== "completed" || !String(finalText || "").trim()) return { ok: true, artifact: null };
-    const currentMode = String(mode || "").toLowerCase();
+    const currentMode = String(artifactType || mode || "").toLowerCase();
     const state = loadState(workspace);
     const structured = parseStructuredText(finalText);
     if (currentMode === "hypothesis") {
@@ -713,11 +713,8 @@ function createAssessmentModeWorkflow() {
   }
 
   function classify({ mode = "agent", message = "", workspace = "" } = {}) {
-    const current = String(mode || "agent").toLowerCase();
     const value = String(message || "").trim();
     const state = loadState(workspace);
-    const lower = value.toLowerCase();
-    const stay = /\b(?:stay|continue|proceed|keep|remain)\b[\s\S]{0,60}\b(?:here|normally|this mode|agent|hypothesis|plan)\b/i.test(value) || /without switching|don't switch|do not switch|as an unbound agent/i.test(value);
     const approval = /^(?:yes[, ]*)?(?:approve|approved|i approve|approve the plan|approve plan)\b/i.test(value);
     const hypothesisIntent = /\b(?:hypothesis|hypotheses|correlate the findings|analy[sz]e (?:the )?(?:current )?(?:findings|evidence)|enough info(?:rmation)?|start with some assessment|what might be wrong)\b/i.test(value);
     const planIntent = /\b(?:plan|planning|assessment procedure|testing procedure|how should we test|steps to validate)\b/i.test(value);
@@ -726,22 +723,20 @@ function createAssessmentModeWorkflow() {
     // execute a command") must remain ordinary Agent work even when a stale
     // unapproved plan exists in the workspace.
     const executeIntent = /\b(?:(?:execute|run|start|perform|begin)\s+(?:(?:the|a|an|this|that|approved|saved|current)\s+)*(?:plan|assessment)|carry\s+out\s+(?:(?:the|a|an|this|that|approved|saved|current)\s+)*(?:plan|assessment)|test\s+(?:(?:the|this|that|approved|saved|current)\s+)*(?:plan|assessment))\b/i.test(value);
-    const refineIntent = /\b(?:refine|revise|explain|clarify|expand|why)\b/i.test(value);
     const revisionIntent = /\b(?:refine|revise|change|update|edit)\b/i.test(value);
     const explanationIntent = /\b(?:explain|clarify|why)\b/i.test(value);
     const intent = approval ? "plan_approval" : executeIntent ? (state.activePlan ? "plan_execution" : "ad_hoc_agent_execution") : planIntent ? (explanationIntent ? "plan_explanation" : revisionIntent ? "plan_revision" : "assessment_planning") : hypothesisIntent ? (explanationIntent ? "hypothesis_explanation" : revisionIntent ? "hypothesis_refinement" : "hypothesis_creation") : /\b(?:evidence|finding|traffic|observation|what happened)\b/i.test(value) ? "project_evidence_investigation" : "ordinary";
-    if (current === "agent" && hypothesisIntent && !stay) return { action: "recommend_switch", targetMode: "hypothesis", intent, message: "This request would benefit from Hypothesis mode because it needs to correlate the evidence collected so far. I’m currently in Agent mode. Switch to Hypothesis so I can analyze the current findings efficiently, or tell me to continue here using the normal workspace tools." };
-    if (current === "agent" && hypothesisIntent && stay) return { action: "continue", override: "unbound_agent", intent };
-    if (current === "hypothesis" && state.activeHypothesis && (planIntent || executeIntent) && !refineIntent) return { action: "recommend_switch", targetMode: "plan", intent, message: `I’ve completed and saved ${state.activeHypothesis}. Switch to Plan mode so I can build a controlled assessment plan from this hypothesis.` };
-    if (current === "plan" && approval && state.activePlan) return { action: "approve_plan", planId: state.activePlan, intent };
-    if (current === "plan" && executeIntent && state.activePlan) return { action: "recommend_switch", targetMode: "agent", intent, message: "The plan is ready. Switch to Agent mode to execute it after approval." };
-    if (current === "agent" && executeIntent && state.activePlan) {
-      if (stay) return { action: "continue", override: "unbound_agent", intent };
+    // Modes are user-selected working styles, not workflow gates. Hypothesis,
+    // planning, analysis, and execution requests continue in the current mode.
+    // Plan approval and immutable execution binding remain mode-independent
+    // safety controls.
+    if (approval && state.activePlan) return { action: "approve_plan", planId: state.activePlan, intent };
+    if (executeIntent && state.activePlan) {
       const plan = readPlan(workspace, state.activePlan);
       if (plan?.approval?.status === "approved" && plan.approval.contentHash === plan.executionHash) {
         return { action: "bind_plan", planId: plan.id, intent };
       }
-      return { action: "ask_plan_choice", intent, message: "There is an unapproved plan. Switch to Plan mode to review or approve it, or explicitly tell me to continue as an unbound Agent." };
+      return { action: "review_required", intent, message: "The saved plan is not approved yet. Review it and explicitly approve it here before asking me to execute it." };
     }
     return { action: "continue", intent };
   }

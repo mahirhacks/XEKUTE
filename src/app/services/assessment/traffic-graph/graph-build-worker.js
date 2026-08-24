@@ -6,12 +6,14 @@ const crypto = require("node:crypto");
 const { parentPort, workerData } = require("node:worker_threads");
 const { createAssessmentWorkspace } = require("../../../../domain/assessment/assessment-workspace.js");
 const { createJavascriptArtifactStore } = require("../../../../domain/assessment/javascript-artifact-store.js");
+const { createWebArtifactStore } = require("../../../../domain/assessment/web-artifact-store.js");
 const { createAssessmentMap } = require("../../../../domain/assessment/assessment-map.js");
 
 try {
   const assessmentWorkspace = createAssessmentWorkspace({ fs, path });
   const javascriptArtifacts = createJavascriptArtifactStore({ fs, path, crypto });
-  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace, javascriptArtifacts });
+  const webArtifacts = createWebArtifactStore({ fs, path, crypto });
+  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace, javascriptArtifacts, webArtifacts });
   const result = assessmentMap.build(workerData.workspace, workerData.options || {});
   parentPort.postMessage(result?.error
     ? result

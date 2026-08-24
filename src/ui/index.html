@@ -1235,7 +1235,7 @@
     </aside>
   </div>
   <div id="app-settings-overlay" class="tool-config-overlay" hidden>
-    <form id="app-settings-dialog" class="tool-config-dialog app-settings-dialog"><header><div><span class="codicon codicon-settings-gear"></span><div><strong>XEKUTE Settings</strong><small>Custom slash commands and static command roles are stored for this app profile.</small></div></div><button type="button" id="app-settings-close" class="icon-btn"><span class="codicon codicon-close"></span></button></header><div class="app-settings-body"><label>Custom slash commands <small>One per line: /name = prompt or terminal command</small></label><textarea id="custom-commands-input" placeholder="/myrecon = Perform my recon workflow"></textarea><label>Command registry JSON <small>Set role to <code>static</code> for local execution or <code>ai</code> to send the command to the Agent.</small></label><textarea id="command-registry-input" class="command-registry-input" spellcheck="false" placeholder='{"/pentest":{"role":"ai"}}'></textarea></div><footer><button type="submit" class="primary-button">Save Settings</button></footer></form>
+    <form id="app-settings-dialog" class="tool-config-dialog app-settings-dialog"><header><div><span class="codicon codicon-settings-gear"></span><div><strong>XEKUTE Settings</strong><small>User-authored slash guidance is stored separately from the five shipped special skills.</small></div></div><button type="button" id="app-settings-close" class="icon-btn"><span class="codicon codicon-close"></span></button></header><div class="app-settings-body"><label>Custom slash commands <small>One per line: /name = prompt guidance for the Agent</small></label><textarea id="custom-commands-input" placeholder="/myrecon = Perform my recon workflow"></textarea><label>Command registry JSON <small>Optional metadata for user-authored AI prompts. Shipped special skills cannot be overridden and static command runners are unavailable.</small></label><textarea id="command-registry-input" class="command-registry-input" spellcheck="false" placeholder='{"/myrecon":{"role":"ai","prompt":"Perform my recon workflow."}}'></textarea></div><footer><button type="submit" class="primary-button">Save Settings</button></footer></form>
   </div>
   <div id="help-guide-overlay" class="help-guide-overlay" hidden>
     <section class="help-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="help-guide-title">
@@ -1243,7 +1243,7 @@
       <div class="help-guide-body">
         <section><h3>Start with a project</h3><p>Use <strong>Files → Create New Project</strong> to create a workspace, or <strong>Open Project</strong> to open an existing folder. The Target sidebar holds assessment files and custom files.</p></section>
         <section><h3>Workspaces</h3><p><strong>Search</strong> finds evidence, <strong>Target</strong> organizes scope and findings, <strong>Security Tools</strong> handles request/response work, and <strong>Map</strong> visualizes application behavior.</p></section>
-        <section><h3>Chat commands</h3><p>Type <code>/</code> in Chat to see the three best command matches. Static commands run through the local Python runner; AI commands are expanded into the Agent workflow using their configured aim, prompt, and constraints.</p></section>
+        <section><h3>Chat commands</h3><p>Type <code>/</code> in Chat to see the shipped special skills and your custom prompt aliases. The five shipped skills are parameterless; any trailing text is conversational context and the active chat mode is preserved.</p></section>
         <section><h3>Authority and modes</h3><p><strong>Modes</strong> (Hypothesis, Plan, Agent, Ask) set which tools the model can call. <strong>Authority</strong> (Full Authority, Ask for Approval, Approve for me) controls scope and whether sensitive actions auto-run or need your approval. Switch both from the Chat composer.</p></section>
         <section><h3>Terminal and safety</h3><p>Use Terminal for local commands and keep testing within the authorization and scope recorded in the assessment. Tool configurations and results stay inside the current project.</p></section>
         <section><h3>Useful shortcuts</h3><p><code>Ctrl+F</code> Search · <code>Ctrl+P</code> Quick Open · <code>Ctrl+S</code> Save · <code>Ctrl+`</code> Toggle Terminal · <code>Ctrl+=</code>/<code>Ctrl+-</code> Zoom.</p></section>
@@ -1255,37 +1255,37 @@
   </div>
   <div id="workspace-context-menu" class="custom-context-menu workspace-context-menu" role="menu" hidden>
     <button type="button" data-workspace-context-action="open" role="menuitem">
-      <span class="codicon codicon-file-code"></span><span>Open</span>
+      <span>Open</span>
     </button>
     <button type="button" data-workspace-context-action="analyze" role="menuitem">
-      <span class="codicon codicon-search"></span><span>Analyze</span>
+      <span>Analyze</span>
     </button>
     <div class="context-menu-separator" data-workspace-context-separator="clipboard" aria-hidden="true"></div>
     <button type="button" data-workspace-context-action="cut" role="menuitem">
-      <span class="codicon codicon-move"></span><span>Cut</span>
+      <span>Cut</span>
     </button>
     <button type="button" data-workspace-context-action="copy" role="menuitem">
-      <span class="codicon codicon-copy"></span><span>Copy</span>
+      <span>Copy</span>
     </button>
     <button type="button" data-workspace-context-action="paste" role="menuitem" hidden>
-      <span class="codicon codicon-clone"></span><span>Paste</span>
+      <span>Paste</span>
     </button>
     <div class="context-menu-separator" data-workspace-context-separator="create" aria-hidden="true"></div>
     <button type="button" data-workspace-context-action="new-file" role="menuitem">
-      <span class="codicon codicon-new-file"></span><span>New File</span>
+      <span>New File</span>
     </button>
     <button type="button" data-workspace-context-action="new-folder" role="menuitem">
-      <span class="codicon codicon-new-folder"></span><span>New Folder</span>
+      <span>New Folder</span>
     </button>
     <button type="button" data-workspace-context-action="terminal" role="menuitem">
-      <span class="codicon codicon-run"></span><span>Run in Integrated Terminal</span>
+      <span>Run in Integrated Terminal</span>
     </button>
     <div class="context-menu-separator" data-workspace-context-separator="delete" aria-hidden="true"></div>
     <button type="button" data-workspace-context-action="rename" role="menuitem">
-      <span class="codicon codicon-edit"></span><span>Rename</span>
+      <span>Rename</span>
     </button>
     <button type="button" data-workspace-context-action="delete" role="menuitem">
-      <span class="codicon codicon-trash"></span><span id="workspace-context-delete-label">Delete</span>
+      <span id="workspace-context-delete-label">Delete</span>
     </button>
   </div>
 
@@ -1381,11 +1381,11 @@
 
   <div id="chat-mode-menu" class="chat-mode-menu" role="menu" aria-label="Chat modes" hidden>
     <div class="chat-mode-group">
-      <button type="button" class="chat-mode-option mode-hypothesis" data-chat-mode="hypothesis" role="menuitemradio" aria-checked="false" title="Read context and form hypotheses only">
-        <span class="codicon codicon-bug chat-mode-option-icon" aria-hidden="true"></span><span class="chat-mode-option-copy"><span class="chat-mode-option-label">Hypothesis</span><span class="chat-mode-option-desc">Read context and form hypotheses</span></span><span class="codicon codicon-check chat-mode-option-check" aria-hidden="true"></span>
+      <button type="button" class="chat-mode-option mode-hypothesis" data-chat-mode="hypothesis" role="menuitemradio" aria-checked="false" title="Emphasize evidence-backed hypotheses">
+        <span class="codicon codicon-bug chat-mode-option-icon" aria-hidden="true"></span><span class="chat-mode-option-copy"><span class="chat-mode-option-label">Hypothesis</span><span class="chat-mode-option-desc">Focus on hypotheses and evidence</span></span><span class="codicon codicon-check chat-mode-option-check" aria-hidden="true"></span>
       </button>
-      <button type="button" class="chat-mode-option mode-plan" data-chat-mode="plan" role="menuitemradio" aria-checked="false" title="Create or revise plans and workspace files">
-        <span class="codicon codicon-checklist chat-mode-option-icon" aria-hidden="true"></span><span class="chat-mode-option-copy"><span class="chat-mode-option-label">Plan</span><span class="chat-mode-option-desc">Create and revise plans and files</span></span><span class="codicon codicon-check chat-mode-option-check" aria-hidden="true"></span>
+      <button type="button" class="chat-mode-option mode-plan" data-chat-mode="plan" role="menuitemradio" aria-checked="false" title="Emphasize structured planning">
+        <span class="codicon codicon-checklist chat-mode-option-icon" aria-hidden="true"></span><span class="chat-mode-option-copy"><span class="chat-mode-option-label">Plan</span><span class="chat-mode-option-desc">Focus on structured planning</span></span><span class="codicon codicon-check chat-mode-option-check" aria-hidden="true"></span>
       </button>
       <button type="button" class="chat-mode-option mode-agent" data-chat-mode="agent" role="menuitemradio" aria-checked="true" title="Execute, observe, verify, and report within Authority">
         <span class="codicon codicon-copilot chat-mode-option-icon" aria-hidden="true"></span><span class="chat-mode-option-copy"><span class="chat-mode-option-label">Agent</span><span class="chat-mode-option-desc">Execute within Authority and policy</span></span><span class="codicon codicon-check chat-mode-option-check" aria-hidden="true"></span>

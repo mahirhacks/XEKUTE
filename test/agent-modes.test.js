@@ -6,14 +6,14 @@ const ModeRegistry = require("../src/agent/modes/mode-registry.js");
 const ToolPort = require("../src/contracts/tool/tool-port.js");
 const { evaluateToolScope } = require("../src/agent/authority/scope/scope-policy.js");
 
-test("mode surfaces are exact and do not depend on authority labels", () => {
+test("every mode exposes the canonical surface and does not depend on authority labels", () => {
   assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.length, 6);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.hypothesis.length, 12);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.plan.length, 11);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.agent.length, 22);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.agent.includes("manage_plan"), false);
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.plan.includes("manage_plan"), true);
+  for (const mode of ["ask", "hypothesis", "plan", "agent"]) {
+    assert.equal(ModeRegistry.MODE_TOOL_GROUPS[mode].length, ToolPort.REGISTRY_TOOL_NAMES.length);
+    assert.equal(ModeRegistry.MODE_TOOL_GROUPS[mode].includes("manage_plan"), true);
+    assert.equal(ModeRegistry.MODE_TOOL_GROUPS[mode].includes("ingest_traffic"), true);
+    assert.equal(ModeRegistry.MODE_TOOL_GROUPS[mode].includes("exec_command"), true);
+  }
   assert.equal(ModeRegistry.normalizeProfile({ key: "agent", authority: "full" }).key, "agent");
 });
 

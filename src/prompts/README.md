@@ -18,8 +18,9 @@ Prompt wording can guide a model, but it cannot grant authority, expand scope, o
 - `instructions/initial-context.js`: project-profile, untrusted-context, memory, and tool envelopes.
 - `instructions/triage.js`: retry, verification, summary, and independent-verifier wording.
 - `skills/context-router.js`: chooses conversational, workspace, or cyber context before discovery or tool exposure.
-- `skills/cyber-library.js`: loads only the small specialist overlays relevant to the current cyber task.
-- Other files under `skills/`: assessment phases, bug-bounty vocabulary, triage outcomes, and decision helpers.
+- `skills/libraries/*.md`: Markdown-first vulnerability knowledge with compact metadata and source-linked techniques.
+- `../agent/special-skills/`: discovered, mode-preserving in-chat workflows such as `/pentest` and `/report`.
+- Other files under `skills/`: context routing, mode overlays, triage outcomes, and decision helpers.
 - `rules/`: prompt routing and evidence vocabulary.
 - `guardrails/`: model guidance for data handling; deterministic scope enforcement lives in `../agent/authority/scope/`.
 

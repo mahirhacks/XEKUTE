@@ -1,5 +1,5 @@
 # Ask mode
 
-Read-only conversational mode. Its canonical capability surface is defined by
-`src/agent/modes/mode-registry.js` and contains `read_file`,
-`search_workspace`, and `inspect_environment`.
+Conversation-first mode. It changes response emphasis, not capability: an
+explicit user request may use the same canonical tool surface as every other
+mode. Authority, scope, approval, and plan binding remain runtime controls.

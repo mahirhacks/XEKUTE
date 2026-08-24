@@ -10,6 +10,7 @@ const editor = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features
 const failureMemory = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "memory", "failure-memory.js"), "utf8");
 const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
 const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+const layoutStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
 const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
 
 test("workspace files open in the Monaco-powered center editor", () => {
@@ -20,26 +21,42 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
   assert.match(html, /id="editor-empty">\s*<img src="\.\.\/\.\.\/xekute_icon\.png" alt="" class="resource-viewer-empty-logo">\s*<\/div>/);
   assert.match(renderer, /const EditorManager = globalThis\.XekuteEditorManager/);
   assert.match(renderer, /const TerminalManager = globalThis\.XekuteTerminalManager/);
-  assert.match(renderer, /path: SETTINGS_TAB_PATH[\s\S]*?preview: false[\s\S]*?special: "settings"/);
-  assert.match(renderer, /path: INTERCEPTOR_TAB_PATH[\s\S]*?preview: false[\s\S]*?special: "interceptor"/);
-  assert.match(renderer, /path: APPLICATION_GRAPH_TAB_PATH[\s\S]*?preview: false[\s\S]*?special: "application-graph"/);
+  assert.match(renderer, /path: SETTINGS_TAB_PATH[\s\S]*?special: "settings"/);
+  assert.match(renderer, /path: INTERCEPTOR_TAB_PATH[\s\S]*?special: "interceptor"/);
+  assert.match(renderer, /path: APPLICATION_GRAPH_TAB_PATH[\s\S]*?special: "application-graph"/);
   assert.match(renderer, /function showSecurityWorkspace\(tool = ""\) \{\s*openInterceptorTab\(tool\);/);
   assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\) \|\| isApplicationGraphTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
   assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\) \|\| isApplicationGraphTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
+  assert.match(renderer, /if \(specialWorkspaceTab\) el\.classList\.add\("special-workspace-tab"\)/);
+  assert.match(renderer, /isSettingsTab\(tab\)[\s\S]*?codicon-settings-gear[\s\S]*?isInterceptorTab\(tab\)[\s\S]*?codicon-debug-disconnect[\s\S]*?isApplicationGraphTab\(tab\)[\s\S]*?codicon-type-hierarchy/);
   assert.match(renderer, /if \(editorBody\) editorBody\.hidden = true;\s*updateEditorPathBar\(\);/);
   assert.match(renderer, /if \(isInterceptorTab\(activeTab\)\) \{[\s\S]*?showSecurityWorkspaceContent\(activeTab\.securityTool \|\| ""\);/);
   assert.match(renderer, /if \(isApplicationGraphTab\(activeTab\)\) \{[\s\S]*?await showMapWorkspace\(\);/);
-  assert.match(renderer, /async function openFile\(filePath, fileName, \{[\s\S]*?focusEditor = true,[\s\S]*?preview = false,[\s\S]*?line = 0,[\s\S]*?column = 1,[\s\S]*?\} = \{\}\) \{[\s\S]*?showCodeEditorWorkspace\(\)/);
-  assert.match(renderer, /item\.addEventListener\("click"[\s\S]*?selectItem\(item, \{ ctrlKey: e\.ctrlKey, metaKey: e\.metaKey, shiftKey: e\.shiftKey \}\)[\s\S]*?openFile\(entry\.path, entry\.name, \{ focusEditor: false, preview: true \}\)/);
-  assert.match(renderer, /item\.addEventListener\("dblclick"[\s\S]*?selectItem\(item\)[\s\S]*?await openFile\(entry\.path, entry\.name, \{ focusEditor: true, preview: false \}\)/);
-  assert.match(renderer, /function discardCleanPreviewTabs\(exceptPath = ""\)/);
+  const editorPathBarSource = renderer.match(/function updateEditorPathBar\(\)[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(editorPathBarSource, /const relativePath = relativePathFromRoot\(filePath\)/);
+  assert.match(editorPathBarSource, /const projectPath = relativePath === null \? \(activeTab\.name \|\| ""\) : relativePath/);
+  assert.match(editorPathBarSource, /const displayPath = normPath\(projectPath\)\.replace\(\/\^\\\/\+\/, ""\)/);
+  assert.doesNotMatch(editorPathBarSource, /normalizedProjectPath|`\\\\\$\{/);
+  assert.doesNotMatch(editorPathBarSource, /editorPathLabel\.textContent = activeTab\.(?:diskPath|path)/);
+  assert.match(renderer, /async function openFile\(filePath, fileName, \{[\s\S]*?focusEditor = true,[\s\S]*?line = 0,[\s\S]*?column = 1,[\s\S]*?\} = \{\}\) \{[\s\S]*?showCodeEditorWorkspace\(\)/);
+  assert.match(renderer, /item\.addEventListener\("click"[\s\S]*?selectItem\(item, \{ ctrlKey: e\.ctrlKey, metaKey: e\.metaKey, shiftKey: e\.shiftKey \}\)[\s\S]*?openFile\(entry\.path, entry\.name, \{ focusEditor: false \}\)/);
+  assert.match(renderer, /item\.addEventListener\("dblclick"[\s\S]*?selectItem\(item\)[\s\S]*?await openFile\(entry\.path, entry\.name, \{ focusEditor: true \}\)/);
+  assert.match(renderer, /fileTree\?\.addEventListener\("click", \(event\) => \{\s*if \(event\.target\?\.closest\?\.\("\.tree-item"\)\) return;\s*selectItem\(null\);\s*\}\);/);
+  assert.match(renderer, /async function createNewItemInput\(isFolder\) \{[\s\S]*?let targetDir = rootPath;[\s\S]*?let targetContainer = fileTree;[\s\S]*?if \(selectedItem\) \{/);
+  assert.doesNotMatch(renderer, /discardCleanPreviewTabs|tab\.preview|preview: Boolean\(preview\)/);
   assert.match(renderer, /function reorderOpenTabs\(draggedPath, targetPath, \{ after = false \} = \{\}\)/);
   assert.match(renderer, /openTabs\.clear\(\);\s*entries\.forEach\(\(\[path, tab\]\) => openTabs\.set\(path, tab\)\);/);
   assert.match(renderer, /el\.draggable = true;[\s\S]*?el\.addEventListener\("dragstart"[\s\S]*?el\.addEventListener\("drop"/);
-  assert.match(renderer, /preview: Boolean\(preview\)/);
-  assert.match(renderer, /tab\.preview = false/);
   assert.match(renderer, /key === "s" && activeTabPath[\s\S]*?await saveActiveTab\(\)/);
-  assert.match(styles, /\.editor-tab\.preview \.tab-label \{ font-style: italic; \}/);
+  assert.doesNotMatch(styles, /\.editor-tab\.preview/);
+  assert.match(layoutStyles, /\.editor-tab\.special-workspace-tab \.tab-icon \{[\s\S]*?display: inline-flex !important;/);
+  assert.match(layoutStyles, /\.chat-mode-button \{[\s\S]*?min-width: 0;[\s\S]*?width: fit-content;/);
+  assert.match(layoutStyles, /#terminal-pane,[\s\S]*?#terminal-tabs-list,[\s\S]*?background: var\(--revamp-surface\) !important;/);
+  assert.match(styles, /\.app-dialog \{[\s\S]*?background: var\(--revamp-surface, var\(--bg-0\)\)/);
+  assert.match(styles, /\.app-dialog > header,[\s\S]*?\.app-dialog > footer \{[\s\S]*?border: 0;[\s\S]*?background: var\(--revamp-surface, var\(--bg-0\)\)/);
+  assert.match(styles, /\.app-dialog > footer \{[\s\S]*?justify-content: flex-end; \}/);
+  assert.match(styles, /\.app-dialog \.primary-button,[\s\S]*?\.app-dialog \.secondary-button \{[\s\S]*?border-color: transparent;/);
+  assert.match(styles, /\.app-dialog \.danger-button:hover \{[\s\S]*?border-color: transparent;/);
   assert.match(styles, /\.editor-tab\.tab-dragging \{[\s\S]*?opacity: \.52;/);
   assert.match(styles, /\.editor-tab\.tab-drop-before \{[\s\S]*?box-shadow: inset 2px 0 0 var\(--accent\);/);
   assert.match(styles, /\.editor-tab\.tab-drop-after \{[\s\S]*?box-shadow: inset -2px 0 0 var\(--accent\);/);
@@ -90,10 +107,12 @@ test("Project activity icon only toggles the file-tree sidebar", () => {
 });
 
 test("workspace context menu renames files and folders without discarding open editor state", () => {
-  assert.match(html, /data-workspace-context-action="cut"[\s\S]*?codicon-move[\s\S]*?<span>Cut<\/span>/);
-  assert.doesNotMatch(html, /codicon-cut/);
-  assert.match(html, /data-workspace-context-action="delete"[\s\S]*?codicon-trash[\s\S]*?workspace-context-delete-label/);
+  const workspaceContextMenuMarkup = html.match(/<div id="workspace-context-menu"[\s\S]*?<\/div>\s*<div id="update-toast"/)?.[0] || "";
+  assert.match(workspaceContextMenuMarkup, /data-workspace-context-action="cut"[\s\S]*?<span>Cut<\/span>/);
+  assert.match(workspaceContextMenuMarkup, /data-workspace-context-action="delete"[\s\S]*?workspace-context-delete-label/);
   assert.match(html, /data-workspace-context-action="rename"[\s\S]*?<span>Rename<\/span>/);
+  assert.doesNotMatch(workspaceContextMenuMarkup, /class="codicon/);
+  assert.match(styles, /\.workspace-context-menu \{[^}]*background:var\(--revamp-surface,var\(--bg-0\)\)/);
   assert.match(renderer, /setHidden\("rename", !target \|\| multiple\)/);
   assert.match(renderer, /async function renameWorkspaceContextTarget\(target\)/);
   assert.match(renderer, /window\.api\.movePath\(\{[\s\S]*?source: target\.relativePath,[\s\S]*?destination/);
@@ -110,7 +129,7 @@ test("workspace editor accepts text files up to 5 MB", () => {
 });
 
 test("workspace context menu runs only supported code files in the integrated terminal", () => {
-  assert.match(html, /data-workspace-context-action="terminal"[\s\S]*?codicon-run[\s\S]*?Run in Integrated Terminal/);
+  assert.match(html, /data-workspace-context-action="terminal"[\s\S]*?Run in Integrated Terminal/);
   assert.match(renderer, /const WORKSPACE_RUNNABLE_EXTENSIONS = new Set\(\[[\s\S]*?"\.c"[\s\S]*?"\.cpp"[\s\S]*?"\.js"[\s\S]*?"\.py"/);
   assert.match(renderer, /function workspaceRunCommand\(target\)[\s\S]*?if \(!target \|\| target\.isDir\) return ""/);
   assert.match(renderer, /setHidden\("terminal", multiple \|\| !workspaceRunCommand\(target\)\)/);
@@ -124,7 +143,7 @@ test("workspace context menu runs only supported code files in the integrated te
 });
 
 test("workspace context menu analyzes every single file in a visible Agent session", () => {
-  assert.match(html, /data-workspace-context-action="analyze"[\s\S]*?codicon-search[\s\S]*?<span>Analyze<\/span>/);
+  assert.match(html, /data-workspace-context-action="analyze"[\s\S]*?<span>Analyze<\/span>/);
   assert.match(renderer, /setHidden\("analyze", !target \|\| isDir \|\| multiple\)/);
   assert.match(renderer, /async function startWorkspaceFileAnalysis\(target\)/);
   assert.match(renderer, /Perform a focused security analysis of the workspace file/);

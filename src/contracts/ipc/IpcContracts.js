@@ -44,7 +44,6 @@ const LARGE_CHANNELS = new Set([
 const COMMAND_CHANNELS = new Set([
   "tools:runCommand",
   "tools:startProcess",
-  "commands:run",
 ]);
 
 const IDENTITY_CHANNELS = new Set([

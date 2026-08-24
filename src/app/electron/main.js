@@ -7,6 +7,19 @@ const { pathToFileURL } = require("url");
 const pty = require("node-pty");
 const { spawn } = require("child_process");
 const { createAgentTerminalRunner } = require("../services/terminal/terminal-runner.js");
+const { defaultRegistry } = require("../../agent/special-skills/registry.js");
+const { resolveInvocation } = require("../../agent/special-skills/runner.js");
+const {
+  CREATE_GUIDANCE_TOOL,
+  MANAGE_PENTEST_TOOL,
+  createSpecialSkillToolEntry,
+  createSpecialSkillToolDefinitions,
+  executeCreateGuidance,
+  executeManagePentest,
+} = require("../../agent/special-skills/capabilities.js");
+const { createPentestStateStore } = require("../../agent/special-skills/pentest/state-store.js");
+const { createPentestOrchestrator, MATERIAL_TOOLS: PENTEST_MATERIAL_TOOLS } = require("../../agent/special-skills/pentest/orchestrator.js");
+const { createSkillKnowledgeGraph } = require("../services/assessment/knowledge/skill-knowledge-graph.js");
 const { resolveSecurityExecutable } = require("../../agent/tools/process/executable-resolver.js");
 const { validateInput: validateExecCommandInput } = require("../../agent/tools/process/exec-command.js");
 const { normalizeAuthorityProfile } = require("../../agent/authority/profiles/profile-manifest.js");
@@ -19,15 +32,13 @@ const { runAgentTurn } = require("../../agent/controller/agent-controller.js");
 const { createRuntimeDelegationProvider } = require("../../agent/runtime/delegation-provider.js");
 const { createSubagentCoordinator, DEFAULT_MAX_ACTIVE_CHILDREN } = require("../../agent/runtime/subagent-coordinator.js");
 const { normalizeProfile } = require("../../agent/modes/mode-registry.js");
-const ScopeEngine = require("../../domain/scope/scope-engine");
-const { evaluateToolScopeAsync, loadScopePolicy, evaluateNetworkTarget } = require("../../agent/authority/scope/scope-policy.js");
+const { evaluateToolScopeAsync } = require("../../agent/authority/scope/scope-policy.js");
 const AgentVerifier = require("../../agent/runtime/verifier.js");
 const { captureOllamaStream } = require("../../agent/llm/ollama/ollama-stream.js");
 const { captureOpenRouterStream, normalizeOpenRouterMessages, openRouterHeaders, openRouterTools } = require("../../agent/llm/openrouter/openrouter-stream.js");
 const { DEFAULT_OPENROUTER_BASE_URL, normalizeProvider, normalizeBaseUrl, buildChatRequest } = require("../../agent/llm/openrouter/providers.js");
 const ContextBudget = require("../../agent/runtime/context-budget.js");
 const { estimateTokenCount } = ContextBudget;
-const { appendAgentAction, appendHypothesis } = require("../../agent/memory/action-memory.js");
 const ContextMemory = require("../../agent/memory/context-memory.js");
 const Capsule = require("../../agent/memory/context/context-capsule.js");
 const CapsuleParsers = require("../../agent/memory/context/tool-context-parsers.js");
@@ -37,7 +48,7 @@ const { createProjectProfileStore } = require("../storage/project-profile-store.
 const { validateIpcRequest } = require("../../contracts/ipc/IpcContracts");
 const { registerIpcHandler } = require("../ipc/register");
 const { registerProjectIpc } = require("../ipc/project.js");
-const { parseCommand, runCommand } = require("../commands/command-parser.js");
+const { parseCommand } = require("../commands/command-parser.js");
 const { ingest: ingestAssessmentRecords, listDatasets, datasetExists, RESOURCE_SPECS } = require("../services/assessment/assessment-ingest.js");
 const { buildContext } = require("../services/assessment/parse-context.js");
 const {
@@ -55,6 +66,9 @@ const { registerLifecycle, setAllowImmediateQuit } = require("./lifecycle.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { createTestCaseRunner } = require("../services/assessment/test-case-runner.js");
+
+const pentestStateStore = createPentestStateStore({ fs, path, crypto });
+let pentestOrchestrator = null;
 
 const CONTEXT_SUMMARY_PROVIDER_TIMEOUT_MS = 30_000;
 const CONTEXT_COMPACTION_TIMEOUT_MS = 180_000;
@@ -114,10 +128,11 @@ function displayExecCommand(executable, args = []) {
   return [quote(executable), ...(Array.isArray(args) ? args.map(quote) : [])].join(" ").trim();
 }
 
-async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", blockId = "", mode = "agent", terminalHost = null, planBinding = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", delegationProvider = null }) {
+async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", blockId = "", mode = "agent", terminalHost = null, planBinding = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", delegationProvider = null, specialSkill = null }) {
   const name = toolCall?.function?.name || toolCall?.toolName || "";
   const args = toolCall?.function?.arguments || {};
-  const entry = container?.toolRegistry?.get(name);
+  const specialEntry = createSpecialSkillToolEntry(specialSkill, name);
+  const entry = container?.toolRegistry?.get(name) || specialEntry;
   const dynamicContext = { workspace, sessionId, mode };
   const dynamicEntry = !entry ? container?.mcpRuntime?.metadata?.(name, dynamicContext) : null;
   if (!entry && !dynamicEntry) {
@@ -242,7 +257,21 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
           },
         };
     } else {
-      if (name === "run_test_case") {
+      if (name === CREATE_GUIDANCE_TOOL && specialEntry) {
+        result = executeCreateGuidance({
+          args,
+          workspace,
+          globalRoot: globalGuidanceRoot(),
+          writeGuidanceFile,
+        });
+      } else if (name === MANAGE_PENTEST_TOOL && specialEntry) {
+        result = await executeManagePentest({
+          args,
+          workspace,
+          runId: durableRunId,
+          orchestrator: pentestOrchestrator,
+        });
+      } else if (name === "run_test_case") {
         result = await runProductionTestCase({ workspace, input: args, signal: monitorRuntime.signal, sessionId, mode, terminalHost, planBinding, authorityProfile, approvalProvider, durableRunId });
       } else {
         result = dynamicEntry
@@ -333,8 +362,19 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     if (name === "query_knowledge" && result?.ok && sessionId && container.contextCompiler?.activateKnowledgeLease) {
       container.contextCompiler.activateKnowledgeLease({ workspace, sessionId, leaseId: result.leaseId || "", packet: result });
     }
-    if (["ingest_traffic", "replay_request", "run_test_case", "browser_action", "store_finding", "attack_graph"].includes(name)) {
-      container.assessmentIntelligence.refresh(workspace).catch(() => {});
+    const materialAssessmentTool = ["ingest_traffic", "replay_request", "run_test_case", "browser_action", "store_finding", "verify_finding", "attack_graph"].includes(name);
+    const activePentest = specialSkill?.manifest?.id === "pentest" && Boolean(durableRunId) && Boolean(pentestOrchestrator);
+    if (materialAssessmentTool && !activePentest) container.assessmentIntelligence.refresh(workspace).catch(() => {});
+    if (activePentest && PENTEST_MATERIAL_TOOLS.has(name) && name !== MANAGE_PENTEST_TOOL) {
+      const pentestUpdate = await pentestOrchestrator.observeToolResult({ workspace, runId: durableRunId, toolName: name, args, result }).catch((error) => ({ ok: false, error: error.message, code: "PENTEST_SYNC_FAILED" }));
+      if (result && typeof result === "object" && Object.isExtensible(result)) result.pentest = {
+        ok: pentestUpdate?.ok !== false,
+        materialChanged: Boolean(pentestUpdate?.materialChanged),
+        selectionChanged: Boolean(pentestUpdate?.selectionChanged),
+        vectorsChanged: Boolean(pentestUpdate?.vectorsChanged),
+        readyTasks: Array.isArray(pentestUpdate?.readyTasks) ? pentestUpdate.readyTasks.slice(0, 50) : [],
+        error: pentestUpdate?.ok === false ? String(pentestUpdate.error || "Pentest synchronization failed.").slice(0, 1_000) : undefined,
+      };
     }
     return result;
   } catch (error) {
@@ -451,6 +491,20 @@ const webResearch = container.webResearch;
 const webClone = container.webClone;
 const assessmentWorkspace = container.assessmentWorkspace;
 const assessmentMap = container.assessmentMap;
+const pentestKnowledgeGraph = createSkillKnowledgeGraph({
+  fs,
+  path,
+  libraryRoot: path.resolve(__dirname, "..", "..", "prompts", "skills", "libraries"),
+});
+pentestOrchestrator = createPentestOrchestrator({
+  fs,
+  path,
+  crypto,
+  stateStore: pentestStateStore,
+  assessmentWorkspace,
+  intelligence: container.assessmentIntelligence,
+  knowledgeGraph: pentestKnowledgeGraph,
+});
 const securityHttpWorkbench = container.securityHttpWorkbench;
 const proxyListener = container.getProxyListener();
 const workspaceWatchers = new Map();
@@ -1321,7 +1375,6 @@ function runAssessmentIngestPython(payload = {}) {
 function dispatchSlashCommand(action, payload = {}) {
   try {
     if (action === "parse") return Promise.resolve(parseCommand(payload.command, payload.overrides));
-    if (action === "run") return runCommand(payload.command, payload.assessment, payload.overrides);
     return Promise.resolve({ ok: false, error: `Unknown command action: ${action}`, code: "COMMAND_ACTION_INVALID" });
   } catch (error) {
     return Promise.resolve({ ok: false, error: error.message || "Command runner failed", code: error.code || "COMMAND_RUNNER_FAILED" });
@@ -1445,56 +1498,12 @@ ipcMain.handle("tools:catalog", async () => {
 });
 
 ipcMain.handle("commands:parse", async (_event, payload = {}) => dispatchSlashCommand("parse", payload));
-
-function configuredSlashTarget(policy = {}) {
-  for (const entry of Array.isArray(policy.targets) ? policy.targets : []) {
-    if (entry?.enabled === false || entry?.inScope === false) continue;
-    const raw = String(typeof entry === "string" ? entry : entry?.value || entry?.url || entry?.host || entry?.hostname || "").trim();
-    if (!raw || raw.startsWith("*.") || (/^[^/]+\/\d{1,2}$/.test(raw) && !raw.includes("://"))) continue;
-    const target = ScopeEngine.canonicalTarget(raw);
-    if (!target || !ScopeEngine.evaluateTarget(target, policy).allowed) continue;
-    const defaultPort = target.scheme === "https" ? 443 : 80;
-    return `${target.scheme}://${target.hostname}${target.port === defaultPort ? "" : `:${target.port}`}${target.path || "/"}`;
-  }
-  return "";
-}
-
-ipcMain.handle("commands:run", async (_event, payload = {}) => {
-  const parsed = await dispatchSlashCommand("parse", payload);
-  if (parsed?.error || parsed?.ok === false) return parsed;
-  if (parsed?.role === "static") {
-    const workspace = payload.assessment || payload.workspace || payload.path;
-    if (!workspace) return { ok: false, error: "An assessment workspace is required", code: "WORKSPACE_REQUIRED" };
-    const policy = loadScopePolicy(workspace, readProjectProfile(workspace)?.profile || null);
-    const target = String(parsed.args?.[0] || configuredSlashTarget(policy));
-    if (!target) return { ok: false, error: `No concrete target was supplied and ${parsed.command} could not derive one from Scope → In-Scope.`, code: "TARGET_REQUIRED", parsed };
-    const scopeResult = evaluateNetworkTarget(target, policy);
-    if (!scopeResult.ok) return { ok: false, error: scopeResult.reason, code: scopeResult.code, scope: scopeResult, parsed };
-    const runPayload = parsed.args?.length ? payload : { ...payload, command: `${parsed.command} ${target}` };
-    const slashRunId = `slash-${Date.now().toString(36)}`;
-    const hypothesisId = `${slashRunId}-hypothesis`;
-    appendHypothesis(workspace, {
-      id: hypothesisId,
-      runId: slashRunId,
-      title: `${parsed.command} operator-directed assessment hypothesis`,
-      question: `What authorized attack-surface evidence does ${parsed.command} produce for the selected target?`,
-      target,
-      expectedSignal: "The configured adapters return target-specific observations that can be preserved and reviewed.",
-      rejectingSignal: "The adapters return no target-specific observations or fail to complete.",
-      proposedTechnique: String(parsed.command || "").replace(/^\//, ""),
-      evidencePlan: ["Preserve per-tool output", "Record exit status and output path"],
-      stopConditions: ["Out-of-scope resolution or redirect", "Unexpected impact", "Scope configuration changes"],
-      evidenceIds: [],
-      status: "ready",
-      source: "operator-slash-command",
-      recordedAt: new Date().toISOString(),
-    });
-    const result = await dispatchSlashCommand("run", runPayload);
-    appendAgentAction(workspace, { runId: slashRunId, type: "run_terminal", timestamp: new Date().toISOString(), profile: "scope_only", tool: parsed.command, target, ok: Boolean(result?.ok), status: result?.ok ? "completed" : "failed", errorCode: result?.code || "", output: result?.output || "", hypothesisId });
-    return result;
-  }
-  return dispatchSlashCommand("run", payload);
+ipcMain.handle("special-skills:list", async () => ({ ok: true, skills: defaultRegistry.list(), diagnostics: defaultRegistry.diagnostics() }));
+ipcMain.handle("special-skills:resolve", async (_event, { command = "" } = {}) => {
+  const resolved = defaultRegistry.resolve(command);
+  return resolved.ok ? { ok: true, manifest: resolved.manifest } : resolved;
 });
+
 ipcMain.handle("commands:customScripts", async (_event, { path: root } = {}) => {
   if (!root || !fs.existsSync(root)) return { ok: true, scripts: [] };
   const base = path.join(root, "custom_scripts");
@@ -3166,6 +3175,19 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   const requestedProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");
   const selectedCatalog = toolCatalogFromRegistry(container.toolRegistry);
   const catalogMode = selectedCatalog.mode;
+  const specialInput = payload.specialSkill || (continuationResultId ? parentDescriptor?.payload?.userMessage : payload.userMessage) || "";
+  const resolvedSpecialSkill = String(specialInput).trim().startsWith("/")
+    ? resolveInvocation(defaultRegistry, specialInput, { mode: requestedProfile.key, workspace: payload.workspace || "" })
+    : null;
+  let activeSpecialSkill = resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null;
+  // Special-skill capabilities are scoped to the active package.  They are
+  // added to this turn's model catalog only; the canonical registry and its
+  // global tool inventory remain unchanged.
+  for (const definition of createSpecialSkillToolDefinitions(resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null)) {
+    if (!selectedCatalog.tools.some((tool) => tool?.function?.name === definition?.function?.name)) {
+      selectedCatalog.tools.push(definition);
+    }
+  }
   const previousRun = agentRunControllers.get(runKey);
   if (previousRun) previousRun.abort();
   const runController = new AbortController();
@@ -3184,6 +3206,19 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     : "";
   const durableRunId = String(parentDescriptor?.durableRunId || (continuationResultId && persistedPlanRunId) || assessmentRun?.id || `run-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`);
   if (parentDescriptor) parentDescriptor.durableRunId = durableRunId;
+  if (activeSpecialSkill?.manifest?.id === "pentest" && payload.workspace) {
+    const initializedPentest = await pentestOrchestrator.initialize(payload.workspace, {
+      runId: durableRunId,
+      mode: requestedProfile.key,
+      userContext: activeSpecialSkill.userContext || "",
+      assessmentRun,
+    });
+    if (!assessmentRun && initializedPentest?.assessmentRun) assessmentRun = initializedPentest.assessmentRun;
+    const runtimePrompt = initializedPentest?.ok
+      ? initializedPentest.runtimePrompt
+      : `PENTEST RUNTIME INITIALIZATION BLOCKED\nCode: ${initializedPentest?.code || "PENTEST_INITIALIZATION_FAILED"}\nReason: ${initializedPentest?.error || "The adaptive runtime could not initialize."}\nAsk only for the missing scope/authorization/workspace information; do not switch modes or invent state.`;
+    activeSpecialSkill = { ...activeSpecialSkill, prompt: `${activeSpecialSkill.prompt}\n\n${runtimePrompt}` };
+  }
   if (payload.workspace) {
     await Promise.allSettled([
       container.longHorizonRunStore.reconcile(payload.workspace, { staleAfterMs: Tunables.LONG_HORIZON_STALE_RUN_MS }),
@@ -3224,6 +3259,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     extraFiles: payload.extraFiles || [],
     subagentModel: payload.subagentModel || "",
     userMessage: continuationResultId ? buildSubagentResultPrompt(claimedContinuation.result) : payload.userMessage || "",
+    specialSkill: activeSpecialSkill,
     modeWorkflow: container.modeWorkflow,
     intelligence: container.assessmentIntelligence,
     contextCompiler: container.contextCompiler,
@@ -3240,6 +3276,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       ...request,
       blockId: request?.blockId || payload.blockId || "",
       terminalHost: agentTerminalHost,
+      specialSkill: activeSpecialSkill,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
       approvalProvider: (proposal) => requestToolApproval(event.sender, { ...proposal, sessionId }),
       questionProvider: (proposal) => requestOperatorQuestions(event.sender, { ...proposal, sessionId }),
@@ -3323,10 +3360,18 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   }
   if (assessmentRun?.id) {
     const runtimeStatus = result?.runState?.status;
+    const pentestRuntimeState = activeSpecialSkill?.manifest?.id === "pentest" && payload.workspace
+      ? pentestStateStore.read(payload.workspace, durableRunId)?.run || null
+      : null;
+    const assessmentStatus = result?.aborted
+      ? "stopped"
+      : pentestRuntimeState
+        ? pentestRuntimeState.status === "completed" ? "completed" : pentestRuntimeState.status === "stopped" ? "stopped" : "inconclusive"
+        : ["completed", "inconclusive", "stopped", "failed"].includes(runtimeStatus) ? runtimeStatus : result?.ok ? "completed" : "failed";
     assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, {
-      status: result?.aborted ? "stopped" : ["completed", "inconclusive", "stopped", "failed"].includes(runtimeStatus) ? runtimeStatus : result?.ok ? "completed" : "failed",
+      status: assessmentStatus,
       completedAt: new Date().toISOString(),
-      stopReason: result?.aborted ? "Aborted by operator" : result?.error || "",
+      stopReason: result?.aborted ? "Aborted by operator" : pentestRuntimeState && !["completed", "stopped"].includes(pentestRuntimeState.status) ? `Pentest run remains ${pentestRuntimeState.status} with ${pentestRuntimeState.readyTaskCount || 0} ready task(s).` : result?.error || pentestRuntimeState?.stopReason || "",
       notes: String(result?.finalText || result?.error || "").slice(0, 2000),
     });
   }

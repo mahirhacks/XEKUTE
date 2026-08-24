@@ -157,18 +157,14 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    CALL[Normalized tool call] --> MODE{Granted in selected mode?}
-    MODE -->|No| DENY_GRANT[NOT_GRANTED or MODE_GUARD]
-    MODE -->|Yes| SCHEMA{Schema loaded?}
+    CALL[Normalized tool call] --> REGISTERED{Registered or leased tool?}
+    REGISTERED -->|No| DENY_GRANT[TOOL_UNAVAILABLE]
+    REGISTERED -->|Yes| SCHEMA{Schema loaded?}
     SCHEMA -->|No| DENY_SCHEMA[SCHEMA_NOT_LOADED; no execution]
     SCHEMA -->|Yes| CLASSIFY[classifyAction]
     CLASSIFY --> PERM{Authority permission enabled?}
     PERM -->|No| DENY_PERM[AUTHORITY_PERMISSION_DISABLED]
-    PERM -->|Yes| READONLY{Read-only profile with active/mutation?}
-    READONLY -->|Yes| DENY_MODE[MODE_READ_ONLY]
-    READONLY -->|No| PLAN{Planner with active/evidence/exploit?}
-    PLAN -->|Yes| DENY_PLAN[MODE_PLAN_SCOPE]
-    PLAN -->|No| EXPLOIT{Exploit action?}
+    PERM -->|Yes| EXPLOIT{Exploit action?}
     EXPLOIT -->|Yes| EXP_GATE{Exploit allowed and approved?}
     EXP_GATE -->|No| DENY_EXPLOIT[POLICY_EXPLOIT_DISABLED or EXPLOIT_APPROVAL_REQUIRED]
     EXP_GATE -->|Yes| ACTIVE

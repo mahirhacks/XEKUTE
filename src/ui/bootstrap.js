@@ -15,15 +15,12 @@ const xekuteStore = globalThis.XekuteCore.createAppStore();
 const appController = new globalThis.XekuteCore.AppController(xekuteStore);
 const appLifecycle = new globalThis.XekuteCore.LifecycleCollection();
 const ToolMap = globalThis.ToolMap || (() => {
-  // Registry-backed ToolMap for the renderer. The catalog is fetched once from
-  // the main process (tools:catalog); the four-mode mapping mirrors the
-  // canonical mode registry and never makes authority decisions.
+  // Registry-backed ToolMap for the renderer. Modes change working style, not
+  // capability, so every selected mode receives the canonical catalog.
   const MODE_TOOL_GROUPS = {
-    ask: ["read_file", "search_workspace", "inspect_environment", "query_knowledge", "web_research"],
-    hypothesis: ["read_file", "search_workspace", "inspect_environment", "manage_state", "ingest_traffic", "compare_responses", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"],
-    plan: ["read_file", "search_workspace", "inspect_environment", "manage_plan", "manage_state", "attack_graph", "query_assessment", "expand_evidence", "query_knowledge", "web_research"],
-    // Agent mode receives the execution catalog but never the plan-authoring
-    // tool. Approved plan checkbox updates use the workflow task-list bridge.
+    ask: null,
+    hypothesis: null,
+    plan: null,
     agent: null,
   };
   const MUTATING = new Set(["apply_patch", "manage_plan", "manage_state", "manage_identity", "store_finding", "attack_graph"]);
@@ -53,7 +50,7 @@ const ToolMap = globalThis.ToolMap || (() => {
     const key = normalized || String(profile?.key || profile || "agent");
     const group = MODE_TOOL_GROUPS[key];
     const entries = group === null || group === undefined
-      ? catalog.filter((entry) => key !== "agent" || entry.name !== "manage_plan")
+      ? catalog
       : catalog.filter((entry) => group.includes(entry.name));
     return entries.map((entry) => ({
       type: "function",
@@ -844,7 +841,7 @@ let proxyListenerState = { running: false };
 let assessmentSettingsCache = null;
 let assessmentSettingsVirtual = false;
 let slashSuggestionItems = [];
-let slashSuggestionIndex = 0;
+let slashSuggestionIndex = -1;
 let selectedSlashCommand = "";
 installChatInputEditorAdapter();
 let appSettingsSection = "general";
@@ -1996,7 +1993,7 @@ function renderGuidanceList() {
         const entryName = entry.name || entry.relativePath.split("/").pop() || "guidance";
         const entryPath = escapeHtml(entry.relativePath);
         const entryScope = escapeHtml(entry.scope || "project");
-        return `<div class="guidance-entry-row"><button type="button" class="guidance-entry${selected ? " active" : ""}" data-guidance-path="${entryPath}" data-guidance-scope="${entryScope}" aria-pressed="${selected}"><span class="guidance-entry-copy"><strong>${escapeHtml(entryName)}</strong><small>${escapeHtml(summary)}</small></span><span class="guidance-entry-meta"><span class="guidance-entry-scope">${escapeHtml(guidanceScopeLabel(entry.scope))}</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span></span></button><button type="button" class="guidance-entry-delete" data-guidance-delete-path="${entryPath}" data-guidance-delete-scope="${entryScope}" aria-label="Delete ${escapeHtml(entryName)}" title="Delete ${escapeHtml(entryName)}"><span class="codicon codicon-trash" aria-hidden="true"></span></button></div>`;
+        return `<div class="guidance-entry-row"><button type="button" class="guidance-entry${selected ? " active" : ""}" data-guidance-path="${entryPath}" data-guidance-scope="${entryScope}" aria-pressed="${selected}"><span class="guidance-entry-copy"><strong>${escapeHtml(entryName)}</strong><small>${escapeHtml(summary)}</small></span><span class="guidance-entry-meta"><span class="codicon codicon-chevron-right" aria-hidden="true"></span></span></button><button type="button" class="guidance-entry-delete" data-guidance-delete-path="${entryPath}" data-guidance-delete-scope="${entryScope}" aria-label="Delete ${escapeHtml(entryName)}" title="Delete ${escapeHtml(entryName)}"><span class="codicon codicon-trash" aria-hidden="true"></span></button></div>`;
       }).join("")
       : `<div class="guidance-category-empty">No ${guidanceKindLabel(kind).toLowerCase()} yet.</div>`;
     return `<section class="guidance-category" data-guidance-kind="${kind}"><header class="guidance-category-header"><div><span class="codicon ${GUIDANCE_KIND_ICONS[kind]}" aria-hidden="true"></span><div><h3>${guidanceKindLabel(kind)}</h3><p>${GUIDANCE_KIND_DESCRIPTIONS[kind]}</p></div></div><button type="button" class="guidance-new-button" data-guidance-new-kind="${kind}" ${!rootPath && guidanceScope === "project" ? "disabled" : ""}><span class="codicon codicon-add" aria-hidden="true"></span>New</button></header><div class="guidance-category-list">${cards}</div></section>`;
@@ -2111,6 +2108,7 @@ async function saveGuidanceFile({ autoSave = false } = {}) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = autoSave ? "All changes saved" : `Saved ${selectedGuidancePath}`;
   }
   if (!autoSave) await loadGuidanceSettings({ preserveSelection: true });
+  else await refreshCustomSkillCatalog();
   return true;
 }
 
@@ -2144,6 +2142,15 @@ function renderGuidanceSettings() {
   if (guidanceDraft && !guidanceDraft.isNew) renderGuidanceDetail();
 }
 
+async function refreshCustomSkillCatalog() {
+  const catalog = await window.api.guidanceEntries?.({ workspace: rootPath || "", scope: "all" });
+  if (!Array.isArray(catalog?.entries)) return false;
+  customGuidanceEntries = catalog.entries;
+  syncCustomSkillSlashCommands();
+  await loadGuidanceContext();
+  return true;
+}
+
 async function loadGuidanceContext() {
   if (!window.api.guidanceContext) {
     guidanceContext = "";
@@ -2174,6 +2181,7 @@ async function loadGuidanceSettings({ preserveSelection = false } = {}) {
   if (!preserveSelection) guidanceDraft = null;
   if (!window.api.guidanceEntries) {
     customGuidanceEntries = [];
+    syncCustomSkillSlashCommands();
     selectedGuidancePath = "";
     selectedGuidanceContent = "";
     renderGuidanceSettings();
@@ -2181,6 +2189,7 @@ async function loadGuidanceSettings({ preserveSelection = false } = {}) {
   }
   const result = await window.api.guidanceEntries({ workspace: rootPath || "", scope: "all" });
   customGuidanceEntries = Array.isArray(result?.entries) ? result.entries : [];
+  syncCustomSkillSlashCommands();
   if (preserveSelection && previousSelection && customGuidanceEntries.some((entry) => guidanceEntryKey(entry) === `${previousScope}:${previousSelection}`)) {
     selectedGuidancePath = previousSelection;
     selectedGuidanceScope = previousScope;
@@ -6644,7 +6653,7 @@ function modeIconClass(mode = chatMode) {
 
 function modePlaceholder(mode = chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
-  if (profile?.key === "hypothesis") return "Form hypotheses from context (read-only)";
+  if (profile?.key === "hypothesis") return "Form hypotheses or request any action";
   if (profile?.key === "plan") return "Build or revise a plan document";
   if (profile?.key === "ask") return "Ask, analyze, observe, or explain";
   if (profile?.key === "agent") return "Describe the investigation or workspace action";
@@ -8274,6 +8283,10 @@ btnNewFolder.addEventListener("click", () => createNewItemInput(true));
 btnProjectSettings?.addEventListener("click", () => {
   openAppSettings("project");
 });
+fileTree?.addEventListener("click", (event) => {
+  if (event.target?.closest?.(".tree-item")) return;
+  selectItem(null);
+});
 
 let creatingItem = false;
 async function createNewItemInput(isFolder) {
@@ -8539,6 +8552,7 @@ async function loadWorkspace(folder) {
   if (!appController.isCurrent(workspaceOperation.epoch)) return false;
   await window.api.watchWorkspace?.(folder);
   await restoreChatSessionsForCurrentWorkspace();
+  await loadGuidanceSettings({ preserveSelection: true });
   updateContextUsage();
   setAssessmentUiState("project", {
     title: projectName(folder),
@@ -8551,7 +8565,10 @@ async function loadWorkspace(folder) {
 async function restoreLastWorkspace() {
   const saved = localStorage.getItem(WORKSPACE_KEY);
   if (saved) await loadWorkspace(saved);
-  else await restoreChatSessionsForCurrentWorkspace();
+  else {
+    await restoreChatSessionsForCurrentWorkspace();
+    await loadGuidanceSettings({ preserveSelection: true });
+  }
 }
 
 // ── File Explorer ─────────────────────────────────────────────────────────────
@@ -8602,7 +8619,6 @@ function openSettingsTab() {
     savedContent: "",
     dirty: false,
     error: null,
-    preview: false,
     special: "settings",
   });
   renderTabs();
@@ -8626,7 +8642,6 @@ function openInterceptorTab(tool = "") {
     savedContent: "",
     dirty: false,
     error: null,
-    preview: false,
     special: "interceptor",
     securityTool: requestedTool,
   });
@@ -8645,7 +8660,6 @@ async function openApplicationGraphTab({ build = false } = {}) {
       savedContent: "",
       dirty: false,
       error: null,
-      preview: false,
       special: "application-graph",
     });
   }
@@ -8655,8 +8669,6 @@ async function openApplicationGraphTab({ build = false } = {}) {
 function switchToSettingsTab() {
   if (terminalMaximized) setTerminalMaximized(false);
   commitActiveTab();
-  const hadOther = Boolean(activeTabPath) && activeTabPath !== SETTINGS_TAB_PATH;
-  if (hadOther) discardCleanPreviewTabs(SETTINGS_TAB_PATH);
   activeTabPath = SETTINGS_TAB_PATH;
   editorLoadedPath = null;
   renderTabs();
@@ -8667,8 +8679,6 @@ function switchToSettingsTab() {
 function switchToInterceptorTab() {
   if (terminalMaximized) setTerminalMaximized(false);
   commitActiveTab();
-  const hadOther = Boolean(activeTabPath) && activeTabPath !== INTERCEPTOR_TAB_PATH;
-  if (hadOther) discardCleanPreviewTabs(INTERCEPTOR_TAB_PATH);
   activeTabPath = INTERCEPTOR_TAB_PATH;
   editorLoadedPath = null;
   renderTabs();
@@ -8678,8 +8688,6 @@ function switchToInterceptorTab() {
 async function switchToApplicationGraphTab({ build = false } = {}) {
   if (terminalMaximized) setTerminalMaximized(false);
   commitActiveTab();
-  const hadOther = Boolean(activeTabPath) && activeTabPath !== APPLICATION_GRAPH_TAB_PATH;
-  if (hadOther) discardCleanPreviewTabs(APPLICATION_GRAPH_TAB_PATH);
   activeTabPath = APPLICATION_GRAPH_TAB_PATH;
   editorLoadedPath = null;
   renderTabs();
@@ -10185,7 +10193,6 @@ function workspaceSearchResultItem(row, query) {
     run: async () => {
       await openFile(joinWorkspacePath(row.path), name, {
         focusEditor: true,
-        preview: false,
         line,
         column,
       });
@@ -10996,12 +11003,12 @@ async function renderTree(dirPath, container, depth) {
         e.stopPropagation();
         selectItem(item, { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey });
         if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-        await openFile(entry.path, entry.name, { focusEditor: false, preview: true });
+        await openFile(entry.path, entry.name, { focusEditor: false });
       });
       item.addEventListener("dblclick", async (e) => {
         e.stopPropagation();
         selectItem(item);
-        await openFile(entry.path, entry.name, { focusEditor: true, preview: false });
+        await openFile(entry.path, entry.name, { focusEditor: true });
       });
     }
 
@@ -11142,10 +11149,6 @@ async function rerenderExplorer(options = {}) {
       const droppedOnItem = event.target?.closest?.(".tree-item");
       if (droppedOnItem) return; // folder-item drop handlers already fired (they stopPropagation)
       await moveDroppedTreeItem(event, { relativePath: "" });
-    });
-    fileTree?.addEventListener("click", (event) => {
-      if (event.target?.closest?.(".tree-item[data-path]")) return;
-      selectItem(null);
     });
   }
   const availablePaths = new Set([...fileTree.querySelectorAll(".tree-item[data-path]")].map((item) => explorerPathKey(item.dataset.path)));
@@ -11679,23 +11682,6 @@ function handleProxyCapture(payload = {}) {
   }
 }
 
-function discardCleanPreviewTabs(exceptPath = "") {
-  let changed = false;
-  for (const [path, tab] of [...openTabs.entries()]) {
-    if (path === exceptPath || !tab?.preview || tab.dirty) continue;
-    const wasActive = path === activeTabPath;
-    EditorManager.disposeModel(path);
-    openTabs.delete(path);
-    if (wasActive) {
-      activeTabPath = null;
-      editorLoadedPath = null;
-    }
-    changed = true;
-  }
-  if (changed) renderTabs();
-  return changed;
-}
-
 function clearEditorTabDropIndicators() {
   editorTabBar?.querySelectorAll(".tab-drop-before, .tab-drop-after")
     .forEach((tab) => tab.classList.remove("tab-drop-before", "tab-drop-after"));
@@ -11729,7 +11715,6 @@ function reorderOpenTabs(draggedPath, targetPath, { after = false } = {}) {
 
 async function openFile(filePath, fileName, {
   focusEditor = true,
-  preview = false,
   line = 0,
   column = 1,
 } = {}) {
@@ -11747,7 +11732,6 @@ async function openFile(filePath, fileName, {
 
   const existingTab = openTabs.get(path);
   if (existingTab) {
-    if (!preview) existingTab.preview = false;
     switchToTab(path, { focusEditor });
     if (line > 0) {
       await renderEditor({ focusEditor });
@@ -11755,8 +11739,6 @@ async function openFile(filePath, fileName, {
     }
     return;
   }
-
-  if (preview) discardCleanPreviewTabs(path);
 
   openTabs.set(path, {
     path,
@@ -11766,7 +11748,6 @@ async function openFile(filePath, fileName, {
     savedContent: "",
     dirty: false,
     error: null,
-    preview: Boolean(preview),
   });
   renderTabs();
   switchToTab(path, { focusEditor });
@@ -11823,7 +11804,6 @@ function switchToTab(filePath, { focusEditor = true } = {}) {
   }
   showCodeEditorWorkspace();
   commitActiveTab();
-  if (activeTabPath && activeTabPath !== filePath) discardCleanPreviewTabs(filePath);
   activeTabPath = filePath;
   editorLoadedPath = null;
   renderTabs();
@@ -11836,10 +11816,7 @@ async function saveActiveTab() {
   const tab = openTabs.get(activeTabPath);
   if (!tab || tab.error) return;
   if (!tab.dirty) {
-    const wasPreview = Boolean(tab.preview);
-    tab.preview = false;
     EditorManager.clearChangeDecorations(activeTabPath);
-    if (wasPreview) renderTabs();
     if (isAssessmentSettingsTab(tab)) await configureProxyListener();
     return;
   }
@@ -11854,7 +11831,6 @@ async function saveActiveTab() {
 
   tab.savedContent = tab.content;
   tab.dirty = false;
-  tab.preview = false;
   EditorManager.clearChangeDecorations(activeTabPath);
   renderTabs();
   if (isAssessmentSettingsTab(tab)) await configureProxyListener();
@@ -11915,23 +11891,16 @@ function renderTabs() {
   for (const [path, tab] of openTabs) {
     const el = document.createElement("div");
     el.className = "editor-tab"
-      + (path === activeTabPath ? " active" : "")
-      + (tab.preview ? " preview" : "");
+      + (path === activeTabPath ? " active" : "");
     const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab) || isApplicationGraphTab(tab);
+    if (specialWorkspaceTab) el.classList.add("special-workspace-tab");
     el.title = specialWorkspaceTab
       ? tab.name
-      : (tab.preview
-        ? `${relativePathFromRoot(tab.diskPath) || tab.diskPath || tab.name} (preview)`
-        : (relativePathFromRoot(tab.diskPath) || tab.diskPath || tab.name));
+      : (relativePathFromRoot(tab.diskPath) || tab.diskPath || tab.name);
     el.draggable = true;
     el.addEventListener("click", () => switchToTab(path));
     el.addEventListener("dblclick", (event) => {
       event.stopPropagation();
-      const nextTab = openTabs.get(path);
-      if (nextTab?.preview) {
-        nextTab.preview = false;
-        renderTabs();
-      }
       switchToTab(path, { focusEditor: true });
     });
     el.addEventListener("dragstart", (event) => {
@@ -12036,7 +12005,10 @@ function updateEditorPathBar() {
     editorPathLabel.removeAttribute("title");
     return;
   }
-  const displayPath = activeTab.diskPath || activeTab.path || "";
+  const filePath = activeTab.diskPath || activeTab.path || "";
+  const relativePath = relativePathFromRoot(filePath);
+  const projectPath = relativePath === null ? (activeTab.name || "") : relativePath;
+  const displayPath = normPath(projectPath).replace(/^\/+/, "");
   editorPathLabel.textContent = displayPath;
   editorPathBar.hidden = !displayPath;
   editorPathLabel.title = displayPath;
@@ -13055,6 +13027,9 @@ window.api.onWorkspaceChanged?.((payload) => {
   if (!rootPath || !payload?.workspace) return;
   if (normPath(payload.workspace) !== normPath(rootPath)) return;
   refreshWorkspaceUi().catch((error) => console.warn("Workspace refresh failed", error));
+  if (/(?:^|[\\/])(?:\.xekute|custom)[\\/]skills[\\/]/i.test(String(payload.path || ""))) {
+    refreshCustomSkillCatalog().catch((error) => console.warn("Custom skill refresh failed", error));
+  }
 });
 
 window.addEventListener("resize", () => {
@@ -14935,31 +14910,130 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
 }
 
 const BUILTIN_SLASH_COMMANDS = [
-  { name: "/passive", description: "Run passive reconnaissance", prompt: "Perform a passive reconnaissance workflow using only public, non-intrusive sources. Review scope first, use pen_context.md, execute appropriate available tools, and record useful findings under recon/passive-recon.json." },
-  { name: "/endpoint", description: "Discover and organize endpoints", prompt: "Discover and organize application endpoints, parameters, methods, and authentication requirements using appropriate available tools; update enumeration/endpoints.json with evidence." },
-  { name: "/scope", description: "Review scope and authorization", prompt: "Review the assessment scope, exclusions, authorization, and rules of engagement. Summarize any blockers before testing." },
-  { name: "/report", description: "Build the assessment report", prompt: "Synthesize the current assessment evidence into the security report, preserving traceability to findings and request-response evidence." },
-  { name: "/map", description: "Inventory application relationships", prompt: "Prepare the current assessment data for the future application Map feature. For now, inventory hosts, pages, endpoints, scripts, and relationships without inventing data." },
-  { name: "/webclone", description: "Prepare a safe WebClone inventory", prompt: "Prepare a safe WebClone plan for the authorized target. For now, inventory cloneable public assets and dependencies; do not execute cloning." },
-  { name: "/create-rule", description: "Create an AI-authored Rule", prompt: "Create a detailed XEKUTE rule with the create_guidance tool." },
-  { name: "/create-skill", description: "Create an AI-authored Skill", prompt: "Create a detailed XEKUTE skill with the create_guidance tool." },
-  { name: "/create-subagent", description: "Create an AI-authored Subagent", prompt: "Create a detailed XEKUTE subagent with the create_guidance tool." },
-  { name: "/settings", description: "Edit custom slash commands", prompt: "" },
+  { name: "/pentest", description: "Run adaptive, scope-aware penetration testing", prompt: "" },
+  { name: "/report", description: "Generate the structured VAPT report", prompt: "" },
+  { name: "/create-rule", description: "Create a project or global rule", prompt: "" },
+  { name: "/create-skill", description: "Create user-authored guidance", prompt: "" },
+  { name: "/create-subagent", description: "Create a bounded subagent profile", prompt: "" },
 ];
 
+const SPECIAL_SKILL_COMMANDS = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
+const CUSTOM_SKILL_COMMANDS = new Set();
+let customSkillSlashCommands = [];
+
+function syncCustomSkillSlashCommands(entries = customGuidanceEntries) {
+  const seen = new Set();
+  customSkillSlashCommands = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => guidanceEntryKind(entry) === "skills")
+    .sort((left, right) => {
+      const leftScope = String(left?.scope || "project") === "project" ? 0 : 1;
+      const rightScope = String(right?.scope || "project") === "project" ? 0 : 1;
+      return leftScope - rightScope || String(left?.name || "").localeCompare(String(right?.name || ""));
+    })
+    .map((entry) => ({
+      name: String(entry.activation || "").trim().toLowerCase(),
+      description: String(entry.summary || `Run the ${entry.name || "custom"} skill.`),
+      overview: String(entry.summary || `Run the ${entry.name || "custom"} skill.`),
+      prompt: "",
+      group: "custom-skill",
+    }))
+    .filter((command) => command.name
+      && /^\/[a-z0-9][a-z0-9_-]*$/.test(command.name)
+      && !SPECIAL_SKILL_COMMANDS.has(command.name)
+      && !seen.has(command.name)
+      && seen.add(command.name));
+  CUSTOM_SKILL_COMMANDS.clear();
+  customSkillSlashCommands.forEach((command) => CUSTOM_SKILL_COMMANDS.add(command.name));
+  renderSlashSuggestions();
+}
+
+async function hydrateSpecialSkillCommands() {
+  try {
+    const result = await window.api?.listSpecialSkills?.();
+    const skills = Array.isArray(result?.skills) ? result.skills : [];
+    if (!skills.length) return;
+    BUILTIN_SLASH_COMMANDS.splice(0, BUILTIN_SLASH_COMMANDS.length, ...skills.map((skill) => ({
+      name: String(skill.command || "").toLowerCase(),
+      title: String(skill.title || ""),
+      description: String(skill.description || skill.title || "Special skill"),
+      overview: String(skill.description || skill.title || "Special skill"),
+      prompt: "",
+    })).filter((skill) => skill.name));
+    SPECIAL_SKILL_COMMANDS.clear();
+    BUILTIN_SLASH_COMMANDS.forEach((skill) => SPECIAL_SKILL_COMMANDS.add(skill.name));
+    syncCustomSkillSlashCommands();
+    renderSlashSuggestions();
+  } catch { /* The static retained-skill fallback remains available. */ }
+}
+
+hydrateSpecialSkillCommands();
+
 function availableSlashCommands() {
-  const commands = [...BUILTIN_SLASH_COMMANDS];
+  const commands = [
+    ...BUILTIN_SLASH_COMMANDS.map((command) => ({ ...command, group: "built-in-skill" })),
+    ...customSkillSlashCommands,
+  ];
   for (const line of (localStorage.getItem(CUSTOM_COMMANDS_KEY) || "").split(/\r?\n/)) {
     const match = line.match(/^\s*(\/[\w-]+)\s*=\s*(.+)$/);
-    if (match) commands.push({ name: match[1].toLowerCase(), description: "Custom command", prompt: match[2] });
+    if (match) commands.push({ name: match[1].toLowerCase(), description: match[2], overview: match[2], prompt: match[2], group: "custom-command" });
   }
-  return commands.filter((command, index, all) => command.name !== "/active" && all.findIndex((item) => item.name === command.name) === index);
+  return commands.filter((command, index, all) => all.findIndex((item) => item.name === command.name) === index);
+}
+
+function slashCommandTitle(command) {
+  const explicit = String(command?.title || "").trim();
+  if (explicit) return explicit;
+  return String(command?.name || "Skill")
+    .replace(/^\//, "")
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ") || "Skill";
+}
+
+function slashCommandOverviewElement() {
+  let overview = document.querySelector("#slash-command-overview");
+  if (overview) return overview;
+  overview = document.createElement("aside");
+  overview.id = "slash-command-overview";
+  overview.className = "slash-command-overview";
+  overview.setAttribute("role", "tooltip");
+  overview.hidden = true;
+  overview.innerHTML = `<strong></strong><p></p>`;
+  document.body.appendChild(overview);
+  return overview;
+}
+
+function hideSlashCommandOverview() {
+  const overview = document.querySelector("#slash-command-overview");
+  if (overview) overview.hidden = true;
+  slashCommandSuggestions?.querySelectorAll("[aria-describedby=\"slash-command-overview\"]")
+    .forEach((item) => item.removeAttribute("aria-describedby"));
+}
+
+function showSlashCommandOverview(command, anchor) {
+  const overview = slashCommandOverviewElement();
+  overview.querySelector("strong").textContent = slashCommandTitle(command);
+  overview.querySelector("p").textContent = String(command?.overview || command?.description || "Custom skill");
+  overview.hidden = false;
+  anchor.setAttribute("aria-describedby", overview.id);
+  const anchorRect = anchor.getBoundingClientRect();
+  const paletteRect = slashCommandSuggestions.getBoundingClientRect();
+  const width = overview.offsetWidth || 200;
+  const height = overview.offsetHeight || 120;
+  const left = paletteRect.left - width - 8 >= 8
+    ? paletteRect.left - width - 8
+    : Math.max(8, Math.min(window.innerWidth - width - 8, paletteRect.right + 8));
+  const top = Math.max(8, Math.min(window.innerHeight - height - 8, anchorRect.top));
+  overview.style.left = `${left}px`;
+  overview.style.top = `${top}px`;
 }
 
 function closeSlashSuggestions() {
   if (slashCommandSuggestions) slashCommandSuggestions.hidden = true;
+  hideSlashCommandOverview();
   slashSuggestionItems = [];
-  slashSuggestionIndex = 0;
+  slashSuggestionIndex = -1;
 }
 
 function effectiveChatInputValue() {
@@ -15142,30 +15216,48 @@ function renderSlashSuggestions() {
   const value = chatInput.value;
   if (!/^\/[\w-]*$/.test(value)) return closeSlashSuggestions();
   const query = value.toLowerCase();
-  slashSuggestionItems = availableSlashCommands()
+  const groupOrder = { "built-in-skill": 0, "custom-skill": 1, "custom-command": 2 };
+  const matchingCommands = availableSlashCommands()
     .map((command) => ({ command, score: command.name.startsWith(query) ? 0 : command.name.includes(query.slice(1)) || command.description.toLowerCase().includes(query.slice(1)) ? 1 : 2 }))
     .filter((item) => item.score < 2)
-    .sort((a, b) => a.score - b.score || a.command.name.localeCompare(b.command.name))
-    .slice(0, 3)
+    .sort((a, b) => (groupOrder[a.command.group] ?? 99) - (groupOrder[b.command.group] ?? 99) || a.score - b.score || a.command.name.localeCompare(b.command.name));
+  slashSuggestionItems = (query === "/" ? matchingCommands : matchingCommands.slice(0, 8))
     .map((item) => item.command);
   if (!slashSuggestionItems.length) return closeSlashSuggestions();
   slashSuggestionIndex = Math.min(slashSuggestionIndex, slashSuggestionItems.length - 1);
+  hideSlashCommandOverview();
   slashCommandSuggestions.innerHTML = "";
+  const groupLabels = { "built-in-skill": "Skills", "custom-skill": "Custom Skills", "custom-command": "Commands" };
+  let previousGroup = "";
   slashSuggestionItems.forEach((command, index) => {
+    if (command.group !== previousGroup) {
+      const label = document.createElement("div");
+      label.className = "slash-command-group-label";
+      label.setAttribute("role", "presentation");
+      label.textContent = groupLabels[command.group] || "Commands";
+      slashCommandSuggestions.appendChild(label);
+      previousGroup = command.group;
+    }
     const button = document.createElement("button"); button.type = "button"; button.className = `slash-command-option${index === slashSuggestionIndex ? " selected" : ""}`; button.setAttribute("role", "option"); button.setAttribute("aria-selected", String(index === slashSuggestionIndex));
-    button.innerHTML = `<span class="slash-command-name">${command.name}</span><span class="slash-command-description">${command.description}</span>`;
+    const name = document.createElement("span"); name.className = "slash-command-name"; name.textContent = command.name;
+    const description = document.createElement("span"); description.className = "slash-command-description"; description.textContent = command.description;
+    button.append(name, description);
+    button.addEventListener("mouseenter", () => showSlashCommandOverview(command, button));
+    button.addEventListener("mouseleave", hideSlashCommandOverview);
+    button.addEventListener("focus", () => showSlashCommandOverview(command, button));
+    button.addEventListener("blur", hideSlashCommandOverview);
     button.addEventListener("mousedown", (event) => { event.preventDefault(); chooseSlashSuggestion(index, { clicked: true }); });
     slashCommandSuggestions.appendChild(button);
   });
   slashCommandSuggestions.hidden = false;
+  slashCommandSuggestions.querySelector(".slash-command-option.selected")?.scrollIntoView({ block: "nearest" });
 }
 
 function expandSlashCommand(raw) {
   const text = String(raw || "").trim();
   if (!text.startsWith("/")) return text;
   const [command, ...rest] = text.split(/\s+/); const args = rest.join(" ");
-  if (command === "/settings") { openAppSettings(); return ""; }
-  if (/^\/create-(?:rule|skill|subagent)$/i.test(command)) return text;
+  if (SPECIAL_SKILL_COMMANDS.has(command.toLowerCase()) || CUSTOM_SKILL_COMMANDS.has(command.toLowerCase())) return text;
   const override = slashCommandOverrides()[command.toLowerCase()];
   const configuredAiFields = override?.role === "ai" ? [
     override.aim && `Aim: ${override.aim}`,
@@ -15190,51 +15282,42 @@ function slashCommandOverrides() {
   return parsed;
 }
 
-async function runStaticSlashCommand(rawCommand) {
-  if (rawCommand.trim().toLowerCase() === "/settings") return false;
+async function runSpecialSlashCommand(rawCommand) {
   if (/^\/create-(?:rule|skill|subagent)(?:\s|$)/i.test(rawCommand.trim())) return false;
+  const command = String(rawCommand || "").trim().split(/\s+/, 1)[0].toLowerCase();
+  if (CUSTOM_SKILL_COMMANDS.has(command)) return false;
   const parsed = await window.api.parseSlashCommand({ command: rawCommand, overrides: slashCommandOverrides() });
   if (!parsed?.ok) { addErrorMessage(parsed?.error || "Could not parse slash command."); return true; }
-  if (parsed.role !== "static") return false;
-  addUserMessage(rawCommand);
-  const userMessage = {
-    role: "user",
-    content: rawCommand,
-    id: `${activeChatSessionId}-message-${Date.now()}-${chatHistory.length + 1}`,
-    createdAt: new Date().toISOString(),
-  };
-  chatHistory.push(userMessage);
-  maybeNameActiveChat(rawCommand);
-  await beginSessionMemoryBlock(rawCommand);
-  syncActiveChatSession();
-  const commandPayload = { assessment: assessmentPath, command: rawCommand, modeFamily: chatFamily, mode: chatMode, overrides: slashCommandOverrides() };
-  let result;
-  try {
-    result = await window.api.runSlashCommand(commandPayload);
-  } catch (error) {
-    result = { ok: false, error: error?.message || "Slash command failed unexpectedly." };
+  if (parsed.role === "special") {
+    if (parsed.command !== "/report") return false;
+    addUserMessage(rawCommand);
+    const userMessage = {
+      role: "user",
+      content: rawCommand,
+      id: `${activeChatSessionId}-message-${Date.now()}-${chatHistory.length + 1}`,
+      createdAt: new Date().toISOString(),
+    };
+    chatHistory.push(userMessage);
+    maybeNameActiveChat(rawCommand);
+    await beginSessionMemoryBlock(rawCommand);
+    syncActiveChatSession();
+    let result;
+    try { result = await window.api.assessmentGenerateReport({ path: assessmentPath }); }
+    catch (error) { result = { ok: false, error: error?.message || "Report generation failed unexpectedly." }; }
+    const assistant = createAssistantTurn({ sessionId: activeChatSessionId });
+    const message = result?.ok
+      ? `VAPT report generated.\n\nWorking file: ${result.workingPath || "report/report.md"}\nTimestamped export: ${result.exportPath || result.path || "report/exports"}`
+      : `VAPT report could not be generated: ${result?.error || "Open an assessment workspace first."}`;
+    assistant.setRawContent(message);
+    assistant.finalizeContent();
+    const assistantMessage = { role: "assistant", content: message, id: `${activeChatSessionId}-message-${Date.now()}-${chatHistory.length + 1}`, createdAt: new Date().toISOString() };
+    assistant.messageId = assistantMessage.id;
+    chatHistory.push(assistantMessage);
+    syncActiveChatSession();
+    await finishSessionMemoryBlock({ assistant, outcome: result?.ok ? "completed" : "failed" });
+    return true;
   }
-  const assistant = createAssistantTurn({ sessionId: activeChatSessionId });
-  const message = result?.ok
-    ? `${parsed.command} completed for ${result.target}.\n\nNormalized results: ${JSON.stringify(result.normalized || {})}\nOutput: ${result.output || "assessment output"}\n\n${(result.results || []).map((item) => `- ${item.tool}: ${item.status || (item.exitCode === 0 ? "completed" : `exit ${item.exitCode}`)}${item.error ? ` (${item.error})` : ""}`).join("\n")}`
-    : `/${String(parsed.command || "command").replace(/^\//, "")} failed: ${result?.error || "Unknown command error"}`;
-  assistant.setRawContent(message);
-  assistant.finalizeContent();
-  const assistantMessage = {
-    role: "assistant",
-    content: message,
-    id: `${activeChatSessionId}-message-${Date.now()}-${chatHistory.length + 1}`,
-    createdAt: new Date().toISOString(),
-  };
-  assistant.messageId = assistantMessage.id;
-  chatHistory.push(assistantMessage);
-  const toolNames = (Array.isArray(result?.results) ? result.results : [])
-    .map((item) => item?.tool || item?.toolName || item?.name)
-    .filter(Boolean);
-  if (toolNames.length) await queueSessionMemoryEvent({ type: "tool_usage", toolNames });
-  syncActiveChatSession();
-  await finishSessionMemoryBlock({ assistant, outcome: result?.ok ? "completed" : "failed" });
-  return true;
+  return false;
 }
 
 async function sendMessageWithAgentRuntime(options = {}) {
@@ -15255,7 +15338,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     return;
   }
   if (!internal && text.startsWith("/")) {
-    const handled = await runStaticSlashCommand(text);
+    const handled = await runSpecialSlashCommand(text);
     if (handled) { chatInput.value = ""; resetChatInput(); closeSlashSuggestions(); return; }
   }
   if (!internal) text = expandSlashCommand(text);
@@ -16574,7 +16657,9 @@ chatInput.addEventListener("keydown", (e) => {
   if (!slashCommandSuggestions?.hidden && ["ArrowDown", "ArrowUp"].includes(e.key)) {
     e.preventDefault();
     const direction = e.key === "ArrowDown" ? 1 : -1;
-    slashSuggestionIndex = (slashSuggestionIndex + direction + slashSuggestionItems.length) % slashSuggestionItems.length;
+    slashSuggestionIndex = slashSuggestionIndex < 0
+      ? (direction > 0 ? 0 : slashSuggestionItems.length - 1)
+      : (slashSuggestionIndex + direction + slashSuggestionItems.length) % slashSuggestionItems.length;
     renderSlashSuggestions();
     return;
   }

@@ -279,11 +279,13 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.ok(html.includes('id="help-guide-overlay"'));
   assert.doesNotMatch(html, /custom-scripts-list/);
   assert.ok(html.includes('id="slash-command-suggestions"'));
-  assert.match(renderer, /\/passive/);
-  assert.match(renderer, /\/endpoint/);
+  assert.match(renderer, /\/pentest/);
+  assert.match(renderer, /\/report/);
+  assert.doesNotMatch(renderer, /\/passive(?:\s|["'])/);
+  assert.doesNotMatch(renderer, /\/endpoint(?:\s|["'])/);
   assert.match(renderer, /slice\(0, 3\)/);
   assert.match(renderer, /availableSlashCommands/);
-  assert.match(renderer, /runStaticSlashCommand/);
+  assert.match(renderer, /runSpecialSlashCommand/);
   assert.match(renderer, /slashCommandOverrides/);
   assert.match(renderer, /appSettingsWorkspace\.hidden = false/);
   assert.match(renderer, /openChatPane\(\{ createIfEmpty: true \}\)/);
@@ -623,7 +625,9 @@ test("professional assessment records preserve evidence hashes, findings, assets
   assert.equal(stopped.run.stopReason, "operator stop");
   const report = workspace.generateReport(root);
   assert.equal(report.ok, true);
-  assert.match(report.path, /^report\/exports\/report-/);
+  assert.match(report.path, /^report\/exports\/vapt-report-/);
+  assert.equal(report.path, report.exportPath);
+  assert.equal(report.workingPath, "report/report.md");
   assert.ok(fs.existsSync(path.join(root, report.path.replace(/\//g, path.sep))));
   fs.rmSync(parent, { recursive: true, force: true });
 });
