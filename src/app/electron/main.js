@@ -198,14 +198,19 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
       }
       const commandMode = typeof args.command === "string" && args.command.trim() !== "";
       const executableArgs = Array.isArray(args.args) ? args.args : [];
-      const terminalResult = commandMode && terminalHost.runShellCommand
+      const terminalResult = terminalHost.runSupervisedCommand
+        ? await terminalHost.runSupervisedCommand(workspace, {
+          ...args,
+          operation: "run",
+        }, monitorRuntime)
+        : commandMode && terminalHost.runShellCommand
         ? await terminalHost.runShellCommand(workspace, args.command, {
           shell: args.shell || "auto",
           toolName: "exec_command",
           cwd: args.cwd || "",
           env: args.env || null,
           timeoutMs: Number(args.timeout_ms) || 0,
-          exposeTerminal: false,
+          exposeTerminal: true,
           signal: monitorRuntime.signal,
           onProgress: monitorRuntime.progress,
           onChildProcess: monitorRuntime.childProcess,
@@ -216,7 +221,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
           cwd: args.cwd || "",
           env: args.env || null,
           timeoutMs: Number(args.timeout_ms) || 0,
-          exposeTerminal: false,
+          exposeTerminal: true,
           signal: monitorRuntime.signal,
           onProgress: monitorRuntime.progress,
           onChildProcess: monitorRuntime.childProcess,
@@ -234,26 +239,33 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
           ok: terminalResult?.ok !== false,
           ...(terminalResult?.ok === false ? {
             error: {
-              code: terminalResult.timedOut ? "EXEC_COMMAND_TIMEOUT" : terminalResult.status === "stopped" ? "EXEC_COMMAND_STOPPED" : "EXEC_COMMAND_EXIT_FAILED",
-              message: terminalResult.timedOut ? "The command reached its explicit timeout." : terminalResult.status === "stopped" ? "The command was stopped." : `The command exited with code ${terminalResult.exitCode}.`,
+              code: (terminalResult.timedOut || terminalResult.value?.status === "timeout") ? "EXEC_COMMAND_TIMEOUT" : (terminalResult.status || terminalResult.value?.status) === "stopped" ? "EXEC_COMMAND_STOPPED" : "EXEC_COMMAND_EXIT_FAILED",
+              message: (terminalResult.timedOut || terminalResult.value?.status === "timeout") ? "The command reached its explicit timeout." : (terminalResult.status || terminalResult.value?.status) === "stopped" ? "The command was stopped." : `The command exited with code ${terminalResult.exitCode ?? terminalResult.value?.exitCode}.`,
               retryable: false,
             },
           } : {}),
           value: {
-            processId: terminalResult.processId,
+            mode: terminalResult.mode || terminalResult.value?.mode || "command",
+            processId: terminalResult.processId || terminalResult.value?.processId || "",
+            pid: terminalResult.pid || terminalResult.value?.pid,
+            terminalId: terminalResult.terminalId || terminalResult.value?.terminalId || "",
             ...(commandMode ? { command: args.command, shell: terminalResult.shell || args.shell || "auto" } : { executable: args.executable, args: executableArgs }),
             resolvedExecutable: terminalResult.executable || args.executable || "",
-            cwd: terminalResult.cwd || args.cwd || workspace,
-            stdout: terminalResult.stdout || "",
-            stderr: terminalResult.stderr || "",
-            exitCode: terminalResult.exitCode,
-            signal: terminalResult.signal,
-            startedAt: Date.now() - Math.max(0, Number(terminalResult.elapsedMs) || 0),
-            finishedAt: Date.now(),
-            elapsedMs: Number(terminalResult.elapsedMs) || 0,
-            status: terminalResult.status || (terminalResult.exitCode === 0 ? "complete" : "failed"),
-            timedOut: Boolean(terminalResult.timedOut),
-            outputCompleteness: terminalResult.outputCompleteness || "complete",
+            cwd: terminalResult.cwd || terminalResult.value?.cwd || args.cwd || workspace,
+            stdout: terminalResult.stdout || terminalResult.value?.stdout || "",
+            stderr: terminalResult.stderr || terminalResult.value?.stderr || "",
+            exitCode: terminalResult.exitCode ?? terminalResult.value?.exitCode ?? null,
+            signal: terminalResult.signal || terminalResult.value?.signal || null,
+            startedAt: terminalResult.startedAt || terminalResult.value?.startedAt || Date.now() - Math.max(0, Number(terminalResult.elapsedMs || terminalResult.value?.elapsedMs) || 0),
+            finishedAt: terminalResult.finishedAt || terminalResult.value?.finishedAt || (terminalResult.value?.status === "running" ? null : Date.now()),
+            elapsedMs: Number(terminalResult.elapsedMs ?? terminalResult.value?.elapsedMs) || 0,
+            status: terminalResult.status || terminalResult.value?.status || (terminalResult.exitCode === 0 ? "complete" : "failed"),
+            timedOut: Boolean(terminalResult.timedOut || terminalResult.value?.timedOut || terminalResult.value?.status === "timeout"),
+            waiting: Boolean(terminalResult.waiting || terminalResult.value?.waiting),
+            metrics: terminalResult.metrics || terminalResult.value?.metrics || null,
+            observation: terminalResult.observation || terminalResult.value?.observation || null,
+            cursor: terminalResult.cursor || terminalResult.value?.cursor || null,
+            outputCompleteness: terminalResult.outputCompleteness || terminalResult.value?.outputCompleteness || "complete",
           },
         };
     } else {
@@ -1331,8 +1343,104 @@ const toolExecutor = {
   executeToolCall,
 };
 
-function createAgentTerminalHost(webContents, sendAgentEvent) {
+function createAgentTerminalHost(webContents, sendAgentEvent, { sessionId = "" } = {}) {
   if (!webContents) return null;
+  let supervisedTerminalCounter = 0;
+  function nextSupervisedTerminalId() {
+    supervisedTerminalCounter += 1;
+    return `agent-${Date.now().toString(36)}-supervised-${supervisedTerminalCounter}`;
+  }
+  function sendTerminalData(id, data) {
+    if (!webContents || webContents.isDestroyed() || !data) return;
+    webContents.send("terminal:data", { id, data: String(data), agent: true });
+  }
+  function createSupervisedTerminal(workspace, input, runtime = {}) {
+    const manager = container.durableProcessManager;
+    const terminalId = nextSupervisedTerminalId();
+    const command = typeof input.command === "string"
+      ? input.command
+      : displayExecCommand(input.executable, Array.isArray(input.args) ? input.args : []);
+    let processId = "";
+    let closing = false;
+    const record = {
+      ownerId: webContents.id,
+      agent: true,
+      supervised: true,
+      readOnly: true,
+      processId: "",
+      waiting: false,
+      command,
+      toolName: "exec_command",
+      cwd: input.cwd || workspace,
+      pty: {
+        write() {},
+        resize() {},
+        kill: () => {
+          if (closing) return Promise.resolve({ ok: true, status: "stopped" });
+          if (!processId) {
+            record.stopRequested = true;
+            return Promise.resolve({ ok: true, pending: true, status: "stopping" });
+          }
+          return manager.stop(workspace, { process_id: processId, reason: "user_requested" });
+        },
+      },
+    };
+    terminals.set(terminalId, record);
+    sendAgentEvent?.({ type: "agent_terminal", phase: "start", id: terminalId, terminalId, processId: "", command, toolName: "exec_command", cwd: record.cwd, sessionId });
+    const supervisedRuntime = {
+      ...runtime,
+      terminalId,
+      sessionId,
+      onStarted: (started) => {
+        processId = String(started?.processId || "");
+        record.processId = processId;
+        record.pid = started?.pid;
+        sendAgentEvent?.({ type: "agent_terminal", phase: "started", id: terminalId, terminalId, processId, pid: started?.pid, command, toolName: "exec_command", cwd: record.cwd, sessionId });
+        runtime.onStarted?.(started);
+        if (record.stopRequested && processId) manager.stop(workspace, { process_id: processId, reason: "user_requested" }).catch(() => {});
+      },
+      onOutput: (payload) => {
+        sendTerminalData(terminalId, payload?.data);
+        runtime.onOutput?.(payload);
+      },
+      onDetached: (payload) => {
+        record.waiting = true;
+        runtime.onDetached?.(payload);
+      },
+      onHealth: (payload) => {
+        sendAgentEvent?.({ ...payload, terminalId, processId: payload?.processId || processId, sessionId });
+        runtime.onHealth?.(payload);
+      },
+      onReview: (payload) => {
+        sendAgentEvent?.({ type: "terminal_checkpoint", ...payload, terminalId, processId: payload?.processId || processId, sessionId });
+        runtime.onReview?.(payload);
+      },
+      onComplete: (payload) => {
+        closing = true;
+        const waiting = Boolean(record.waiting);
+        if (!webContents.isDestroyed()) webContents.send("terminal:exit", { id: terminalId, exitCode: payload?.exitCode ?? null, signal: payload?.signal || null, agent: true, processId: payload?.processId || processId, waiting });
+        sendAgentEvent?.({ type: "agent_terminal", phase: "end", id: terminalId, terminalId, processId: payload?.processId || processId, command, exitCode: payload?.exitCode ?? null, signal: payload?.signal || null, status: payload?.status, terminationReason: payload?.terminationReason, waiting, sessionId });
+        sendAgentEvent?.({ type: "terminal_complete", ...payload, terminalId, processId: payload?.processId || processId, command, waiting, sessionId });
+        terminals.delete(terminalId);
+        runtime.onComplete?.(payload);
+      },
+    };
+    return { terminalId, record, runtime: supervisedRuntime, getProcessId: () => processId };
+  }
+  async function runSupervised(workspace, input, runtime = {}) {
+    const manager = container.durableProcessManager;
+    if (!manager) return { ok: false, error: { code: "DURABLE_PROCESS_PROVIDER_UNAVAILABLE", message: "Durable process management is unavailable.", retryable: false } };
+    const terminal = createSupervisedTerminal(workspace, input, runtime);
+    const operation = String(input.operation || "run");
+    if (operation !== "run") terminal.record.waiting = true;
+    const result = operation === "run"
+      ? await manager.run(workspace, input, terminal.runtime)
+      : await manager.start(workspace, input, terminal.runtime);
+    if (result?.ok === false && !terminal.getProcessId()) terminals.delete(terminal.terminalId);
+    if (result?.value && !result.value.terminalId) result.value.terminalId = terminal.terminalId;
+    if (result?.value && !result.value.processId) result.value.processId = terminal.getProcessId();
+    return result;
+  }
   return {
     runCommand: (workspace, command, options = {}) => agentTerminalRunner.runCommand(webContents, workspace, command, { ...options, sendAgentEvent }),
     runExecutable: (workspace, executable, args, options = {}) => agentTerminalRunner.runExecutable(webContents, workspace, executable, args, { ...options, sendAgentEvent }),
@@ -1340,8 +1448,10 @@ function createAgentTerminalHost(webContents, sendAgentEvent) {
     manageDurableProcess: (workspace, operation, args, runtime = {}) => {
       const manager = container.durableProcessManager;
       if (!manager || typeof manager[operation] !== "function") return Promise.resolve({ ok: false, error: { code: "DURABLE_PROCESS_PROVIDER_UNAVAILABLE", message: "Durable process management is unavailable.", retryable: false } });
+      if (operation === "start") return runSupervised(workspace, { ...args, operation: "start" }, runtime);
       return manager[operation](workspace, args, runtime);
     },
+    runSupervisedCommand: (workspace, input, runtime = {}) => runSupervised(workspace, { ...input, operation: "run" }, runtime),
     sendLifecycleEvent: (payload) => sendAgentEvent?.({ type: "tool_lifecycle", ...payload }),
     startProcess: (workspace, command, options = {}) => agentTerminalRunner.startProcess(webContents, workspace, command, {
       ...options,
@@ -1582,12 +1692,20 @@ ipcMain.handle("terminal:resize", (_event, { id, cols, rows }) => {
   return { ok: true };
 });
 
-ipcMain.handle("terminal:kill", (_event, { id }) => {
+ipcMain.handle("terminal:kill", async (_event, { id }) => {
   const record = terminals.get(id);
   if (!record || record.ownerId !== _event.sender.id) return { error: "Terminal is not owned by this window", code: "TERMINAL_NOT_OWNED" };
   if (record) {
-    try { record.pty.kill(); } catch { /* ignore */ }
-    terminals.delete(id);
+    try {
+      const result = await record.pty.kill();
+      // Supervised agent terminals remove themselves after the durable manager
+      // publishes the completion event. Interactive terminals have no durable
+      // callback and can be removed immediately.
+      if (!record.agent || (!record.processId && !record.supervised)) terminals.delete(id);
+      return result?.ok === false ? result : { ok: true, ...(result || {}) };
+    } catch (error) {
+      return { ok: false, error: error.message || "Terminal could not be stopped", code: "TERMINAL_STOP_FAILED" };
+    }
   }
   return { ok: true };
 });
@@ -3161,7 +3279,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     getBrowserTarget,
     onResultReady: (readyResult) => scheduleParentContinuation(runKey, readyResult),
   });
-  const agentTerminalHost = createAgentTerminalHost(sender, sendAgentEvent);
+  const agentTerminalHost = createAgentTerminalHost(sender, sendAgentEvent, { sessionId });
   let assessmentRun = null;
   if (payload.workspace) {
     const agentProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");

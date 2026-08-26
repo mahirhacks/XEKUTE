@@ -392,7 +392,7 @@ test("command execution renders as sequential collapsed chat events without ente
   assert.match(renderer, /assistant\.completeCommandEvent\(payload\.tool, uiResult\)/);
   assert.match(renderer, /turn\.dataset\.rawAssistant = this\.rawContent/);
   assert.match(renderer, /assistantTurn\.dataset\.rawAssistant/);
-  assert.doesNotMatch(renderer, /TerminalManager\.attachAgentSession\(\{[\s\S]{0,180}payload\.id/);
+  assert.match(renderer, /TerminalManager\.attachAgentSession\(\{[\s\S]{0,220}payload\.id/);
   assert.match(chatStyles, /\.agent-command-event\s*\{/);
   assert.match(chatStyles, /\.agent-command-event\[open\] \.agent-command-chevron/);
   assert.match(chatStyles, /\.agent-command-body code\s*\{/);

@@ -186,11 +186,12 @@ test("typed exec accepts an absolute executable path", async () => {
   assert.equal(calls[0].executable, "C:/Program Files/tool/tool.exe");
 });
 
-test("canonical agent exec explicitly disables terminal projection", () => {
+test("canonical agent exec projects terminal output and keeps the runner fallback configurable", () => {
   const runner = fs.readFileSync(path.join(__dirname, "..", "src", "app", "services", "terminal", "terminal-runner.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
 
-  assert.match(main, /exposeTerminal:\s*false/);
+  assert.match(main, /runSupervisedCommand/);
+  assert.match(main, /exposeTerminal:\s*true/);
   assert.match(main, /terminalHost\.runExecutable/);
   assert.match(main, /terminalHost\.runShellCommand/);
   assert.match(runner, /function runShellCommand/);

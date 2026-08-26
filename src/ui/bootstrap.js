@@ -649,6 +649,7 @@ const chatSessionsNeedingAttention = new Set();
   const seenSubagentResultIds = new Set();
   let subagentDrainRetryTimer = null;
 const waitCardTickers = new Map();
+const commandTimelineTickers = new Map();
 let activeStreamContent = "";
 let contextFilesCache = [];
 let chatSessionCounter = 0;
@@ -1993,7 +1994,7 @@ function renderGuidanceList() {
         const entryName = entry.name || entry.relativePath.split("/").pop() || "guidance";
         const entryPath = escapeHtml(entry.relativePath);
         const entryScope = escapeHtml(entry.scope || "project");
-        return `<div class="guidance-entry-row"><button type="button" class="guidance-entry${selected ? " active" : ""}" data-guidance-path="${entryPath}" data-guidance-scope="${entryScope}" aria-pressed="${selected}"><span class="guidance-entry-copy"><strong>${escapeHtml(entryName)}</strong><small>${escapeHtml(summary)}</small></span><span class="guidance-entry-meta"><span class="codicon codicon-chevron-right" aria-hidden="true"></span></span></button><button type="button" class="guidance-entry-delete" data-guidance-delete-path="${entryPath}" data-guidance-delete-scope="${entryScope}" aria-label="Delete ${escapeHtml(entryName)}" title="Delete ${escapeHtml(entryName)}"><span class="codicon codicon-trash" aria-hidden="true"></span></button></div>`;
+        return `<div class="guidance-entry-row"><button type="button" class="guidance-entry${selected ? " active" : ""}" data-guidance-path="${entryPath}" data-guidance-scope="${entryScope}" aria-pressed="${selected}"><span class="guidance-entry-copy"><strong>${escapeHtml(entryName)}</strong><small>${escapeHtml(summary)}</small></span></button><button type="button" class="guidance-entry-delete" data-guidance-delete-path="${entryPath}" data-guidance-delete-scope="${entryScope}" aria-label="Delete ${escapeHtml(entryName)}" title="Delete ${escapeHtml(entryName)}"><span class="codicon codicon-trash" aria-hidden="true"></span></button></div>`;
       }).join("")
       : `<div class="guidance-category-empty">No ${guidanceKindLabel(kind).toLowerCase()} yet.</div>`;
     return `<section class="guidance-category" data-guidance-kind="${kind}"><header class="guidance-category-header"><div><span class="codicon ${GUIDANCE_KIND_ICONS[kind]}" aria-hidden="true"></span><div><h3>${guidanceKindLabel(kind)}</h3><p>${GUIDANCE_KIND_DESCRIPTIONS[kind]}</p></div></div><button type="button" class="guidance-new-button" data-guidance-new-kind="${kind}" ${!rootPath && guidanceScope === "project" ? "disabled" : ""}><span class="codicon codicon-add" aria-hidden="true"></span>New</button></header><div class="guidance-category-list">${cards}</div></section>`;
@@ -13676,10 +13677,47 @@ function createCommandTimelineRow(tool, { state = "running" } = {}) {
 
 function updateCommandTimelineRow(row, state = "success") {
   if (!row) return null;
+  stopCommandTimelineTicker(row);
   row.dataset.state = state;
+  delete row.dataset.waiting;
   const label = row.querySelector(".agent-command-label");
   if (label) label.textContent = commandTimelineStateLabel(state);
   return row;
+}
+
+function startCommandTimelineTicker(row, startedAt = Date.now()) {
+  if (!row) return;
+  stopCommandTimelineTicker(row);
+  const start = Number(startedAt) || Date.now();
+  row.dataset.waitStartedAt = String(start);
+  const tick = () => {
+    if (!row.isConnected || row.dataset.state !== "running" || row.dataset.waiting !== "true") {
+      stopCommandTimelineTicker(row);
+      return;
+    }
+    const label = row.querySelector(".agent-command-label");
+    if (label) label.textContent = `Running command · ${formatWaitClock(Date.now() - start)}`;
+  };
+  tick();
+  commandTimelineTickers.set(row, setInterval(tick, 1000));
+}
+
+function stopCommandTimelineTicker(row) {
+  const timer = commandTimelineTickers.get(row);
+  if (timer) clearInterval(timer);
+  commandTimelineTickers.delete(row);
+}
+
+function updateCommandTimelineLabel(processId, label) {
+  const id = String(processId || "");
+  if (!id || !messages) return;
+  for (const row of messages.querySelectorAll(".agent-command-event[data-process-id]")) {
+    if (String(row.dataset.processId || "") !== id) continue;
+    if (row.dataset.waiting !== "true") continue;
+    const labelEl = row.querySelector(".agent-command-label");
+    if (labelEl) labelEl.textContent = label;
+    row.dataset.state = "running";
+  }
 }
 
 function agentToolDisplayName(tool = {}) {
@@ -13736,7 +13774,7 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
     card.dataset.subagentId = waitId;
     card.dataset.waitId = waitId;
     card.dataset.waitKind = result.mode === "subagent_wait" ? "subagent" : "terminal";
-    card.dataset.waitStartedAt = String(Date.now());
+    card.dataset.waitStartedAt = String(Number(result.startedAt) || Date.now());
     card.dataset.waitMs = String(waitMs);
     const budgetLabel = waitMs > 0 ? formatWaitClock(waitMs) : "";
     appendHarnessWaitLine(waitId, budgetLabel ? `waiting ${budgetLabel}` : "waiting");
@@ -13902,10 +13940,10 @@ function formatWaitClock(ms) {
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  if (minutes < 60) return seconds ? `${minutes}m${seconds}s` : `${minutes}m`;
+  if (minutes < 60) return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
-  return remainingMinutes ? `${hours}h${remainingMinutes}m` : `${hours}h`;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
 function conciseAgentStatus(text = "", kind = "working") {
@@ -14645,6 +14683,20 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const key = commandTimelineKey(tool);
       const entries = this.commandEntries.get(key) || [];
       const row = [...entries].reverse().find((entry) => entry.dataset.state === "running") || entries[entries.length - 1];
+      const resultMode = result?.mode || result?.value?.mode;
+      const waiting = resultMode === "terminal_wait"
+        || (resultMode === "process_start" && String(result?.status || result?.value?.status || "running") === "running");
+      if (waiting) {
+        const processId = String(result?.processId || result?.value?.processId || "");
+        if (row) {
+          row.dataset.state = "running";
+          row.dataset.waiting = "true";
+          row.dataset.processId = processId;
+          row.dataset.waitId = processId || String(result?.terminalId || result?.value?.terminalId || "");
+          startCommandTimelineTicker(row, Number(result?.startedAt || result?.value?.startedAt) || Date.now());
+        }
+        return row;
+      }
       const failed = Boolean(result?.error || result?.ok === false);
       return updateCommandTimelineRow(row, failed ? "error" : "success");
     },
@@ -14746,6 +14798,9 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
 
       for (const row of this.turn.querySelectorAll(".agent-command-event[data-state='running']")) {
+        // A durable terminal_wait command remains live after this agent turn
+        // settles. Its row is finalized by the later terminal_complete event.
+        if (row.dataset.waiting === "true") continue;
         updateCommandTimelineRow(row, failed ? "error" : "success");
       }
     },
@@ -15609,8 +15664,14 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "agent_terminal") {
-      // Agent command processes are intentionally not projected into the
-      // terminal workspace. Their lifecycle is shown inline in chat instead.
+      if (payload.phase === "start" || payload.phase === "started") {
+        TerminalManager.attachAgentSession({
+          id: payload.id || payload.terminalId,
+          command: payload.command || "command",
+          toolName: payload.toolName || "exec_command",
+        });
+        globalThis.expandTerminalPanel?.({ createIfMissing: false });
+      }
       return;
     }
 
@@ -16400,6 +16461,16 @@ function queueParentContinuationEvent(payload = {}) {
 // events (sessionId=childSessionId) never reach it.
 window.api?.onAgentEvent?.((payload) => {
   const type = String(payload?.type || "");
+  if (type === "terminal_health") {
+    const waitId = String(payload.processId || payload.terminalId || "");
+    if (waitId) {
+      const elapsedMs = Number(payload.elapsedMs) || 0;
+      const state = String(payload.health?.state || payload.metrics?.state || "running");
+      updateWaitCardLabel(waitId, `Running command · ${formatWaitClock(elapsedMs)} · ${state}`);
+      updateCommandTimelineLabel(waitId, `Running command · ${formatWaitClock(elapsedMs)} · ${state}`);
+    }
+    return;
+  }
   if (payload?.source === "parent_continuation") {
     queueParentContinuationEvent(payload);
     return;
@@ -16429,6 +16500,10 @@ window.api?.onAgentEvent?.((payload) => {
   if (!["subagent_complete", "terminal_complete", "subagent_checkpoint", "terminal_checkpoint"].includes(type)) {
     return;
   }
+  // Foreground commands can emit a terminal_complete lifecycle event before
+  // their normal tool result arrives. They never entered a background wait,
+  // so do not start a duplicate continuation turn for them.
+  if (type === "terminal_complete" && payload?.waiting === false) return;
   const phase = type.endsWith("_checkpoint") ? "checkpoint" : "complete";
   const kind = type.startsWith("subagent_") ? "subagent" : "terminal";
   if (!anyChatSessionRunning() && !subagentCompletionPending) {
@@ -16474,10 +16549,13 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
       : Math.max(0, Date.now() - Date.parse(payload.startedAt || "") || 0);
     const elapsedLabel = formatWaitClock(elapsedMs);
     if (phase === "checkpoint") {
-      updateWaitCardLabel(waitId, `waiting ${elapsedLabel}`);
-      appendHarnessWaitLine(waitId, `waiting ${elapsedLabel}`);
+      const waitLabel = kind === "terminal" ? `Running command · ${elapsedLabel}` : `waiting ${elapsedLabel}`;
+      updateWaitCardLabel(waitId, waitLabel);
+      if (kind === "terminal") updateCommandTimelineLabel(waitId, waitLabel);
+      appendHarnessWaitLine(waitId, waitLabel);
     } else {
       finalizeSubagentWaitingCard(waitId, status, elapsedLabel);
+      if (kind === "terminal") finalizeCommandTimeline(waitId, status, payload.exitCode);
       appendHarnessWaitLine(waitId, `waited ${elapsedLabel}`);
     }
     const transcript = String(payload.stdout || "").trim();
@@ -16485,6 +16563,10 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
     const command = String(payload.command || "");
     const target = String(payload.target || "");
     const terminalId = String(payload.terminalId || "");
+    const health = payload.health || payload.metrics || {};
+    const healthSummary = kind === "terminal" && phase === "checkpoint"
+      ? `Health: ${String(health.state || "unknown")}; CPU ${Number(health.cpuPercent || 0).toFixed(1)}%; RAM ${(Number(health.rssBytes || 0) / 1_048_576).toFixed(1)} MB; process tree ${Number(health.processCount || 0)} PID(s). ${health.note || ""}`.trim()
+      : "";
     const clipped = transcript.length > 8000 ? `${transcript.slice(-8000)}\n…(truncated)` : transcript;
     const errClipped = stderr.length > 2000 ? `${stderr.slice(-2000)}\n…(truncated)` : stderr;
     const message = phase === "checkpoint"
@@ -16498,9 +16580,11 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
         ]
         : [
           `Harness checkpoint: terminal ${terminalId || waitId || "session"} has been waiting ${elapsedLabel}${command ? ` for \`${command}\`` : ""} and is still running.`,
+          waitId ? `Process ID: ${waitId}` : "",
+          healthSummary,
           clipped ? `Current terminal log:\n\`\`\`\n${clipped}\n\`\`\`` : "No terminal transcript was captured yet.",
           errClipped ? `stderr:\n\`\`\`\n${errClipped}\n\`\`\`` : "",
-          "Decide whether the command looks healthy. Leave it running, stop it with stop_process, or take another action. The harness will resume you again when it exits.",
+          "Decide whether the command looks healthy. Leave it running, or stop it with exec_command operation=stop using the process ID above. The harness will resume you again when it exits.",
         ]).filter(Boolean).join("\n\n")
       : (kind === "subagent"
         ? [
@@ -16543,7 +16627,9 @@ function startWaitCardTicker(card) {
       return;
     }
     const startedAt = Number(card.dataset.waitStartedAt) || Date.now();
-    const label = `waiting ${formatWaitClock(Date.now() - startedAt)}`;
+    const waitKind = card.dataset.waitKind || "terminal";
+    const elapsed = formatWaitClock(Date.now() - startedAt);
+    const label = waitKind === "terminal" ? `Running command · ${elapsed}` : `waiting ${elapsed}`;
     const fileEl = card.querySelector(".tool-card-file");
     if (fileEl) fileEl.textContent = label;
     card.setAttribute("aria-label", label);
@@ -16589,6 +16675,18 @@ function appendHarnessWaitLine(waitId, text) {
   if (host?.appendChild) host.appendChild(line);
   else messages.appendChild(line);
   scrollMessages();
+}
+
+function finalizeCommandTimeline(waitId, status = "complete", exitCode = null) {
+  const id = String(waitId || "");
+  if (!id || !messages) return;
+  const normalized = String(status || "complete").toLowerCase();
+  const failed = ["failed", "stopped", "timeout", "finished_unknown"].includes(normalized)
+    || (exitCode !== null && exitCode !== undefined && Number(exitCode) !== 0);
+  for (const row of messages.querySelectorAll(".agent-command-event[data-process-id]")) {
+    if (String(row.dataset.processId || "") !== id) continue;
+    updateCommandTimelineRow(row, failed ? "error" : "success");
+  }
 }
 
 function finalizeSubagentWaitingCard(subagentId, status, elapsedLabel = "") {

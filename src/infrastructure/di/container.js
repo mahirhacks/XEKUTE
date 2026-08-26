@@ -416,16 +416,33 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     return disposePromise;
   }
 
-  function terminateProcessTree(child) {
+  function terminateProcessTree(child, tree = null) {
     if (!child?.pid) return;
     if (process.platform === "win32") {
       try {
         const { spawn } = require("child_process");
-        const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-        killer.unref();
+        const pids = [...new Set([child.pid, ...(Array.isArray(tree?.pids) ? tree.pids : [])]
+          .map((pid) => Number(pid))
+          .filter((pid) => Number.isInteger(pid) && pid > 0))];
+        for (const pid of pids) {
+          const killer = spawn("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+          killer.unref();
+        }
         return;
       } catch { /* Fall back to the direct child below. */ }
     }
+    // POSIX supervised commands are started detached, making the root PID the
+    // process-group ID. Signal the whole group so descendants do not survive
+    // a user stop or agent cancellation. Windows commands stay attached to
+    // avoid a PowerShell detached-launch bug and are terminated by taskkill
+    // using the sampled process-tree PIDs above.
+    try {
+      const pid = Number(child.pid);
+      if (Number.isInteger(pid) && pid > 0) {
+        process.kill(-pid, "SIGTERM");
+        return;
+      }
+    } catch { /* No detached process group; fall back to the direct child. */ }
     try { child.kill("SIGTERM"); } catch { /* Process already exited. */ }
   }
 

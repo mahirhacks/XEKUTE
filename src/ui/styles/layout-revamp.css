@@ -1857,7 +1857,6 @@ body,
 
 .app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry.active {
   background: transparent;
-  box-shadow: inset 2px 0 #858585;
 }
 
 .app-settings-content :is(#app-settings-prompts-panel, #app-settings-commands-panel) .guidance-entry-copy strong,
@@ -1871,17 +1870,6 @@ body,
 .app-settings-content #app-settings-commands-panel .mcp-add-copy small {
   color: #777;
   font-size: 11px;
-}
-
-.app-settings-content #app-settings-prompts-panel .guidance-settings-content {
-  margin-top: 34px;
-}
-
-.app-settings-content #app-settings-prompts-panel .guidance-detail-card {
-  padding: 18px;
-  border: 0 !important;
-  border-radius: 12px;
-  background: #1b1b1b;
 }
 
 .app-settings-content #app-settings-commands-panel .mcp-connection-editor {
