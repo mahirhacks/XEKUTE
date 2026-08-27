@@ -71,6 +71,40 @@ function registerProjectIpc({
   const mcpConfig = createMcpConfigService({ fs, path, home: () => app.getPath("home") });
   const kaliAccess = createKaliAccessService({ fs, path, home: () => app.getPath("home") });
 
+  function v2Authoritative() {
+    return container.memoryFeatureFlags?.projectMemoryV2 === true
+      && container.memoryFeatureFlags?.blockMemoryUpdater === true;
+  }
+
+  function protectedProjectId(workspace) {
+    const resolved = container.memoryProjectIdentityStore?.resolveProject?.(workspace, { persist: false });
+    return resolved?.ok ? String(resolved.projectId || "") : "";
+  }
+
+  async function cleanupSessionMemory(workspace, sessionId, { deleteCheckpoint = false } = {}) {
+    if (!workspace || !sessionId) return { ok: true, skipped: true };
+    const projectId = protectedProjectId(workspace);
+    if (!projectId) return v2Authoritative()
+      ? { ok: false, code: "MEMORY_PROJECT_UNINITIALIZED", error: "The protected project identity is required before session memory can be removed." }
+      : { ok: true, skipped: true };
+    if (container.memoryFeatureFlags?.sensitiveWorkingMemory === true && container.memorySensitiveWorkingMemory?.closeSession) {
+      const sensitive = container.memorySensitiveWorkingMemory.closeSession({
+        workspace,
+        projectId,
+        sessionId,
+        agentId: "system:session-lifecycle",
+        purpose: deleteCheckpoint ? "session_deleted" : "session_closed",
+        adapter: "project-ipc",
+      });
+      if (sensitive?.ok === false) return sensitive;
+    }
+    if (deleteCheckpoint && container.memoryFeatureFlags?.operationalContextV2 === true && container.memoryOperationalContextStore?.deleteSession) {
+      const checkpoint = await container.memoryOperationalContextStore.deleteSession({ workspace, projectId, sessionId });
+      if (checkpoint?.ok === false) return checkpoint;
+    }
+    return { ok: true, changed: true, projectId, sessionId };
+  }
+
 // â”€â”€ File System IPC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Open a folder picker, return the chosen path */
@@ -257,6 +291,8 @@ ipcMain.handle("session-memory:update", async (_event, { workspace, sessionId, s
 ipcMain.handle("session-memory:close", async (_event, { workspace, sessionId } = {}) => {
   const result = container.sessionMemoryStore().close(workspace, sessionId);
   await container.browserSessionManager?.closeSession?.(workspace, sessionId);
+  const sensitive = await cleanupSessionMemory(workspace, sessionId);
+  if (sensitive?.ok === false) return sensitive;
   container.contextCompiler?.clearSession?.(workspace, sessionId);
   container.mcpRuntime?.clearSession?.(sessionId, workspace);
   clearBrowserSessionTargets(workspace, sessionId);
@@ -283,7 +319,7 @@ ipcMain.handle("session-memory:delete", async (_event, { workspace, sessionId } 
   const loaded = container.sessionMemoryStore().load(workspace);
   const sessions = [...(loaded.sessions || []), ...(loaded.closedSessions || []), ...(loaded.archivedSessions || [])];
   const session = sessions.find((item) => String(item.id) === String(sessionId));
-  if (session) {
+  if (session && !v2Authoritative()) {
     if (!container.contextCompiler?.prepareFinalization) return { ok: false, error: "Project-memory finalization is unavailable; the session was not deleted.", code: "CONTEXT_FINALIZATION_UNAVAILABLE" };
     try {
       const prepared = container.contextCompiler.prepareFinalization({
@@ -301,6 +337,8 @@ ipcMain.handle("session-memory:delete", async (_event, { workspace, sessionId } 
   container.mcpRuntime?.clearSession?.(sessionId, workspace);
   await container.browserSessionManager?.closeSession?.(workspace, sessionId);
   clearBrowserSessionTargets(workspace, sessionId);
+  const cleaned = await cleanupSessionMemory(workspace, sessionId, { deleteCheckpoint: true });
+  if (cleaned?.ok === false) return cleaned;
   return container.sessionMemoryStore().remove(workspace, sessionId);
 });
 
@@ -320,6 +358,37 @@ ipcMain.handle("context:event", async (_event, { workspace, ...input } = {}) => 
 
 ipcMain.handle("context:flush", async () => {
   return container.contextCompiler?.flush?.() || { ok: true };
+});
+
+// Operational Context v2 is intentionally separate from the legacy compiler.
+// The main process owns the flag and the stores; renderer callers can only
+// request bounded service operations through these typed channels.
+function operationalContextDisabled() {
+  return { ok: true, enabled: false, skipped: true, reason: "operationalContextV2 is disabled" };
+}
+
+function operationalContextEnabled() {
+  return Boolean(container.memoryFeatureFlags?.operationalContextV2);
+}
+
+ipcMain.handle("context:operationalStatus", async (_event, payload = {}) => {
+  if (!operationalContextEnabled()) return operationalContextDisabled();
+  return container.memoryContextCheckpoint?.status?.(payload) || { ok: false, code: "MEMORY_CONTEXT_UNAVAILABLE", error: "Operational Context is unavailable." };
+});
+
+ipcMain.handle("context:operationalRead", async (_event, payload = {}) => {
+  if (!operationalContextEnabled()) return operationalContextDisabled();
+  return container.memoryContextCheckpoint?.read?.(payload) || { ok: false, code: "MEMORY_CONTEXT_UNAVAILABLE", error: "Operational Context is unavailable." };
+});
+
+ipcMain.handle("context:operationalCheckpoint", async (_event, payload = {}) => {
+  if (!operationalContextEnabled()) return operationalContextDisabled();
+  return container.memoryContextCheckpoint?.checkpoint?.(payload) || { ok: false, code: "MEMORY_CONTEXT_UNAVAILABLE", error: "Operational Context is unavailable." };
+});
+
+ipcMain.handle("context:operationalMergeLate", async (_event, payload = {}) => {
+  if (!operationalContextEnabled()) return operationalContextDisabled();
+  return container.memoryOperationalContextStore?.mergeLate?.(payload) || { ok: false, code: "MEMORY_CONTEXT_UNAVAILABLE", error: "Operational Context is unavailable." };
 });
 
 ipcMain.on("session-memory:save-before-close", (event, { workspace, ...memoryEvent } = {}) => {
@@ -1111,6 +1180,8 @@ module.exports = Object.freeze({
     "session-memory:close", "session-memory:reopen", "session-memory:archive", "session-memory:unarchive",
     "session-memory:flush", "session-memory:save-before-close", "session-memory:delete",
     "context:projectMemory", "context:consolidate", "context:event", "context:flush",
+    "context:operationalStatus", "context:operationalRead", "context:operationalCheckpoint",
+    "context:operationalMergeLate",
     "security:httpRequest", "security:buildIntruder", "proxy:configure", "proxy:status",
     "proxy:forward", "proxy:drop", "proxy:showCa", "proxy:browserLaunch", "proxy:browserStatus", "webclone:build", "webclone:manifest",
     "webclone:readFile", "webclone:previewDocument", "webclone:previewBounds", "webclone:hidePreview",

@@ -51,6 +51,8 @@ function createBrowserSessionManager({
   loginNavigation = null,
   onStatus = () => {},
   sharedContextProvider = null,
+  sensitiveWorkingMemory = null,
+  sensitiveWorkingMemoryEnabled = false,
 } = {}) {
   const provider = chromium || require("playwright-core").chromium;
   const contexts = new Map();
@@ -74,6 +76,27 @@ function createBrowserSessionManager({
     return `${workspaceKey(workspace)}::${identity}`;
   }
   function pageKey(record, sessionId, pageId) { return `${record.key}::${keyPart(sessionId || "direct")}::${keyPart(pageId || "main")}`; }
+
+  function sensitiveAgentId(executionContext = {}) {
+    return text(executionContext.agentId || executionContext.requestMetadata?.agentId || executionContext.requestMetadata?.actorId || "agent-main", "agent-main", 240);
+  }
+
+  function sensitiveContext(record, extra = {}) {
+    return {
+      workspace: record.workspace,
+      sessionId: record.executionContext?.sessionId || "direct",
+      agentId: sensitiveAgentId(record.executionContext),
+      identityId: record.identityId || "",
+      browserContext: record.key,
+      trusted: true,
+      authorityDecision: record.sensitiveAuthority || null,
+      ...extra,
+    };
+  }
+
+  function sensitiveAuthorityAvailable(record) {
+    return Boolean(sensitiveWorkingMemoryEnabled && sensitiveWorkingMemory && record?.sensitiveAuthority?.ok === true);
+  }
 
   function queue(key, task) {
     const previous = locks.get(key) || Promise.resolve();
@@ -170,9 +193,32 @@ function createBrowserSessionManager({
       // current URL, then re-add only exact-origin/path bindings.
       const identityNames = identityHeaderNames(record.secret);
       for (const name of Object.keys(headers)) if (identityNames.has(name.toLowerCase())) delete headers[name];
-      for (const binding of headerBindingsFor(record.secret)) {
-        if (!originMatches(request.url(), binding.origin)) continue;
-        for (const [name, value] of Object.entries(binding.headers || {})) headers[name] = value;
+      let materialized = null;
+      if (sensitiveAuthorityAvailable(record) && typeof sensitiveWorkingMemory.issueRequestLease === "function") {
+        const lease = sensitiveWorkingMemory.issueRequestLease({
+          ...sensitiveContext(record),
+          url: request.url(),
+          method: request.method?.() || "GET",
+          purpose: "browser_request",
+          adapter: "browser-session-manager",
+          entryTypes: ["authorization_header", "access_token", "refresh_token", "csrf_token", "nonce"],
+        });
+        if (lease?.ok && lease.lease && typeof sensitiveWorkingMemory.materializeRequestForTrustedAdapter === "function") {
+          materialized = sensitiveWorkingMemory.materializeRequestForTrustedAdapter({
+            ...sensitiveContext(record),
+            leaseId: lease.lease.lease_id,
+            trusted: true,
+            adapter: "browser-session-manager",
+          });
+        }
+      }
+      if (materialized?.ok) {
+        for (const [name, value] of Object.entries(materialized.request?.headers || {})) headers[name] = value;
+      } else if (!sensitiveAuthorityAvailable(record)) {
+        for (const binding of headerBindingsFor(record.secret)) {
+          if (!originMatches(request.url(), binding.origin)) continue;
+          for (const [name, value] of Object.entries(binding.headers || {})) headers[name] = value;
+        }
       }
       try { await route.continue({ headers }); } catch { /* The page may have closed during cancellation. */ }
     });
@@ -252,7 +298,20 @@ function createBrowserSessionManager({
       shared: Boolean(shared),
       sharedMainPage: shared?.mainPage || null,
       sharedPageKeys: new Set(),
+      sensitiveAuthority: executionContext.sensitiveAuthority || null,
+      sensitiveHandles: [],
     };
+    if (sensitiveAuthorityAvailable(record) && identityId && typeof sensitiveWorkingMemory.importIdentityVaultState === "function") {
+      const imported = sensitiveWorkingMemory.importIdentityVaultState({
+        ...sensitiveContext(record),
+        identityVault,
+        purpose: "browser_session_import",
+        adapter: "browser-session-manager",
+        source: "identity_vault",
+      });
+      if (imported?.ok) record.sensitiveHandles = [...(imported.cookieHandles || []), ...(imported.headerHandles || []), ...(imported.certificateHandles || [])];
+      else if (imported?.code) onStatus({ ok: false, code: imported.code, message: imported.error || "Sensitive browser state could not be imported." });
+    }
     contexts.set(key, record);
     await configureContext(record);
     return record;
@@ -285,6 +344,17 @@ function createBrowserSessionManager({
     if (!record.identityId || !record.context?.storageState) return null;
     const storageState = await record.context.storageState();
     record.secret = { ...(record.secret || {}), storageState };
+    if (sensitiveAuthorityAvailable(record) && typeof sensitiveWorkingMemory.rotateFromBrowserState === "function") {
+      const rotated = sensitiveWorkingMemory.rotateFromBrowserState({
+        ...sensitiveContext(record),
+        cookies: storageState.cookies || [],
+        purpose: "browser_response_state_rotation",
+        adapter: "browser-session-manager",
+        source: "browser_context",
+      });
+      if (rotated?.ok) record.sensitiveLastSync = rotated;
+      else if (rotated?.code) onStatus({ ok: false, code: rotated.code, message: rotated.error || "Sensitive browser state could not be rotated." });
+    }
     return {
       storageState,
       headerBindings: record.secret?.headerBindings || [],
@@ -373,7 +443,11 @@ function createBrowserSessionManager({
       error.code = "BROWSER_ACTION_STOPPED";
       throw error;
     }
-    const record = await getRecord(workspace, identityId, sessionId, { ...executionContext, identityId });
+    const record = await getRecord(workspace, identityId, sessionId, {
+      ...executionContext,
+      identityId,
+      sensitiveAuthority: runtimeOptions.authorityDecision || runtimeOptions.sensitiveAuthority || executionContext.sensitiveAuthority || null,
+    });
 
     if (action === "list_pages") {
       const owner = `${keyPart(sessionId)}::`;
@@ -501,6 +575,7 @@ function createBrowserSessionManager({
         storageState,
         headerBindings: existing?.ok ? existing.secret.headerBindings : [],
         unmappedTokens: existing?.ok ? existing.secret.unmappedTokens : {},
+        clientCertificates: existing?.ok ? existing.secret.clientCertificates : [],
       });
       if (!saved?.ok) return saved || { ok: false, error: { code: "IDENTITY_VAULT_UNAVAILABLE", message: "Identity vault is unavailable.", retryable: false } };
       await record.context.close();
@@ -537,6 +612,9 @@ function createBrowserSessionManager({
       try { await record.browser.close(); } catch { /* Best effort during shutdown. */ }
     }
     loginContexts.clear();
+    if (sensitiveWorkingMemory?.close) {
+      try { sensitiveWorkingMemory.close(); } catch { /* Sensitive process-only state is best-effort cleared on shutdown. */ }
+    }
     if (browser) {
       try { await browser.close(); } catch { /* Best effort during shutdown. */ }
       browser = null;
@@ -555,6 +633,9 @@ function createBrowserSessionManager({
         try { await record.context.close(); } catch { /* Best effort. */ }
       }
       contexts.delete(key);
+      if (sensitiveWorkingMemory?.closeIdentity && sensitiveAuthorityAvailable(record)) {
+        try { sensitiveWorkingMemory.closeIdentity({ ...sensitiveContext(record), purpose: "identity_closed", adapter: "browser-session-manager" }); } catch { /* Handle cleanup is best effort after browser closure. */ }
+      }
     }
     return { ok: true, identityId, closed: true };
   }
@@ -579,6 +660,9 @@ function createBrowserSessionManager({
       }
       const snapshot = await captureRecordState(record).catch(() => null);
       if (snapshot) await schedulePersistRecord(record, snapshot);
+      if (sensitiveWorkingMemory?.closeSession && sensitiveAuthorityAvailable(record)) {
+        try { sensitiveWorkingMemory.closeSession({ ...sensitiveContext(record), purpose: "session_closed", adapter: "browser-session-manager" }); } catch { /* Handle cleanup is best effort after browser closure. */ }
+      }
     }
     return { ok: true, sessionId, closed: true };
   }

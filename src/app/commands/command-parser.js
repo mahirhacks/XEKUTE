@@ -3,25 +3,19 @@
 /*
  * Shared slash-command boundary.
  *
- * Shipped commands are discovered from the special-skill registry. User
- * aliases can still be stored in Settings, but they are prompt expansions
- * only; executable/static command adapters are intentionally not part of the
- * chat command surface.
+ * Built-in Markdown package bodies remain internal. This boundary exposes
+ * only their safe invocation metadata, alongside user-authored prompt aliases.
+ * Executable/static command adapters are not part of the chat command surface.
  */
 
-const { defaultRegistry } = require("../../agent/special-skills/registry.js");
-
-const DEFAULT_COMMANDS = Object.freeze(Object.fromEntries(defaultRegistry.list().map((skill) => [skill.command, {
-  role: "special",
-  description: skill.description,
-  title: skill.title,
-  version: skill.version,
-  entrypoint: skill.entrypoint,
-  resources: skill.resources,
-  modes: skill.modes,
-  parameterPolicy: skill.parameterPolicy,
-  requiredTools: skill.requiredTools,
-}])));
+const DEFAULT_COMMANDS = Object.freeze({
+  "/pentest": Object.freeze({ id: "pentest", title: "Adaptive penetration testing", description: "Run adaptive, scope-aware penetration testing." }),
+  "/report": Object.freeze({ id: "report", title: "VAPT report generation", description: "Generate an evidence-linked VAPT report." }),
+  "/create-rule": Object.freeze({ id: "create-rule", title: "Create a project rule", description: "Create a project or global rule." }),
+  "/create-skill": Object.freeze({ id: "create-skill", title: "Create user guidance skill", description: "Create user-authored guidance." }),
+  "/create-subagent": Object.freeze({ id: "create-subagent", title: "Create a subagent profile", description: "Create a bounded subagent profile." }),
+});
+const INTERNAL_COMMAND_NAMES = new Set(Object.keys(DEFAULT_COMMANDS));
 
 function loadOverrides(raw) {
   if (!raw) return {};
@@ -44,29 +38,27 @@ function parseCommand(raw, overrides = null) {
   if (!text.startsWith("/")) return { ok: false, error: "Command must start with '/'", code: "NOT_SLASH_COMMAND" };
   const parts = text.split(/\s+/);
   const name = parts[0].toLowerCase();
-  const special = defaultRegistry.resolve(text);
-  if (special.ok) {
+  if (INTERNAL_COMMAND_NAMES.has(name)) {
+    const systemSkill = DEFAULT_COMMANDS[name];
     return {
       ok: true,
-      command: special.command,
+      command: name,
       args: [],
-      userContext: special.userContext || "",
+      userContext: parts.slice(1).join(" "),
       role: "special",
-      id: special.manifest.id,
-      title: special.manifest.title,
-      aim: special.manifest.description,
-      description: special.manifest.description,
+      id: systemSkill.id,
+      title: systemSkill.title,
+      aim: systemSkill.description,
+      description: systemSkill.description,
       prompt: "",
       expectedOutput: "",
       constraints: "",
       output: "",
-      tools: special.manifest.requiredTools || [],
-      parameterPolicy: special.manifest.parameterPolicy,
-      acceptsContext: special.manifest.acceptsContext !== false,
-      version: special.manifest.version,
+      tools: [],
+      parameterPolicy: "context-only",
+      acceptsContext: true,
     };
   }
-
   const config = customCommandConfig(name, loadOverrides(overrides));
   if (!Object.keys(config).length) return { ok: false, error: `Unknown slash command: ${name}`, code: "UNKNOWN_COMMAND" };
   if (config.enabled === false) return { ok: false, error: `Slash command is disabled in XEKUTE Settings: ${name}`, code: "COMMAND_DISABLED" };
@@ -100,4 +92,4 @@ async function runCommand(raw, _assessment, overrides = null) {
   return { ...parsed, ok: true, mode: parsed.role === "special" ? "special" : "ai" };
 }
 
-module.exports = { DEFAULT_COMMANDS, parseCommand, runCommand };
+module.exports = { DEFAULT_COMMANDS, INTERNAL_COMMAND_NAMES, parseCommand, runCommand };

@@ -75,7 +75,7 @@
     return hash.toString(16).padStart(8, "0");
   }
 
-  function compile({ family = "assist", mode = "ask", overrides = null, depth = "operational", moduleKeys = null, specializedGuidance = "" } = {}) {
+  function compile({ family = "assist", mode = "ask", overrides = null, depth = "operational", moduleKeys = null } = {}) {
     const profile = normalizeProfile(family, mode);
     const validation = validatePromptConfig(overrides);
     const config = validation.ok ? validation.config : normalizeOverrides(null);
@@ -103,7 +103,6 @@
       `SELECTED PROFILE: ${profile.id.toUpperCase()}. Current profile wins over conversation history.`,
       ...sections,
       `MODE OVERLAY\n${overlay}`,
-      specializedGuidance ? String(specializedGuidance).trim() : "",
     ].filter(Boolean).join("\n\n");
   }
 

@@ -153,6 +153,7 @@ test("main-owned result handoff marks renderer events observational and invokes 
 test("child runs inherit plan policy, tool metadata, browser scope, and checkpoints", async () => {
   const planBinding = { planId: "plan-1", executionHash: "hash-1", objective: "verify" };
   const received = {};
+  const contextAssembly = { assemble: async () => ({ ok: true, state: "current" }) };
   const executed = [];
   const checkpointContexts = [];
   const provider = createRuntimeDelegationProvider({
@@ -165,6 +166,7 @@ test("child runs inherit plan policy, tool metadata, browser scope, and checkpoi
     modeWorkflow: { loadState: () => ({ planBinding }) },
     intelligence: { status: () => ({ ok: true }) },
     contextCompiler: { compile: () => ({}) },
+    contextAssembly,
     planBinding,
     toolMetadataForName: (name, sessionId) => ({ name, sessionId }),
     getBrowserTarget: (workspace, sessionId) => `${workspace}/${sessionId}`,
@@ -175,6 +177,7 @@ test("child runs inherit plan policy, tool metadata, browser scope, and checkpoi
       assert.equal(payload.modeWorkflow.loadState().planBinding, planBinding);
       assert.equal(payload.intelligence.status().ok, true);
       assert.equal(payload.contextCompiler.compile() !== undefined, true);
+      assert.equal(payload.contextAssembly, contextAssembly);
       assert.deepEqual(payload.toolMetadataForName("read_file"), { name: "read_file", sessionId: payload.sessionId });
       assert.equal(payload.getBrowserTarget("G:/ws", payload.sessionId), `G:/ws/${payload.sessionId}`);
       await payload.executeToolCall({

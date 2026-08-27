@@ -8,18 +8,19 @@ const pty = require("node-pty");
 const { spawn } = require("child_process");
 const { createAgentTerminalRunner } = require("../services/terminal/terminal-runner.js");
 const { defaultRegistry } = require("../../agent/special-skills/registry.js");
-const { resolveInvocation } = require("../../agent/special-skills/runner.js");
+const { selectInternalSkill } = require("../../agent/special-skills/runner.js");
 const {
   CREATE_GUIDANCE_TOOL,
-  MANAGE_PENTEST_TOOL,
   createSpecialSkillToolEntry,
   createSpecialSkillToolDefinitions,
   executeCreateGuidance,
-  executeManagePentest,
 } = require("../../agent/special-skills/capabilities.js");
-const { createPentestStateStore } = require("../../agent/special-skills/pentest/state-store.js");
-const { createPentestOrchestrator, MATERIAL_TOOLS: PENTEST_MATERIAL_TOOLS } = require("../../agent/special-skills/pentest/orchestrator.js");
-const { createSkillKnowledgeGraph } = require("../services/assessment/knowledge/skill-knowledge-graph.js");
+const {
+  PENTEST_CHECKPOINT_TOOL,
+  createPentestCheckpointToolDefinition,
+  createPentestCheckpointToolEntry,
+  createPentestLoopController,
+} = require("../../agent/special-skills/pentest/loop-controller.js");
 const { resolveSecurityExecutable } = require("../../agent/tools/process/executable-resolver.js");
 const { validateInput: validateExecCommandInput } = require("../../agent/tools/process/exec-command.js");
 const { normalizeAuthorityProfile } = require("../../agent/authority/profiles/profile-manifest.js");
@@ -48,6 +49,7 @@ const { createProjectProfileStore } = require("../storage/project-profile-store.
 const { validateIpcRequest } = require("../../contracts/ipc/IpcContracts");
 const { registerIpcHandler } = require("../ipc/register");
 const { registerProjectIpc } = require("../ipc/project.js");
+const { registerMemoryIpc } = require("../ipc/memory-v2.js");
 const { parseCommand } = require("../commands/command-parser.js");
 const { ingest: ingestAssessmentRecords, listDatasets, datasetExists, RESOURCE_SPECS } = require("../services/assessment/assessment-ingest.js");
 const { buildContext } = require("../services/assessment/parse-context.js");
@@ -66,9 +68,6 @@ const { registerLifecycle, setAllowImmediateQuit } = require("./lifecycle.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { createTestCaseRunner } = require("../services/assessment/test-case-runner.js");
-
-const pentestStateStore = createPentestStateStore({ fs, path, crypto });
-let pentestOrchestrator = null;
 
 const CONTEXT_SUMMARY_PROVIDER_TIMEOUT_MS = 30_000;
 const CONTEXT_COMPACTION_TIMEOUT_MS = 180_000;
@@ -132,7 +131,10 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
   const name = toolCall?.function?.name || toolCall?.toolName || "";
   const args = toolCall?.function?.arguments || {};
   const specialEntry = createSpecialSkillToolEntry(specialSkill, name);
-  const entry = container?.toolRegistry?.get(name) || specialEntry;
+  const pentestEntry = name === PENTEST_CHECKPOINT_TOOL && specialSkill?.manifest?.id === "pentest"
+    ? createPentestCheckpointToolEntry({ controller: pentestLoopController, workspace, sessionId, blockId })
+    : null;
+  const entry = container?.toolRegistry?.get(name) || specialEntry || pentestEntry;
   const dynamicContext = { workspace, sessionId, mode };
   const dynamicEntry = !entry ? container?.mcpRuntime?.metadata?.(name, dynamicContext) : null;
   if (!entry && !dynamicEntry) {
@@ -152,6 +154,9 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     }
   }
   const projectProfile = readProjectProfile(workspace)?.profile || null;
+  const memoryProjectBinding = workspace && container?.memoryProjectIdentityStore?.resolveProject
+    ? container.memoryProjectIdentityStore.resolveProject(workspace, { persist: false })
+    : null;
   let context;
   try {
     context = createExecutionContext({
@@ -162,7 +167,11 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
       workspace: { root: workspace },
       sessionId,
       mode,
-      requestMetadata: { actorId: "local-user", source: nested ? "nested_tool" : "agent" },
+      requestMetadata: {
+        actorId: "local-user",
+        source: nested ? "nested_tool" : "agent",
+        projectId: memoryProjectBinding?.ok ? memoryProjectBinding.projectId || "" : "",
+      },
       identityContext: {
         identityId: String(args.identityId || ""),
         pageId: String(args.pageId || "main"),
@@ -184,6 +193,20 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     inputSchema: dynamicEntry?.inputSchema || dynamicEntry?.parameters || dynamicEntry?.schema || { type: "object", properties: {} },
     metadata: dynamicEntry || {},
   };
+  const blockMemoryV2 = Boolean(container?.memoryFeatureFlags?.blockMemoryUpdater && container?.memoryBlockUpdater?.enabled?.());
+  const blockMemoryInput = blockMemoryV2 ? {
+    workspace,
+    blockId: blockId || "",
+    sessionId,
+    projectId: "",
+    toolName: name,
+    invocationId: context.invocationId,
+    argumentKeys: Object.keys(args && typeof args === "object" ? args : {}),
+    authority: { profile: normalizeAuthorityProfile(authorityProfile) },
+  } : null;
+  if (blockMemoryInput) {
+    await container.memoryBlockUpdater.recordInvocation(blockMemoryInput).catch(() => {});
+  }
   const executeRaw = async (monitorRuntime) => {
     const rawContext = projectExecutionContext(context);
     let result;
@@ -210,7 +233,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
           cwd: args.cwd || "",
           env: args.env || null,
           timeoutMs: Number(args.timeout_ms) || 0,
-          exposeTerminal: true,
+          exposeTerminal: args.show_in_terminal === true,
           signal: monitorRuntime.signal,
           onProgress: monitorRuntime.progress,
           onChildProcess: monitorRuntime.childProcess,
@@ -221,7 +244,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
           cwd: args.cwd || "",
           env: args.env || null,
           timeoutMs: Number(args.timeout_ms) || 0,
-          exposeTerminal: true,
+          exposeTerminal: args.show_in_terminal === true,
           signal: monitorRuntime.signal,
           onProgress: monitorRuntime.progress,
           onChildProcess: monitorRuntime.childProcess,
@@ -275,13 +298,6 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
           workspace,
           globalRoot: globalGuidanceRoot(),
           writeGuidanceFile,
-        });
-      } else if (name === MANAGE_PENTEST_TOOL && specialEntry) {
-        result = await executeManagePentest({
-          args,
-          workspace,
-          runId: durableRunId,
-          orchestrator: pentestOrchestrator,
         });
       } else if (name === "run_test_case") {
         result = await runProductionTestCase({ workspace, input: args, signal: monitorRuntime.signal, sessionId, mode, terminalHost, planBinding, authorityProfile, approvalProvider, durableRunId });
@@ -350,9 +366,22 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
         onEvent: (eventPayload) => terminalHost?.sendLifecycleEvent?.(eventPayload),
       },
     });
+    if (blockMemoryV2) {
+      // The v2 updater records a bounded result event.  Raw tool output stays
+      // at the authority/tool boundary and is never copied into semantic
+      // memory or the model-facing event payload.
+      await container.memoryBlockUpdater.recordResult({
+        ...blockMemoryInput,
+        result,
+        outcome: result?.lifecycle?.outcome || result?.outcome || (result?.ok === false ? "failed" : "completed"),
+        artifactRefs: result?.lifecycle?.artifactRefs || result?.artifactRefs || [],
+      }).catch(() => {});
+    }
     // Capture immediately after the authority pipeline while lifecycle data is
     // still structured.  Tool output and assistant text never enter capsules.
-    if (workspace && sessionId && blockId) {
+    // The legacy capsule/project path remains active until the v2 block updater
+    // flag is enabled for the owning rollout phase.
+    if (!blockMemoryV2 && workspace && sessionId && blockId) {
       const lifecycleResult = result?.lifecycle || null;
       const parsed = CapsuleParsers.parseToolResult({ toolName: name, args, lifecycleResult, workspace });
       const capsule = Capsule.createCapsule({ sessionId, blockId, sequence: Date.now(), toolName: name, args, lifecycleResult, records: parsed.records, residues: parsed.residues });
@@ -375,21 +404,17 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
       container.contextCompiler.activateKnowledgeLease({ workspace, sessionId, leaseId: result.leaseId || "", packet: result });
     }
     const materialAssessmentTool = ["ingest_traffic", "replay_request", "run_test_case", "browser_action", "store_finding", "verify_finding", "attack_graph"].includes(name);
-    const activePentest = specialSkill?.manifest?.id === "pentest" && Boolean(durableRunId) && Boolean(pentestOrchestrator);
-    if (materialAssessmentTool && !activePentest) container.assessmentIntelligence.refresh(workspace).catch(() => {});
-    if (activePentest && PENTEST_MATERIAL_TOOLS.has(name) && name !== MANAGE_PENTEST_TOOL) {
-      const pentestUpdate = await pentestOrchestrator.observeToolResult({ workspace, runId: durableRunId, toolName: name, args, result }).catch((error) => ({ ok: false, error: error.message, code: "PENTEST_SYNC_FAILED" }));
-      if (result && typeof result === "object" && Object.isExtensible(result)) result.pentest = {
-        ok: pentestUpdate?.ok !== false,
-        materialChanged: Boolean(pentestUpdate?.materialChanged),
-        selectionChanged: Boolean(pentestUpdate?.selectionChanged),
-        vectorsChanged: Boolean(pentestUpdate?.vectorsChanged),
-        readyTasks: Array.isArray(pentestUpdate?.readyTasks) ? pentestUpdate.readyTasks.slice(0, 50) : [],
-        error: pentestUpdate?.ok === false ? String(pentestUpdate.error || "Pentest synchronization failed.").slice(0, 1_000) : undefined,
-      };
-    }
+    if (materialAssessmentTool) container.assessmentIntelligence.refresh(workspace).catch(() => {});
     return result;
   } catch (error) {
+    if (blockMemoryV2) {
+      await container.memoryBlockUpdater.recordResult({
+        ...blockMemoryInput,
+        result: { ok: false, code: error.code || "TOOL_EXECUTION_FAILED" },
+        outcome: "failed",
+        summary: error.message || "tool execution failed",
+      }).catch(() => {});
+    }
     return { ok: false, error: error.message, code: "TOOL_EXECUTION_FAILED", retryable: false };
   }
 }
@@ -407,6 +432,16 @@ const container = createContainer({
   safeStorage,
   getMainWindow: () => mainWindow,
   verifyFindingCandidate,
+});
+const pentestLoopController = createPentestLoopController({
+  projectIdentityStore: container.memoryProjectIdentityStore,
+  projectRepository: container.memoryProjectMemoryRepository,
+  investigationRepository: container.memoryInvestigationMemoryRepository,
+  investigationService: container.memoryInvestigationMemoryService,
+  knowledgeReleaseStore: container.memoryKnowledgeReleaseStore,
+  knowledgeSelectionService: container.memoryKnowledgeSelectionService,
+  featureFlags: container.memoryFeatureFlags,
+  crypto,
 });
 const terminals = container.terminals;
 const toolProcesses = container.toolProcesses;
@@ -503,20 +538,6 @@ const webResearch = container.webResearch;
 const webClone = container.webClone;
 const assessmentWorkspace = container.assessmentWorkspace;
 const assessmentMap = container.assessmentMap;
-const pentestKnowledgeGraph = createSkillKnowledgeGraph({
-  fs,
-  path,
-  libraryRoot: path.resolve(__dirname, "..", "..", "prompts", "skills", "libraries"),
-});
-pentestOrchestrator = createPentestOrchestrator({
-  fs,
-  path,
-  crypto,
-  stateStore: pentestStateStore,
-  assessmentWorkspace,
-  intelligence: container.assessmentIntelligence,
-  knowledgeGraph: pentestKnowledgeGraph,
-});
 const securityHttpWorkbench = container.securityHttpWorkbench;
 const proxyListener = container.getProxyListener();
 const workspaceWatchers = new Map();
@@ -1073,6 +1094,12 @@ registerProjectIpc({
   clearBrowserIdentityTargets,
 });
 
+registerMemoryIpc({
+  ipcMain,
+  container,
+  service: container.memoryIpc,
+});
+
 ipcMain.handle("window:minimize", () => {
   mainWindow?.minimize();
 });
@@ -1357,6 +1384,7 @@ function createAgentTerminalHost(webContents, sendAgentEvent, { sessionId = "" }
   function createSupervisedTerminal(workspace, input, runtime = {}) {
     const manager = container.durableProcessManager;
     const terminalId = nextSupervisedTerminalId();
+    const exposeTerminal = input.show_in_terminal === true;
     const command = typeof input.command === "string"
       ? input.command
       : displayExecCommand(input.executable, Array.isArray(input.args) ? input.args : []);
@@ -1385,8 +1413,10 @@ function createAgentTerminalHost(webContents, sendAgentEvent, { sessionId = "" }
         },
       },
     };
-    terminals.set(terminalId, record);
-    sendAgentEvent?.({ type: "agent_terminal", phase: "start", id: terminalId, terminalId, processId: "", command, toolName: "exec_command", cwd: record.cwd, sessionId });
+    if (exposeTerminal) {
+      terminals.set(terminalId, record);
+      sendAgentEvent?.({ type: "agent_terminal", phase: "start", id: terminalId, terminalId, processId: "", command, toolName: "exec_command", cwd: record.cwd, sessionId });
+    }
     const supervisedRuntime = {
       ...runtime,
       terminalId,
@@ -1395,12 +1425,12 @@ function createAgentTerminalHost(webContents, sendAgentEvent, { sessionId = "" }
         processId = String(started?.processId || "");
         record.processId = processId;
         record.pid = started?.pid;
-        sendAgentEvent?.({ type: "agent_terminal", phase: "started", id: terminalId, terminalId, processId, pid: started?.pid, command, toolName: "exec_command", cwd: record.cwd, sessionId });
+        if (exposeTerminal) sendAgentEvent?.({ type: "agent_terminal", phase: "started", id: terminalId, terminalId, processId, pid: started?.pid, command, toolName: "exec_command", cwd: record.cwd, sessionId });
         runtime.onStarted?.(started);
         if (record.stopRequested && processId) manager.stop(workspace, { process_id: processId, reason: "user_requested" }).catch(() => {});
       },
       onOutput: (payload) => {
-        sendTerminalData(terminalId, payload?.data);
+        if (exposeTerminal) sendTerminalData(terminalId, payload?.data);
         runtime.onOutput?.(payload);
       },
       onDetached: (payload) => {
@@ -1418,14 +1448,14 @@ function createAgentTerminalHost(webContents, sendAgentEvent, { sessionId = "" }
       onComplete: (payload) => {
         closing = true;
         const waiting = Boolean(record.waiting);
-        if (!webContents.isDestroyed()) webContents.send("terminal:exit", { id: terminalId, exitCode: payload?.exitCode ?? null, signal: payload?.signal || null, agent: true, processId: payload?.processId || processId, waiting });
-        sendAgentEvent?.({ type: "agent_terminal", phase: "end", id: terminalId, terminalId, processId: payload?.processId || processId, command, exitCode: payload?.exitCode ?? null, signal: payload?.signal || null, status: payload?.status, terminationReason: payload?.terminationReason, waiting, sessionId });
+        if (exposeTerminal && !webContents.isDestroyed()) webContents.send("terminal:exit", { id: terminalId, exitCode: payload?.exitCode ?? null, signal: payload?.signal || null, agent: true, processId: payload?.processId || processId, waiting });
+        if (exposeTerminal) sendAgentEvent?.({ type: "agent_terminal", phase: "end", id: terminalId, terminalId, processId: payload?.processId || processId, command, exitCode: payload?.exitCode ?? null, signal: payload?.signal || null, status: payload?.status, terminationReason: payload?.terminationReason, waiting, sessionId });
         sendAgentEvent?.({ type: "terminal_complete", ...payload, terminalId, processId: payload?.processId || processId, command, waiting, sessionId });
         terminals.delete(terminalId);
         runtime.onComplete?.(payload);
       },
     };
-    return { terminalId, record, runtime: supervisedRuntime, getProcessId: () => processId };
+    return { terminalId, exposeTerminal, record, runtime: supervisedRuntime, getProcessId: () => processId };
   }
   async function runSupervised(workspace, input, runtime = {}) {
     const manager = container.durableProcessManager;
@@ -1436,8 +1466,9 @@ function createAgentTerminalHost(webContents, sendAgentEvent, { sessionId = "" }
     const result = operation === "run"
       ? await manager.run(workspace, input, terminal.runtime)
       : await manager.start(workspace, input, terminal.runtime);
-    if (result?.ok === false && !terminal.getProcessId()) terminals.delete(terminal.terminalId);
-    if (result?.value && !result.value.terminalId) result.value.terminalId = terminal.terminalId;
+    if (result?.ok === false && !terminal.getProcessId() && terminal.exposeTerminal) terminals.delete(terminal.terminalId);
+    if (result?.value && terminal.exposeTerminal && !result.value.terminalId) result.value.terminalId = terminal.terminalId;
+    if (result?.value) result.value.showInTerminal = terminal.exposeTerminal;
     if (result?.value && !result.value.processId) result.value.processId = terminal.getProcessId();
     return result;
   }
@@ -1608,12 +1639,6 @@ ipcMain.handle("tools:catalog", async () => {
 });
 
 ipcMain.handle("commands:parse", async (_event, payload = {}) => dispatchSlashCommand("parse", payload));
-ipcMain.handle("special-skills:list", async () => ({ ok: true, skills: defaultRegistry.list(), diagnostics: defaultRegistry.diagnostics() }));
-ipcMain.handle("special-skills:resolve", async (_event, { command = "" } = {}) => {
-  const resolved = defaultRegistry.resolve(command);
-  return resolved.ok ? { ok: true, manifest: resolved.manifest } : resolved;
-});
-
 ipcMain.handle("commands:customScripts", async (_event, { path: root } = {}) => {
   if (!root || !fs.existsSync(root)) return { ok: true, scripts: [] };
   const base = path.join(root, "custom_scripts");
@@ -3171,6 +3196,18 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       });
     }
   };
+  const blockMemoryV2 = Boolean(container.memoryFeatureFlags?.blockMemoryUpdater && container.memoryBlockUpdater?.enabled?.() && payload.workspace);
+  let memoryBlock = null;
+  if (blockMemoryV2) {
+    memoryBlock = await container.memoryBlockUpdater.begin({
+      workspace: payload.workspace,
+      projectId: payload.projectId || payload.memoryProjectId || "",
+      blockId: payload.blockId || "",
+      sessionId,
+      agentId: runKey,
+      authority: { profile: normalizeAuthorityProfile(payload.authorityProfile) },
+    }).catch((error) => ({ ok: false, code: error.code || "MEMORY_BLOCK_BEGIN_FAILED", error: error.message }));
+  }
   const delegationProvider = createRuntimeDelegationProvider({
     senderId: event.sender.id,
     runKey,
@@ -3236,8 +3273,33 @@ async function handleAgentRun(event, payload = {}, options = {}) {
         || childResult.task
         || `Delegated agent ${outcome}`,
       ).slice(0, 2_000);
-      const [memoryResult] = await Promise.all([
-        container.contextCompiler?.sealEpisode?.({
+      let memoryResult;
+      if (container.memoryFeatureFlags?.blockMemoryUpdater && container.memoryBlockUpdater?.enabled?.()) {
+        // Child tool calls are captured against the child session/block by the
+        // same main-process updater. A child with no tools still gets an empty
+        // sealed block so it cannot leave an active capture behind. The
+        // legacy context compiler is never used once v2 is authoritative.
+        const childBlock = await container.memoryBlockUpdater.begin({
+          workspace: childResult.workspace,
+          projectId: childResult.projectId || projectId || memoryBlock?.projectId || "",
+          blockId: childResult.blockId || childResult.childInvocationId || "",
+          sessionId: childResult.sessionId || "",
+          agentId: `child:${childResult.childInvocationId || childResult.sessionId || "agent"}`,
+          authority: { profile: normalizeAuthorityProfile(authorityProfile) },
+        });
+        memoryResult = childBlock?.ok
+          ? await container.memoryBlockUpdater.finish({
+            workspace: childResult.workspace,
+            projectId: childBlock.projectId,
+            blockId: childBlock.externalBlockId,
+            sessionId: childResult.sessionId || "",
+            status: outcome === "completed" ? "completed" : outcome === "stopped" ? "interrupted" : "failed",
+            outcome,
+            summary,
+          })
+          : childBlock;
+      } else {
+        memoryResult = await (container.contextCompiler?.sealEpisode?.({
           workspace: childResult.workspace,
           sessionId: childResult.sessionId,
           blockId: childResult.blockId,
@@ -3250,26 +3312,50 @@ async function handleAgentRun(event, payload = {}, options = {}) {
             evidenceIds: Array.isArray(childResult.evidenceIds) ? childResult.evidenceIds : [],
           }],
           outcome,
-        }) || Promise.resolve({ ok: false, code: "CONTEXT_COMPILER_UNAVAILABLE" }),
-        container.assessmentIntelligence?.flush?.() || Promise.resolve({ ok: true, skipped: true }),
-      ]);
+        }) || Promise.resolve({ ok: false, code: "CONTEXT_COMPILER_UNAVAILABLE" }));
+      }
+      await (container.assessmentIntelligence?.flush?.() || Promise.resolve({ ok: true, skipped: true }));
       await (container.assessmentIntelligence?.whenIdle?.(childResult.workspace) || Promise.resolve());
       const intelligenceStatus = container.assessmentIntelligence?.status?.(childResult.workspace) || { ok: true, status: "unavailable" };
       return {
         ok: memoryResult?.ok !== false && intelligenceStatus?.ok !== false,
-        projectMemoryRevision: Number(memoryResult?.memory?.revision) || 0,
+        projectMemoryRevision: Number(memoryResult?.project?.revision || memoryResult?.memory?.revision) || 0,
+        memoryFinalization: memoryResult?.ok === false ? { ok: false, code: memoryResult.code || "MEMORY_FINALIZATION_FAILED" } : { ok: true, changed: Boolean(memoryResult?.changed) },
         intelligenceStatus: String(intelligenceStatus?.status || "unknown"),
         intelligenceUpdatedAt: String(intelligenceStatus?.overview?.updatedAt || ""),
         sourceSessionId: String(childResult.sessionId || ""),
       };
     },
+    specialistDispatch: container.memorySpecialistDispatch,
+    specialistReturnService: container.memorySpecialistReturn,
+    recordSpecialistReturn: async (childResult = {}) => {
+      if (!blockMemoryV2 || !memoryBlock?.ok || !childResult.normalized?.parentEvent) return { ok: true, skipped: true, changed: false };
+      const parent = await container.memoryBlockUpdater.resolve({
+        workspace: payload.workspace,
+        projectId: memoryBlock.projectId,
+        blockId: memoryBlock.externalBlockId,
+        sessionId,
+      });
+      if (!parent.ok) return parent;
+      return container.memoryBlockUpdater.recordSpecialistReturn({
+        workspace: payload.workspace,
+        projectId: memoryBlock.projectId,
+        blockId: memoryBlock.externalBlockId,
+        sessionId,
+        payload: childResult.normalized.parentEvent,
+      });
+    },
+    assignmentLeases: container.memoryAssignmentLeases,
+    projectId: payload.projectId || payload.memoryProjectId || memoryBlock?.projectId || "",
+    parentBlockId: memoryBlock?.blockId || "",
     sendToRenderer: sendAgentEvent,
     registerChildRun,
     unregisterChildRun,
     getActiveProvider,
     modeWorkflow: container.modeWorkflow,
     intelligence: container.assessmentIntelligence,
-    contextCompiler: container.contextCompiler,
+    contextCompiler: container.memoryFeatureFlags?.contextAssemblyV2 ? null : container.contextCompiler,
+    contextAssembly: container.memoryFeatureFlags?.contextAssemblyV2 ? container.memoryContextAssembly : null,
     planBinding: container.modeWorkflow?.loadState?.(payload.workspace)?.planBinding || null,
     toolMetadataForName: (name, childSessionId = sessionId) => container.mcpRuntime?.metadata?.(name, {
       workspace: payload.workspace,
@@ -3293,16 +3379,25 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   const requestedProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");
   const selectedCatalog = toolCatalogFromRegistry(container.toolRegistry);
   const catalogMode = selectedCatalog.mode;
-  const specialInput = payload.specialSkill || (continuationResultId ? parentDescriptor?.payload?.userMessage : payload.userMessage) || "";
-  const resolvedSpecialSkill = String(specialInput).trim().startsWith("/")
-    ? resolveInvocation(defaultRegistry, specialInput, { mode: requestedProfile.key, workspace: payload.workspace || "" })
-    : null;
+  const internalSkillId = payload.internalRuntimeInput && payload.internalSkillId === "pentest" ? "pentest" : "";
+  const skillIntent = payload.internalRuntimeInput
+    ? (internalSkillId ? `/${internalSkillId}` : "")
+    : continuationResultId
+      ? parentDescriptor?.payload?.userMessage
+      : payload.userMessage;
+  const resolvedSpecialSkill = selectInternalSkill(defaultRegistry, skillIntent || "", { mode: requestedProfile.key, workspace: payload.workspace || "" });
   let activeSpecialSkill = resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null;
   // Special-skill capabilities are scoped to the active package.  They are
   // added to this turn's model catalog only; the canonical registry and its
   // global tool inventory remain unchanged.
   for (const definition of createSpecialSkillToolDefinitions(resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null)) {
     if (!selectedCatalog.tools.some((tool) => tool?.function?.name === definition?.function?.name)) {
+      selectedCatalog.tools.push(definition);
+    }
+  }
+  if (activeSpecialSkill?.manifest?.id === "pentest") {
+    const definition = createPentestCheckpointToolDefinition();
+    if (!selectedCatalog.tools.some((tool) => tool?.function?.name === definition.function.name)) {
       selectedCatalog.tools.push(definition);
     }
   }
@@ -3324,19 +3419,6 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     : "";
   const durableRunId = String(parentDescriptor?.durableRunId || (continuationResultId && persistedPlanRunId) || assessmentRun?.id || `run-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`);
   if (parentDescriptor) parentDescriptor.durableRunId = durableRunId;
-  if (activeSpecialSkill?.manifest?.id === "pentest" && payload.workspace) {
-    const initializedPentest = await pentestOrchestrator.initialize(payload.workspace, {
-      runId: durableRunId,
-      mode: requestedProfile.key,
-      userContext: activeSpecialSkill.userContext || "",
-      assessmentRun,
-    });
-    if (!assessmentRun && initializedPentest?.assessmentRun) assessmentRun = initializedPentest.assessmentRun;
-    const runtimePrompt = initializedPentest?.ok
-      ? initializedPentest.runtimePrompt
-      : `PENTEST RUNTIME INITIALIZATION BLOCKED\nCode: ${initializedPentest?.code || "PENTEST_INITIALIZATION_FAILED"}\nReason: ${initializedPentest?.error || "The adaptive runtime could not initialize."}\nAsk only for the missing scope/authorization/workspace information; do not switch modes or invent state.`;
-    activeSpecialSkill = { ...activeSpecialSkill, prompt: `${activeSpecialSkill.prompt}\n\n${runtimePrompt}` };
-  }
   if (payload.workspace) {
     await Promise.allSettled([
       container.longHorizonRunStore.reconcile(payload.workspace, { staleAfterMs: Tunables.LONG_HORIZON_STALE_RUN_MS }),
@@ -3380,7 +3462,10 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     specialSkill: activeSpecialSkill,
     modeWorkflow: container.modeWorkflow,
     intelligence: container.assessmentIntelligence,
-    contextCompiler: container.contextCompiler,
+    projectId: payload.projectId || payload.memoryProjectId || memoryBlock?.projectId || "",
+    precedingBlockId: payload.precedingBlockId || payload.preceding_block_id || "",
+    contextAssembly: container.memoryFeatureFlags?.contextAssemblyV2 ? container.memoryContextAssembly : null,
+    contextCompiler: container.memoryFeatureFlags?.contextAssemblyV2 ? null : container.contextCompiler,
     signal: runController.signal,
     globalGuidanceRoot: globalGuidanceRoot(),
     sendEvent: sendAgentEvent,
@@ -3392,7 +3477,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }, runKey),
     executeToolCall: (request) => executeToolCall({
       ...request,
-      blockId: request?.blockId || payload.blockId || "",
+      blockId: request?.blockId || payload.blockId || memoryBlock?.externalBlockId || "",
       terminalHost: agentTerminalHost,
       specialSkill: activeSpecialSkill,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
@@ -3426,7 +3511,46 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       stopped: Boolean(result?.aborted),
     });
   }
-  if (payload.workspace && container.contextCompiler?.recordKeyEvent) {
+  let memoryFinalization = null;
+  if (blockMemoryV2 && memoryBlock?.ok && memoryBlock.enabled !== false) {
+    const status = result?.aborted ? "interrupted" : result?.ok ? "completed" : "failed";
+    memoryFinalization = await container.memoryBlockUpdater.finish({
+      workspace: payload.workspace,
+      projectId: memoryBlock.projectId,
+      blockId: memoryBlock.externalBlockId,
+      sessionId,
+      status,
+      outcome: status,
+      summary: result?.error ? String(result.error).slice(0, 1_000) : "",
+    }).catch((error) => ({ ok: false, code: error.code || "MEMORY_FINALIZATION_FAILED", error: error.message }));
+    if (result && typeof result === "object" && Object.isExtensible(result)) {
+      result.memoryFinalization = {
+        ok: memoryFinalization?.ok !== false,
+        operationId: memoryFinalization?.operationId || "",
+        changed: Boolean(memoryFinalization?.changed),
+        revision: Number(memoryFinalization?.project?.revision || 0),
+        code: memoryFinalization?.ok === false ? memoryFinalization.code || "MEMORY_FINALIZATION_FAILED" : "",
+      };
+    }
+  }
+  if (activeSpecialSkill?.manifest?.id === "pentest" && result && typeof result === "object" && Object.isExtensible(result)) {
+    result.pentestLoop = await pentestLoopController.finalizeBlock({
+      workspace: payload.workspace,
+      projectId: memoryBlock?.projectId || payload.projectId || payload.memoryProjectId || "",
+      sessionId,
+      blockId: memoryBlock?.externalBlockId || payload.blockId || "",
+      result,
+      memoryFinalization,
+      aborted: Boolean(result.aborted),
+    }).catch((error) => ({
+      ok: false,
+      continue: false,
+      state: "blocked",
+      code: error.code || "PENTEST_LOOP_FINALIZATION_FAILED",
+      reason: error.message || "Pentest loop finalization failed.",
+    }));
+  }
+  if (payload.workspace && !blockMemoryV2 && container.contextCompiler?.recordKeyEvent) {
     const workflowArtifact = result?.workflow?.artifact;
     const isHypothesisArtifact = workflowArtifact?.id && /^hypothesis[-_]/i.test(String(workflowArtifact.id));
     const isCompletedPlanArtifact = workflowArtifact?.id && /^plan[-_]/i.test(String(workflowArtifact.id)) && workflowArtifact.status === "completed";
@@ -3478,18 +3602,13 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   }
   if (assessmentRun?.id) {
     const runtimeStatus = result?.runState?.status;
-    const pentestRuntimeState = activeSpecialSkill?.manifest?.id === "pentest" && payload.workspace
-      ? pentestStateStore.read(payload.workspace, durableRunId)?.run || null
-      : null;
     const assessmentStatus = result?.aborted
       ? "stopped"
-      : pentestRuntimeState
-        ? pentestRuntimeState.status === "completed" ? "completed" : pentestRuntimeState.status === "stopped" ? "stopped" : "inconclusive"
-        : ["completed", "inconclusive", "stopped", "failed"].includes(runtimeStatus) ? runtimeStatus : result?.ok ? "completed" : "failed";
+      : ["completed", "inconclusive", "stopped", "failed"].includes(runtimeStatus) ? runtimeStatus : result?.ok ? "completed" : "failed";
     assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, {
       status: assessmentStatus,
       completedAt: new Date().toISOString(),
-      stopReason: result?.aborted ? "Aborted by operator" : pentestRuntimeState && !["completed", "stopped"].includes(pentestRuntimeState.status) ? `Pentest run remains ${pentestRuntimeState.status} with ${pentestRuntimeState.readyTaskCount || 0} ready task(s).` : result?.error || pentestRuntimeState?.stopReason || "",
+      stopReason: result?.aborted ? "Aborted by operator" : result?.error || "",
       notes: String(result?.finalText || result?.error || "").slice(0, 2000),
     });
   }

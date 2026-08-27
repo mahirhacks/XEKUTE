@@ -51,12 +51,17 @@ const html = read("src/ui/index.html");
 const preload = read("src/app/electron/preload.js");
 const forgeConfig = read("forge.config.js");
 const packageJson = JSON.parse(read("package.json"));
+const memoryFlags = read("src/infrastructure/config/memory-feature-flags.js");
+const legacyProjectStore = read("src/app/storage/project-memory-store.js");
+const legacyContextCompiler = read("src/agent/memory/context/context-compiler.js");
+const memorySecurityAudit = read("src/app/services/memory/memory-security-audit.js");
+const memoryMaintenance = read("src/app/services/memory/memory-maintenance-service.js");
 const ToolRegistry = require(path.join(root, "src/agent/tools/config/tool-registry.js"));
 const ToolPort = require(path.join(root, "src/contracts/tool/tool-port.js"));
 const ModeRegistry = require(path.join(root, "src/agent/modes/mode-registry.js"));
 const ScopePolicy = require(path.join(root, "src/agent/authority/scope/scope-policy.js"));
 const { createSkillKnowledgeGraph } = require(path.join(root, "src/app/services/assessment/knowledge/skill-knowledge-graph.js"));
-const { createSpecialSkillRegistry } = require(path.join(root, "src/agent/special-skills/registry.js"));
+const { createSpecialSkillRegistry, internalSkillIdForIntent } = require(path.join(root, "src/agent/special-skills/registry.js"));
 
 assert.match(main, /sandbox:\s*true/);
 assert.match(main, /contextIsolation:\s*true/);
@@ -166,12 +171,17 @@ for (const required of [
   "src/agent/special-skills/loader.js",
   "src/agent/special-skills/runner.js",
   "src/agent/special-skills/schema.js",
-  "src/agent/special-skills/pentest/pipeline.js",
-  "src/agent/special-skills/pentest/state-store.js",
+  "src/agent/special-skills/pentest/SKILL.md",
+  "src/agent/special-skills/pentest/loop-controller.js",
   "src/domain/assessment/web-artifact-store.js",
   "src/app/storage/project-memory-store.js",
   "src/agent/memory/context/context-compiler.js",
   "src/app/storage/session-memory-store.js",
+  "src/app/services/memory/memory-security-audit.js",
+  "src/app/services/memory/memory-maintenance-service.js",
+  "src/app/storage/memory/migration-store.js",
+  "src/contracts/memory/migration-contracts.js",
+  "src/contracts/ipc/memory-ipc-contracts.js",
   "src/app/electron/lifecycle.js",
   "src/app/ipc/register.js",
   "src/app/ipc/project.js",
@@ -180,6 +190,23 @@ for (const required of [
   "src/ui/core/runtime-modules.js",
   "src/ui/features/history/history-model.js",
 ]) assert.ok(exists(required), `${required} must exist in the canonical tree`);
+
+for (const flag of [
+  "durabilityFoundation", "projectMemoryV2", "blockMemoryUpdater", "knowledgeRetrievalV2",
+  "investigationMemoryV2", "evidenceMemoryV2", "sensitiveWorkingMemory", "operationalContextV2",
+  "contextAssemblyV2", "derivedMemoryViews", "multiAgentMemoryV2", "memoryUiV2",
+  "migrationDualRead", "migrationDualWrite",
+]) assert.match(memoryFlags, new RegExp(`${flag}:\\s*false`), `memory flag ${flag} must default off`);
+assert.match(legacyProjectStore, /MEMORY_V1_WRITER_RETIRED/);
+assert.match(legacyProjectStore, /function legacyWriterRetired\(\)/);
+assert.match(legacyContextCompiler, /MEMORY_CONTEXT_FALLBACK_RETIRED/);
+assert.match(legacyContextCompiler, /allowLegacyFallback/);
+assert.match(memorySecurityAudit, /MEMORY_PROJECT_ISOLATION_VIOLATION/);
+assert.match(memorySecurityAudit, /MEMORY_SECRET_VALUE_DETECTED/);
+assert.match(memoryMaintenance, /warm_context_assembly_p95/);
+assert.match(memoryMaintenance, /large_history_p95/);
+assert.ok(exists("context_memory_revamp/context_memory_operator_guide.md"), "operator guidance must be shipped");
+assert.ok(exists("context_memory_revamp/context_memory_acceptance_matrix.md"), "acceptance matrix must be shipped");
 
 for (const removed of [
   "src/preload.js",
@@ -284,17 +311,32 @@ assert.equal(sourceFiles("src/prompts/skills/libraries").some((file) => file.end
 
 const specialSkillRegistry = createSpecialSkillRegistry({ root: path.join(sourceRoot, "agent", "special-skills") });
 assert.deepEqual(
-  specialSkillRegistry.list().map((skill) => skill.command),
-  ["/create-rule", "/create-skill", "/create-subagent", "/pentest", "/report"],
-  "the shipped special-skill registry must contain exactly the five built-ins",
+  specialSkillRegistry.list(),
+  [],
+  "internal Markdown package manifests must not appear in the public registry",
+);
+assert.deepEqual(
+  specialSkillRegistry.listInternal().map((skill) => skill.id),
+  ["create-rule", "create-skill", "create-subagent", "pentest", "report"],
+  "the internal skill registry must contain exactly the five Markdown packages",
 );
 assert.deepEqual(specialSkillRegistry.diagnostics(), [], "shipped special-skill packages must validate without diagnostics");
-const pentestSkill = specialSkillRegistry.list().find((skill) => skill.id === "pentest");
-assert.ok(pentestSkill.requiredTools.includes("manage_pentest"), "the pentest package must declare its scoped orchestration capability");
-assert.ok(exists("src/agent/special-skills/pentest/orchestrator.js"), "the pentest production orchestrator must exist");
+const pentestSkill = specialSkillRegistry.listInternal().find((skill) => skill.id === "pentest");
+assert.equal(pentestSkill.visibility, "internal", "pentest must remain internal");
+assert.equal(pentestSkill.instructionRole, "skill-context", "pentest must use the shared system prompt");
+assert.equal(pentestSkill.resources.length, 0, "pentest must not declare supporting package resources");
+assert.equal(pentestSkill.requiredTools.includes("manage_pentest"), false, "pentest must use shared memory services instead of a private orchestration capability");
+assert.equal(pentestSkill.requiredTools.includes("pentest_checkpoint"), true, "pentest must close each shared-memory cycle explicitly");
+assert.deepEqual(fs.readdirSync(path.join(sourceRoot, "agent", "special-skills", "pentest")).sort(), ["SKILL.md", "loop-controller.js"], "pentest may contain only its Markdown skill and memory-cycle coordinator");
 const electronMain = read("src/app/electron/main.js");
-assert.match(electronMain, /pentestOrchestrator\.initialize\(/, "\/pentest must initialize the production orchestrator");
-assert.match(electronMain, /pentestOrchestrator\.observeToolResult\(/, "material pentest tool results must resynchronize the orchestrator");
-assert.match(electronMain, /executeManagePentest\(/, "the manage_pentest capability must execute through the main-process authority pipeline");
+assert.match(electronMain, /selectInternalSkill\(defaultRegistry/, "ordinary intent must select internal Markdown skills inside the main process");
+assert.equal(internalSkillIdForIntent("/pentest example.com"), "pentest", "system skills must support explicit picker invocation");
+assert.doesNotMatch(electronMain, /special-skills:list|special-skills:resolve/, "internal skills must not expose renderer IPC");
+assert.doesNotMatch(electronMain, /pentestOrchestrator|pentestStateStore|executeManagePentest|MANAGE_PENTEST_TOOL/, "the internal pentest skill must not own a parallel JavaScript runtime");
+assert.match(electronMain, /createPentestLoopController/, "pentest must coordinate repeated blocks through shared memory services");
+assert.match(electronMain, /createPentestCheckpointToolDefinition/, "pentest must expose its checkpoint only while the internal skill is active");
+const rendererBootstrap = read("src/ui/bootstrap.js");
+assert.match(rendererBootstrap, /internalSkillId:\s*"pentest"/, "pentest continuation must remain an internal runtime input");
+assert.match(rendererBootstrap, /agentRunResult\?\.pentestLoop\?\.continue/, "the renderer must schedule only an explicit Pentest continuation result");
 
 console.log("XEKUTE production architecture invariants verified.");

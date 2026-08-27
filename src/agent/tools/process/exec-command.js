@@ -16,6 +16,7 @@ const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
     cwd: { type: "string", description: "Working directory inside the active workspace. Defaults to the workspace root." },
     env: { type: "object", additionalProperties: { type: "string" }, description: "Environment variables merged over the application environment for this process." },
     timeout_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "Optional timeout in milliseconds. Zero or omission means no timeout." },
+    show_in_terminal: { type: "boolean", default: false, description: "For run/start only. Set true only when the command is long-running, interactive, important, or needs operator attention. Omit or set false for small/background commands; they still execute and return results without appearing in the Terminal panel." },
     process_id: { type: "string", description: "Durable process ID used by status or stop." },
     tail_chars: { type: "integer", minimum: 0, maximum: 200000, description: "Maximum recent stdout/stderr characters returned by status." },
     wait_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "For status, wait up to this many milliseconds for process state or output to change. This is an observation window, not a process timeout." },
@@ -97,6 +98,8 @@ function validateInput(input) {
   if (input.timeout_ms !== undefined && (!Number.isInteger(input.timeout_ms) || input.timeout_ms < 0 || input.timeout_ms > 86_400_000)) {
     return invalidInput("timeout_ms must be an integer between 0 and 86400000");
   }
+  if (input.show_in_terminal !== undefined && typeof input.show_in_terminal !== "boolean") return invalidInput("show_in_terminal must be true or false");
+  if (!needsCommand && input.show_in_terminal !== undefined) return invalidInput("show_in_terminal is only valid for run or start");
   if (input.process_id !== undefined && (typeof input.process_id !== "string" || !/^[a-z0-9-]{3,160}$/i.test(input.process_id))) return invalidInput("process_id is invalid");
   if (input.tail_chars !== undefined && (!Number.isInteger(input.tail_chars) || input.tail_chars < 0 || input.tail_chars > 200_000)) return invalidInput("tail_chars must be between 0 and 200000");
   if (input.wait_ms !== undefined && (!Number.isInteger(input.wait_ms) || input.wait_ms < 0 || input.wait_ms > 86_400_000)) return invalidInput("wait_ms must be between 0 and 86400000");

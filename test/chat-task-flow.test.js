@@ -126,7 +126,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(chatMarkup, /id="send-btn"[\s\S]*?codicon-arrow-up/);
   assert.match(html, /id="context-usage-popover"[\s\S]*?Context Usage[\s\S]*?id="context-usage-compact"[\s\S]*?id="context-usage-heading-value"[\s\S]*?id="context-usage-used"[\s\S]*?id="context-usage-breakdown"/);
   assert.doesNotMatch(html, /context-usage-free|context-usage-diagnostics|context-compaction-status|context-usage-measure-note/);
-  assert.match(renderer, /system_tools: "System & Tools"[\s\S]*?project_memory: "Project Memory"[\s\S]*?recent_working_set: "Recent Working Set"/);
+  assert.match(renderer, /key: "system_prompt", label: "System prompt"[\s\S]*?key: "tool_definitions", label: "Tool definitions"[\s\S]*?key: "project", label: "Project"[\s\S]*?key: "investigation", label: "Investigation"[\s\S]*?key: "evidence", label: "Evidence"[\s\S]*?key: "conversation", label: "Conversation"[\s\S]*?key: "rules", label: "Rules"[\s\S]*?key: "skills", label: "Skills"/);
   assert.ok(renderer.indexOf("const CONTEXT_USAGE_ROW_LABELS") < renderer.indexOf("\nsyncChatModeUi();"), "context labels must initialize before the first context render");
   assert.match(renderer, /contextUsageUsed\.textContent = `\$\{Math\.round\(pct \* 100\)\}%`/);
   assert.doesNotMatch(renderer, /context-usage-row-value">~/);
@@ -281,6 +281,10 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   assert.match(renderer, /chooseSlashSuggestion\(index, \{ clicked: true \}\)/);
   assert.match(renderer, /function chooseSlashSuggestion\(index = slashSuggestionIndex, \{ clicked = false \} = \{\}\)/);
   assert.match(renderer, /function effectiveChatInputValue\(\)/);
+  assert.match(renderer, /const SYSTEM_SKILL_SLASH_COMMANDS = Object\.freeze\(\[/);
+  assert.match(renderer, /"system-skill": "System Skills"/);
+  assert.match(renderer, /\.\.\.SYSTEM_SKILL_SLASH_COMMANDS/);
+  assert.match(renderer, /SYSTEM_SKILL_COMMANDS\.has\(command\.toLowerCase\(\)\)/);
   assert.match(renderer, /let text = hasExplicitText[\s\S]*?: effectiveChatInputValue\(\)\.trim\(\)/);
   assert.match(html, /class="composer-input-row">[\s\S]*?id="chat-input"[\s\S]*?id="selected-slash-command"/);
   assert.doesNotMatch(html, /selected-slash-command-clear/);
@@ -295,6 +299,22 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   assert.match(chatStyles, /#chat-input\.chat-input-empty::before[\s\S]*?content:attr\(data-placeholder\)/);
   assert.doesNotMatch(renderer, /name: "\/active"/);
   assert.doesNotMatch(parser, /"\/active"\s*:/);
+});
+
+test("background terminal continuations remain internal to the agent runtime", () => {
+  const renderer = read("src/ui/bootstrap.js");
+  const main = read("src/app/electron/main.js");
+
+  assert.match(renderer, /function isInternalRuntimeInputMessage\(message = \{\}\)/);
+  assert.match(renderer, /__xekuteInternalRuntimeInput/);
+  assert.match(renderer, /\^Harness \(\?:checkpoint:\|waited\\b\)/);
+  assert.match(renderer, /handleBackgroundWaitEvent\([\s\S]*?sendMessageWithAgentRuntime\(\{[\s\S]*?internal: true,[\s\S]*?text: message,[\s\S]*?skipContextFiles: true/);
+  assert.doesNotMatch(renderer, /chatInput\.value = message;[\s\S]{0,100}sendMessageWithAgentRuntime\(\)/);
+  assert.match(renderer, /userMessage: internal && options\?\.continuation \? "" : text/);
+  assert.match(renderer, /internalRuntimeInput: internal/);
+  assert.match(renderer, /internalSkillId: internal \? String\(options\?\.internalSkillId \|\| ""\) : ""/);
+  assert.match(main, /const internalSkillId = payload\.internalRuntimeInput && payload\.internalSkillId === "pentest" \? "pentest" : ""/);
+  assert.match(main, /const skillIntent = payload\.internalRuntimeInput[\s\S]*?\? \(internalSkillId \? `\/\$\{internalSkillId\}` : ""\)/);
 });
 
 test("assistant messages render a relative-time label beside the copy button", () => {

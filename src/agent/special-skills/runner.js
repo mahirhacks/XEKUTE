@@ -7,8 +7,9 @@ function compilePrompt(skill, { userContext = "", mode = "agent", workspace = ""
   const manifest = skill.manifest || skill;
   const resources = Array.isArray(skill.resources) ? skill.resources : [];
   const sections = [
-    `XEKUTE SPECIAL SKILL: ${manifest.title} (${manifest.command})`,
+    `XEKUTE INTERNAL SKILL: ${manifest.title} (${manifest.id})`,
     `Skill version: ${manifest.version}`,
+    "Instruction role: skill-context. This package never defines or replaces a system prompt.",
     `Invocation mode: ${mode}. Preserve this mode; never instruct the user to switch modes.`,
     workspace ? `Workspace: ${workspace}` : "Workspace: not selected",
     "This is a built-in skill contract. Follow the user's direct request while respecting the existing authority, scope, identity, approval, resource, verification, and recovery gates.",
@@ -20,10 +21,16 @@ function compilePrompt(skill, { userContext = "", mode = "agent", workspace = ""
   return sections.join("\n").slice(0, MAX_COMPILED_CHARS);
 }
 
-function resolveInvocation(registry, raw, options = {}) {
-  const resolved = registry?.resolve?.(raw, options);
+function resolveInternalSkill(registry, id, options = {}) {
+  const resolved = registry?.resolve?.(id, options);
   if (!resolved?.ok) return resolved || { ok: false, code: "SPECIAL_SKILL_NOT_FOUND" };
   return { ...resolved, prompt: compilePrompt(resolved, options) };
 }
 
-module.exports = Object.freeze({ MAX_COMPILED_CHARS, compilePrompt, resolveInvocation });
+function selectInternalSkill(registry, raw, options = {}) {
+  const selected = registry?.select?.(raw, options);
+  if (!selected?.ok) return selected || { ok: false, code: "SPECIAL_SKILL_NOT_SELECTED" };
+  return { ...selected, prompt: compilePrompt(selected, { ...options, userContext: selected.userContext || "" }) };
+}
+
+module.exports = Object.freeze({ MAX_COMPILED_CHARS, compilePrompt, resolveInternalSkill, selectInternalSkill });

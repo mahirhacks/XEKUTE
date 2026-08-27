@@ -1,10 +1,11 @@
 ---
 id: report
-command: /report
 title: VAPT report generation
-description: Generate an evidence-linked, structured VAPT Markdown report from the current assessment records.
-version: 1.0.0
+description: Internal guidance for generating an evidence-linked, structured VAPT Markdown report from current assessment records.
+version: 1.1.0
 entrypoint: SKILL.md
+visibility: internal
+instruction_role: skill-context
 resources: ["vapt-report.md"]
 modes: ["agent", "ask", "plan", "hypothesis"]
 required_tools: ["query_assessment", "expand_evidence"]
@@ -13,7 +14,7 @@ parameter_policy: context-only
 
 ## Purpose
 
-`/report` is a parameterless reporting skill. It reads the current scope, engagement, intelligence, assets, coverage, runs, evidence, findings, and retest state. It creates the current working report and an immutable timestamped export.
+This internal reporting skill is selected by the runtime for VAPT report requests. It reads the current scope, engagement, intelligence, assets, coverage, runs, evidence, findings, and retest state. It creates the current working report and an immutable timestamped export. It contributes workflow guidance beneath Xekute's canonical system prompt and never defines its own system instructions.
 
 ## Evidence policy
 

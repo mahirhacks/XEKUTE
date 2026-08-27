@@ -109,10 +109,17 @@ function createRuntimeDelegationProvider({
   unregisterChildRun,
   recordChildSession,
   finalizeChildContext,
+  specialistDispatch = null,
+  specialistReturnService = null,
+  recordSpecialistReturn = null,
+  assignmentLeases = null,
+  projectId = "",
+  parentBlockId = "",
   getActiveProvider = () => "",
   modeWorkflow = null,
   intelligence = null,
   contextCompiler = null,
+  contextAssembly = null,
   planBinding = null,
   toolMetadataForName = () => null,
   getBrowserTarget = () => "",
@@ -122,6 +129,88 @@ function createRuntimeDelegationProvider({
   if (typeof runAgentTurn !== "function") throw new TypeError("runAgentTurn is required");
   if (typeof runModelRound !== "function") throw new TypeError("runModelRound is required");
   if (typeof executeToolCall !== "function") throw new TypeError("executeToolCall is required");
+
+  function assignmentInput(input = {}) {
+    const resources = input?.contextPackage?.resources && typeof input.contextPackage.resources === "object"
+      ? input.contextPackage.resources
+      : {};
+    const investigationId = input.investigationId || input.investigation_id || resources.investigationId || resources.investigation_id || "";
+    const testCaseId = input.testCaseId || input.test_case_id || resources.testCaseId || resources.test_case_id || "";
+    return {
+      investigationId: String(investigationId || "").trim(),
+      testCaseId: String(testCaseId || "").trim(),
+    };
+  }
+
+  async function prepareDelegation({ input, executionContext = null, childInvocationId, childSessionId, operation = "spawn" } = {}) {
+    let prepared = input && typeof input === "object" ? { ...input, contextPackage: { ...(input.contextPackage || {}) } } : input;
+    let dispatch = null;
+    const dispatchEnabled = specialistDispatch?.enabled?.() === true;
+    if (dispatchEnabled && specialistDispatch?.build) {
+      dispatch = await specialistDispatch.build({
+        workspace,
+        projectId,
+        parentSessionId: sessionId,
+        parentAgentId: `agent:${runKey}`,
+        childInvocationId,
+        childSessionId,
+        objective: input?.task || "",
+        authorityProfile,
+        expectedOutput: input?.expectedOutput || {},
+        targetRefs: input?.targetRefs || input?.target_refs || [],
+        investigationRefs: input?.investigationRefs || input?.investigation_refs || [],
+        testCaseRefs: input?.testCaseRefs || input?.test_case_refs || [],
+        artifactRefs: input?.artifactRefs || input?.artifact_refs || [],
+        mode,
+      });
+      if (!dispatch?.ok) {
+        const error = Object.assign(new Error(dispatch?.error || "Specialist dispatch packet creation failed."), { code: dispatch?.code || "MEMORY_DISPATCH_PACKET_FAILED", details: dispatch?.details || {} });
+        throw error;
+      }
+      prepared.contextPackage = {
+        role: String(prepared.contextPackage.role || mode || "agent"),
+        authority: String(prepared.contextPackage.authority || authorityProfile || "approve_for_me"),
+        scope: prepared.contextPackage.scope && typeof prepared.contextPackage.scope === "object" ? prepared.contextPackage.scope : {},
+        identity: prepared.contextPackage.identity && typeof prepared.contextPackage.identity === "object" ? prepared.contextPackage.identity : {},
+        resources: prepared.contextPackage.resources && typeof prepared.contextPackage.resources === "object" ? prepared.contextPackage.resources : {},
+        memoryPacket: dispatch.packet,
+      };
+    }
+
+    let assignment = null;
+    const refs = assignmentInput(prepared);
+    if (dispatchEnabled && assignmentLeases?.acquire && refs.investigationId && refs.testCaseId) {
+      const boundProjectId = String(dispatch?.packet?.project_id || projectId || "");
+      assignment = await assignmentLeases.acquire({
+        workspace,
+        projectId: boundProjectId,
+        investigationId: refs.investigationId,
+        testCaseId: refs.testCaseId,
+        agentId: `agent:${childInvocationId}`,
+        sessionId: childSessionId,
+        exclusive: true,
+      });
+      if (!assignment?.ok) {
+        const error = Object.assign(new Error(assignment?.error || "The Investigation assignment could not be acquired."), { code: assignment?.code || "MEMORY_ASSIGNMENT_ACQUIRE_FAILED", details: assignment?.details || {}, retryable: Boolean(assignment?.retryable) });
+        throw error;
+      }
+    }
+    return { input: prepared, dispatch, assignment };
+  }
+
+  async function releaseAssignment(assignment) {
+    if (!assignment?.lease || !assignmentLeases?.release) return;
+    try {
+      await assignmentLeases.release({
+        workspace,
+        projectId: assignment.lease.project_id || projectId,
+        leaseId: assignment.lease.lease_id,
+        agentId: assignment.lease.agent_id,
+        sessionId: assignment.lease.session_id,
+        reason: "child_terminal",
+      });
+    } catch { /* Lease expiry remains the safe recovery path. */ }
+  }
 
   function currentTools() {
     const source = typeof getTools === "function" ? getTools() : tools;
@@ -272,6 +361,7 @@ function createRuntimeDelegationProvider({
         modeWorkflow,
         intelligence,
         contextCompiler,
+        contextAssembly,
         planBinding: modeWorkflow?.loadState?.(workspace)?.planBinding || planBinding || null,
         authorityProfile,
         sessionId: childSessionId,
@@ -295,7 +385,7 @@ function createRuntimeDelegationProvider({
     };
   }
 
-  async function executeChild({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation = 1, operation = "spawn", previousHistory = [], model = "", cleanup = null } = {}) {
+  async function executeChild({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation = 1, operation = "spawn", previousHistory = [], model = "", dispatch = null, assignment = null, cleanup = null } = {}) {
     const selectedChildModel = String(subagentModel || parentModel || "").trim();
     let effectiveModel = String(model || selectedChildModel).trim();
     const requestedModel = effectiveModel;
@@ -328,6 +418,30 @@ function createRuntimeDelegationProvider({
         : "";
       const error = String(mutationFailure || result?.error || result?.runState?.stopReason || "").slice(0, MAX_SUMMARY_CHARS);
       const terminalType = status === "completed" ? "subagent_completed" : status === "stopped" ? "subagent_stopped" : "subagent_failed";
+      let specialistReturn = null;
+      const returnedPayload = result?.specialistReturn || result?.specialist_return || result?.memorySpecialistReturn || result?.structuredReturn || null;
+      if (returnedPayload && typeof returnedPayload === "object") {
+        const candidate = {
+          ...returnedPayload,
+          project_id: returnedPayload.project_id || returnedPayload.projectId || projectId,
+          parent_session_id: returnedPayload.parent_session_id || returnedPayload.parentSessionId || sessionId,
+          child_session_id: returnedPayload.child_session_id || returnedPayload.childSessionId || childSessionId,
+          child_invocation_id: returnedPayload.child_invocation_id || returnedPayload.childInvocationId || childInvocationId,
+          agent_id: returnedPayload.agent_id || returnedPayload.agentId || `agent:${childInvocationId}`,
+          status: returnedPayload.status || (status === "completed" ? "completed" : status === "stopped" ? "cancelled" : "failed"),
+          parent_block_id: returnedPayload.parent_block_id || returnedPayload.parentBlockId || parentBlockId,
+        };
+        try {
+          specialistReturn = specialistReturnService?.accept
+            ? await specialistReturnService.accept({ ...candidate, parentBlockId: candidate.parent_block_id, executionCapture: null })
+            : null;
+          if (specialistReturn?.ok && typeof recordSpecialistReturn === "function") {
+            specialistReturn = await recordSpecialistReturn({ ...candidate, normalized: specialistReturn });
+          }
+        } catch (error) {
+          specialistReturn = { ok: false, code: error.code || "MEMORY_SPECIALIST_RETURN_FAILED", error: String(error.message || "Specialist return was rejected.").slice(0, MAX_SUMMARY_CHARS) };
+        }
+      }
       const outcome = {
         status,
         output: { text: childSummary, format: String(input?.expectedOutput?.format || "text"), summary: String(input?.expectedOutput?.description || input?.task || "").slice(0, MAX_SUMMARY_CHARS) },
@@ -346,6 +460,9 @@ function createRuntimeDelegationProvider({
           provisionalPlan: result?.provisionalPlan || null,
           error,
           appendedMessages: Array.isArray(result?.appendedMessages) ? result.appendedMessages : [],
+          memoryDispatch: dispatch ? { packetId: dispatch.packet?.packet_id || "", packetHash: dispatch.packetHash || "", contextState: dispatch.contextState || "" } : null,
+          memoryAssignment: assignment?.lease ? { leaseId: assignment.lease.lease_id, investigationId: assignment.lease.investigation_id, testCaseId: assignment.lease.test_case_id } : null,
+          specialistReturn: specialistReturn ? { ok: specialistReturn.ok !== false, returnId: specialistReturn.recordId || specialistReturn.parentEvent?.specialist_return_id || "", code: specialistReturn.ok === false ? specialistReturn.code || "MEMORY_SPECIALIST_RETURN_FAILED" : "" } : null,
         },
       };
       sendChildEvent(childSessionId, childInvocationId, {
@@ -417,7 +534,7 @@ function createRuntimeDelegationProvider({
         summary: String(error?.message || (status === "stopped" ? "Child agent stopped." : "Child agent failed.")),
         operation,
       });
-      const outcome = { status, output: { text: "", format: "text", summary: "" }, metadata: { sessionId: childSessionId, model: effectiveModel, requestedModel, fallbackUsed, error: String(error?.message || "Child agent failed.") } };
+      const outcome = { status, output: { text: "", format: "text", summary: "" }, metadata: { sessionId: childSessionId, model: effectiveModel, requestedModel, fallbackUsed, error: String(error?.message || "Child agent failed."), memoryDispatch: dispatch ? { packetId: dispatch.packet?.packet_id || "", packetHash: dispatch.packetHash || "" } : null, memoryAssignment: assignment?.lease ? { leaseId: assignment.lease.lease_id, investigationId: assignment.lease.investigation_id, testCaseId: assignment.lease.test_case_id } : null } };
       try {
         await recordChildSession?.({ workspace, sessionId: childSessionId, blockId, childInvocationId, operation, model: effectiveModel, status: outcome.status, output: outcome.output, metadata: outcome.metadata });
       } catch (persistenceError) {
@@ -457,6 +574,7 @@ function createRuntimeDelegationProvider({
       }
       return outcome;
     } finally {
+      await releaseAssignment(assignment);
       cleanup?.();
     }
   }
@@ -472,12 +590,17 @@ function createRuntimeDelegationProvider({
       const childSession = await beginSession({ childSessionId: existing.childSessionId, childInvocationId: existing.childInvocationId, task: input.task, model: selectedModel, operation });
       const childSessionId = childSession.sessionId;
       const previousHistory = Array.isArray(existing.history) ? existing.history : [];
+      const prepared = await prepareDelegation({ input, executionContext, childInvocationId: existing.childInvocationId, childSessionId, operation });
       const queued = coordinator.submitFollowUp({
         childInvocationId: existing.childInvocationId,
         parentKey: runKey,
-        task: input.task,
-        summary: input.expectedOutput?.description || input.task,
-        metadata: { operation },
+        task: prepared.input.task,
+        summary: prepared.input.expectedOutput?.description || prepared.input.task,
+        metadata: {
+          operation,
+          memoryDispatch: prepared.dispatch ? { packetId: prepared.dispatch.packet?.packet_id || "", packetHash: prepared.dispatch.packetHash || "" } : null,
+          memoryAssignment: prepared.assignment?.lease ? { leaseId: prepared.assignment.lease.lease_id, investigationId: prepared.assignment.lease.investigation_id, testCaseId: prepared.assignment.lease.test_case_id } : null,
+        },
         controller: childController,
         onCancel: () => {
           sendChildEvent(childSessionId, existing.childInvocationId, {
@@ -499,10 +622,11 @@ function createRuntimeDelegationProvider({
             output: { text: "", format: String(input.expectedOutput?.format || "text"), summary: "Stopped before the child started." },
             metadata: { sessionId: childSessionId, model: selectedModel, error: "Stopped before the child started." },
           })).catch(() => {});
+          releaseAssignment(prepared.assignment).catch(() => {});
           childControllerState.cleanup();
           unregisterChildRun?.(existing.childSessionId);
         },
-        start: () => executeChild({ input, executionContext, childSessionId, blockId: childSession.blockId, childInvocationId: existing.childInvocationId, childController, generation: existing.generation + 1, operation, previousHistory, model: selectedModel, cleanup: () => { childControllerState.cleanup(); unregisterChildRun?.(existing.childSessionId); } }),
+        start: () => executeChild({ input: prepared.input, executionContext, childSessionId, blockId: childSession.blockId, childInvocationId: existing.childInvocationId, childController, generation: existing.generation + 1, operation, previousHistory, model: selectedModel, dispatch: prepared.dispatch, assignment: prepared.assignment, cleanup: () => { childControllerState.cleanup(); unregisterChildRun?.(existing.childSessionId); } }),
       });
       if (!queued.ok) {
         childControllerState.cleanup();
@@ -516,25 +640,27 @@ function createRuntimeDelegationProvider({
         status: queued.status,
         operation,
         model: selectedModel,
-        task: String(input?.task || ""),
+        task: String(prepared.input?.task || ""),
         summary: oneLiner(input?.task || "", "Working on delegated follow-up"),
       });
-      return { childInvocationId: existing.childInvocationId, output: { text: "", format: String(input.expectedOutput?.format || "text"), summary: "Follow-up accepted." }, status: queued.status, metadata: { sessionId: childSessionId, operation, generation: queued.generation } };
+      return { childInvocationId: existing.childInvocationId, output: { text: "", format: String(prepared.input.expectedOutput?.format || "text"), summary: "Follow-up accepted." }, status: queued.status, metadata: { sessionId: childSessionId, operation, generation: queued.generation, memoryDispatch: prepared.dispatch ? { packetId: prepared.dispatch.packet?.packet_id || "", packetHash: prepared.dispatch.packetHash || "" } : null, memoryAssignment: prepared.assignment?.lease ? { leaseId: prepared.assignment.lease.lease_id } : null } };
     }
 
     const childInvocationId = `subagent-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+    const childSessionSeed = `subagent-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
     const childSession = await beginSession({
-      childSessionId: `subagent-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`,
+      childSessionId: childSessionSeed,
       childInvocationId,
       task: input?.task,
       model: String(subagentModel || parentModel || ""),
       operation,
     });
     const childSessionId = childSession.sessionId;
+    const prepared = await prepareDelegation({ input, executionContext, childInvocationId, childSessionId, operation });
     const childControllerState = createChildController(runtime);
     const childController = childControllerState.controller;
     registerChildRun?.({ parentRunKey: runKey, childSessionId, controller: childController });
-    const summary = oneLiner(input?.expectedOutput?.description || input?.task || "", "");
+    const summary = oneLiner(prepared.input?.expectedOutput?.description || prepared.input?.task || "", "");
     const started = coordinator
       ? coordinator.submitChild({
         parentKey: runKey,
@@ -544,8 +670,12 @@ function createRuntimeDelegationProvider({
         childInvocationId,
         childSessionId,
         model: String(subagentModel || parentModel || "").trim(),
-        task: String(input?.task || ""),
+        task: String(prepared.input?.task || ""),
         summary,
+        metadata: {
+          memoryDispatch: prepared.dispatch ? { packetId: prepared.dispatch.packet?.packet_id || "", packetHash: prepared.dispatch.packetHash || "" } : null,
+          memoryAssignment: prepared.assignment?.lease ? { leaseId: prepared.assignment.lease.lease_id, investigationId: prepared.assignment.lease.investigation_id, testCaseId: prepared.assignment.lease.test_case_id } : null,
+        },
         controller: childController,
         onCancel: () => {
           sendChildEvent(childSessionId, childInvocationId, {
@@ -567,10 +697,11 @@ function createRuntimeDelegationProvider({
             output: { text: "", format: String(input?.expectedOutput?.format || "text"), summary: "Stopped before the child started." },
             metadata: { sessionId: childSessionId, model: String(subagentModel || parentModel || "").trim(), error: "Stopped before the child started." },
           })).catch(() => {});
+          releaseAssignment(prepared.assignment).catch(() => {});
           childControllerState.cleanup();
           unregisterChildRun?.(childSessionId);
         },
-        start: () => executeChild({ input, executionContext, childSessionId, blockId: childSession.blockId, childInvocationId, childController, generation: 1, operation, model: String(subagentModel || parentModel || "").trim(), cleanup: () => { childControllerState.cleanup(); unregisterChildRun?.(childSessionId); } }),
+        start: () => executeChild({ input: prepared.input, executionContext, childSessionId, blockId: childSession.blockId, childInvocationId, childController, generation: 1, operation, model: String(subagentModel || parentModel || "").trim(), dispatch: prepared.dispatch, assignment: prepared.assignment, cleanup: () => { childControllerState.cleanup(); unregisterChildRun?.(childSessionId); } }),
       })
       : null;
     if (coordinator) {
@@ -584,14 +715,14 @@ function createRuntimeDelegationProvider({
         status: started.status,
         operation,
         model: String(subagentModel || parentModel || "").trim(),
-        task: String(input?.task || ""),
+        task: String(prepared.input?.task || ""),
         summary,
       });
-      return { childInvocationId, output: { text: "", format: String(input?.expectedOutput?.format || "text"), summary: "Child accepted and running in the background." }, status: started.status, metadata: { sessionId: childSessionId, operation, generation: started.generation } };
+      return { childInvocationId, output: { text: "", format: String(prepared.input?.expectedOutput?.format || "text"), summary: "Child accepted and running in the background." }, status: started.status, metadata: { sessionId: childSessionId, operation, generation: started.generation, memoryDispatch: prepared.dispatch ? { packetId: prepared.dispatch.packet?.packet_id || "", packetHash: prepared.dispatch.packetHash || "" } : null, memoryAssignment: prepared.assignment?.lease ? { leaseId: prepared.assignment.lease.lease_id } : null } };
     }
 
     try {
-      const outcome = await executeChild({ input, executionContext, childSessionId, blockId: childSession.blockId, childInvocationId, childController, generation: 1, operation, model: String(subagentModel || parentModel || "").trim(), cleanup: childControllerState.cleanup });
+      const outcome = await executeChild({ input: prepared.input, executionContext, childSessionId, blockId: childSession.blockId, childInvocationId, childController, generation: 1, operation, model: String(subagentModel || parentModel || "").trim(), dispatch: prepared.dispatch, assignment: prepared.assignment, cleanup: childControllerState.cleanup });
       return { childInvocationId, output: outcome.output, status: outcome.status, metadata: outcome.metadata };
     } finally {
       unregisterChildRun?.(childSessionId);

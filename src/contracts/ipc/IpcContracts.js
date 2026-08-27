@@ -24,6 +24,8 @@ const LARGE_CHANNELS = new Set([
   "context:event",
   "context:projectMemory",
   "context:flush",
+  "context:operationalCheckpoint",
+  "context:operationalMergeLate",
   "ollama:chat",
   "agent:run",
   "session-memory:begin",

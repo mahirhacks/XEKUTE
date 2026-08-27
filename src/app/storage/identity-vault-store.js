@@ -7,6 +7,8 @@ const MAX_HEADERS = 100;
 const MAX_COOKIES = 2_000;
 const MAX_HEADER_VALUE = 32_768;
 const MAX_CREDENTIAL_PASSWORD = 4_096;
+const MAX_CLIENT_CERTIFICATES = 20;
+const MAX_CERTIFICATE_VALUE = 256 * 1_024;
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/;
 
 function isRecord(value) {
@@ -281,13 +283,40 @@ function createIdentityVault({
     };
   }
 
+  function normalizeClientCertificates(input) {
+    const source = Array.isArray(input) ? input : [];
+    return source.slice(0, MAX_CLIENT_CERTIFICATES).filter(isRecord).map((certificate) => {
+      const certificateId = text(certificate.certificateId || certificate.id || certificate.name, "", 120).trim();
+      const origin = text(certificate.origin || certificate.url, "", 2_000).trim();
+      const chain = certificate.certificateChain ?? certificate.certificate_chain ?? certificate.chain;
+      const privateKey = certificate.privateKey ?? certificate.private_key;
+      const passphrase = certificate.passphrase;
+      if (!certificateId || (!chain && !privateKey)) return null;
+      const serialized = JSON.stringify({ chain, privateKey, passphrase });
+      if (Buffer.byteLength(serialized, "utf8") > MAX_CERTIFICATE_VALUE) return null;
+      return {
+        certificateId,
+        origin,
+        certificateChain: chain === undefined ? "" : secretText(chain, "", MAX_CERTIFICATE_VALUE),
+        privateKey: privateKey === undefined ? "" : secretText(privateKey, "", MAX_CERTIFICATE_VALUE),
+        passphrase: passphrase === undefined ? "" : secretText(passphrase, "", MAX_HEADER_VALUE),
+        identityVaultRef: text(certificate.identityVaultRef || certificate.identity_vault_ref || certificateId, certificateId, 500),
+      };
+    }).filter(Boolean);
+  }
+
   function normalizeSecret(input = {}) {
     const source = isRecord(input) ? input : {};
     const state = normalizeStorageState(source.storageState || source);
     const cookies = state.cookies.length ? state.cookies : normalizeCookies(source.cookies);
     const headerBindings = normalizeHeaderBindings(source.headerBindings || source.headers);
     const unmappedTokens = isRecord(source.unmappedTokens) ? clone(source.unmappedTokens) : {};
-    return { storageState: { cookies, origins: state.origins }, headerBindings, unmappedTokens };
+    return {
+      storageState: { cookies, origins: state.origins },
+      headerBindings,
+      unmappedTokens,
+      clientCertificates: normalizeClientCertificates(source.clientCertificates || source.client_certificates),
+    };
   }
 
   function publicMetadata(value = {}) {
@@ -305,6 +334,7 @@ function createIdentityVault({
       cookieCount: Math.max(0, Number(source.cookieCount) || 0),
       originCount: Math.max(0, Number(source.originCount) || 0),
       headerOriginCount: Math.max(0, Number(source.headerOriginCount) || 0),
+      certificateCount: Math.max(0, Number(source.certificateCount) || 0),
       requiresMapping: Boolean(source.requiresMapping),
       migration: source.migration ? clone(source.migration) : undefined,
     };
@@ -531,7 +561,7 @@ function createIdentityVault({
     if (!metadataFor(workspace, identityId)) return error("IDENTITY_NOT_FOUND", `identity not found: ${identityId}`, { identityId });
     if (!secureStorageAvailable()) return error("SECURE_STORAGE_UNAVAILABLE", "Secure identity storage is unavailable; authenticated state was not persisted.");
     const secret = normalizeSecret(input);
-    if (!secret.storageState.cookies.length && !secret.storageState.origins.length && !secret.headerBindings.length && !Object.keys(secret.unmappedTokens).length) {
+    if (!secret.storageState.cookies.length && !secret.storageState.origins.length && !secret.headerBindings.length && !Object.keys(secret.unmappedTokens).length && !secret.clientCertificates.length) {
       return error("IDENTITY_AUTH_STATE_EMPTY", "No supported cookies, origins, or origin-bound headers were provided.", { identityId });
     }
     const projectId = projectIdFor(workspace, true);
@@ -549,6 +579,7 @@ function createIdentityVault({
       originCount: secret.storageState.origins.length,
       headerOriginCount: secret.headerBindings.length,
       requiresMapping: Object.keys(secret.unmappedTokens).length > 0,
+      certificateCount: secret.clientCertificates.length,
       updatedAt: timestamp(),
     });
     return { ok: true, value: { identity: metadata.value?.identity || metadata.identity, projectId } };
@@ -558,7 +589,7 @@ function createIdentityVault({
     if (!metadataFor(workspace, identityId)) return Promise.resolve(error("IDENTITY_NOT_FOUND", `identity not found: ${identityId}`, { identityId }));
     if (!secureStorageAvailable()) return Promise.resolve(error("SECURE_STORAGE_UNAVAILABLE", "Secure identity storage is unavailable; authenticated state was not persisted."));
     const secret = normalizeSecret(input);
-    if (!secret.storageState.cookies.length && !secret.storageState.origins.length && !secret.headerBindings.length && !Object.keys(secret.unmappedTokens).length) {
+    if (!secret.storageState.cookies.length && !secret.storageState.origins.length && !secret.headerBindings.length && !Object.keys(secret.unmappedTokens).length && !secret.clientCertificates.length) {
       return Promise.resolve(error("IDENTITY_AUTH_STATE_EMPTY", "No supported cookies, origins, or origin-bound headers were provided.", { identityId }));
     }
     const projectId = projectIdFor(workspace, true);
@@ -578,6 +609,7 @@ function createIdentityVault({
         originCount: secret.storageState.origins.length,
         headerOriginCount: secret.headerBindings.length,
         requiresMapping: Object.keys(secret.unmappedTokens).length > 0,
+        certificateCount: secret.clientCertificates.length,
         updatedAt: timestamp(),
       });
       return { ok: true, value: { identity: metadata.value?.identity || metadata.identity, projectId } };

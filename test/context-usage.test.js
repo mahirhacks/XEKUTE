@@ -22,6 +22,12 @@ test("context meter uses routed previews and Ollama's measured last prompt", () 
   assert.ok(html.includes('id="context-usage-heading-value"'));
   assert.ok(html.includes('id="context-usage-breakdown"'));
   assert.ok(html.includes('id="context-usage-compact"'));
+  for (const section of ["System prompt", "Tool definitions", "Project", "Investigation", "Evidence", "Conversation", "Rules", "Skills"]) {
+    assert.match(renderer, new RegExp(`label: "${section}"`));
+  }
+  assert.match(renderer, /active_workflow:\s*"conversation"/);
+  assert.match(renderer, /recent_working_set:\s*"conversation"/);
+  assert.doesNotMatch(html, /id="context-memory-open"/);
   assert.doesNotMatch(html, /context-usage-measure-note|context-usage-diagnostics/);
   assert.doesNotMatch(html, /id="context-usage-model"/);
   assert.doesNotMatch(html, /id="context-memory-note"/);

@@ -869,6 +869,42 @@ function createSessionMemoryStore({
     return document;
   }
 
+  function importLegacy(rawWorkspace, legacyState, { sourceHash = "", operationId = "" } = {}) {
+    const resolved = resolveProject(rawWorkspace, { persist: false });
+    if (!resolved.projectId) return Promise.resolve({ ok: false, code: "MEMORY_PROJECT_UNINITIALIZED", error: "Project session memory is not initialized." });
+    if (legacyState?.encrypted === true) return Promise.resolve({ ok: false, code: "MEMORY_LEGACY_SESSION_ENCRYPTED", error: "The legacy session source is encrypted and cannot be imported by this store." });
+    const hashValue = text(sourceHash, "", 128).trim().toLowerCase();
+    const migrationId = text(operationId, "", 240).trim();
+    return enqueue(resolved.canonical, async () => {
+      const loaded = readDocument(resolved.projectId, resolved.workspace);
+      const document = loaded.document;
+      const project = projectPart(document, resolved.projectId);
+      const meta = project[RESERVED_META_KEY];
+      const knownHashes = Array.isArray(meta.migration_source_hashes) ? meta.migration_source_hashes.map((value) => text(value, "", 128).trim().toLowerCase()).filter(Boolean) : [];
+      const knownOperations = Array.isArray(meta.migration_operations) ? meta.migration_operations.map((value) => text(value, "", 240).trim()).filter(Boolean) : [];
+      if ((hashValue && knownHashes.includes(hashValue)) || (migrationId && knownOperations.includes(migrationId))) {
+        return { ok: true, imported: false, duplicate: true, changed: false, projectId: resolved.projectId, sessionIds: [], sourceHash: hashValue, operationId: migrationId };
+      }
+      const migrated = migrateLegacy(resolved.workspace, resolved.projectId, legacyState);
+      const migratedProject = migrated[resolved.projectId] || {};
+      const sessionIds = [];
+      for (const [sessionId, session] of Object.entries(migratedProject)) {
+        if (sessionId === RESERVED_META_KEY || project[sessionId]) continue;
+        project[sessionId] = clone(session);
+        sessionIds.push(sessionId);
+      }
+      const activeSessionId = migratedProject[RESERVED_META_KEY]?.active_session_id || "";
+      if (!meta.active_session_id && activeSessionId && project[activeSessionId]) meta.active_session_id = activeSessionId;
+      if (hashValue) meta.migration_source_hashes = [...new Set([...knownHashes, hashValue])].slice(-100);
+      if (migrationId) meta.migration_operations = [...new Set([...knownOperations, migrationId])].slice(-100);
+      meta.migration_version = Math.max(Number(meta.migration_version) || 0, 1);
+      meta.updated_at = timestamp();
+      const changed = sessionIds.length > 0 || Boolean(hashValue || migrationId);
+      if (changed) saveDocument(resolved.projectId, resolved.workspace, document);
+      return { ok: true, imported: sessionIds.length > 0, duplicate: false, changed, projectId: resolved.projectId, sessionIds, sourceHash: hashValue, operationId: migrationId };
+    });
+  }
+
   function load(rawWorkspace, { migrate = false } = {}) {
     const resolved = resolveProject(rawWorkspace, { persist: false });
     if (!resolved.workspace) return { ok: true, exists: false, projectId: "", projectPath: "", sessions: [], closedSessions: [], archivedSessions: [], activeSessionId: "" };
@@ -1048,6 +1084,7 @@ function createSessionMemoryStore({
     normalizeDocument,
     migrationBlocks,
     migrateLegacy,
+    importLegacy,
     STORE_VERSION,
   };
 }

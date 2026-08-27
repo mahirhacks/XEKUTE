@@ -19,14 +19,30 @@ const QUERY_KNOWLEDGE_INPUT_SCHEMA = Object.freeze({
   additionalProperties: false,
 });
 
-function createQueryKnowledgeTool({ knowledge } = {}) {
+function createQueryKnowledgeTool({ knowledge, memoryRetrieval = null, projectIdentityStore = null, memoryFeatureFlags = {} } = {}) {
   return {
     name: "query_knowledge",
     inputSchema: QUERY_KNOWLEDGE_INPUT_SCHEMA,
     async execute(input = {}, executionContext) {
       if (!isRestrictedToolContext(executionContext)) return { ok: false, error: "query_knowledge requires a restricted tool context.", code: "INVALID_EXECUTION_CONTEXT" };
       const workspace = executionContext.workspace?.root || "";
-      if (!workspace || !knowledge?.query) return { ok: false, error: "Assessment knowledge is unavailable.", code: "KNOWLEDGE_UNAVAILABLE" };
+      if (!workspace || (!knowledge?.query && memoryFeatureFlags?.knowledgeRetrievalV2 !== true)) return { ok: false, error: "Assessment knowledge is unavailable.", code: "KNOWLEDGE_UNAVAILABLE" };
+      if (memoryFeatureFlags?.knowledgeRetrievalV2 === true && memoryRetrieval?.query && projectIdentityStore?.resolveProject) {
+        const resolved = projectIdentityStore.resolveProject(workspace, { persist: false });
+        if (!resolved?.ok) return resolved;
+        if (!resolved.projectId) return { ok: false, error: "Project Memory is not initialized for this workspace.", code: "MEMORY_PROJECT_UNINITIALIZED", retryable: false };
+        return memoryRetrieval.query({
+          workspace,
+          projectId: resolved.projectId,
+          objective: String(input.query || input.skill || input.phase || "knowledge").slice(0, 2_000),
+          domains: ["knowledge"],
+          filters: { skill: String(input.skill || "").slice(0, 160), phase: String(input.phase || "").slice(0, 120), query: String(input.query || "").slice(0, 500) },
+          limit: Math.max(1, Math.min(Number(input.limit) || 10, 50)),
+          tokenBudget: 16_000,
+          sensitivityCeiling: "confidential",
+          includeProvenance: true,
+        });
+      }
       const result = await knowledge.query({
         skill: String(input.skill || "").slice(0, 160),
         phase: String(input.phase || "").slice(0, 120),

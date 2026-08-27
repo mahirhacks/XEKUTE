@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("path");
+const { createMemoryFeatureFlags } = require("./memory-feature-flags.js");
 
 /**
  * Centralized application configuration derived from environment and Electron
@@ -16,6 +17,7 @@ function createAppConfig({ app, processEnv = process.env } = {}) {
     appRoot: path.join(__dirname, "..", "..", ".."),
     userData,
     isDev: isDev(),
+    memoryFeatures: () => createMemoryFeatureFlags(),
     preferencesPath: () => path.join(userData(), "pointer-preferences.json"),
     projectProfilesDirectory: () => path.join(userData(), "project-profiles"),
     sessionMemoryDirectory: () => path.join(home(), ".xekute", "data"),

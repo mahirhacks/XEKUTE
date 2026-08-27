@@ -113,10 +113,15 @@ function clipText(value, maxChars) {
   return `${text.slice(0, headSize)}\n... omitted to preserve context ...\n${text.slice(-tailSize)}`;
 }
 
-function buildSystemContext({ mode = "agent", modeFamily = "xekute", promptConfig = null, depth = "operational", specializedGuidance = "" } = {}) {
+function buildSystemContext({ mode = "agent", modeFamily = "xekute", promptConfig = null, depth = "operational" } = {}) {
   const profile = normalizeProfile(modeFamily, mode);
-  const guidance = [ModeSkills.render(profile.key), specializedGuidance].filter(Boolean).join("\n\n");
-  return PromptCompiler.compile({ family: profile.family, mode: profile.key, overrides: promptConfig, depth, specializedGuidance: guidance });
+  return PromptCompiler.compile({ family: profile.family, mode: profile.key, overrides: promptConfig, depth });
+}
+
+function buildSkillContext({ mode = "agent", modeFamily = "xekute", specialSkillPrompt = "" } = {}) {
+  const profile = normalizeProfile(modeFamily, mode);
+  const sections = [ModeSkills.render(profile.key), String(specialSkillPrompt || "").trim()].filter(Boolean);
+  return sections.join("\n\n");
 }
 
 function buildUntrustedContext({ dirMap = "", activeFile = null, extraFiles = [], discovery = null, userMessage = "", numCtx = DEFAULT_CONTEXT_TOKENS } = {}) {
@@ -142,6 +147,7 @@ function buildUntrustedContext({ dirMap = "", activeFile = null, extraFiles = []
 
 module.exports = {
   buildSystemContext,
+  buildSkillContext,
   buildUntrustedContext,
   contextLimits,
   inferEditTarget,

@@ -181,7 +181,28 @@ function applyDelta(memoryInput, delta = {}) {
   return memory;
 }
 
-function createProjectMemoryStore({ fs = nodeFs, path = nodePath, crypto = nodeCrypto } = {}) {
+function createProjectMemoryStore({ fs = nodeFs, path = nodePath, crypto = nodeCrypto, featureFlags = {} } = {}) {
+  function legacyWriterRetired() {
+    return featureFlags.projectMemoryV2 === true && featureFlags.blockMemoryUpdater === true;
+  }
+  function retiredMutation(delta = {}) {
+    const source = delta && typeof delta === "object" ? delta : {};
+    const digest = crypto.createHash("sha256").update(JSON.stringify({ workspace: "legacy-project-memory", delta: source }), "utf8").digest("hex").slice(0, 32);
+    const operationId = /^op_[A-Za-z0-9]/.test(String(source.operationId || source.operation_id || source.idempotencyKey || ""))
+      ? String(source.operationId || source.operation_id || source.idempotencyKey)
+      : `op_${digest}`;
+    return {
+      ok: true,
+      operationId,
+      recordIds: [],
+      previousRevision: 0,
+      revision: 0,
+      changed: false,
+      conflicts: [],
+      warnings: [{ code: "MEMORY_V1_WRITER_RETIRED", message: "Project Memory v1 writes are retired while Project Memory v2 is authoritative." }],
+      retired: true,
+    };
+  }
   function filePath(workspace) { return path.join(projectRoot(workspace), ".xekute", "context", "project-memory.json"); }
   function backupPath(workspace) { return `${filePath(workspace)}.bak`; }
   function readFile(target) {
@@ -209,16 +230,19 @@ function createProjectMemoryStore({ fs = nodeFs, path = nodePath, crypto = nodeC
     try { fs.chmodSync(target, 0o600); } catch { /* Windows ACLs provide the protection. */ }
   }
   function save(workspace, memory, options = {}) {
+    if (legacyWriterRetired()) return retiredMutation({ workspace, memory, options });
     const normalized = normalizeMemory(memory, workspace);
     atomicWrite(filePath(workspace), normalized, options);
     return { ok: true, memory: normalized, path: filePath(workspace) };
   }
   function consolidate(workspace, delta = {}) {
+    if (legacyWriterRetired()) return retiredMutation(delta);
     const loaded = load(workspace);
     const memory = applyDelta(loaded.memory, delta);
     return { ...save(workspace, memory, { backup: !loaded.recovered }), recovered: Boolean(loaded.recovered) };
   }
   function rebuild(workspace, deltas = []) {
+    if (legacyWriterRetired()) return retiredMutation({ workspace, deltas });
     let memory = defaultMemory(workspace);
     for (const delta of Array.isArray(deltas) ? deltas : []) memory = applyDelta(memory, delta);
     return save(workspace, memory);
@@ -227,7 +251,7 @@ function createProjectMemoryStore({ fs = nodeFs, path = nodePath, crypto = nodeC
     const loaded = load(workspace);
     return { ok: true, path: loaded.path, exists: Boolean(loaded.exists || fs.existsSync(loaded.path)), recovered: Boolean(loaded.recovered), revision: loaded.memory.revision, updatedAt: loaded.memory.updatedAt, sourceCount: loaded.memory.sourceSessions.length };
   }
-  return Object.freeze({ filePath, backupPath, load, save, consolidate, rebuild, status, normalizeMemory, projectMemoryProjection, applyDelta, stableId });
+  return Object.freeze({ filePath, backupPath, load, save, consolidate, rebuild, status, normalizeMemory, projectMemoryProjection, applyDelta, stableId, legacyWriterRetired });
 }
 
 module.exports = { PROJECT_MEMORY_SCHEMA_VERSION, createProjectMemoryStore, normalizeMemory, projectMemoryProjection, applyDelta, stableId };

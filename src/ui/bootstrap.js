@@ -99,7 +99,6 @@ globalThis.addEventListener("beforeunload", () => {
 
 const EditorManager = globalThis.XekuteEditorManager;
 const TerminalManager = globalThis.XekuteTerminalManager;
-
 const btnNewFile       = $("btn-new-file");
 const btnNewFolder     = $("btn-new-folder");
 const explorerTitle    = $("explorer-title");
@@ -231,14 +230,40 @@ const contextUsageSource = $("context-usage-source");
 const contextUsageClose = $("context-usage-close");
 const contextUsageCompact = $("context-usage-compact");
 const contextUsageSegments = $("context-usage-segments");
-const CONTEXT_USAGE_ROW_LABELS = Object.freeze({
-  system_tools: "System & Tools",
-  project_memory: "Project Memory",
-  active_workflow: "Active Workflow",
-  conversation: "Conversation",
-  project_intelligence: "Project Intelligence",
-  knowledge: "Knowledge",
-  recent_working_set: "Recent Working Set",
+const CONTEXT_USAGE_SECTIONS = Object.freeze([
+  Object.freeze({ key: "system_prompt", label: "System prompt", color: "#a7a7ab" }),
+  Object.freeze({ key: "tool_definitions", label: "Tool definitions", color: "#77a8d8" }),
+  Object.freeze({ key: "project", label: "Project", color: "#c28ad4" }),
+  Object.freeze({ key: "investigation", label: "Investigation", color: "#e1a85b" }),
+  Object.freeze({ key: "evidence", label: "Evidence", color: "#d87e7e" }),
+  Object.freeze({ key: "conversation", label: "Conversation", color: "#8ca6e8" }),
+  Object.freeze({ key: "rules", label: "Rules", color: "#67b7a5" }),
+  Object.freeze({ key: "skills", label: "Skills", color: "#d58dbc" }),
+]);
+const CONTEXT_USAGE_ROW_LABELS = Object.freeze(Object.fromEntries(
+  CONTEXT_USAGE_SECTIONS.map((section) => [section.key, section.label]),
+));
+const CONTEXT_USAGE_SECTION_ALIASES = Object.freeze({
+  system: "system_prompt",
+  system_prompt: "system_prompt",
+  tool_definitions: "tool_definitions",
+  tools: "tool_definitions",
+  project: "project",
+  project_memory: "project",
+  project_intelligence: "project",
+  graph: "project",
+  investigation: "investigation",
+  evidence: "evidence",
+  conversation: "conversation",
+  active_workflow: "conversation",
+  recent_working_set: "conversation",
+  checkpoint: "conversation",
+  recent_tail: "conversation",
+  rules: "rules",
+  authority: "rules",
+  skills: "skills",
+  knowledge: "skills",
+  knowledge_lease: "skills",
 });
 const contextMemoryNote = $("context-memory-note");
 const contextMemoryText = $("context-memory-text");
@@ -641,6 +666,7 @@ let deletingExplorerItem = false;
 let deletingCustomEntries = false;
 let chatHistory  = [];
 const activeChatRuns = new Map();
+const pentestContinuationTimers = new Map();
 const chatSessionsNeedingAttention = new Set();
   let subagentCompletionPending = false;
   let pendingBackgroundWaitEvents = [];
@@ -1411,6 +1437,12 @@ function normalizeChatExchanges() {
   }
 }
 
+function isInternalRuntimeInputMessage(message = {}) {
+  if (message?.__xekuteInternalRuntimeInput || message?.__xekuteInternalSubagentResult) return true;
+  if (message?.role !== "user") return false;
+  return /^Harness (?:checkpoint:|waited\b)/.test(String(message?.content || "").trim());
+}
+
 function renderCanonicalChatHistory(history = []) {
   const fragment = document.createDocumentFragment();
   const session = activeChatSession();
@@ -1418,7 +1450,7 @@ function renderCanonicalChatHistory(history = []) {
     ? ContextMemory.ensureMessageIdentity(history, session?.id || "chat")
     : (Array.isArray(history) ? history : []);
   const renderMessage = (message, container) => {
-    if (message?.__xekuteInternalSubagentResult) return;
+    if (isInternalRuntimeInputMessage(message)) return;
     const content = String(message?.content || "").trim();
     if (message.role === "user") {
       if (!content) return;
@@ -4361,8 +4393,9 @@ function setSidebarView(view, { persist = true } = {}) {
   const next = "project";
   currentSidebarView = next;
   if (explorerSidebarView) {
-    explorerSidebarView.hidden = false;
-    explorerSidebarView.setAttribute("aria-hidden", "false");
+    const visible = next === "project";
+    explorerSidebarView.hidden = !visible;
+    explorerSidebarView.setAttribute("aria-hidden", String(!visible));
   }
   if (bugBountySidebarView) {
     bugBountySidebarView.hidden = true;
@@ -4370,6 +4403,7 @@ function setSidebarView(view, { persist = true } = {}) {
   }
   if (sidebarViewTitle) sidebarViewTitle.textContent = "Project";
   if (btnSidebarMore) {
+    btnSidebarMore.hidden = false;
     btnSidebarMore.title = "Project Actions";
     btnSidebarMore.setAttribute("aria-label", btnSidebarMore.title);
   }
@@ -7503,7 +7537,7 @@ function workingHistoryMessages(history = chatHistory, session = activeChatSessi
   const source = ContextMemory?.ensureMessageIdentity
     ? ContextMemory.ensureMessageIdentity(history, session?.id || "chat")
     : (Array.isArray(history) ? history : []);
-  const visibleSource = source.filter((message) => !message?.__xekuteInternalSubagentResult);
+  const visibleSource = source.filter((message) => !isInternalRuntimeInputMessage(message));
   const cursor = String(memoryRecord(session)?.archivedThroughMessageId || "");
   if (!cursor) return visibleSource;
   const index = visibleSource.findIndex((message) => String(message?.id || "") === cursor);
@@ -7512,6 +7546,39 @@ function workingHistoryMessages(history = chatHistory, session = activeChatSessi
   return ContextMemory?.projectRecentContextMessages
     ? ContextMemory.projectRecentContextMessages(recent)
     : recent;
+}
+
+function splitGuidanceContextForUsage(value = "") {
+  const source = String(value || "").trim();
+  if (!source) return { system: "", rules: "", skills: "" };
+  const markers = [...source.matchAll(/^\[(RULES|SKILLS|SUBAGENTS)\s*[·|]\s*[^\]]+\]/gim)];
+  if (!markers.length) return { system: source, rules: "", skills: "" };
+  const buckets = { system: source.slice(0, markers[0].index).trim(), rules: [], skills: [] };
+  for (let index = 0; index < markers.length; index += 1) {
+    const match = markers[index];
+    const end = markers[index + 1]?.index ?? source.length;
+    const block = source.slice(match.index, end).trim();
+    if (match[1].toUpperCase() === "RULES") buckets.rules.push(block);
+    else buckets.skills.push(block);
+  }
+  return { system: buckets.system, rules: buckets.rules.join("\n\n"), skills: buckets.skills.join("\n\n") };
+}
+
+function normalizeContextUsageSections(sections = [], { legacyToolTokens = 0 } = {}) {
+  const totals = new Map(CONTEXT_USAGE_SECTIONS.map((section) => [section.key, 0]));
+  for (const section of Array.isArray(sections) ? sections : []) {
+    const sourceKey = String(section?.key || "").trim().toLowerCase();
+    const tokens = Math.max(0, Number(section?.tokens) || 0);
+    if (sourceKey === "system_tools") {
+      const toolTokens = Math.min(tokens, Math.max(0, Number(legacyToolTokens) || 0));
+      totals.set("tool_definitions", totals.get("tool_definitions") + toolTokens);
+      totals.set("system_prompt", totals.get("system_prompt") + tokens - toolTokens);
+      continue;
+    }
+    const key = CONTEXT_USAGE_SECTION_ALIASES[sourceKey] || "conversation";
+    totals.set(key, totals.get(key) + tokens);
+  }
+  return CONTEXT_USAGE_SECTIONS.map((section) => ({ ...section, tokens: totals.get(section.key) || 0 }));
 }
 
 function getContextBreakdown(requestText = chatInput.value.trim()) {
@@ -7540,6 +7607,8 @@ function getContextBreakdown(requestText = chatInput.value.trim()) {
   const toolMenu = globalThis.XekuteInitialPrompts?.noToolsSurface?.()
     || globalThis.XekuteInitialPrompts?.toolCatalog?.([], { packs: [] })
     || "";
+  const guidanceUsage = splitGuidanceContextForUsage(guidanceContext);
+  const baseSystemPrompt = [compiledPrompt, guidanceUsage.system, toolMenu].filter(Boolean).join("\n\n").trim();
   const systemPrompt = [compiledPrompt, guidanceContext, toolMenu].filter(Boolean).join("\n\n").trim();
   const projectContext = route.includeWorkspaceContext
     ? buildProjectContextMessage({
@@ -7556,54 +7625,61 @@ function getContextBreakdown(requestText = chatInput.value.trim()) {
   const streamTokens = activeStreamContent ? estimateTokens(activeStreamContent) + 4 : 0;
   const sections = [
     {
-      key: "system_tools",
-      label: "System + tools",
+      key: "system_prompt",
+      label: "System prompt",
       color: "#a7a7ab",
-      tokens: (systemPrompt ? estimateMessagesTokens([{ role: "system", content: systemPrompt }]) : 0)
-        + (routedTools.length ? estimateTokens(JSON.stringify(routedTools)) : 0),
+      tokens: baseSystemPrompt ? estimateMessagesTokens([{ role: "system", content: baseSystemPrompt }]) : 0,
     },
     {
-      key: "project_memory",
-      label: "Project memory",
+      key: "tool_definitions",
+      label: "Tool definitions",
+      color: "#77a8d8",
+      tokens: routedTools.length ? estimateTokens(JSON.stringify(routedTools)) : 0,
+    },
+    {
+      key: "project",
+      label: "Project",
       color: "#c28ad4",
-      tokens: summaryMessage ? estimateMessagesTokens([{ role: "system", content: summaryMessage }]) : 0,
+      tokens: projectContext ? estimateMessagesTokens([{ role: "user", content: projectContext }]) : 0,
     },
     {
-      key: "active_workflow",
-      label: "Active workflow",
+      key: "investigation",
+      label: "Investigation",
       color: "#e1a85b",
+      tokens: 0,
+    },
+    {
+      key: "evidence",
+      label: "Evidence",
+      color: "#d87e7e",
       tokens: 0,
     },
     {
       key: "conversation",
       label: "Conversation",
-      color: "#7ea9d8",
-      tokens: estimateMessagesTokens(workingHistory),
-    },
-    {
-      key: "project_intelligence",
-      label: "Project intelligence",
-      color: "#67b7a5",
-      tokens: 0,
-    },
-    {
-      key: "knowledge",
-      label: "Knowledge",
-      color: "#d58dbc",
-      tokens: 0,
-    },
-    {
-      key: "recent_working_set",
-      label: "Recent working set",
       color: "#8ca6e8",
-      tokens: (draft ? estimateTokens(draft) + 4 : 0) + streamTokens
-        + (projectContext ? estimateMessagesTokens([{ role: "user", content: projectContext }]) : 0),
+      tokens: (summaryMessage ? estimateMessagesTokens([{ role: "system", content: summaryMessage }]) : 0)
+        + estimateMessagesTokens(workingHistory)
+        + (draft ? estimateTokens(draft) + 4 : 0)
+        + streamTokens,
+    },
+    {
+      key: "rules",
+      label: "Rules",
+      color: "#67b7a5",
+      tokens: guidanceUsage.rules ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.rules }]) : 0,
+    },
+    {
+      key: "skills",
+      label: "Skills",
+      color: "#d58dbc",
+      tokens: guidanceUsage.skills ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.skills }]) : 0,
     },
   ];
-  const summaryTokens = sections.find((section) => section.key === "project_memory")?.tokens || 0;
-  const liveChatTokens = sections.find((section) => section.key === "conversation")?.tokens || 0;
-  const toolTokens = sections.find((section) => section.key === "system_tools")?.tokens || 0;
-  const draftTokens = sections.find((section) => section.key === "recent_working_set")?.tokens || 0;
+  const summaryTokens = summaryMessage ? estimateMessagesTokens([{ role: "system", content: summaryMessage }]) : 0;
+  const liveChatTokens = estimateMessagesTokens(workingHistory);
+  const toolTokens = sections.find((section) => section.key === "tool_definitions")?.tokens || 0;
+  const draftTokens = (draft ? estimateTokens(draft) + 4 : 0) + streamTokens;
   const visibleComposerTokens = draftTokens;
   const estimatedTotal = sections.reduce((sum, section) => sum + section.tokens, 0);
 
@@ -8044,7 +8120,14 @@ function getContextUsage(usedOverride = null) {
   const draft = chatInput.value.trim();
   const storedCandidate = !draft && !isRunningChatActive() ? normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage) : null;
   const stored = storedCandidate && (!storedCandidate.model || !selectedModel || storedCandidate.model === selectedModel) && (!storedCandidate.provider || storedCandidate.provider === plan.provider) ? storedCandidate : null;
-  const storedSections = stored ? stored.sections.map((section) => ({ ...section })) : [];
+  const storedToolNames = new Set(stored?.toolNames || []);
+  const legacyToolDefinitions = storedToolNames.size
+    ? modeTools().filter((tool) => storedToolNames.has(tool?.function?.name))
+    : [];
+  const legacyToolTokens = legacyToolDefinitions.length ? estimateTokens(JSON.stringify(legacyToolDefinitions)) : 0;
+  const storedSections = stored
+    ? normalizeContextUsageSections(stored.sections, { legacyToolTokens })
+    : [];
   const storedTotal = stored ? stored.promptTokens : null;
   const breakdown = stored
     ? { sections: storedSections, estimatedTotal: storedTotal, tools: [], messages: [] }
@@ -8088,8 +8171,9 @@ function getContextUsageMessages(breakdown = getContextBreakdown()) {
 
 function renderContextUsage({ total, used, free, pct, source, breakdown = getContextBreakdown(), capacityApproximate = true, provider = "ollama", model = "", modelMaxTokens = null, promptBudgetTokens = null, responseReserveTokens = null, contextWindowSource = "fallback", compressionRatio = null, sourcesRepresented = 0, freshness = "Current", compileLatencyMs = null }) {
   if (!contextRingFill) return;
+  const displaySections = normalizeContextUsageSections(breakdown.sections);
   const filled = pct * CONTEXT_RING_C;
-  const estimatedTotal = Math.max(breakdown.estimatedTotal, 1);
+  const estimatedTotal = Math.max(displaySections.reduce((sum, section) => sum + section.tokens, 0), 1);
   const scale = used > 0 ? used / estimatedTotal : 1;
 
   contextRingFill.style.strokeDasharray = `${filled} ${CONTEXT_RING_C}`;
@@ -8121,7 +8205,7 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
     contextUsageCapacity.textContent = `${budget} · ${maximum}${reserve}`;
   }
   if (contextUsageSegments) {
-    const segments = breakdown.sections
+    const segments = displaySections
       .map((section) => {
         const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
         const widthPct = Math.max((scaledTokens / Math.max(total, 1)) * 100, 1);
@@ -8131,7 +8215,7 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
     contextUsageSegments.innerHTML = segments.join("");
   }
   if (contextUsageBreakdown) {
-    const rows = breakdown.sections
+    const rows = displaySections
       .map((section) => {
         const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
         return `
@@ -14966,15 +15050,14 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
   return assistant;
 }
 
-const BUILTIN_SLASH_COMMANDS = [
-  { name: "/pentest", description: "Run adaptive, scope-aware penetration testing", prompt: "" },
-  { name: "/report", description: "Generate the structured VAPT report", prompt: "" },
-  { name: "/create-rule", description: "Create a project or global rule", prompt: "" },
-  { name: "/create-skill", description: "Create user-authored guidance", prompt: "" },
-  { name: "/create-subagent", description: "Create a bounded subagent profile", prompt: "" },
-];
-
-const SPECIAL_SKILL_COMMANDS = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
+const SYSTEM_SKILL_SLASH_COMMANDS = Object.freeze([
+  Object.freeze({ name: "/pentest", title: "Adaptive penetration testing", description: "Run adaptive, scope-aware penetration testing", overview: "Internal evidence-led reconnaissance, testing, verification, and replanning guidance.", prompt: "", group: "system-skill" }),
+  Object.freeze({ name: "/report", title: "VAPT report generation", description: "Generate an evidence-linked VAPT report", overview: "Build the current structured report from canonical assessment evidence and findings.", prompt: "", group: "system-skill" }),
+  Object.freeze({ name: "/create-rule", title: "Create a project rule", description: "Create a project or global rule", overview: "Create validated Xekute rule guidance through the protected guidance writer.", prompt: "", group: "system-skill" }),
+  Object.freeze({ name: "/create-skill", title: "Create user guidance skill", description: "Create user-authored guidance", overview: "Create a validated project or global custom guidance skill.", prompt: "", group: "system-skill" }),
+  Object.freeze({ name: "/create-subagent", title: "Create a subagent profile", description: "Create a bounded subagent profile", overview: "Create a validated project or global specialist-agent profile.", prompt: "", group: "system-skill" }),
+]);
+const SYSTEM_SKILL_COMMANDS = new Set(SYSTEM_SKILL_SLASH_COMMANDS.map((command) => command.name));
 const CUSTOM_SKILL_COMMANDS = new Set();
 let customSkillSlashCommands = [];
 
@@ -14996,7 +15079,7 @@ function syncCustomSkillSlashCommands(entries = customGuidanceEntries) {
     }))
     .filter((command) => command.name
       && /^\/[a-z0-9][a-z0-9_-]*$/.test(command.name)
-      && !SPECIAL_SKILL_COMMANDS.has(command.name)
+      && !SYSTEM_SKILL_COMMANDS.has(command.name)
       && !seen.has(command.name)
       && seen.add(command.name));
   CUSTOM_SKILL_COMMANDS.clear();
@@ -15004,30 +15087,9 @@ function syncCustomSkillSlashCommands(entries = customGuidanceEntries) {
   renderSlashSuggestions();
 }
 
-async function hydrateSpecialSkillCommands() {
-  try {
-    const result = await window.api?.listSpecialSkills?.();
-    const skills = Array.isArray(result?.skills) ? result.skills : [];
-    if (!skills.length) return;
-    BUILTIN_SLASH_COMMANDS.splice(0, BUILTIN_SLASH_COMMANDS.length, ...skills.map((skill) => ({
-      name: String(skill.command || "").toLowerCase(),
-      title: String(skill.title || ""),
-      description: String(skill.description || skill.title || "Special skill"),
-      overview: String(skill.description || skill.title || "Special skill"),
-      prompt: "",
-    })).filter((skill) => skill.name));
-    SPECIAL_SKILL_COMMANDS.clear();
-    BUILTIN_SLASH_COMMANDS.forEach((skill) => SPECIAL_SKILL_COMMANDS.add(skill.name));
-    syncCustomSkillSlashCommands();
-    renderSlashSuggestions();
-  } catch { /* The static retained-skill fallback remains available. */ }
-}
-
-hydrateSpecialSkillCommands();
-
 function availableSlashCommands() {
   const commands = [
-    ...BUILTIN_SLASH_COMMANDS.map((command) => ({ ...command, group: "built-in-skill" })),
+    ...SYSTEM_SKILL_SLASH_COMMANDS,
     ...customSkillSlashCommands,
   ];
   for (const line of (localStorage.getItem(CUSTOM_COMMANDS_KEY) || "").split(/\r?\n/)) {
@@ -15273,7 +15335,7 @@ function renderSlashSuggestions() {
   const value = chatInput.value;
   if (!/^\/[\w-]*$/.test(value)) return closeSlashSuggestions();
   const query = value.toLowerCase();
-  const groupOrder = { "built-in-skill": 0, "custom-skill": 1, "custom-command": 2 };
+  const groupOrder = { "system-skill": 0, "custom-skill": 1, "custom-command": 2 };
   const matchingCommands = availableSlashCommands()
     .map((command) => ({ command, score: command.name.startsWith(query) ? 0 : command.name.includes(query.slice(1)) || command.description.toLowerCase().includes(query.slice(1)) ? 1 : 2 }))
     .filter((item) => item.score < 2)
@@ -15284,7 +15346,7 @@ function renderSlashSuggestions() {
   slashSuggestionIndex = Math.min(slashSuggestionIndex, slashSuggestionItems.length - 1);
   hideSlashCommandOverview();
   slashCommandSuggestions.innerHTML = "";
-  const groupLabels = { "built-in-skill": "Skills", "custom-skill": "Custom Skills", "custom-command": "Commands" };
+  const groupLabels = { "system-skill": "System Skills", "custom-skill": "Custom Skills", "custom-command": "Commands" };
   let previousGroup = "";
   slashSuggestionItems.forEach((command, index) => {
     if (command.group !== previousGroup) {
@@ -15314,7 +15376,7 @@ function expandSlashCommand(raw) {
   const text = String(raw || "").trim();
   if (!text.startsWith("/")) return text;
   const [command, ...rest] = text.split(/\s+/); const args = rest.join(" ");
-  if (SPECIAL_SKILL_COMMANDS.has(command.toLowerCase()) || CUSTOM_SKILL_COMMANDS.has(command.toLowerCase())) return text;
+  if (SYSTEM_SKILL_COMMANDS.has(command.toLowerCase()) || CUSTOM_SKILL_COMMANDS.has(command.toLowerCase())) return text;
   const override = slashCommandOverrides()[command.toLowerCase()];
   const configuredAiFields = override?.role === "ai" ? [
     override.aim && `Aim: ${override.aim}`,
@@ -15340,46 +15402,48 @@ function slashCommandOverrides() {
 }
 
 async function runSpecialSlashCommand(rawCommand) {
-  if (/^\/create-(?:rule|skill|subagent)(?:\s|$)/i.test(rawCommand.trim())) return false;
   const command = String(rawCommand || "").trim().split(/\s+/, 1)[0].toLowerCase();
   if (CUSTOM_SKILL_COMMANDS.has(command)) return false;
   const parsed = await window.api.parseSlashCommand({ command: rawCommand, overrides: slashCommandOverrides() });
   if (!parsed?.ok) { addErrorMessage(parsed?.error || "Could not parse slash command."); return true; }
-  if (parsed.role === "special") {
-    if (parsed.command !== "/report") return false;
-    addUserMessage(rawCommand);
-    const userMessage = {
-      role: "user",
-      content: rawCommand,
-      id: `${activeChatSessionId}-message-${Date.now()}-${chatHistory.length + 1}`,
-      createdAt: new Date().toISOString(),
-    };
-    chatHistory.push(userMessage);
-    maybeNameActiveChat(rawCommand);
-    await beginSessionMemoryBlock(rawCommand);
-    syncActiveChatSession();
-    let result;
-    try { result = await window.api.assessmentGenerateReport({ path: assessmentPath }); }
-    catch (error) { result = { ok: false, error: error?.message || "Report generation failed unexpectedly." }; }
-    const assistant = createAssistantTurn({ sessionId: activeChatSessionId });
-    const message = result?.ok
-      ? `VAPT report generated.\n\nWorking file: ${result.workingPath || "report/report.md"}\nTimestamped export: ${result.exportPath || result.path || "report/exports"}`
-      : `VAPT report could not be generated: ${result?.error || "Open an assessment workspace first."}`;
-    assistant.setRawContent(message);
-    assistant.finalizeContent();
-    const assistantMessage = { role: "assistant", content: message, id: `${activeChatSessionId}-message-${Date.now()}-${chatHistory.length + 1}`, createdAt: new Date().toISOString() };
-    assistant.messageId = assistantMessage.id;
-    chatHistory.push(assistantMessage);
-    syncActiveChatSession();
-    await finishSessionMemoryBlock({ assistant, outcome: result?.ok ? "completed" : "failed" });
-    return true;
-  }
   return false;
+}
+
+function cancelPentestContinuation(sessionId = "") {
+  const key = String(sessionId || "");
+  const timer = pentestContinuationTimers.get(key);
+  if (timer) clearTimeout(timer);
+  pentestContinuationTimers.delete(key);
+}
+
+function schedulePentestContinuation(sessionId = "", prompt = "") {
+  const key = String(sessionId || "");
+  const message = String(prompt || "").trim().slice(0, 12_000);
+  if (!key || !message) return;
+  cancelPentestContinuation(key);
+  const resume = () => {
+    pentestContinuationTimers.delete(key);
+    if (!chatSessions.some((session) => session.id === key)) return;
+    if (contextCompacting) {
+      pentestContinuationTimers.set(key, setTimeout(resume, 100));
+      return;
+    }
+    if (isChatSessionRunning(key)) return;
+    Promise.resolve(sendMessageWithAgentRuntime({
+      internal: true,
+      internalSkillId: "pentest",
+      sessionId: key,
+      text: message,
+      skipContextFiles: true,
+    })).catch(() => {});
+  };
+  pentestContinuationTimers.set(key, setTimeout(resume, 75));
 }
 
 async function sendMessageWithAgentRuntime(options = {}) {
   const internal = Boolean(options?.internal);
   const targetSessionId = String(options?.sessionId || activeChatSessionId || "");
+  if (!internal) cancelPentestContinuation(targetSessionId);
   const hasExplicitText = Object.prototype.hasOwnProperty.call(options || {}, "text");
   let text = hasExplicitText
     ? String(options.text || "").trim()
@@ -15441,7 +15505,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     content: text,
     id: `${runSession.id}-message-${Date.now()}-${runHistory.length + 1}`,
     createdAt: new Date().toISOString(),
-    ...(internal ? { __xekuteInternalSubagentResult: true } : {}),
+    ...(internal ? { __xekuteInternalRuntimeInput: true } : {}),
   };
   runHistory.push(userMessage);
   runSession.lastContextUsage = null;
@@ -15758,8 +15822,8 @@ async function sendMessageWithAgentRuntime(options = {}) {
       mode: runMode,
       modeFamily: runFamily,
       authorityProfile: authoritySettingsData.superMode,
-       chatHistory: workingHistoryMessages(runHistory.filter((message) => !message?.__xekuteInternalSubagentResult), runSession),
-      rawSourceTokens: estimateMessagesTokens(runHistory),
+       chatHistory: workingHistoryMessages(runHistory.filter((message) => !isInternalRuntimeInputMessage(message)), runSession),
+      rawSourceTokens: estimateMessagesTokens(runHistory.filter((message) => !isInternalRuntimeInputMessage(message))),
       contextSummary: activeSession?.contextSummary || "",
       sessionId: activeSession?.memorySessionId || activeSession?.id || "",
       blockId: activeSession?.memoryBlockId || "",
@@ -15768,7 +15832,9 @@ async function sendMessageWithAgentRuntime(options = {}) {
       activeFile: runActiveFile,
       extraFiles: run.contextFilesCache,
       subagentModel: getExploreSubagentModel(),
-       userMessage: internal ? "" : text,
+       userMessage: internal && options?.continuation ? "" : text,
+       internalRuntimeInput: internal,
+       internalSkillId: internal ? String(options?.internalSkillId || "") : "",
        continuation: internal ? (options?.continuation || null) : null,
     });
     const result = agentRunResult;
@@ -15898,6 +15964,9 @@ async function sendMessageWithAgentRuntime(options = {}) {
       Promise.resolve(maybeCompactContext(getContextUsage())).catch(() => {});
     } else {
       runSession.pendingAutoCompression = true;
+    }
+    if (agentRunResult?.pentestLoop?.continue === true && !run.stopRequested && !agentRunResult?.aborted) {
+      schedulePentestContinuation(runSession.id, agentRunResult.pentestLoop.prompt);
     }
     queueMicrotask(drainPendingBackgroundWaitEvents);
     scheduleSubagentResultDrain();
@@ -16601,8 +16670,13 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
           errClipped ? `stderr:\n\`\`\`\n${errClipped}\n\`\`\`` : "",
           "Continue from this terminal output.",
         ]).filter(Boolean).join("\n\n");
-    chatInput.value = message;
-    await sendMessageWithAgentRuntime();
+    const targetSessionId = chatSessionIdForRuntimeId(payload.sessionId || payload.parentSessionId || "") || activeChatSessionId;
+    await sendMessageWithAgentRuntime({
+      internal: true,
+      sessionId: targetSessionId,
+      text: message,
+      skipContextFiles: true,
+    });
   } finally {
     subagentCompletionPending = false;
     queueMicrotask(drainPendingBackgroundWaitEvents);
