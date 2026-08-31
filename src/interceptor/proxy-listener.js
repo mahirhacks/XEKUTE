@@ -306,22 +306,24 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
 
       decodeHttpBody(rawBuffer, encoding).then((bodyText) => {
         record.response = rawResponse(ctx, bodyText);
-        const logged = assessmentWorkspace.appendTrafficRecord(root, {
-          tool: "interceptor",
-          requestId: record.id,
-          url: record.url,
-          method: ctx.clientToProxyRequest.method,
-          statusCode: ctx.serverToProxyResponse?.statusCode || null,
-          durationMs: Date.now() - record.startedAt,
-          request: record.request,
-          response: record.response,
-          requestContentType: String(Object.entries(record.effectiveRequest?.headers || ctx.clientToProxyRequest.headers || {}).find(([name]) => name.toLowerCase() === "content-type")?.[1] || ""),
-          requestBodyBytes: record.requestBytes,
-          requestBodyCapturedBytes: Math.min(record.requestBytes, MAX_CAPTURE_BYTES),
-          requestBodyTruncated: record.requestBytes > MAX_CAPTURE_BYTES,
-          truncated: record.requestBytes > MAX_CAPTURE_BYTES || record.responseBytes > MAX_CAPTURE_BYTES,
-          captureIdentity: record.captureIdentity || undefined,
-        });
+        const logged = settings?.logging?.logRawTraffic === false
+          ? { ok: true, disabled: true }
+          : assessmentWorkspace.appendTrafficRecord(root, {
+              tool: "interceptor",
+              requestId: record.id,
+              url: record.url,
+              method: ctx.clientToProxyRequest.method,
+              statusCode: ctx.serverToProxyResponse?.statusCode || null,
+              durationMs: Date.now() - record.startedAt,
+              request: record.request,
+              response: record.response,
+              requestContentType: String(Object.entries(record.effectiveRequest?.headers || ctx.clientToProxyRequest.headers || {}).find(([name]) => name.toLowerCase() === "content-type")?.[1] || ""),
+              requestBodyBytes: record.requestBytes,
+              requestBodyCapturedBytes: Math.min(record.requestBytes, MAX_CAPTURE_BYTES),
+              requestBodyTruncated: record.requestBytes > MAX_CAPTURE_BYTES,
+              truncated: record.requestBytes > MAX_CAPTURE_BYTES || record.responseBytes > MAX_CAPTURE_BYTES,
+              captureIdentity: record.captureIdentity || undefined,
+            });
         emitCapture({ id: record.id, phase: "response", request: record.request, response: record.response, url: record.url, logged });
         if (record.captureJavascript && record.javascriptBytes <= MAX_JAVASCRIPT_ARTIFACT_BYTES && record.javascriptChunks.length) {
           const compressed = Buffer.concat(record.javascriptChunks);
@@ -369,6 +371,9 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     }
     fs.mkdirSync(sslCaDir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(sslCaDir, 0o700); } catch { /* Windows ACLs are inherited from protected user data. */ }
+    if (settings?.logging?.logRawTraffic !== false) {
+      try { assessmentWorkspace?.ensureTrafficLog?.(root); } catch { /* First capture recreates traffic/ if this fails. */ }
+    }
     const instance = adapter.create();
     attachHandlers(instance);
 

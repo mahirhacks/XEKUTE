@@ -1,6 +1,6 @@
 {
   "name": "xekute-app",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
   "main": "src/app/electron/main.js",

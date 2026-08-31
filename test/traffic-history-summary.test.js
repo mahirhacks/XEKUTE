@@ -68,3 +68,29 @@ test("readTrafficHistory can return summaries without bodies", () => {
     fs.rmSync(parent, { recursive: true, force: true });
   }
 });
+
+test("appendTrafficRecord creates traffic/raw.jsonl on an empty project folder", () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-traffic-empty-"));
+  const root = path.join(parent, "project");
+  fs.mkdirSync(root, { recursive: true });
+  const workspace = createAssessmentWorkspace({ fs, path });
+  try {
+    const prepared = workspace.ensureTrafficLog(root);
+    assert.equal(prepared.ok, true);
+    assert.equal(fs.existsSync(path.join(root, "traffic", "raw.jsonl")), true);
+    const logged = workspace.appendTrafficRecord(root, {
+      requestId: "empty-project-capture",
+      method: "GET",
+      url: "https://authorized.example/",
+      statusCode: 200,
+      request: "GET / HTTP/1.1\r\nHost: authorized.example\r\n\r\n",
+      response: "HTTP/1.1 200 OK\r\n\r\n",
+    });
+    assert.equal(logged.ok, true);
+    assert.equal(logged.path, "traffic/raw.jsonl");
+    assert.equal(logged.evidence, undefined);
+    assert.equal(workspace.readTrafficHistory(root).records[0].requestId, "empty-project-capture");
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
