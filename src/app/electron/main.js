@@ -2945,7 +2945,21 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
 async function handleAgentRun(event, payload = {}, options = {}) {
   const sender = event.sender;
   const sessionId = String(payload.sessionId || payload.memorySessionId || "");
-  const runKey = `${event.sender.id}::${sessionId || "__default__"}`;
+  const foregroundRunKey = `${event.sender.id}::${sessionId || "__default__"}`;
+  const tier2MemoryMaintenance = Boolean(payload.tier2MemoryMaintenance);
+  const backgroundRuntime = Boolean(tier2MemoryMaintenance || payload.backgroundRuntime || options.automaticContinuation);
+  // Background memory maintenance gets its own controller/model lane. A
+  // visible chat Stop targets the foreground key and cannot abort this lane.
+  const runKey = tier2MemoryMaintenance
+    ? `${foregroundRunKey}::tier2`
+    : backgroundRuntime
+      ? `${foregroundRunKey}::background`
+      : foregroundRunKey;
+  // Main-owned delegated-result continuations still claim their FIFO packet
+  // from the foreground parent coordinator even though execution is hidden.
+  const coordinationKey = options.automaticContinuation || payload.continuation?.resultId
+    ? foregroundRunKey
+    : runKey;
   const requestedProjectId = String(payload.projectId || payload.memoryProjectId || "").trim();
   const requestedTier1ProjectId = isMemoryId(requestedProjectId, "proj") ? requestedProjectId : "";
   let tier1Identity = null;
@@ -2970,14 +2984,14 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }
   }
   const continuationResultId = String(payload.continuation?.resultId || "");
-  const parentDescriptor = rememberParentRunDescriptor(runKey, event, payload, continuationResultId);
+  const parentDescriptor = rememberParentRunDescriptor(coordinationKey, event, payload, continuationResultId);
   const claimedContinuation = continuationResultId
-    ? subagentCoordinator.claimResult(runKey, continuationResultId)
+    ? subagentCoordinator.claimResult(coordinationKey, continuationResultId)
     : null;
   if (continuationResultId && !claimedContinuation?.ok) {
     return { ok: false, error: claimedContinuation?.error || "The delegated result is no longer ready.", code: claimedContinuation?.code || "SUBAGENT_RESULT_NOT_READY" };
   }
-  const parentTurn = subagentCoordinator.beginParentTurn(runKey, { continuation: Boolean(continuationResultId) });
+  const parentTurn = subagentCoordinator.beginParentTurn(coordinationKey, { continuation: Boolean(continuationResultId) });
   if (!parentTurn.ok) {
     return { ok: false, error: parentTurn.error || "The parent agent is already processing a turn.", code: parentTurn.code || "PARENT_BUSY" };
   }
@@ -2991,13 +3005,15 @@ async function handleAgentRun(event, payload = {}, options = {}) {
         ...(options.automaticContinuation ? {
           source: "parent_continuation",
           parentContinuationResultId: continuationResultId,
+        } : backgroundRuntime ? {
+          source: "background_runtime",
         } : {}),
       });
     }
   };
   const delegationProvider = createRuntimeDelegationProvider({
     senderId: event.sender.id,
-    runKey,
+    runKey: coordinationKey,
     parentModel: payload.model,
     subagentModel: payload.subagentModel,
     numCtx: payload.numCtx,
@@ -3110,11 +3126,11 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       mode: requestedProfile.key,
     }) || null,
     getBrowserTarget,
-    onResultReady: (readyResult) => scheduleParentContinuation(runKey, readyResult),
+    onResultReady: (readyResult) => scheduleParentContinuation(coordinationKey, readyResult),
   });
   const agentTerminalHost = createAgentTerminalHost(sender, sendAgentEvent, { sessionId });
   let assessmentRun = null;
-  if (payload.workspace) {
+  if (payload.workspace && !tier2MemoryMaintenance) {
     const agentProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");
     const runResult = assessmentWorkspace.createRun(payload.workspace, {
       profile: agentProfile.key,
@@ -3161,6 +3177,14 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       knownToolNames.add(name);
     }
   }
+  // User-facing turns never perform Tier 2 writes in their foreground model
+  // lane. The renderer schedules one post-response maintenance turn, whose
+  // capability surface is restricted to the canonical artifact writer.
+  const runtimeTools = tier2MemoryMaintenance
+    ? selectedCatalog.tools.filter((tool) => tool?.function?.name === "update_project_artifacts")
+    : backgroundRuntime
+      ? selectedCatalog.tools
+      : selectedCatalog.tools.filter((tool) => tool?.function?.name !== "update_project_artifacts");
   const durableRunId = String(parentDescriptor?.durableRunId || assessmentRun?.id || `run-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`);
   if (parentDescriptor) parentDescriptor.durableRunId = durableRunId;
   if (payload.workspace) {
@@ -3217,7 +3241,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     contextPlan: payload.contextPlan || null,
     thinking: payload.thinking,
     reasoningEffort: payload.reasoningEffort,
-    tools: selectedCatalog.tools,
+    tools: runtimeTools,
     catalogMode,
     mode: payload.mode || "agent",
     modeFamily: payload.modeFamily || "xekute",
@@ -3263,7 +3287,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       : null,
     memorySessionId: tier1ProjectId ? tier1SessionId : "",
     workingReferences,
-    requireArtifactFinalization: artifactWorkspace,
+    requireArtifactFinalization: artifactWorkspace && backgroundRuntime,
     isFirstAgentTurn: firstAgentTurnTracker.isFirstAgentTurn({
       sessionId,
       workspace: payload.workspace,
@@ -3310,7 +3334,6 @@ async function handleAgentRun(event, payload = {}, options = {}) {
           const warning = `Artifact synchronization failed (${committed?.code || "ARTIFACT_COMMIT_FAILED"}). No complete canonical update was committed; inspect the workspace diagnostics before relying on artifact state.`;
           result.runState.status = "artifact_sync_failed";
           result.runState.reason = warning;
-          result.finalText = `${String(result.finalText || "").trim()}\n\n${warning}`.trim();
           sendAgentEvent({ type: "artifact_finalization", status: "failed", runId: durableRunId, code: committed?.code || "ARTIFACT_COMMIT_FAILED", error: committed?.error || warning });
         } else {
           sendAgentEvent({ type: "artifact_finalization", status: "committed", runId: durableRunId, stagingId, changedPaths: committed.changed_paths || [] });
@@ -3331,13 +3354,13 @@ async function handleAgentRun(event, payload = {}, options = {}) {
         error: result?.error ? String(result.error).slice(0, 2000) : "",
       }).catch(() => {});
     }
-    subagentCoordinator.finishParentTurn(runKey, {
+    subagentCoordinator.finishParentTurn(coordinationKey, {
       resultId: continuationResultId,
       stopped: Boolean(result?.aborted),
     });
   }
   let tier1Transcript = null;
-  if (tier1ProjectId && container.v3SessionStore?.record) {
+  if (tier1ProjectId && container.v3SessionStore?.record && !tier2MemoryMaintenance) {
     const transcriptPrompt = continuationResultId
       ? buildSubagentResultPrompt(claimedContinuation?.result || {})
       : String(payload.userMessage || "");
@@ -3392,9 +3415,9 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       notes: String(result?.finalText || result?.error || "").slice(0, 2000),
     });
   }
-  appendParentRunHistory(runKey, payload, result);
+  appendParentRunHistory(coordinationKey, payload, result);
   if (options.automaticContinuation) {
-    const pending = parentContinuationOutbox.get(runKey) || [];
+    const pending = parentContinuationOutbox.get(coordinationKey) || [];
     pending.push({
       sessionId,
       parentSessionId: sessionId,
@@ -3403,7 +3426,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       source: "parent_continuation",
       parentContinuationResultId: continuationResultId,
     });
-    parentContinuationOutbox.set(runKey, pending.slice(-20));
+    parentContinuationOutbox.set(coordinationKey, pending.slice(-20));
     sendAgentEvent({
       type: "parent_continuation_complete",
       continuationResultId,

@@ -13,7 +13,8 @@ const TESTING_AGENT = [
   "Long-horizon work must checkpoint meaningful progress, completed coverage, failures, evidence references, active durable process IDs, and the next bounded action. Do not keep a foreground tool call open merely to wait.",
   "Workspace paths must remain inside the open workspace. Network actions against assessment targets require a concrete target in configured scope.",
   "Do not repeat an identical failed call. Report observed, inferred, verified, rejected, and inconclusive results distinctly.",
-  "Before the visible final answer for a project-bound turn, call update_project_artifacts exactly once after every other tool. Use typed sourced operations or a clear no-op reason. For project facts use project.upsert with document, key, and value — do not apply_patch .xekute Markdown. Agent cannot project.remove. Do not rewrite hypothesis definitions or checklist structure.",
+  "The foreground user-facing turn must finish without update_project_artifacts. XEKUTE schedules a separate hidden Tier 2 maintenance turn immediately afterward.",
+  "In that hidden maintenance turn, call update_project_artifacts exactly once as the sole tool. Use typed sourced operations or a clear no-op reason. For project facts use project.upsert with document, key, and value — do not apply_patch .xekute Markdown. Agent cannot project.remove. Do not rewrite hypothesis definitions or checklist structure, and never narrate the maintenance result.",
   "Handle execution in this mode. Use Hypothesis mode for hypothesis-definition work and Plan mode for checklist-structure work.",
 ].join("\n");
 
