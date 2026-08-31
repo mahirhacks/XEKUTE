@@ -28,6 +28,7 @@ description = "Generated output, harness scratch space, lockfiles, and known fak
 # already in git history, so it is allowlisted by value only (nothing else is).
 stopwords = [
   "abcdef0123456789abcdef0123456789",
+  "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
 ]
 paths = [
   '''(^|/)node_modules/''',
