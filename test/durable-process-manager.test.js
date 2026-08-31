@@ -39,6 +39,11 @@ test("durable PowerShell runs persist workspace writes on Windows", { skip: proc
     assert.equal(result.value.detached, false);
     assert.equal(result.value.resumable, false);
   } finally {
-    fs.rmSync(workspace, { recursive: true, force: true });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    try {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    } catch (error) {
+      if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(error.code)) throw error;
+    }
   }
 });
