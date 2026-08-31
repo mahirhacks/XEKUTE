@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const crypto = require("node:crypto");
 const Artifacts = require("../artifacts/investigation-artifacts.js");
@@ -258,7 +258,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
     const trafficDir = path.join(verification.root, "traffic"), rawPath = path.join(trafficDir, "raw.jsonl");
     try {
       fs.mkdirSync(trafficDir, { recursive: true });
-      if (!fs.existsSync(rawPath)) fs.writeFileSync(rawPath, "", { encoding: "utf8", flag: "wx" });
+      fs.writeFileSync(rawPath, "", { encoding: "utf8", flag: "wx" });
       return { ok: true, root: verification.root, path: "traffic/raw.jsonl" };
     } catch (error) {
       if (error.code === "EEXIST") return { ok: true, root: verification.root, path: "traffic/raw.jsonl" };
@@ -270,7 +270,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
     const fitted = serializeTrafficRecord({ recordType: "http-exchange", schemaVersion: ASSESSMENT_VERSION, timestamp: formatTrafficTimestamp(date), isoTimestamp: date.toISOString(), ...record, redacted: false }, 1_500_000);
     if (fitted.error) return fitted;
     const relativePath = filtered ? "traffic/filtered.jsonl" : "traffic/raw.jsonl";
-    try { fs.mkdirSync(path.dirname(path.join(prepared.root, ...relativePath.split("/"))), { recursive: true }); fs.appendFileSync(path.join(prepared.root, ...relativePath.split("/")), `${fitted.serialized}\n`, "utf8"); return { ok: true, path: relativePath, timestamp: fitted.record.timestamp, record: fitted.record }; } catch (error) { return { error: error.message, code: "TRAFFIC_LOG_FAILED" }; }
+    try { fs.appendFileSync(path.join(prepared.root, ...relativePath.split("/")), `${fitted.serialized}\n`, "utf8"); return { ok: true, path: relativePath, timestamp: fitted.record.timestamp, record: fitted.record }; } catch (error) { return { error: error.message, code: "TRAFFIC_LOG_FAILED" }; }
   }
   function readTrafficHistory(rawRoot, options = {}) {
     const read = readJsonl(rawRoot, "traffic/raw.jsonl", { limit: Math.min(Number(options.limit) || 500, 1000), maxBytes: options.maxBytes });
