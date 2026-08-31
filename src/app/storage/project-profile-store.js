@@ -28,6 +28,10 @@ function boolean(value, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function isPlainRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function number(value, fallback, minimum, maximum) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
@@ -121,6 +125,12 @@ function defaultProjectProfile(root, path, now = () => new Date()) {
       classification: "confidential",
       deletionProcedure: "",
     },
+    runtime: {
+      listener: { enabled: false, bindAddress: "127.0.0.1", port: 8080, invisibleProxying: false, supportHttp2: true },
+      interception: { enabled: false, interceptRequests: true, interceptResponses: false, onlyInScope: true, automaticallyUpdateContentLength: true, automaticallyFixNewlines: true, excludedExtensions: ["gif", "jpg", "jpeg", "png", "css", "js", "ico", "svg"], rules: [] },
+      requests: { timeoutSeconds: 15, followRedirects: false, maximumResponseBytes: 1_000_000, defaultHeaders: {} },
+      logging: { logRawTraffic: true, logFilteredTraffic: true, includeBodies: true, maximumRecordBytes: 1_500_000 },
+    },
     context: {
       background: "",
       applicationOverview: "",
@@ -152,6 +162,7 @@ function normalizeProjectProfile(input, root, path, now = () => new Date(), prev
   const rules = source.rulesOfEngagement || {};
   const review = source.review || {};
   const dataHandling = source.dataHandling || {};
+  const runtime = source.runtime || {};
   const context = source.context || {};
   const authenticationSelection = engagement.authenticationSelection && typeof engagement.authenticationSelection === "object" && !Array.isArray(engagement.authenticationSelection)
     ? engagement.authenticationSelection
@@ -244,6 +255,37 @@ function normalizeProjectProfile(input, root, path, now = () => new Date(), prev
       retentionDays: number(dataHandling.retentionDays, defaults.dataHandling.retentionDays, 0, 3_650),
       classification: ["public", "internal", "confidential", "restricted"].includes(dataHandling.classification) ? dataHandling.classification : defaults.dataHandling.classification,
       deletionProcedure: text(dataHandling.deletionProcedure),
+    },
+    runtime: {
+      listener: {
+        ...defaults.runtime.listener,
+        ...(isPlainRecord(runtime.listener) ? runtime.listener : {}),
+        enabled: boolean(runtime.listener?.enabled),
+        bindAddress: text(runtime.listener?.bindAddress, defaults.runtime.listener.bindAddress, 120),
+        port: number(runtime.listener?.port, defaults.runtime.listener.port, 1, 65535),
+      },
+      interception: {
+        ...defaults.runtime.interception,
+        ...(isPlainRecord(runtime.interception) ? runtime.interception : {}),
+        enabled: boolean(runtime.interception?.enabled),
+        onlyInScope: boolean(runtime.interception?.onlyInScope, true),
+        excludedExtensions: list(runtime.interception?.excludedExtensions, defaults.runtime.interception.excludedExtensions),
+        rules: Array.isArray(runtime.interception?.rules) ? runtime.interception.rules.slice(0, 500) : [],
+      },
+      requests: {
+        ...defaults.runtime.requests,
+        ...(isPlainRecord(runtime.requests) ? runtime.requests : {}),
+        timeoutSeconds: number(runtime.requests?.timeoutSeconds, defaults.runtime.requests.timeoutSeconds, 1, 300),
+        maximumResponseBytes: number(runtime.requests?.maximumResponseBytes, defaults.runtime.requests.maximumResponseBytes, 1_024, 100_000_000),
+      },
+      logging: {
+        ...defaults.runtime.logging,
+        ...(isPlainRecord(runtime.logging) ? runtime.logging : {}),
+        logRawTraffic: boolean(runtime.logging?.logRawTraffic, true),
+        logFilteredTraffic: boolean(runtime.logging?.logFilteredTraffic, true),
+        includeBodies: boolean(runtime.logging?.includeBodies, true),
+        maximumRecordBytes: number(runtime.logging?.maximumRecordBytes, defaults.runtime.logging.maximumRecordBytes, 64_000, 16_000_000),
+      },
     },
     context: {
       background: text(context.background),

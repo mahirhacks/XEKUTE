@@ -9,9 +9,8 @@ const WORKSPACE_TOOLS = new Set([
   "search_workspace",
   "apply_patch",
   "inspect_environment",
-  "manage_plan",
+  "update_project_artifacts",
   "manage_state",
-  "store_finding",
   "attack_graph",
   "exec_command",
 ]);

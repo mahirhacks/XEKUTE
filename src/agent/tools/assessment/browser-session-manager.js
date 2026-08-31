@@ -373,7 +373,11 @@ function createBrowserSessionManager({
       error.code = "BROWSER_ACTION_STOPPED";
       throw error;
     }
-    const record = await getRecord(workspace, identityId, sessionId, { ...executionContext, identityId });
+    const record = await getRecord(workspace, identityId, sessionId, {
+      ...executionContext,
+      identityId,
+      sensitiveAuthority: runtimeOptions.authorityDecision || runtimeOptions.sensitiveAuthority || executionContext.sensitiveAuthority || null,
+    });
 
     if (action === "list_pages") {
       const owner = `${keyPart(sessionId)}::`;
@@ -501,6 +505,7 @@ function createBrowserSessionManager({
         storageState,
         headerBindings: existing?.ok ? existing.secret.headerBindings : [],
         unmappedTokens: existing?.ok ? existing.secret.unmappedTokens : {},
+        clientCertificates: existing?.ok ? existing.secret.clientCertificates : [],
       });
       if (!saved?.ok) return saved || { ok: false, error: { code: "IDENTITY_VAULT_UNAVAILABLE", message: "Identity vault is unavailable.", retryable: false } };
       await record.context.close();

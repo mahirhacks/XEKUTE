@@ -4,7 +4,7 @@ const MAX_DECODED_TEXT = 2 * 1024 * 1024;
 const MAX_REGEX_LENGTH = 512;
 
 const OPERATOR_DEFINITIONS = Object.freeze([
-  { name: "source", category: "Sources", description: "Limit results to traffic, findings, JavaScript, evidence, tools, map, assets, code, or workspace.", values: ["traffic", "finding", "javascript", "evidence", "tool", "map", "asset", "code", "workspace"] },
+  { name: "source", category: "Sources", description: "Limit results to traffic, JavaScript, evidence, tools, map, assets, code, or workspace.", values: ["traffic", "javascript", "evidence", "tool", "map", "asset", "code", "workspace"] },
   { name: "path", category: "Files", description: "Match a workspace path; * and ** wildcards are supported." },
   { name: "file", category: "Files", description: "Match a file name." },
   { name: "ext", category: "Files", description: "Match a file extension.", values: ["js", "ts", "json", "jsonl", "md", "txt", "html"] },
@@ -27,19 +27,19 @@ const OPERATOR_DEFINITIONS = Object.freeze([
   { name: "mime", category: "HTTP", description: "Match response content type." },
   { name: "request", category: "HTTP", description: "Search request-only content." },
   { name: "response", category: "HTTP", description: "Search response-only content." },
-  { name: "in-scope", category: "Scope", description: "Limit results using the project scope files.", values: ["true", "false"] },
+  { name: "in-scope", category: "Scope", description: "Limit results using app-managed Project Settings scope.", values: ["true", "false"] },
   { name: "asset", category: "Scope", description: "Match a host, URL, target, or asset identifier." },
   { name: "identity", category: "Scope", description: "Match capture identity id, label, or role." },
   { name: "authenticated", category: "Scope", description: "Filter authenticated or anonymous traffic.", values: ["true", "false"] },
-  { name: "severity", category: "Findings", description: "Match finding severity.", values: ["critical", "high", "medium", "low", "info"] },
-  { name: "confidence", category: "Findings", description: "Compare confidence, for example confidence:>=0.8." },
-  { name: "verified", category: "Findings", description: "Filter verified findings.", values: ["true", "false"] },
-  { name: "finding-status", category: "Findings", description: "Match finding workflow status.", values: ["open", "confirmed", "in_progress", "resolved", "false_positive"] },
-  { name: "cwe", category: "Findings", description: "Match CWE identifiers." },
-  { name: "owasp", category: "Findings", description: "Match OWASP categories." },
-  { name: "tag", category: "Findings", description: "Match tags or risk labels." },
-  { name: "tool", category: "Findings", description: "Match the capture or scanner tool." },
-  { name: "evidence", category: "Findings", description: "Match evidence identifiers and references." },
+  { name: "severity", category: "Evidence", description: "Match evidence severity.", values: ["critical", "high", "medium", "low", "informational", "unrated"] },
+  { name: "confidence", category: "Evidence", description: "Compare evidence confidence, for example confidence:>=0.8." },
+  { name: "verified", category: "Evidence", description: "Filter verified evidence.", values: ["true", "false"] },
+  { name: "evidence-status", category: "Evidence", description: "Match evidence lifecycle status.", values: ["observed", "verified", "rejected", "inconclusive"] },
+  { name: "cwe", category: "Evidence", description: "Match CWE identifiers." },
+  { name: "owasp", category: "Evidence", description: "Match OWASP categories." },
+  { name: "tag", category: "Evidence", description: "Match tags or risk labels." },
+  { name: "tool", category: "Evidence", description: "Match the capture or verifier tool." },
+  { name: "evidence", category: "Evidence", description: "Match evidence identifiers and references." },
   { name: "url", category: "JavaScript", description: "Match URLs found in JavaScript artifacts." },
   { name: "symbol", category: "JavaScript", description: "Match function, class, or assigned symbols." },
   { name: "secret", category: "JavaScript", description: "Find likely secret material.", values: ["true", "false"] },
@@ -60,7 +60,7 @@ const OPERATOR_MAP = new Map(OPERATOR_DEFINITIONS.map((entry) => [entry.name, en
 const FIELD_ALIASES = new Map([
   ["in_scope", "in-scope"], ["status-code", "status"], ["status_code", "status"],
   ["content-type", "mime"], ["identity-id", "identity"], ["source_map", "source-map"],
-  ["finding_status", "finding-status"], ["response-diff", "response.diff"],
+  ["evidence_status", "evidence-status"], ["response-diff", "response.diff"],
 ]);
 const CONTROL_FIELDS = new Set(["case", "decode", "normalized", "same", "different", "compare", "changed", "response.diff", "risk"]);
 const CORRELATION_FIELDS = new Set(["same", "different", "compare", "changed", "response.diff", "risk"]);
@@ -76,7 +76,7 @@ const CLOSED_OPERATOR_VALUES = new Map([
 ]);
 const BOOLEAN_OPERATOR_FIELDS = new Set(["case", "normalized", "authenticated", "verified", "secret", "source-map", "response.diff", "in-scope"]);
 const CODE_EXTENSIONS = new Set(["js", "jsx", "ts", "tsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "c", "h", "cpp", "hpp", "cs", "php"]);
-const STRUCTURED_COLLECTION_KEYS = ["findings", "artifacts", "records", "evidence", "assets", "endpoints", "pages", "subdomains", "services", "runs"];
+const STRUCTURED_COLLECTION_KEYS = ["artifacts", "records", "evidence", "assets", "endpoints", "pages", "subdomains", "services", "runs"];
 
 class QuerySyntaxError extends Error {
   constructor(message, position = 0, code = "INVALID_ADVANCED_QUERY") {
@@ -666,14 +666,14 @@ function classifySources(relativePath, record = null) {
   const ext = rel.split(".").pop() || "";
   const sources = new Set(["workspace"]);
   if (/^(?:traffic\/(?:raw|filtered)\.jsonl|traffic\/captures\/)/.test(rel) || ext === "har" || record?.recordType === "http-exchange" || record?.request && record?.response) sources.add("traffic");
-  if (/(?:^|\/)(?:findings?|vulnerability-scans)(?:\/|$)/.test(rel) || record?.severity && (record?.title || record?.findingId)) sources.add("finding");
+  if (/(?:^|\/)\.xekute\/evidence(?:\/|$)/.test(rel) || record?.severity && record?.title) sources.add("evidence");
   if (/traffic\/artifacts\/javascript/.test(rel) || ["js", "jsx", "ts", "tsx", "mjs", "cjs"].includes(ext) || record?.sourceMaps || record?.endpoints && record?.sha256) sources.add("javascript");
   if (/(?:^|\/)evidence(?:\/|$)/.test(rel) || record?.recordType?.includes?.("evidence")) sources.add("evidence");
   if (/(?:^|\/)\.xekute\/logs\//.test(rel) || /(?:^|\/)(?:scans?|tools?)(?:\/|$)/.test(rel) || record?.tool && record?.exitCode !== undefined) sources.add("tool");
   if (/(?:^|\/)(?:map|traffic\/graph)(?:\/|$)/.test(rel) || record?.kind === "xekute-application-behavior-map") sources.add("map");
   if (/(?:^|\/)(?:enumeration|recon|scope)(?:\/|$)/.test(rel) || record?.inScope !== undefined || record?.targetId) sources.add("asset");
   if (CODE_EXTENSIONS.has(ext)) sources.add("code");
-  const priority = ["traffic", "finding", "javascript", "evidence", "map", "asset", "tool", "code", "workspace"];
+  const priority = ["traffic", "javascript", "evidence", "map", "asset", "tool", "code", "workspace"];
   return { sources: [...sources], primary: priority.find((name) => sources.has(name)) || "workspace" };
 }
 
@@ -755,8 +755,8 @@ function deriveDocument({ relativePath, content, stat = {}, record = null, line 
     : [];
   const corpus = [rawText, ...decoded.variants.map((entry) => entry.text)];
   const timestamp = rawRecord?.isoTimestamp || rawRecord?.timestamp || rawRecord?.updatedAt || rawRecord?.createdAt || stat.mtimeMs || 0;
-  const findingStatus = rawRecord?.findingStatus || (sources.sources.includes("finding") ? rawRecord?.status : "") || "";
-  const verified = Boolean(rawRecord?.verified === true || rawRecord?.verification?.verified === true || ["confirmed", "reported", "remediated", "closed"].includes(String(findingStatus).toLowerCase()));
+  const evidenceStatus = rawRecord?.evidenceStatus || (sources.sources.includes("evidence") ? rawRecord?.status : "") || "";
+  const verified = Boolean(rawRecord?.verified === true || rawRecord?.verification?.verified === true || String(evidenceStatus).toLowerCase() === "verified");
   const tags = [...valuesOf(rawRecord?.tags), ...valuesOf(rawRecord?.riskTags), ...valuesOf(rawRecord?.categories), ...valuesOf(rawRecord?.metadata?.tags)];
   const evidence = [...valuesOf(rawRecord?.evidence), ...valuesOf(rawRecord?.evidenceRefs), ...valuesOf(rawRecord?.evidenceIds), ...valuesOf(rawRecord?.reproductionRefs)];
   const cwe = [...valuesOf(rawRecord?.cwe), ...valuesOf(rawRecord?.cwes), ...valuesOf(rawRecord?.metadata?.cwe)];
@@ -787,7 +787,7 @@ function deriveDocument({ relativePath, content, stat = {}, record = null, line 
       response: [response.raw, response.body, ...decodedResponse.variants.map((entry) => entry.text)],
       asset: [host, topUrl, rawRecord?.targetId, rawRecord?.asset?.host, rawRecord?.asset?.url].filter(Boolean),
       identity: [...identities, ...graph.identities], authenticated: [String(authenticated)], "in-scope": inScope === undefined ? [] : [String(Boolean(inScope))],
-      severity: valuesOf(rawRecord?.severity), confidence: valuesOf(rawRecord?.confidence), verified: [String(verified)], "finding-status": valuesOf(findingStatus),
+      severity: valuesOf(rawRecord?.severity), confidence: valuesOf(rawRecord?.confidence), verified: [String(verified)], "evidence-status": valuesOf(evidenceStatus),
       cwe, owasp, tag: [...tags, ...graph.tags], tool: [rawRecord?.tool, rawRecord?.source, rawRecord?.capturedBy].filter(Boolean), evidence,
       url: [...urlValues, ...graph.urls], symbol: symbols, secret: [String(secretTypes.length > 0)], "secret-type": secretTypes, sink: sinks,
       "source-map": sourceMaps.length ? ["true", ...sourceMaps] : ["false"],
@@ -849,7 +849,7 @@ function evaluateField(node, document, options) {
   if (field === "status") {
     const actual = Number(document.http.status || document.fields.status?.[0]);
     if (actual) return values.some((value) => matchesStatus(actual, value));
-    return values.some((value) => includesValue(document.fields["finding-status"] || [], value, options.caseSensitive, { exact: true }));
+    return values.some((value) => includesValue(document.fields["evidence-status"] || [], value, options.caseSensitive, { exact: true }));
   }
   if (field === "confidence") return values.some((value) => (document.fields.confidence || []).some((actual) => compareNumber(actual, value)));
   if (["authenticated", "verified", "in-scope", "secret", "source-map"].includes(field) && /^(?:true|false|yes|no|1|0|on|off)$/i.test(values[0])) {
@@ -857,7 +857,7 @@ function evaluateField(node, document, options) {
   }
   const actualValues = document.fields[field] || [];
   if (field === "source") {
-    const aliases = { findings: "finding", js: "javascript", scripts: "javascript", tools: "tool", graphs: "map", files: "workspace" };
+    const aliases = { js: "javascript", scripts: "javascript", tools: "tool", graphs: "map", files: "workspace" };
     return values.some((value) => includesValue(actualValues, aliases[String(value).toLowerCase()] || value, false, { exact: true }));
   }
   if (field === "severity") {
@@ -869,7 +869,7 @@ function evaluateField(node, document, options) {
   if (field === "ext") {
     return values.some((value) => includesValue(actualValues, String(value).replace(/^\./, ""), false, { exact: true }));
   }
-  const exactFields = new Set(["source", "ext", "scheme", "port", "method", "severity", "verified", "finding-status", "authenticated", "in-scope", "secret", "secret-type", "sink"]);
+  const exactFields = new Set(["source", "ext", "scheme", "port", "method", "severity", "verified", "evidence-status", "authenticated", "in-scope", "secret", "secret-type", "sink"]);
   return values.some((value) => includesValue(actualValues, value, options.caseSensitive, {
     exact: exactFields.has(field),
     glob: field === "path" || field === "file",

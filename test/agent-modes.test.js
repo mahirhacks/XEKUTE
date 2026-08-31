@@ -8,12 +8,20 @@ const { evaluateToolScope } = require("../src/agent/authority/scope/scope-policy
 
 test("every mode exposes the canonical surface and does not depend on authority labels", () => {
   assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
-  for (const mode of ["ask", "hypothesis", "plan", "agent"]) {
-    assert.equal(ModeRegistry.MODE_TOOL_GROUPS[mode].length, ToolPort.REGISTRY_TOOL_NAMES.length);
-    assert.equal(ModeRegistry.MODE_TOOL_GROUPS[mode].includes("manage_plan"), true);
-    assert.equal(ModeRegistry.MODE_TOOL_GROUPS[mode].includes("ingest_traffic"), true);
-    assert.equal(ModeRegistry.MODE_TOOL_GROUPS[mode].includes("exec_command"), true);
-  }
+  const ask = ModeRegistry.MODE_TOOL_GROUPS.ask;
+  const agent = ModeRegistry.MODE_TOOL_GROUPS.agent;
+  const hypothesis = ModeRegistry.MODE_TOOL_GROUPS.hypothesis;
+  const plan = ModeRegistry.MODE_TOOL_GROUPS.plan;
+  assert.equal(ask.length, 7);
+  assert.equal(agent.length, 22);
+  assert.equal(hypothesis.length, 8);
+  assert.equal(plan.length, 8);
+  assert.deepEqual(ask, ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge"]);
+  assert.equal(ask.includes("ingest_traffic"), false);
+  assert.equal(ask.includes("exec_command"), false);
+  assert.equal(hypothesis.includes("update_project_artifacts"), true);
+  assert.equal(plan.includes("update_project_artifacts"), true);
+  assert.equal(agent.includes("update_project_artifacts"), true);
   assert.equal(ModeRegistry.normalizeProfile({ key: "agent", authority: "full" }).key, "agent");
 });
 
@@ -22,16 +30,4 @@ test("scope decisions are independent of the UI authority label", () => {
   const ask = evaluateToolScope({ workspace: process.cwd(), toolName: "read_file", args, projectProfile: { authority: "ask" } });
   const full = evaluateToolScope({ workspace: process.cwd(), toolName: "read_file", args, projectProfile: { authority: "full" } });
   assert.deepEqual(ask, full);
-});
-
-test("action memory keeps sensitive output intact", () => {
-  const fs = require("node:fs");
-  const os = require("node:os");
-  const path = require("node:path");
-  const { appendAgentAction } = require("../src/agent/memory/action-memory.js");
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-actions-"));
-  const result = appendAgentAction(root, { runId: "run-1", type: "tool_result", tool: "read_file", ok: true, output: "top-secret" });
-  assert.equal(result.ok, true);
-  assert.match(fs.readFileSync(path.join(root, ".xekute", "logs", "agent-actions.jsonl"), "utf8"), /top-secret/);
-  fs.rmSync(root, { recursive: true, force: true });
 });

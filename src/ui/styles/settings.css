@@ -343,6 +343,7 @@
 
 /* Project: one section at a time, with a compact in-page section switcher. */
 .app-settings-content .project-settings-panel { display:block; background:transparent; }
+
 .app-settings-content .project-settings-shell {
   display:block;
   min-height:0;
@@ -580,7 +581,6 @@
 }
 .app-settings-content .project-toggle-grid > label:has(input:checked)::before { background:#2f8cf4; }
 .app-settings-content .project-toggle-grid > label:has(input:checked)::after { transform:translateX(12px); background:#fff; }
-.app-settings-content .project-toggle-grid > label:focus-within { border-color:#69747a; box-shadow:0 0 0 1px rgba(158,172,180,.16); }
 .app-settings-content .project-toggle-grid strong,
 .app-settings-content .project-toggle-grid small { display:block; }
 .app-settings-content .project-toggle-grid strong { color:#ddd; font:600 11px var(--font-ui); }
@@ -728,7 +728,6 @@
 .app-settings-content #llm-openrouter-config input[type="text"] { border-color:var(--settings-border-strong); border-radius:7px; background:#181818; }
 .app-settings-content .certificate-location-row button,
 .app-settings-content .certificate-setting-actions button { border-radius:7px; }
-.app-settings-content .certificate-status-card { background:#1d1d1d; }
 .app-settings-content .llm-provider-actions { gap:8px; }
 .app-settings-content .llm-provider-actions button,
 .app-settings-content .llm-provider-actions .primary-button,
@@ -746,17 +745,6 @@
 .app-settings-content .llm-provider-actions button:focus-visible { outline:1px solid #69747a; outline-offset:2px; }
 .app-settings-content .llm-provider-actions #llm-settings-test { background:#6a541d; color:#f2d782; }
 .app-settings-content .llm-provider-actions #llm-settings-test:hover:not(:disabled) { background:#806522; color:#ffe8a3; }
-.app-settings-content .certificate-security-note {
-  display:block;
-  padding:10px 0 0;
-  border:0;
-  border-radius:0;
-  background:transparent;
-  color:#858585;
-}
-.app-settings-content .certificate-security-note .codicon { display:none; }
-.app-settings-content .certificate-security-note p { margin:0; color:#858585; font:10px/1.45 var(--font-ui); }
-.app-settings-content .certificate-security-note code { padding:0; background:transparent; color:#999; }
 .app-settings-content .llm-provider-option { min-height:96px; padding:18px; border-color:var(--settings-border); border-radius:12px; background:var(--settings-panel); }
 .app-settings-content .llm-provider-option:hover { border-color:#4a4a4a; background:#242424; }
 .app-settings-content .llm-provider-option.selected { border-color:#4c5a5f; background:#242a2c; box-shadow:none; }
@@ -777,8 +765,7 @@
   .app-settings-content > #app-settings-prompts-panel { grid-template-columns:1fr; min-height:0; overflow:visible; }
   .app-settings-content .guidance-settings-sidebar { max-height:270px; border-right:0; border-bottom:1px solid var(--settings-border); }
   .app-settings-content .guidance-settings-main { min-height:400px; }
-  .app-settings-content .certificate-location-row,
-  .app-settings-content .certificate-status-card > div { grid-template-columns:1fr; }
+  .app-settings-content .certificate-location-row { grid-template-columns:1fr; }
   .app-settings-content .certificate-setting-actions { flex-wrap:wrap; }
 }
 
@@ -922,7 +909,7 @@
 }
 .app-settings-content .guidance-entry:hover,
 .app-settings-content .guidance-entry:focus-visible { outline:0; background:#272727; }
-.app-settings-content .guidance-entry.active { background:#292929; box-shadow:inset 2px 0 #aeb9be; }
+.app-settings-content .guidance-entry.active { background:#292929; }
 .app-settings-content .guidance-entry-delete {
   flex:0 0 34px;
   align-self:stretch;
@@ -948,26 +935,6 @@
 .app-settings-content .guidance-entry-scope { padding:3px 6px; border:1px solid #3a3a3a; border-radius:999px; color:#a8a8a8; font:600 8px var(--font-ui); text-transform:uppercase; letter-spacing:.04em; }
 .app-settings-content .guidance-entry .codicon-chevron-right { font-size:12px; }
 .app-settings-content .guidance-category-empty { padding:18px 14px; color:#777; font:10px var(--font-ui); }
-/* The "No guidance yet" empty state is removed from the Rules/Skills page. */
-.app-settings-content .guidance-settings-empty { display:none !important; }
-.app-settings-content .guidance-settings-content { margin-top:22px; }
-.app-settings-content .guidance-settings-detail { padding:0; }
-.app-settings-content .guidance-detail-card { padding:18px; border:1px solid #303030; border-radius:12px; background:#202020; }
-.app-settings-content .guidance-detail-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin:0 0 16px; }
-.app-settings-content .guidance-detail-header > div:first-child { display:flex; align-items:flex-start; gap:10px; min-width:0; }
-.app-settings-content .guidance-detail-header > div:first-child > .codicon { margin-top:2px; color:#aeb9be; }
-.app-settings-content .guidance-detail-eyebrow { display:block; margin-bottom:4px; color:#858585; font:600 9px var(--font-ui); text-transform:uppercase; letter-spacing:.05em; }
-.app-settings-content .guidance-detail-header h2 { margin:0; color:#ededed; font:600 16px/1.25 var(--font-ui); }
-.app-settings-content .guidance-detail-header p { margin:4px 0 0; color:#858585; font:10px/1.4 var(--font-ui); }
-.app-settings-content .guidance-kind-badge { flex:0 0 auto; padding:4px 7px; border:1px solid #414141; border-radius:999px; background:#292929; color:#bdbdbd; font:600 8px var(--font-ui); text-transform:uppercase; }
-.app-settings-content .guidance-detail-content-label { display:flex; flex-direction:column; gap:6px; color:#b9b9b9; font:10px var(--font-ui); }
-.app-settings-content .guidance-detail-content-label textarea { min-height:260px; resize:vertical; padding:11px; border:1px solid #3b3b3b; border-radius:8px; background:#181818; color:#e1e1e1; font:11px/1.55 var(--font-mono); }
-.app-settings-content .guidance-detail-content-label textarea:focus-visible { outline:0; border-color:#69747a; box-shadow:0 0 0 1px rgba(158,172,180,.16); }
-.app-settings-content .guidance-protection-note { display:flex; gap:8px; margin:13px 0 0; padding:10px; border:1px solid #3d4a51; border-radius:8px; background:#1d2529; color:#bdc9cf; }
-.app-settings-content .guidance-protection-note .codicon { color:#a2abb0; }
-.app-settings-content .guidance-protection-note p { margin:0; font:10px/1.45 var(--font-ui); }
-.app-settings-content .guidance-detail-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:15px; padding-top:14px; border-top:1px solid #303030; }
-.app-settings-content .guidance-detail-actions button { min-height:28px; padding:5px 10px; border-radius:7px; }
 
 @media (max-width:700px) {
   .app-settings-content .guidance-customize-page { padding-bottom:28px; }
@@ -991,8 +958,7 @@
   .app-settings-content > #app-settings-prompts-panel { grid-template-columns:1fr; min-height:0; overflow:visible; }
   .app-settings-content .guidance-settings-sidebar { max-height:270px; border-right:0; border-bottom:1px solid var(--settings-border); }
   .app-settings-content .guidance-settings-main { min-height:400px; }
-  .app-settings-content .certificate-location-row,
-  .app-settings-content .certificate-status-card > div { grid-template-columns:1fr; }
+  .app-settings-content .certificate-location-row { grid-template-columns:1fr; }
 }
 
 @container app-settings (max-width: 520px) {
@@ -1248,22 +1214,6 @@
   border-color:#69747a;
   box-shadow:0 0 0 1px rgba(158,172,180,.16);
 }
-.app-settings-content #context-compaction-model {
-  color-scheme:dark;
-  background-color:#181818;
-  color:#e1e1e1;
-  caret-color:#e1e1e1;
-}
-.app-settings-content #context-compaction-model:-webkit-autofill,
-.app-settings-content #context-compaction-model:-webkit-autofill:hover,
-.app-settings-content #context-compaction-model:-webkit-autofill:focus,
-.app-settings-content #context-compaction-model:-webkit-autofill:active {
-  background-color:#181818 !important;
-  color:#e1e1e1 !important;
-  -webkit-text-fill-color:#e1e1e1 !important;
-  -webkit-box-shadow:0 0 0 1000px #181818 inset !important;
-  caret-color:#e1e1e1;
-}
 .app-settings-content .models-search-row {
   position:relative;
   margin:22px 0 0;
@@ -1378,11 +1328,6 @@
 .app-settings-content .models-api-keys {
   margin-top:28px;
   border:0;
-}
-.app-settings-content .models-context-settings {
-  display:flex;
-  flex-direction:column;
-  gap:12px;
 }
 .app-settings-content .models-api-keys-summary {
   min-height:36px;

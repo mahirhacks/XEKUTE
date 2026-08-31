@@ -1,10 +1,11 @@
 ---
 id: create-skill
-command: /create-skill
 title: Create user guidance skill
-description: Conversationally create a validated project or global user-authored guidance skill.
-version: 1.0.0
+description: Internal guidance for conversationally creating a validated project or global user-authored guidance skill.
+version: 1.1.0
 entrypoint: SKILL.md
+visibility: internal
+instruction_role: skill-context
 modes: ["agent", "ask", "plan", "hypothesis"]
 required_tools: ["ask_questions", "create_guidance"]
 parameter_policy: context-only

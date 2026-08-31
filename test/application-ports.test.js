@@ -17,8 +17,10 @@ test("controller consumes the canonical tool contract without importing concrete
   assert.ok(agentTools.length > 0, "agent profile must receive an authorized tool surface");
   assert.ok(agentTools.some((tool) => tool.function?.name === "apply_patch"), "agent profile must include apply_patch");
   const askTools = ToolPort.toolsForProfile({ key: "ask" });
-  assert.deepEqual(askTools, agentTools, "selected modes must receive the same canonical surface");
-  assert.ok(askTools.some((tool) => ToolPort.isMutating(tool.function?.name)), "explicit action requests remain possible in Ask mode");
+  assert.notDeepEqual(askTools, agentTools, "Ask is a read-only subset of the Agent surface");
+  assert.equal(askTools.some((tool) => ToolPort.isMutating(tool.function?.name)), false, "Ask has no mutating tools");
+  assert.equal(askTools.some((tool) => tool.function?.name === "ingest_traffic"), false);
+  assert.equal(askTools.some((tool) => tool.function?.name === "exec_command"), false);
   assert.equal(ToolPort.isMutating("apply_patch"), true, "apply_patch is a mutation");
   assert.equal(ToolPort.isMutating("read_file"), false, "read_file is read-only");
   const normalized = ToolPort.normalizeToolCall({ id: "call-1", function: { name: "apply_patch", arguments: { operations: [] } } });

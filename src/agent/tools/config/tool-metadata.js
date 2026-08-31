@@ -10,7 +10,7 @@ const TOOL_REGISTRY_NAMES = Object.freeze([
   "search_workspace",
   "apply_patch",
   "inspect_environment",
-  "manage_plan",
+  "update_project_artifacts",
   "manage_state",
   "ingest_traffic",
   "manage_identity",
@@ -19,7 +19,6 @@ const TOOL_REGISTRY_NAMES = Object.freeze([
   "browser_action",
   "compare_responses",
   "verify_finding",
-  "store_finding",
   "attack_graph",
   "delegate_agent",
   "query_assessment",
@@ -36,7 +35,7 @@ const TOOL_METADATA = Object.freeze({
   search_workspace: Object.freeze({ mutating: false, reversible: true, targetTypes: ["file", "workspace"] }),
   apply_patch: Object.freeze({ mutating: true, reversible: true, targetTypes: ["file", "workspace"] }),
   inspect_environment: Object.freeze({ mutating: false, reversible: false, targetTypes: ["process", "environment", "workspace"] }),
-  manage_plan: Object.freeze({ mutating: true, reversible: true, targetTypes: ["workspace", "plan"] }),
+  update_project_artifacts: Object.freeze({ mutating: true, reversible: true, targetTypes: ["workspace", "project-artifacts"] }),
   manage_state: Object.freeze({ mutating: true, reversible: true, targetTypes: ["workspace", "state"] }),
   ingest_traffic: Object.freeze({ mutating: false, reversible: false, targetTypes: ["traffic", "network"] }),
   manage_identity: Object.freeze({ mutating: true, reversible: true, targetTypes: ["identity", "session", "workspace"] }),
@@ -45,7 +44,6 @@ const TOOL_METADATA = Object.freeze({
   browser_action: Object.freeze({ mutating: false, reversible: false, targetTypes: ["browser", "network"] }),
   compare_responses: Object.freeze({ mutating: false, reversible: false, targetTypes: ["response", "network"] }),
   verify_finding: Object.freeze({ mutating: false, reversible: false, targetTypes: ["finding", "evidence"] }),
-  store_finding: Object.freeze({ mutating: true, reversible: true, targetTypes: ["finding", "workspace"] }),
   attack_graph: Object.freeze({ mutating: true, reversible: true, targetTypes: ["graph", "workspace"] }),
   delegate_agent: Object.freeze({ mutating: false, reversible: false, targetTypes: ["delegated-resource", "agent"] }),
   query_assessment: Object.freeze({ mutating: false, reversible: true, targetTypes: ["assessment", "evidence", "knowledge"] }),
@@ -54,15 +52,13 @@ const TOOL_METADATA = Object.freeze({
   web_research: Object.freeze({ mutating: false, reversible: false, targetTypes: ["research", "public-web"] }),
 });
 
-// Modes shape the prompt and presentation, never the user's available
-// capabilities. Authority, scope, approval, and plan-binding gates continue to
-// make the actual safety decisions for every tool invocation.
 const ALL_MODE_TOOLS = Object.freeze([...TOOL_REGISTRY_NAMES]);
+const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge"]);
 const MODE_TOOL_GROUPS = Object.freeze({
-  ask: ALL_MODE_TOOLS,
-  hypothesis: ALL_MODE_TOOLS,
-  plan: ALL_MODE_TOOLS,
+  ask: SAFE_READ_TOOLS,
+  hypothesis: Object.freeze([...SAFE_READ_TOOLS, "update_project_artifacts"]),
+  plan: Object.freeze([...SAFE_READ_TOOLS, "update_project_artifacts"]),
   agent: ALL_MODE_TOOLS,
 });
 
-module.exports = { MODE_TOOL_GROUPS, TOOL_METADATA, TOOL_REGISTRY_NAMES };
+module.exports = { MODE_TOOL_GROUPS, SAFE_READ_TOOLS, TOOL_METADATA, TOOL_REGISTRY_NAMES };

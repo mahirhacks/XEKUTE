@@ -34,7 +34,7 @@ test("assistant exchange footer is rebuilt only after the entire AI chunk is idl
 });
 
 test("starting an assistant continuation clears prior exchange metadata", () => {
-  const body = sourceBetween("function createAssistantTurn(", "const BUILTIN_SLASH_COMMANDS");
+  const body = sourceBetween("function createAssistantTurn(", "const SYSTEM_SKILL_SLASH_COMMANDS");
   const appendTurnAt = body.indexOf("appendChatTurn(turn, { container })");
   const removeFooterAt = body.indexOf('querySelector(".assistant-reply-footer")?.remove()');
 
@@ -55,12 +55,13 @@ test("assistant finalization settles the live run before adding exchange metadat
 
 test("restored exchanges attach metadata after text and tool-only assistant turns", () => {
   const body = sourceBetween("function renderCanonicalChatHistory(history = [])", "function hydrateSubagentRunCards");
-  const renderAllAt = body.indexOf("for (const message of sourceHistory) renderMessage(message, fragment)");
+  const renderLoopAt = body.indexOf("for (const message of sourceHistory)");
+  const renderAllAt = body.indexOf("renderMessage(message, fragment)", renderLoopAt);
   const exchangePassAt = body.indexOf('fragment.querySelectorAll(".chat-exchange")');
   const attachAt = body.indexOf("attachAssistantCopyButton(copyAnchor)", exchangePassAt);
   const replaceAt = body.indexOf("messages.replaceChildren(fragment)");
 
-  assert.ok(renderAllAt >= 0);
+  assert.ok(renderLoopAt >= 0 && renderAllAt > renderLoopAt);
   assert.ok(exchangePassAt > renderAllAt, "the complete restored exchange must render before metadata placement");
   assert.ok(attachAt > exchangePassAt);
   assert.ok(replaceAt > attachAt, "the finalized exchange should enter the visible transcript with its footer last");

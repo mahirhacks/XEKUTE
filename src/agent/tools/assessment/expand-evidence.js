@@ -4,24 +4,31 @@ const { isRestrictedToolContext } = require("../../../contracts/tool/execution-c
 
 const EXPAND_EVIDENCE_INPUT_SCHEMA = Object.freeze({
   type: "object",
-  required: ["refs"],
   properties: {
     refs: { type: "array", maxItems: 10, items: { type: "string", maxLength: 300 } },
     ref: { type: "string", maxLength: 300 },
     level: { type: "string", enum: ["representative", "raw"] },
   },
+  anyOf: [{ required: ["refs"] }, { required: ["ref"] }],
+  additionalProperties: false,
 });
 
-function createExpandEvidenceTool({ intelligence } = {}) {
+function createExpandEvidenceTool({ intelligence = null, artifacts = null } = {}) {
   return {
     name: "expand_evidence",
     inputSchema: EXPAND_EVIDENCE_INPUT_SCHEMA,
     async execute(input = {}, executionContext) {
-      if (!isRestrictedToolContext(executionContext)) return { ok: false, error: "expand_evidence requires a restricted tool context.", code: "INVALID_EXECUTION_CONTEXT" };
+      if (!isRestrictedToolContext(executionContext)) return { ok: false, code: "INVALID_EXECUTION_CONTEXT", error: "expand_evidence requires a restricted tool context." };
+      if (input.level === "raw") return { ok: false, code: "RAW_ARTIFACT_AUTH_REQUIRED", error: "Raw evidence expansion requires explicit privileged authorization." };
       const workspace = executionContext.workspace?.root || "";
-      if (!workspace || !intelligence) return { ok: false, error: "Assessment intelligence is unavailable.", code: "INTELLIGENCE_UNAVAILABLE" };
-      const refs = (Array.isArray(input.refs) ? input.refs : [input.ref]).filter(Boolean).slice(0, 10).map((ref) => String(ref).slice(0, 300));
-      return intelligence.expand(workspace, { refs, level: input.level === "raw" ? "raw" : "representative" });
+      const refs = (Array.isArray(input.refs) ? input.refs : [input.ref]).filter(Boolean).map(String).slice(0, 10);
+      const snapshot = artifacts?.inspect?.(workspace);
+      if (snapshot?.ok) {
+        const records = refs.map((ref) => snapshot.evidence.find((item) => item.id === ref)).filter(Boolean);
+        if (records.length) return { ok: true, level: "representative", records, omitted: refs.length - records.length, source: "project-artifacts" };
+      }
+      if (intelligence?.expand) return intelligence.expand(workspace, refs, { level: "representative" });
+      return { ok: false, code: "EVIDENCE_NOT_FOUND", error: "No matching canonical evidence was found." };
     },
   };
 }

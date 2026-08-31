@@ -27,12 +27,12 @@ test("renderer sends prompts without model schemas and main owns registry catalo
   assert.match(main, /tools: selectedCatalog\.tools/);
 });
 
-test("active IPC handlers and preload methods include memory and omit removed approval/chat APIs", () => {
+test("active IPC handlers and preload methods include live channels and omit removed approval/chat APIs", () => {
   const main = read("src/app/electron/main.js");
   const projectIpc = read("src/app/ipc/project.js");
   const activeHandlers = `${main}\n${projectIpc}`;
   const preload = read("src/app/electron/preload.js");
-  for (const channel of ["agent:run", "project:create", "session-memory:load", "session-memory:begin", "session-memory:event", "session-memory:delete", "session-memory:flush", "mcp:read", "mcp:ensure", "kali-access:get", "kali-access:save", "kali-access:test", "kali-access:pickIdentity", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialSave", "settings:credentialDelete", "proxy:browserLaunch", "proxy:browserStatus"]) {
+  for (const channel of ["agent:run", "project:create", "chat-history:load", "chat-history:begin", "chat-history:event", "chat-history:delete", "chat-history:flush", "mcp:read", "mcp:ensure", "kali-access:get", "kali-access:save", "kali-access:test", "kali-access:pickIdentity", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialSave", "settings:credentialDelete", "proxy:browserLaunch", "proxy:browserStatus"]) {
     assert.match(activeHandlers, new RegExp(channel.replace(/[-:]/g, "\\$&")), `active IPC modules must register ${channel}`);
     assert.match(preload, new RegExp(channel.replace(/[-:]/g, "\\$&")), `preload must bridge ${channel}`);
   }

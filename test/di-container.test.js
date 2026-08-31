@@ -40,7 +40,23 @@ test("container constructs the full service graph with fake Electron deps", () =
   assert.equal(typeof container.buildIntruderRequests, "function");
   assert.equal(typeof container.getProxyListener, "function");
   assert.equal(typeof container.projectProfileStore, "function");
-  assert.equal(typeof container.sessionMemoryStore, "function");
+  assert.equal(typeof container.v3SessionStore, "object");
+  assert.equal(typeof container.memoryProjectIdentityStore, "object");
+  assert.equal(typeof container.memorySchemaRegistry, "object");
+  assert.equal(typeof container.projectArtifacts, "object");
+  assert.equal(typeof container.knowledgeLibrary, "object");
+  assert.equal(typeof container.tier1SensitiveStore, "object");
+  assert.equal(typeof container.memoryTier1Coordinator, "object");
+  assert.equal(typeof container.knowledgeStore, "object");
+  assert.equal(typeof container.knowledgeEmbeddingService, "object");
+  assert.equal(typeof container.knowledgeKag, "object");
+  for (const retired of [
+    "memoryManifestStore", "memoryEventStore", "memorySnapshotStore", "memoryArtifactRegistry",
+    "memoryDerivedProjection", "memoryGraphView", "memoryBlockUpdater", "memoryContextCheckpoint",
+    "memoryRetrievalService", "memoryProjectMemoryRepository", "memoryInvestigationMemoryRepository",
+    "memoryEvidenceMemoryRepository", "memorySpecialistDispatch", "memorySpecialistReturn",
+    "memoryAssignmentLeases", "projectMemoryStore", "contextCompiler",
+  ]) assert.equal(Object.prototype.hasOwnProperty.call(container, retired), false, `retired service ${retired} must not be composed`);
   assert.equal(typeof container.resolveCentralCaDirectory, "function");
   assert.equal(typeof container.readApplicationPreferences, "function");
   assert.equal(typeof container.terminateProcessTree, "function");
@@ -65,7 +81,7 @@ test("container exposes singleton state maps and a dispose path", () => {
 test("container lazy stores are singletons", () => {
   const container = createContainer({ app: fakeApp(), safeStorage: fakeSafeStorage(), getMainWindow: () => null });
   assert.equal(container.projectProfileStore(), container.projectProfileStore());
-  assert.equal(container.sessionMemoryStore(), container.sessionMemoryStore());
+  assert.equal(container.v3SessionStore, container.v3SessionStore);
   assert.equal(container.getProxyListener(), container.getProxyListener());
 });
 

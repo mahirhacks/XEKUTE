@@ -1,11 +1,9 @@
 "use strict";
 
-// Special skills may expose narrowly scoped runtime capabilities without
-// expanding the canonical tool registry.  This keeps the shipped tool
-// inventory stable while allowing a skill package to bring the one capability
-// it needs along with it.
+// Creation skills expose one narrowly scoped writer without expanding the
+// canonical tool registry. Other internal skills use the shared runtime tools
+// and memory services directly.
 const CREATE_GUIDANCE_TOOL = "create_guidance";
-const MANAGE_PENTEST_TOOL = "manage_pentest";
 
 const CREATE_GUIDANCE_INPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -41,28 +39,6 @@ const CREATE_GUIDANCE_INPUT_SCHEMA = Object.freeze({
   required: ["kind", "name", "content"],
 });
 
-const MANAGE_PENTEST_INPUT_SCHEMA = Object.freeze({
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    operation: {
-      type: "string",
-      enum: ["status", "refresh", "update_task", "complete_iteration", "stop"],
-      description: "Inspect or advance the active adaptive pentest run.",
-    },
-    taskId: { type: "string", maxLength: 200, description: "Checklist task ID for update_task." },
-    status: {
-      type: "string",
-      enum: ["ready", "running", "completed", "verified", "rejected", "inconclusive", "blocked", "not-tested", "retest-required"],
-    },
-    result: { type: "string", maxLength: 8_000 },
-    evidenceIds: { type: "array", maxItems: 100, items: { type: "string", maxLength: 300 } },
-    discoveredFacts: { type: "array", maxItems: 100, items: { type: "string", maxLength: 2_000 } },
-    reason: { type: "string", maxLength: 1_000 },
-  },
-  required: ["operation"],
-});
-
 function requiredCapabilities(skill) {
   const manifest = skill?.manifest || skill || {};
   return new Set([
@@ -87,46 +63,28 @@ function createSpecialSkillToolDefinitions(skill) {
       },
       specialSkill: manifest.id || "",
     });
-  if (specialSkillNeeds(skill, MANAGE_PENTEST_TOOL)) definitions.push({
-    type: "function",
-    function: {
-      name: MANAGE_PENTEST_TOOL,
-      description: "Inspect, synchronize, update, iterate, or stop the active adaptive pentest run. Canonical intelligence is resynchronized automatically.",
-      parameters: MANAGE_PENTEST_INPUT_SCHEMA,
-    },
-    specialSkill: manifest.id || "",
-  });
   return definitions;
 }
 
 function createSpecialSkillToolEntry(skill, requestedCapability = "") {
   const capability = String(requestedCapability || "").trim();
   const isGuidance = capability === CREATE_GUIDANCE_TOOL && specialSkillNeeds(skill, CREATE_GUIDANCE_TOOL);
-  const isPentest = capability === MANAGE_PENTEST_TOOL && specialSkillNeeds(skill, MANAGE_PENTEST_TOOL);
-  if (!isGuidance && !isPentest) return null;
-  const name = isGuidance ? CREATE_GUIDANCE_TOOL : MANAGE_PENTEST_TOOL;
+  if (!isGuidance) return null;
   return {
-    name,
-    description: isGuidance ? "Create a validated user guidance file in the project or global guidance store." : "Manage the active adaptive pentest run and its derived planning artifacts.",
-    inputSchema: isGuidance ? CREATE_GUIDANCE_INPUT_SCHEMA : MANAGE_PENTEST_INPUT_SCHEMA,
+    name: CREATE_GUIDANCE_TOOL,
+    description: "Create a validated user guidance file in the project or global guidance store.",
+    inputSchema: CREATE_GUIDANCE_INPUT_SCHEMA,
     // The adapter marker lets the authority environment gate treat this as a
     // local capability.  Execution is intentionally performed by the main
     // process branch below, not by arbitrary model-provided code.
     adapter: { inputSchema: CREATE_GUIDANCE_INPUT_SCHEMA },
     metadata: {
       mutating: true,
-      reversible: isPentest,
-      targetTypes: isGuidance ? ["file", "workspace"] : ["assessment", "workspace"],
+      reversible: false,
+      targetTypes: ["file", "workspace"],
     },
     specialSkill: String((skill?.manifest || skill)?.id || ""),
   };
-}
-
-async function executeManagePentest({ args = {}, workspace = "", runId = "", orchestrator = null } = {}) {
-  if (!orchestrator?.execute) return { ok: false, error: "The pentest orchestration service is unavailable.", code: "PENTEST_ORCHESTRATOR_UNAVAILABLE", retryable: false };
-  const result = await orchestrator.execute({ workspace, runId, args });
-  if (!result?.ok) return { ok: false, error: result?.error || "The pentest operation failed.", code: result?.code || "PENTEST_OPERATION_FAILED", retryable: false, details: result };
-  return { ok: true, value: result };
 }
 
 function executeCreateGuidance({ args = {}, workspace = "", globalRoot = "", writeGuidanceFile } = {}) {
@@ -165,12 +123,9 @@ function executeCreateGuidance({ args = {}, workspace = "", globalRoot = "", wri
 module.exports = Object.freeze({
   CREATE_GUIDANCE_INPUT_SCHEMA,
   CREATE_GUIDANCE_TOOL,
-  MANAGE_PENTEST_INPUT_SCHEMA,
-  MANAGE_PENTEST_TOOL,
   createSpecialSkillToolDefinitions,
   createSpecialSkillToolEntry,
   executeCreateGuidance,
-  executeManagePentest,
   requiredCapabilities,
   specialSkillNeeds,
 });

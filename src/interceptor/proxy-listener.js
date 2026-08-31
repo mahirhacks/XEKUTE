@@ -1,4 +1,5 @@
 const { parseRawHttpRequest, urlMatchesTarget } = require("./http-workbench");
+const { summarizeTrafficRecord } = require("../domain/assessment/assessment-workspace");
 const {
   decodeHttpBody,
   decodeHttpBodyBuffer,
@@ -98,17 +99,19 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
   }
 
   function emitCapture(payload) {
-    sendEvent("proxy:capture", payload);
+    const intercepting = Boolean(payload.paused) || Boolean(settings?.interception?.enabled && settings?.interception?.interceptRequests);
+    const next = { ...payload };
+    if (payload.logged?.record) next.history = summarizeTrafficRecord(payload.logged.record);
+    if (!intercepting) {
+      delete next.request;
+      delete next.response;
+      if (payload.logged) next.logged = { timestamp: payload.logged.timestamp, error: payload.logged.error };
+    }
+    sendEvent("proxy:capture", next);
   }
 
   function scopeTargets() {
-    if (Array.isArray(configuredTargets)) return configuredTargets;
-    try {
-      const file = path.join(root, "scope", "in-scope.json");
-      return JSON.parse(fs.readFileSync(file, "utf8")).targets || [];
-    } catch {
-      return [];
-    }
+    return Array.isArray(configuredTargets) ? configuredTargets : [];
   }
 
   function isInScope(ctx) {
@@ -408,12 +411,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
         return { error: error.message, code: "PROJECT_NOT_FOUND" };
       }
       settings = suppliedSettings;
-    } else {
-      const read = assessmentWorkspace.readSettings(assessmentPath);
-      if (read.error) { await stop(); return read; }
-      root = read.root;
-      settings = read.settings;
-    }
+    } else return { error: "App-managed project runtime settings are required", code: "PROJECT_SETTINGS_REQUIRED" };
     configuredTargets = Array.isArray(overrides?.targets) ? overrides.targets : null;
     if (!settings.listener?.enabled) { await stop(); return { ok: true, running: false }; }
     const host = String(settings.listener.bindAddress || "127.0.0.1");

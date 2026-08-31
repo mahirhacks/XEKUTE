@@ -71,6 +71,27 @@ function registerProjectIpc({
   const mcpConfig = createMcpConfigService({ fs, path, home: () => app.getPath("home") });
   const kaliAccess = createKaliAccessService({ fs, path, home: () => app.getPath("home") });
 
+  function protectedProjectId(workspace) {
+    const resolved = container.memoryProjectIdentityStore?.resolveV3Project?.(workspace, { persist: false });
+    return resolved?.ok ? String(resolved.projectId || "") : "";
+  }
+
+  async function cleanupV3SessionState(workspace, sessionId, { deleteCheckpoint = false } = {}) {
+    if (!workspace || !sessionId) return { ok: true, skipped: true };
+    const projectId = protectedProjectId(workspace);
+    if (!projectId) return { ok: false, code: "MEMORY_PROJECT_UNINITIALIZED", error: "The protected V3 project identity is required before chat history can be removed." };
+    // Tier 1 exact state is owned by the V3 sensitive store.  Closing a
+    // session keeps its encrypted transcript/checkpoint data available for
+    // project-lifetime retention; deleting a session explicitly removes only
+    // that session's V3 directory.
+    if (deleteCheckpoint && container.tier1SensitiveStore?.deleteSession) {
+      const deleted = container.tier1SensitiveStore.deleteSession(projectId, sessionId);
+      if (deleted?.ok === false) return deleted;
+      return { ok: true, changed: Boolean(deleted?.changed), projectId, sessionId };
+    }
+    return { ok: true, changed: false, projectId, sessionId };
+  }
+
 // â”€â”€ File System IPC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Open a folder picker, return the chosen path */
@@ -190,6 +211,18 @@ ipcMain.handle("fs:movePath", async (_event, { workspace, source, destination } 
   return transferWorkspacePath(workspace, source, destination, { move: true });
 });
 
+/** Open the OS file manager with the given file or folder selected. */
+ipcMain.handle("fs:showItemInFolder", async (_event, filePath) => {
+  try {
+    const resolved = path.resolve(String(filePath || ""));
+    if (!resolved || !fs.existsSync(resolved)) return { error: "File not found." };
+    shell.showItemInFolder(resolved);
+    return { ok: true, path: resolved };
+  } catch (err) {
+    return { error: err.message || "Could not reveal file in explorer." };
+  }
+});
+
 ipcMain.handle("assessment:create", async (_event, { defaultParent } = {}) => {
   const parent = defaultParent && path.isAbsolute(defaultParent) && fs.existsSync(defaultParent)
     ? defaultParent
@@ -202,7 +235,9 @@ ipcMain.handle("assessment:create", async (_event, { defaultParent } = {}) => {
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   const repaired = assessmentWorkspace.repair(result.filePath, { createRoot: true });
-  return repaired.error ? repaired : { ...repaired, path: repaired.root };
+  if (repaired.error) return repaired;
+  const artifactsReady = container.projectArtifacts.bootstrap(repaired.root);
+  return { ...repaired, path: repaired.root, artifacts: artifactsReady };
 });
 
 ipcMain.handle("assessment:open", async () => {
@@ -219,7 +254,10 @@ ipcMain.handle("assessment:verify", async (_event, { path: assessmentPath } = {}
 });
 
 ipcMain.handle("assessment:repair", async (_event, { path: assessmentPath } = {}) => {
-  return assessmentWorkspace.repair(assessmentPath);
+  const repaired = assessmentWorkspace.repair(assessmentPath);
+  if (repaired.error) return repaired;
+  const artifactsReady = container.projectArtifacts.bootstrap(repaired.root);
+  return { ...repaired, artifacts: artifactsReady };
 });
 
 ipcMain.handle("assessment:trafficLog", async (_event, { path: assessmentPath, record, filtered = false } = {}) => {
@@ -228,16 +266,20 @@ ipcMain.handle("assessment:trafficLog", async (_event, { path: assessmentPath, r
   return result;
 });
 
-ipcMain.handle("assessment:trafficHistory", async (_event, { path: assessmentPath, limit = 500 } = {}) => {
-  return assessmentWorkspace.readTrafficHistory(assessmentPath, { limit });
+ipcMain.handle("assessment:trafficHistory", async (_event, { path: assessmentPath, limit = 500, includeBodies = false } = {}) => {
+  return assessmentWorkspace.readTrafficHistory(assessmentPath, { limit, includeBodies: Boolean(includeBodies) });
 });
 
-ipcMain.handle("session-memory:load", async (_event, { workspace } = {}) => {
-  return container.sessionMemoryStore().load(workspace);
+ipcMain.handle("assessment:trafficRecords", async (_event, { path: assessmentPath, requestIds = [] } = {}) => {
+  return assessmentWorkspace.readTrafficRecords(assessmentPath, { requestIds });
 });
 
-ipcMain.handle("session-memory:begin", async (_event, { workspace, sessionId, title, userPrompt, userMessageId, session } = {}) => {
-  return container.sessionMemoryStore().begin(workspace, {
+ipcMain.handle("chat-history:load", async (_event, { workspace } = {}) => {
+  return container.v3SessionStore.load(workspace);
+});
+
+ipcMain.handle("chat-history:begin", async (_event, { workspace, sessionId, title, userPrompt, userMessageId, session } = {}) => {
+  return container.v3SessionStore.begin(workspace, {
     sessionId,
     title,
     userPrompt,
@@ -246,85 +288,55 @@ ipcMain.handle("session-memory:begin", async (_event, { workspace, sessionId, ti
   });
 });
 
-ipcMain.handle("session-memory:event", async (_event, { workspace, ...event } = {}) => {
-  return container.sessionMemoryStore().record(workspace, event);
+ipcMain.handle("chat-history:event", async (_event, { workspace, ...event } = {}) => {
+  return container.v3SessionStore.record(workspace, event);
 });
 
-ipcMain.handle("session-memory:update", async (_event, { workspace, sessionId, sessionMeta } = {}) => {
-  return container.sessionMemoryStore().record(workspace, { type: "session_meta", sessionId, sessionMeta });
+ipcMain.handle("chat-history:update", async (_event, { workspace, sessionId, sessionMeta } = {}) => {
+  return container.v3SessionStore.record(workspace, { type: "session_meta", sessionId, sessionMeta });
 });
 
-ipcMain.handle("session-memory:close", async (_event, { workspace, sessionId } = {}) => {
-  const result = container.sessionMemoryStore().close(workspace, sessionId);
+ipcMain.handle("chat-history:close", async (_event, { workspace, sessionId } = {}) => {
+  const result = container.v3SessionStore.close(workspace, sessionId);
   await container.browserSessionManager?.closeSession?.(workspace, sessionId);
-  container.contextCompiler?.clearSession?.(workspace, sessionId);
+  const sensitive = await cleanupV3SessionState(workspace, sessionId);
+  if (sensitive?.ok === false) return sensitive;
   container.mcpRuntime?.clearSession?.(sessionId, workspace);
   clearBrowserSessionTargets(workspace, sessionId);
   return result;
 });
 
-ipcMain.handle("session-memory:reopen", async (_event, { workspace, sessionId } = {}) => {
-  return container.sessionMemoryStore().reopen(workspace, sessionId);
+ipcMain.handle("chat-history:reopen", async (_event, { workspace, sessionId } = {}) => {
+  return container.v3SessionStore.reopen(workspace, sessionId);
 });
 
-ipcMain.handle("session-memory:archive", async (_event, { workspace, sessionId } = {}) => {
-  return container.sessionMemoryStore().record(workspace, { type: "archive", sessionId });
+ipcMain.handle("chat-history:archive", async (_event, { workspace, sessionId } = {}) => {
+  return container.v3SessionStore.record(workspace, { type: "archive", sessionId });
 });
 
-ipcMain.handle("session-memory:unarchive", async (_event, { workspace, sessionId } = {}) => {
-  return container.sessionMemoryStore().record(workspace, { type: "unarchive", sessionId });
+ipcMain.handle("chat-history:unarchive", async (_event, { workspace, sessionId } = {}) => {
+  return container.v3SessionStore.record(workspace, { type: "unarchive", sessionId });
 });
 
-ipcMain.handle("session-memory:flush", async () => {
-  return container.sessionMemoryStore().flush();
+ipcMain.handle("chat-history:flush", async () => {
+  return container.v3SessionStore.flush();
 });
 
-ipcMain.handle("session-memory:delete", async (_event, { workspace, sessionId } = {}) => {
-  const loaded = container.sessionMemoryStore().load(workspace);
+ipcMain.handle("chat-history:delete", async (_event, { workspace, sessionId } = {}) => {
+  const loaded = container.v3SessionStore.load(workspace);
   const sessions = [...(loaded.sessions || []), ...(loaded.closedSessions || []), ...(loaded.archivedSessions || [])];
   const session = sessions.find((item) => String(item.id) === String(sessionId));
-  if (session) {
-    if (!container.contextCompiler?.prepareFinalization) return { ok: false, error: "Project-memory finalization is unavailable; the session was not deleted.", code: "CONTEXT_FINALIZATION_UNAVAILABLE" };
-    try {
-      const prepared = container.contextCompiler.prepareFinalization({
-        workspace,
-        sessionId,
-        messages: session.history || session.messages || [],
-        outcome: "deleted",
-      });
-      prepared.completion.catch(() => {});
-    } catch (error) {
-      return { ok: false, error: error.message || "Project-memory finalization could not be made durable; the session was not deleted.", code: error.code || "CONTEXT_FINALIZATION_FAILED" };
-    }
-  }
-  container.contextCompiler?.clearSession?.(workspace, sessionId);
   container.mcpRuntime?.clearSession?.(sessionId, workspace);
   await container.browserSessionManager?.closeSession?.(workspace, sessionId);
   clearBrowserSessionTargets(workspace, sessionId);
-  return container.sessionMemoryStore().remove(workspace, sessionId);
+  const cleaned = await cleanupV3SessionState(workspace, sessionId, { deleteCheckpoint: true });
+  if (cleaned?.ok === false) return cleaned;
+  return container.v3SessionStore.remove(workspace, sessionId);
 });
 
-ipcMain.handle("context:projectMemory", async (_event, { workspace } = {}) => {
-  return container.projectMemoryStore?.load?.(workspace) || { ok: false, code: "PROJECT_MEMORY_UNAVAILABLE" };
-});
-
-ipcMain.handle("context:consolidate", async (_event, { workspace, ...input } = {}) => {
-  const result = container.contextCompiler?.sealEpisode?.({ workspace, ...input }) || { ok: false, code: "CONTEXT_COMPILER_UNAVAILABLE" };
-  if (input.expireKnowledge) container.mcpRuntime?.clearSession?.(input.sessionId, workspace);
-  return result;
-});
-
-ipcMain.handle("context:event", async (_event, { workspace, ...input } = {}) => {
-  return container.contextCompiler?.recordKeyEvent?.({ workspace, ...input }) || { ok: false, code: "CONTEXT_COMPILER_UNAVAILABLE" };
-});
-
-ipcMain.handle("context:flush", async () => {
-  return container.contextCompiler?.flush?.() || { ok: true };
-});
-
-ipcMain.on("session-memory:save-before-close", (event, { workspace, ...memoryEvent } = {}) => {
+ipcMain.on("chat-history:save-before-close", (event, { workspace, ...memoryEvent } = {}) => {
   try {
-    event.returnValue = container.sessionMemoryStore().recordSync(workspace, memoryEvent);
+    event.returnValue = container.v3SessionStore.recordSync(workspace, memoryEvent);
   } catch (error) {
     event.returnValue = { ok: false, error: error.message };
   }
@@ -336,13 +348,6 @@ ipcMain.handle("assessment:evidence", async (_event, { path: assessmentPath, lim
 ipcMain.handle("assessment:appendEvidence", async (_event, { path: assessmentPath, record } = {}) => {
   const result = assessmentWorkspace.appendEvidenceRecord(assessmentPath, record || {});
   Promise.resolve(assessmentIntelligence?.refresh?.(assessmentPath)).catch(() => {});
-  Promise.resolve(container.contextCompiler?.recordKeyEvent?.({ workspace: assessmentPath, events: [{ type: "evidence_relationship", summary: record?.title || record?.type || "Evidence captured", evidenceIds: [result?.record?.id || record?.id].filter(Boolean) }] })).catch(() => {});
-  return result;
-});
-ipcMain.handle("assessment:appendFinding", async (_event, { path: assessmentPath, finding } = {}) => {
-  const result = assessmentWorkspace.appendFinding(assessmentPath, finding || {});
-  Promise.resolve(assessmentIntelligence?.refresh?.(assessmentPath)).catch(() => {});
-  Promise.resolve(container.contextCompiler?.recordKeyEvent?.({ workspace: assessmentPath, events: [{ type: "finding_status", summary: finding?.title || finding?.name || "Finding status changed", findingId: result?.record?.id || finding?.id || "", outcome: finding?.status || "updated", evidenceIds: finding?.evidenceIds || [] }] })).catch(() => {});
   return result;
 });
 ipcMain.handle("assessment:createRun", async (_event, { path: assessmentPath, run } = {}) => {
@@ -352,7 +357,6 @@ ipcMain.handle("assessment:createRun", async (_event, { path: assessmentPath, ru
 ipcMain.handle("assessment:updateRun", async (_event, { path: assessmentPath, id, patch } = {}) => {
   const result = assessmentWorkspace.updateRun(assessmentPath, id, patch || {});
   if (patch?.status && ["completed", "stopped", "failed", "inconclusive"].includes(String(patch.status))) {
-    Promise.resolve(container.contextCompiler?.recordKeyEvent?.({ workspace: assessmentPath, events: [{ type: "run_completed", runId: id, outcome: patch.status, summary: patch.notes || `Assessment run ${patch.status}` }] })).catch(() => {});
   }
   return result;
 });
@@ -441,10 +445,8 @@ ipcMain.handle("webclone:hidePreview", async () => {
 });
 
 ipcMain.handle("assessment:settings", async (_event, { path: assessmentPath } = {}) => {
-  const legacy = assessmentWorkspace.readSettings(assessmentPath);
-  if (!legacy?.error) return legacy;
   const project = projectProfileStore().read(assessmentPath);
-  if (project?.error) return legacy;
+  if (project?.error) return project;
   return {
     ok: true,
     root: project.root,
@@ -454,7 +456,12 @@ ipcMain.handle("assessment:settings", async (_event, { path: assessmentPath } = 
 });
 
 ipcMain.handle("assessment:writeSettings", async (_event, { path: assessmentPath, settings } = {}) => {
-  return assessmentWorkspace.writeSettings(assessmentPath, settings);
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return { error: "Runtime settings must be an object", code: "SETTINGS_INVALID" };
+  const current = projectProfileStore().read(assessmentPath);
+  if (current?.error) return current;
+  const saved = projectProfileStore().save(assessmentPath, { ...current.profile, runtime: settings });
+  if (saved?.error) return saved;
+  return { ok: true, root: saved.root, settings: effectiveProjectRuntimeSettings(saved.root), virtual: true };
 });
 
 function safeAssessmentChild(root, relativePath) {
@@ -672,9 +679,8 @@ ipcMain.handle("assessment:deleteEntries", async (_event, { path: assessmentPath
 ipcMain.handle("assessment:buildContext", async (_event, { path: assessmentPath } = {}) => {
   const verification = assessmentWorkspace.verify(assessmentPath);
   if (verification.error) return verification;
-  const picked = await dialog.showOpenDialog(getMainWindow(), { title: "Add Context Files", buttonLabel: "Build pen_context.md", properties: ["openFile", "multiSelections"] });
+  const picked = await dialog.showOpenDialog(getMainWindow(), { title: "Add Context Files", buttonLabel: "Import Context", properties: ["openFile", "multiSelections"] });
   if (picked.canceled || !picked.filePaths.length) return { canceled: true };
-  const output = path.join(verification.root, "pen_context.md");
   const sourceRoot = path.join(verification.root, "context", "sources");
   const imported = picked.filePaths.map((source, index) => {
     const safeName = path.basename(source).replace(/[^\w.() -]/g, "_");
@@ -683,12 +689,7 @@ ipcMain.handle("assessment:buildContext", async (_event, { path: assessmentPath 
     fs.copyFileSync(source, target);
     return target;
   });
-  try {
-    const details = buildContext({ output, files: imported });
-    return { ok: true, path: output, ...details };
-  } catch (error) {
-    return { error: error.message || "Context extraction failed", code: "CONTEXT_BUILD_FAILED" };
-  }
+  return { ok: true, paths: imported, imported: imported.length };
 });
 
 ipcMain.handle("security:httpRequest", async (_event, payload = {}) => {
@@ -788,6 +789,13 @@ ipcMain.handle("proxy:showCa", async () => {
 });
 
 ipcMain.handle("settings:certificatesGet", async () => certificateSettingsSnapshot());
+
+ipcMain.handle("knowledge:list", async () => container.knowledgeLibrary.list());
+ipcMain.handle("knowledge:status", async (_event, { workspace } = {}) => container.knowledgeLibrary.status(workspace || ""));
+ipcMain.handle("knowledge:preview", async (_event, { package: pkg } = {}) => container.knowledgeLibrary.previewInstall(pkg));
+ipcMain.handle("knowledge:install", async (_event, { package: pkg, confirmation, previewId } = {}) => container.knowledgeLibrary.install(pkg, { previewId, confirmation }));
+ipcMain.handle("knowledge:remove", async (_event, { releaseId } = {}) => container.knowledgeLibrary.remove(releaseId));
+ipcMain.handle("knowledge:reindex", async (_event, { workspace } = {}) => container.knowledgeLibrary.reindex(workspace || ""));
 
 ipcMain.handle("settings:certificatesChoose", async (_event, { assessmentPath = "" } = {}) => {
   const current = configuredCentralCaDirectory();
@@ -1089,14 +1097,14 @@ module.exports = Object.freeze({
   MAX_EDITABLE_FILE_BYTES,
   channels: Object.freeze([
     "fs:openFolder", "fs:openFile", "fs:readdir", "fs:readFile", "fs:writeFile", "fs:mkdir",
-    "fs:deletePath", "fs:copyPath", "fs:movePath", "project:create", "project-profile:get",
+    "fs:deletePath", "fs:copyPath", "fs:movePath", "fs:showItemInFolder", "project:create", "project-profile:get",
     "project-profile:save", "workspace:watch", "workspace:unwatch", "workspace:changed",
     "guidance:entries", "guidance:read", "guidance:context", "guidance:save", "guidance:import",
     "guidance:delete", "mcp:read", "mcp:ensure",
     "kali-access:get", "kali-access:save", "kali-access:test", "kali-access:pickIdentity", "clipboard:writeText",
     "assessment:create", "assessment:open", "assessment:verify", "assessment:repair",
-    "assessment:trafficLog", "assessment:trafficHistory", "assessment:evidence",
-    "assessment:appendEvidence", "assessment:appendFinding", "assessment:createRun",
+    "assessment:trafficLog", "assessment:trafficHistory", "assessment:trafficRecords", "assessment:evidence",
+    "assessment:appendEvidence", "assessment:createRun",
     "assessment:updateRun", "assessment:generateReport", "assessment:runHistory",
     "assessment:deleteTrafficRecords", "assessment:map", "assessment:buildMap", "assessment:deepCollectGraph", "assessment:graphStatus",
     "assessment:mapOverview", "assessment:mapNode", "assessment:mapNeighbors", "assessment:mapPaths",
@@ -1107,15 +1115,15 @@ module.exports = Object.freeze({
     "assessment:intelligenceExpand", "assessment:intelligence",
     "assessment:writeSettings", "assessment:customEntries", "assessment:createEntry",
     "assessment:deleteEntries", "assessment:buildContext",
-    "session-memory:load", "session-memory:begin", "session-memory:event", "session-memory:update",
-    "session-memory:close", "session-memory:reopen", "session-memory:archive", "session-memory:unarchive",
-    "session-memory:flush", "session-memory:save-before-close", "session-memory:delete",
-    "context:projectMemory", "context:consolidate", "context:event", "context:flush",
+    "chat-history:load", "chat-history:begin", "chat-history:event", "chat-history:update",
+    "chat-history:close", "chat-history:reopen", "chat-history:archive", "chat-history:unarchive",
+    "chat-history:flush", "chat-history:save-before-close", "chat-history:delete",
     "security:httpRequest", "security:buildIntruder", "proxy:configure", "proxy:status",
     "proxy:forward", "proxy:drop", "proxy:showCa", "proxy:browserLaunch", "proxy:browserStatus", "webclone:build", "webclone:manifest",
     "webclone:readFile", "webclone:previewDocument", "webclone:previewBounds", "webclone:hidePreview",
     "settings:certificatesGet", "settings:certificatesChoose", "settings:certificatesReset",
     "settings:certificatesShow", "settings:llmGet", "settings:llmSet", "settings:llmTest",
+    "knowledge:list", "knowledge:status", "knowledge:preview", "knowledge:install", "knowledge:remove", "knowledge:reindex",
     "settings:ollamaGet", "settings:ollamaSet", "settings:ollamaTest",
     "settings:identitiesGet", "settings:identityCreate", "settings:identityUpdate",
     "settings:identityDelete", "settings:identityLoginStart", "settings:identityLoginSave",

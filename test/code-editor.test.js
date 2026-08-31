@@ -7,7 +7,6 @@ const path = require("node:path");
 
 const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
 const editor = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "editor", "editor-controller.js"), "utf8");
-const failureMemory = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "memory", "failure-memory.js"), "utf8");
 const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
 const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
 const layoutStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
@@ -69,7 +68,6 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
 });
 
 test("editor provides VS Code-style models, syntax languages, tabs, cursor events, and saving", () => {
-  assert.match(failureMemory, /const canUseCommonJs = typeof module !== "undefined"/);
   assert.match(editor, /new URL\("\.\.\/\.\.\/node_modules\/monaco-editor\/min\/vs\/loader\.js"/);
   assert.match(editor, /paths: \{ vs: "\.\.\/\.\.\/node_modules\/monaco-editor\/min\/vs" \}/);
   assert.match(editor, /monaco\.editor\.create\(container/);

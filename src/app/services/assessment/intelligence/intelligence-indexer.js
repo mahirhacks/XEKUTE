@@ -6,17 +6,15 @@ const readline = require("node:readline");
 const crypto = require("node:crypto");
 const { normalizeGenericRecord } = require("../../../../domain/assessment/intelligence/ontology.js");
 const Store = require("./intelligence-store.js");
+const Artifacts = require("../../../../domain/artifacts/investigation-artifacts.js");
 
 const SOURCE_FILES = Object.freeze([
   ["traffic/raw.jsonl", "traffic"],
   ["traffic/filtered.jsonl", "traffic"],
   ["evidence/index.jsonl", "evidence"],
   [".xekute/evidence/runtime.jsonl", "evidence"],
-  ["findings/findings.json", "findings"],
   ["enumeration/endpoints.json", "endpoints"],
-  ["enumeration/services.json", "services"],
   ["enumeration/assets.json", "assets"],
-  [".xekute/logs/agent-hypotheses.jsonl", "hypotheses"],
   [".xekute/logs/agent-actions.jsonl", "actions"],
   ["Map/application-map.json", "map"],
 ]);
@@ -71,7 +69,7 @@ function recordArray(document) {
       ...(Array.isArray(document.edges) ? document.edges.map((record) => ({ ...record, recordType: record.recordType || "map-edge" })) : []),
     ];
   }
-  for (const key of ["records", "items", "findings", "endpoints", "services", "assets", "nodes", "observations", "hypotheses"]) {
+  for (const key of ["records", "items", "evidence", "endpoints", "services", "assets", "nodes", "observations", "hypotheses"]) {
     if (Array.isArray(document[key])) return document[key];
   }
   return [document];
@@ -150,6 +148,54 @@ function indexJson(db, workspace, relativePath, kind, state = {}) {
   return { count: records.length, paused: false };
 }
 
+function indexMarkdownRecords(db, workspace, relativePath, kind, records, state = {}) {
+  const target = path.join(workspace, ...relativePath.split("/"));
+  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return { count: 0 };
+  const stat = fs.statSync(target);
+  const sourceFingerprint = fingerprint(relativePath, stat);
+  const previous = db.prepare("SELECT fingerprint,status FROM sources WHERE path=?").get(relativePath);
+  if (previous?.fingerprint === sourceFingerprint && previous.status === "indexed") return { count: 0 };
+  const source = { path: relativePath, kind, fingerprint: sourceFingerprint, size: stat.size, mtime: stat.mtimeMs, cursor: stat.size, status: "indexing" };
+  Store.setSource(db, source);
+  Store.transaction(db, () => records.forEach((record) => {
+    Store.insertNormalized(db, {
+      entities: [{
+        id: `${kind}:${record.id || relativePath}`,
+        type: kind,
+        key: String(record.id || relativePath),
+        label: String(record.title || record.id || kind),
+        summary: String(record.title || record.summary || record.id || kind),
+        data: record,
+      }],
+    });
+  }));
+  Store.setSource(db, { ...source, status: "indexed", updatedAt: new Date().toISOString() });
+  return { count: records.length };
+}
+
+function indexEvidenceMarkdown(db, workspace, state = {}) {
+  const directory = path.join(workspace, ".xekute", "evidence");
+  if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) return { count: 0 };
+  let count = 0;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^E-\d{4,}\.md$/i.test(entry.name)) continue;
+    const relativePath = `.xekute/evidence/${entry.name}`;
+    const parsed = Artifacts.parseEvidence(fs.readFileSync(path.join(directory, entry.name), "utf8"));
+    if (!parsed.ok) continue;
+    count += indexMarkdownRecords(db, workspace, relativePath, "evidence", [parsed.value], state).count;
+  }
+  return { count };
+}
+
+function indexHypothesesMarkdown(db, workspace, state = {}) {
+  const relativePath = Artifacts.PATHS.hypotheses;
+  const target = path.join(workspace, ...relativePath.split("/"));
+  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return { count: 0 };
+  const parsed = Artifacts.parseHypotheses(fs.readFileSync(target, "utf8"));
+  if (!parsed.ok) return { count: 0 };
+  return indexMarkdownRecords(db, workspace, relativePath, "hypotheses", parsed.value, state);
+}
+
 async function indexWorkspaceSync({ workspace, indexPath, onProgress = () => {}, runId = "", planId = "", shouldPause = () => false } = {}) {
   const root = path.resolve(String(workspace || ""));
   if (!root || !fs.existsSync(root)) return { ok: false, error: "Assessment workspace does not exist.", code: "WORKSPACE_NOT_FOUND" };
@@ -173,6 +219,8 @@ async function indexWorkspaceSync({ workspace, indexPath, onProgress = () => {},
       }
       onProgress({ source: relativePath, status: "complete", total });
     }
+    total += indexEvidenceMarkdown(db, root, { runId, planId }).count;
+    total += indexHypothesesMarkdown(db, root, { runId, planId }).count;
     Store.setMeta(db, "status", "ready");
     Store.setMeta(db, "updated_at", new Date().toISOString());
     Store.setMeta(db, "record_count", total);

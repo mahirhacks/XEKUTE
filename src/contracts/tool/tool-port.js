@@ -19,10 +19,9 @@ const REGISTRY_TOOL_NAMES = TOOL_REGISTRY_NAMES;
 const MUTATING_TOOL_NAMES = new Set([
   "exec_command",
   "apply_patch",
-  "manage_plan",
+  "update_project_artifacts",
   "manage_state",
   "manage_identity",
-  "store_finding",
   "attack_graph",
 ]);
 

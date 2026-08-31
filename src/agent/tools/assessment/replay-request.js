@@ -1,6 +1,7 @@
 "use strict";
 
 const { isRestrictedToolContext } = require("../../../contracts/tool/execution-context");
+const { redactKnownSecrets } = require("../../../shared/secret-redaction.js");
 
 const REPLAY_REQUEST_INPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -184,6 +185,9 @@ function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvide
 
       const identity = identityResolution.identity;
       const baseHeaders = safeRequestHeaders(mergeHeaders(input.request.headers, input.config?.headers));
+      // Identity material is read from the dedicated identity vault and is
+      // redacted from replay output before it leaves the main process.
+      const sensitiveEnabled = Boolean(identity);
 
       const startedAt = Date.now();
       let response;
@@ -213,9 +217,9 @@ function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvide
           }
           const timer = setTimeout(() => controller.abort(), timeoutMs);
           try {
-          const identityHeaders = identity ? headersForUrl(identity, currentUrl) : {};
-          const cookieHeader = identity ? cookiesForUrl(identity, currentUrl) : "";
-          const requestHeaders = { ...baseHeaders, ...identityHeaders };
+          let identityHeaders = identity ? headersForUrl(identity, currentUrl) : {};
+          let cookieHeader = identity ? cookiesForUrl(identity, currentUrl) : "";
+           const requestHeaders = { ...baseHeaders, ...identityHeaders };
           if (cookieHeader) requestHeaders.Cookie = cookieHeader;
           response = await fetchFn(currentUrl, {
             method: currentMethod,
@@ -274,6 +278,11 @@ function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvide
         }
       }
 
+      const responseHeaders = response?.headers ? Object.fromEntries(response.headers) : {};
+      const safeResponseHeaders = sensitiveEnabled
+        ? Object.fromEntries(Object.entries(responseHeaders).map(([name, value]) => [name, redactKnownSecrets(value, identitySecretValues(identity))]))
+        : responseHeaders;
+      const safeBodyText = sensitiveEnabled ? redactKnownSecrets(bodyText, identitySecretValues(identity)) : bodyText;
       return {
         ok: true,
         value: {
@@ -283,8 +292,8 @@ function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvide
           finalMethod: currentMethod,
           status,
           statusText: response?.statusText || null,
-          headers: response?.headers ? Object.fromEntries(response.headers) : {},
-          body: bodyText,
+          headers: safeResponseHeaders,
+          body: safeBodyText,
           identityId: input.identityId || null,
           startedAt,
           finishedAt,

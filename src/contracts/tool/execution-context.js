@@ -22,6 +22,10 @@ const EXACT_BOUND_FIELDS = Object.freeze([
   "authority",
   "workspace",
   "identityContext",
+  // V3 memory identity is a capability-bound projection.  A delegated child
+  // may inherit it, but can never replace it with another project or block.
+  "memoryContext",
+  "artifactProvenance",
 ]);
 
 const RAW_TOOL_CONTEXT_FIELDS = Object.freeze([
@@ -34,6 +38,8 @@ const RAW_TOOL_CONTEXT_FIELDS = Object.freeze([
   "delegationContext",
   "resourceLimits",
   "parentInvocationId",
+  "memoryContext",
+  "artifactProvenance",
 ]);
 
 const RESTRICTED_CONTEXT_KIND = "raw_tool_projection";
@@ -82,7 +88,7 @@ function validateExecutionContext(input) {
     }
   }
 
-  for (const field of ["declaredScope", "identityContext", "delegationContext", "requestMetadata", "resourceLimits"]) {
+  for (const field of ["declaredScope", "identityContext", "delegationContext", "requestMetadata", "resourceLimits", "memoryContext", "artifactProvenance"]) {
     if (input[field] !== undefined && !isRecord(input[field]) && !Array.isArray(input[field])) {
       return failure(CONTEXT_ERROR_CODES.INVALID_FIELD, `${field} must be structured data when provided`);
     }

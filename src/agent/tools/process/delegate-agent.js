@@ -51,31 +51,6 @@ function structuredFailure(code, message, extra = {}) {
   return { ok: false, error: { code, message, retryable: false, ...extra } };
 }
 
-function boundedProjectMemory(value, maximum = 16_000) {
-  if (!isRecord(value)) return null;
-  const collections = ["observations", "findings", "completedWork", "completedPlans", "completedRuns", "failures", "negativeResults", "evidenceRefs", "relationships", "anomalies", "decisions", "knownGaps"];
-  const compact = {
-    schemaVersion: value.schemaVersion,
-    projectId: value.projectId,
-    revision: Number(value.revision) || 0,
-    updatedAt: value.updatedAt,
-    current: value.current || {},
-    activeHypothesis: value.activeHypothesis || null,
-  };
-  for (const key of collections) {
-    compact[key] = (Array.isArray(value[key]) ? value[key] : []).slice(-20).map((item) => ({
-      id: item?.id || item?.ref || "",
-      summary: String(item?.summary || item?.statement || item?.title || "").slice(0, 800),
-      status: item?.status,
-      sourceRefs: Array.isArray(item?.sourceRefs) ? item.sourceRefs.slice(0, 20) : [],
-      evidenceRefs: Array.isArray(item?.evidenceRefs) ? item.evidenceRefs.slice(0, 20) : [],
-    }));
-  }
-  if (JSON.stringify(compact).length <= maximum) return compact;
-  for (const key of collections) compact[key] = compact[key].slice(-5);
-  return compact;
-}
-
 function validateInput(input) {
   if (!isRecord(input)) return invalidInput("Input must be an object");
   if (typeof input.task !== "string" || input.task.trim() === "") {
@@ -129,7 +104,7 @@ function defaultDelegationProvider(input) {
   };
 }
 
-function createDelegateAgentTool({ delegationProvider = null, projectMemoryProvider = null } = {}) {
+function createDelegateAgentTool({ delegationProvider = null } = {}) {
   const configuredDelegate = typeof delegationProvider === "function" ? delegationProvider : null;
 
   const adapter = {
@@ -151,20 +126,10 @@ function createDelegateAgentTool({ delegationProvider = null, projectMemoryProvi
       }
 
       let outcome;
-      let projectMemory = null;
       try {
         const runtimeDelegate = typeof runtime?.delegationProvider === "function" ? runtime.delegationProvider : null;
         const delegate = runtimeDelegate || configuredDelegate || defaultDelegationProvider;
-        const workspace = executionContext.workspace?.root || "";
-        projectMemory = typeof projectMemoryProvider === "function" ? boundedProjectMemory(await projectMemoryProvider(workspace)) : null;
-        const delegatedInput = {
-          ...input,
-          contextPackage: {
-            ...input.contextPackage,
-            ...(projectMemory && typeof projectMemory === "object" ? { projectMemory } : {}),
-          },
-        };
-        outcome = await delegate(delegatedInput, executionContext, runtime);
+        outcome = await delegate(input, executionContext, runtime);
       } catch (error) {
         return structuredFailure(DELEGATE_ERROR_CODES.DELEGATION_FAILED, error.message);
       }
@@ -204,7 +169,6 @@ function createDelegateAgentTool({ delegationProvider = null, projectMemoryProvi
           },
           status: outcomeStatus,
           metadata: isRecord(outcome.metadata) ? outcome.metadata : {},
-          projectMemoryRevision: Number(projectMemory?.revision) || 0,
         },
       };
     },

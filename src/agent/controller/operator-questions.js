@@ -1,11 +1,13 @@
 /* Operator clarification questions — JSON schema, path builder, and model formatting. */
 
-const { slugifyTopic } = require("../modes/plan/plan-document");
-
 const QUESTIONS_DIR = ".xekute/questions";
 const FREE_WRITE_ID = "free_write";
 const FREE_WRITE_LABEL = "Other (write your own answer)";
 const DOCUMENT_VERSION = 1;
+
+function slugifyTopic(text = "") {
+  return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
 
 function buildQuestionsDocumentPath(topic = "", now = new Date()) {
   const slug = slugifyTopic(topic) || "clarification";

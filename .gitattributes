@@ -1,0 +1,8 @@
+# ONNX weights exceed GitHub's 100 MB git-object limit. Keep them in LFS so
+# clone/CI can fetch the bundled BGE model without rejecting the push.
+resources/memory-v3/models/**/*.onnx filter=lfs diff=lfs merge=lfs -text
+
+# Hash-verified model/knowledge text must stay LF. Windows autocrlf would
+# change byte sizes and fail `verifyModelAssets` in CI.
+resources/memory-v3/**/*.json text eol=lf
+resources/memory-v3/**/*.txt text eol=lf

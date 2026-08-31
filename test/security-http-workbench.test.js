@@ -22,17 +22,20 @@ function response(body = "ok", status = 200) {
   };
 }
 
-function configureAuthorizedScope(root) {
-  const inScopePath = path.join(root, "scope", "in-scope.json");
-  const configPath = path.join(root, "scope", "configurations.json");
-  const settingsPath = path.join(root, "settings.config");
-  const inScope = JSON.parse(fs.readFileSync(inScopePath, "utf8"));
-  inScope.targets.push({ ...inScope.targetTemplate, id: "target-1", value: "https://authorized.example" });
-  fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`);
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+function runtimeSettings() {
+  return { requests: { timeoutSeconds: 15, maximumResponseBytes: 1_000_000 }, logging: { logRawTraffic: true } };
+}
+
+function authorizedProfile(targets = ["https://authorized.example"]) {
+  return {
+    authorization: { confirmed: true },
+    scope: { inScopeTargets: targets.map((value, index) => ({ id: `t${index + 1}`, assetType: "url", value })) },
+    rulesOfEngagement: { requestTimeoutSeconds: 15 },
+  };
+}
+
+function emptyProfile() {
+  return { authorization: { confirmed: true }, scope: { inScopeTargets: [] }, rulesOfEngagement: {} };
 }
 
 test("raw HTTP parsing and scope matching are strict", () => {
@@ -47,7 +50,7 @@ test("raw HTTP parsing and scope matching are strict", () => {
 });
 
 test("Intruder builds capped sniper, pitchfork, and cluster payload requests", () => {
-  const raw = "GET /?user=$user$&pin=$pin$ HTTP/1.1\nHost: authorized.example";
+  const raw = "GET /?user=§user§&pin=§pin§ HTTP/1.1\nHost: authorized.example";
   const payloads = JSON.stringify({ user: ["alice", "bob"], pin: ["1", "2"] });
   const sniper = buildIntruderRequests(raw, payloads, "sniper", 25);
   assert.equal(sniper.ok, true);
@@ -56,6 +59,27 @@ test("Intruder builds capped sniper, pitchfork, and cluster payload requests", (
   assert.match(pitchfork.requests[1], /user=bob&pin=2/);
   const cluster = buildIntruderRequests(raw, payloads, "cluster-bomb", 3);
   assert.equal(cluster.requests.length, 3);
+});
+
+test("Intruder does not treat dollar signs in cookies as payload positions", () => {
+  const raw = [
+    "GET / HTTP/1.1",
+    "Host: www.nasa.gov",
+    "cookie: _ga=GA1.1.123.$o1$g0$t1787796549$j60$l0$h0; _ga_CSLL4ZEK4L=GS2.1.s1787796608$o1$g0$t1787796608$j60$l0$h0",
+  ].join("\n");
+  const none = buildIntruderRequests(raw, JSON.stringify({ o1: ["x"] }), "sniper", 25);
+  assert.equal(none.code, "NO_PAYLOAD_POSITIONS");
+
+  const marked = buildIntruderRequests(
+    raw.replace("www.nasa.gov", "§host§"),
+    JSON.stringify({ host: ["www.nasa.gov"] }),
+    "sniper",
+    25,
+  );
+  assert.equal(marked.ok, true);
+  assert.deepEqual(marked.slots, ["host"]);
+  assert.match(marked.requests[0], /Host: www\.nasa\.gov/);
+  assert.match(marked.requests[0], /\$o1\$g0\$t1787796549\$/);
 });
 
 test("workbench blocks unauthorized and out-of-scope traffic", async () => {
@@ -71,10 +95,23 @@ test("workbench blocks unauthorized and out-of-scope traffic", async () => {
     fetchImpl: async () => { fetches += 1; return response(); },
   });
 
-  const unauthorized = await workbench.run({ assessmentPath: root, rawRequest: "GET / HTTP/1.1\nHost: authorized.example", mode: "repeater" });
+  const missingSettings = await workbench.run({ assessmentPath: root, rawRequest: "GET / HTTP/1.1\nHost: authorized.example", mode: "repeater" });
+  assert.equal(missingSettings.code, "PROJECT_SETTINGS_REQUIRED");
+  const unauthorized = await workbench.run({
+    assessmentPath: root,
+    rawRequest: "GET / HTTP/1.1\nHost: authorized.example",
+    mode: "repeater",
+    projectProfile: emptyProfile(),
+    runtimeSettings: runtimeSettings(),
+  });
   assert.equal(unauthorized.code, "OUT_OF_SCOPE");
-  configureAuthorizedScope(root);
-  const outside = await workbench.run({ assessmentPath: root, rawRequest: "GET / HTTP/1.1\nHost: outside.example", mode: "repeater" });
+  const outside = await workbench.run({
+    assessmentPath: root,
+    rawRequest: "GET / HTTP/1.1\nHost: outside.example",
+    mode: "repeater",
+    projectProfile: authorizedProfile(),
+    runtimeSettings: runtimeSettings(),
+  });
   assert.equal(outside.code, "OUT_OF_SCOPE");
   assert.equal(fetches, 0);
   fs.rmSync(parent, { recursive: true, force: true });
@@ -85,9 +122,14 @@ test("authorized workbench requests are returned and timestamped in Traffic Raw"
   const root = path.join(parent, "assessment");
   const assessment = createAssessmentWorkspace({ fs, path, now: () => new Date(2026, 6, 11, 10, 23, 31, 19) });
   assessment.repair(root, { createRoot: true });
-  configureAuthorizedScope(root);
   const workbench = createSecurityHttpWorkbench({ fs, path, assessmentWorkspace: assessment, fetchImpl: async () => response("hello") });
-  const result = await workbench.run({ assessmentPath: root, rawRequest: "GET / HTTP/1.1\nHost: authorized.example", mode: "repeater" });
+  const result = await workbench.run({
+    assessmentPath: root,
+    rawRequest: "GET / HTTP/1.1\nHost: authorized.example",
+    mode: "repeater",
+    projectProfile: authorizedProfile(),
+    runtimeSettings: runtimeSettings(),
+  });
   assert.equal(result.ok, true);
   assert.match(result.response, /HTTP\/1\.1 200 OK/);
   assert.equal(result.logged.timestamp, "11/07/26-10:23:31:019");
@@ -104,15 +146,6 @@ test("workbench uses configured scope independently of authority metadata", asyn
   const assessment = createAssessmentWorkspace({ fs, path });
   assessment.repair(root, { createRoot: true });
 
-  const inScopePath = path.join(root, "scope", "in-scope.json");
-  const settingsPath = path.join(root, "settings.config");
-  const inScope = JSON.parse(fs.readFileSync(inScopePath, "utf8"));
-  inScope.targets.push({ ...inScope.targetTemplate, id: "target-1", value: "https://authorized.example" });
-  fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`);
-  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  settings.authority.superMode = "full";
-  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
-
   const workbench = createSecurityHttpWorkbench({
     fs,
     path,
@@ -123,6 +156,8 @@ test("workbench uses configured scope independently of authority metadata", asyn
     assessmentPath: root,
     rawRequest: "GET / HTTP/1.1\nHost: authorized.example",
     mode: "repeater",
+    projectProfile: authorizedProfile(),
+    runtimeSettings: runtimeSettings(),
   });
   assert.equal(result.ok, true);
   fs.rmSync(parent, { recursive: true, force: true });
@@ -134,14 +169,6 @@ test("authority metadata cannot bypass configured scope", async () => {
   const assessment = createAssessmentWorkspace({ fs, path });
   assessment.repair(root, { createRoot: true });
 
-  const inScopePath = path.join(root, "scope", "in-scope.json");
-  const settingsPath = path.join(root, "settings.config");
-  const inScope = JSON.parse(fs.readFileSync(inScopePath, "utf8"));
-  fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`);
-  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  settings.authority.superMode = "full";
-  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
-
   const workbench = createSecurityHttpWorkbench({
     fs,
     path,
@@ -152,6 +179,8 @@ test("authority metadata cannot bypass configured scope", async () => {
     assessmentPath: root,
     rawRequest: "GET / HTTP/1.1\nHost: authorized.example",
     mode: "intruder",
+    projectProfile: emptyProfile(),
+    runtimeSettings: runtimeSettings(),
   });
   assert.equal(result.code, "OUT_OF_SCOPE");
   fs.rmSync(parent, { recursive: true, force: true });

@@ -68,7 +68,20 @@ function createInvocationPipeline({ authorityRegistry, concurrency } = {}) {
           signal,
           emit: (event) => auditEvent("execution_monitor_module", { monitorEvent: event }),
           checkpoint: runtime.checkpoint,
-          execute: (monitorRuntime) => execute(monitorRuntime),
+          execute: (monitorRuntime) => execute({
+            ...monitorRuntime,
+            // Reaching the execution stage means every pre-execution authority
+            // gate allowed the invocation. This narrow, non-secret capability
+            // is consumed only by trusted adapters such as Sensitive Working
+            // Memory; the full decision trace stays inside the pipeline.
+            authorityDecision: {
+              ok: true,
+              code: "AUTHORITY_PIPELINE_ALLOWED",
+              policy: resolved.profile.id,
+              invocationId: context.invocationId,
+              toolName,
+            },
+          }),
         });
         for (const adapter of resolved.pipeline) {
           if (!POST_EXECUTION.has(adapter.name)) continue;

@@ -3,8 +3,8 @@
 module.exports = Object.freeze({
   channels: Object.freeze([
     "assessment:create", "assessment:open", "assessment:verify", "assessment:repair",
-    "assessment:trafficLog", "assessment:trafficHistory", "assessment:evidence",
-    "assessment:appendEvidence", "assessment:appendFinding", "assessment:createRun",
+    "assessment:trafficLog", "assessment:trafficHistory", "assessment:trafficRecords", "assessment:evidence",
+    "assessment:appendEvidence", "assessment:createRun",
     "assessment:updateRun", "assessment:generateReport", "assessment:runHistory",
     "assessment:deleteTrafficRecords", "assessment:map", "assessment:buildMap", "assessment:deepCollectGraph", "assessment:graphStatus",
     "assessment:mapOverview", "assessment:mapNode", "assessment:mapNeighbors", "assessment:mapPaths",

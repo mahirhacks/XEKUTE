@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 
 const PHASES = Object.freeze(["preflight", "execution", "observation", "verification", "complete"]);
 const CLAIM_STATES = Object.freeze(["observed", "inferred", "hypothesis", "verified", "rejected", "inconclusive", "unsupported"]);
-const TERMINAL_STATUSES = new Set(["completed", "failed", "stopped", "inconclusive", "waiting"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "stopped", "inconclusive", "waiting", "artifact_sync_failed"]);
 
 function stableId(prefix = "run") {
   return prefix + "-" + Date.now().toString(36) + "-" + crypto.randomBytes(4).toString("hex");

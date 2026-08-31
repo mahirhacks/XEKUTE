@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { URL } = require("node:url");
 const ScopeEngine = require("../../../domain/scope/scope-engine");
+const Artifacts = require("../../../domain/artifacts/investigation-artifacts.js");
 
 const MAX_RECORDS = 250;
 const MAX_TEXT = 20_000;
@@ -18,7 +19,6 @@ const RESOURCE_SPECS = Object.freeze({
   pages: { path: "enumeration/pages.json", collection: "pages", template: "pageTemplate", keys: ["url"], mapRole: "route" },
   subdomains: { path: "enumeration/subdomains.json", collection: "subdomains", template: "subdomainTemplate", keys: ["hostname"], mapRole: "host" },
   assets: { path: "enumeration/assets.json", collection: "assets", template: "assetTemplate", keys: ["assetType", "value"], mapRole: "asset" },
-  services: { path: "vulnerability-scans/services.json", collection: "services", template: "serviceTemplate", keys: ["host", "port", "transport"], mapRole: "service" },
 });
 
 const IngestError = class extends Error {
@@ -66,7 +66,6 @@ function enrich(resource, record, source, timestamp) {
   }
   if (resource === "pages" && record.url && !record.path) record.path = safeUrl(record.url)?.pathname || "/";
   if (resource === "subdomains") record.hostname = String(record.hostname || "").trim().toLowerCase().replace(/\.+$/, "");
-  if (resource === "services") record.transport = String(record.transport || "tcp").toLowerCase();
   return record;
 }
 
@@ -80,7 +79,6 @@ function statistics(resource, rows) {
   if (resource === "endpoints" || resource === "pages") return { total: rows.length, authenticated: rows.filter((row) => ![null, "", "unknown", "none", "unauthenticated"].includes(row.authentication)).length, unauthenticated: rows.filter((row) => ["none", "unauthenticated"].includes(row.authentication)).length, tested: rows.filter((row) => row.tested === true).length, untested: rows.filter((row) => row.tested !== true).length };
   if (resource === "subdomains") return { total: rows.length, live: rows.filter((row) => row.live === true).length, inScope: rows.filter((row) => row.inScope === true).length, takeoverCandidates: rows.filter((row) => ![null, "", "not-checked", "not-vulnerable"].includes(row.takeoverStatus)).length, tested: rows.filter((row) => row.tested === true).length };
   if (resource === "assets") return { total: rows.length, inScope: rows.filter((row) => row.inScope === true).length, outOfScope: rows.filter((row) => row.inScope === false).length, unknownScope: rows.filter((row) => row.inScope == null).length, live: rows.filter((row) => row.live === true || row.status === "live").length, stale: rows.filter((row) => row.status === "stale").length, untested: rows.filter((row) => row.tested !== true).length };
-  if (resource === "services") return { total: rows.length, current: rows.filter((row) => row.versionStatus === "current").length, outdated: rows.filter((row) => row.versionStatus === "outdated").length, endOfLife: rows.filter((row) => row.endOfLife === true).length, unknown: rows.filter((row) => !["current", "outdated"].includes(row.versionStatus) && row.endOfLife !== true).length };
   return {};
 }
 
@@ -130,20 +128,18 @@ function templateFieldsForDataset(workspace, spec) {
   return [...spec.keys];
 }
 
-function loadScopePolicy(workspace) {
-  const scope = readJsonFile(path.join(workspace, "scope/in-scope.json"), {});
-  const outScope = readJsonFile(path.join(workspace, "scope/out-of-scope.json"), {});
+function loadScopePolicy(_workspace, projectProfile = null) {
+  const scope = projectProfile?.scope || {};
   return {
-    targets: Array.isArray(scope.targets) ? scope.targets : [],
+    targets: Array.isArray(scope.inScopeTargets) ? scope.inScopeTargets : [],
     wildcardRules: Array.isArray(scope.wildcardRules) ? scope.wildcardRules : [],
-    excludedTargets: Array.isArray(outScope.assets) ? outScope.assets : [],
+    excludedTargets: Array.isArray(scope.outOfScopeTargets) ? scope.outOfScopeTargets : [],
   };
 }
 
 function targetsFromRecord(resource, record) {
   if (resource === "endpoints" || resource === "pages") return [record.url].filter(Boolean);
   if (resource === "subdomains") return [record.hostname].filter(Boolean);
-  if (resource === "services") return [record.host, `${record.host}:${record.port}`].filter(Boolean);
   return [record.value, record.host].filter(Boolean);
 }
 
@@ -161,9 +157,12 @@ function validateRecordScope(scopePolicy, resource, record) {
 }
 
 function readCoverageSummary(workspace) {
-  const doc = readJsonFile(path.join(workspace, "penetration-testing/coverage.json"), null);
-  if (!doc) return null;
-  const matrix = Array.isArray(doc.matrix) ? doc.matrix : [];
+  let matrix = [];
+  try {
+    const parsed = Artifacts.parseChecklist(fs.readFileSync(path.join(workspace, ...Artifacts.PATHS.checklist.split("/")), "utf8"));
+    if (!parsed.ok) return null;
+    matrix = parsed.value;
+  } catch { return null; }
   const byStatus = {};
   for (const item of matrix) {
     const status = String(item?.status || "unknown");
@@ -171,7 +170,7 @@ function readCoverageSummary(workspace) {
   }
   const untested = (byStatus["not-tested"] || 0) + (byStatus["in-progress"] || 0) + (byStatus["blocked"] || 0);
   return {
-    summary: doc.summary && typeof doc.summary === "object" ? doc.summary : {},
+    summary: byStatus,
     byStatus,
     gapCount: untested,
     totalItems: matrix.length,
@@ -249,7 +248,7 @@ function ingest(payload = {}) {
   const target = path.resolve(workspace, spec.path);
   if (target !== workspace && !target.startsWith(`${workspace}${path.sep}`)) throw new IngestError("Resolved dataset escaped the assessment workspace", "PATH_ESCAPE");
   const coverageBefore = readCoverageSummary(workspace);
-  const scopePolicy = loadScopePolicy(workspace);
+  const scopePolicy = loadScopePolicy(workspace, payload.projectProfile || null);
   const expectProvision = !fs.existsSync(target);
   if (expectProvision) {
     const provisioned = provisionedDocument(spec, payload.provision, resource);

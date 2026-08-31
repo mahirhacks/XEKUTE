@@ -177,11 +177,11 @@ test("advanced workspace queries validate Boolean operators and structured VAPT 
   assert.equal(evaluateAst(parsed.ast, document, parsed.options), true);
 });
 
-test("advanced workspace search filters traffic and findings while streaming source counts", async (t) => {
+test("advanced workspace search filters traffic and evidence while streaming source counts", async (t) => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-advanced-workspace-search-"));
   const workspace = path.join(parent, "workspace");
   fs.mkdirSync(path.join(workspace, "traffic"), { recursive: true });
-  fs.mkdirSync(path.join(workspace, "findings"), { recursive: true });
+  fs.mkdirSync(path.join(workspace, ".xekute", "evidence"), { recursive: true });
   t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
   const traffic = [
     { recordType: "http-exchange", method: "GET", url: "https://api.test/orders/1001", statusCode: 200, captureIdentity: { id: "account-a" }, request: { method: "GET", url: "https://api.test/orders/1001" }, response: { status: 200, body: '{"id":1001,"owner":"a"}' } },
@@ -189,7 +189,7 @@ test("advanced workspace search filters traffic and findings while streaming sou
   ];
   fs.writeFileSync(path.join(workspace, "traffic", "raw.jsonl"), `${traffic.map(JSON.stringify).join("\n")}\n`, "utf8");
   fs.writeFileSync(path.join(workspace, "capture.har"), JSON.stringify({ log: { entries: [{ startedDateTime: "2026-08-20T10:00:00Z", request: { method: "POST", url: "https://api.test/session", headers: [], queryString: [] }, response: { status: 401, headers: [{ name: "Content-Type", value: "application/json" }], content: { text: '{"error":"unauthorized"}' } }, time: 12 }] } }), "utf8");
-  fs.writeFileSync(path.join(workspace, "findings", "findings.json"), JSON.stringify({ findings: [{ id: "F-1", title: "IDOR", severity: "high", status: "confirmed", confidence: 0.95 }] }, null, 2), "utf8");
+  fs.writeFileSync(path.join(workspace, ".xekute", "evidence", "E-0001.json"), `${JSON.stringify({ id: "E-0001", title: "IDOR", severity: "high", status: "verified", confidence: 0.95 })}\n`, "utf8");
 
   const workspaceSearch = createWorkspaceSearch({ fs, path });
   const rows = [];
@@ -205,10 +205,10 @@ test("advanced workspace search filters traffic and findings while streaming sou
   assert.equal(har.totalCount, 1);
   assert.equal(harRows[0].path, "capture.har");
 
-  const findingRows = [];
-  const findings = await workspaceSearch.searchWorkspaceStream(workspace, "source:finding severity:high confidence:>=0.9", { onBatch: (payload) => findingRows.push(...payload.results) });
-  assert.equal(findings.totalCount, 1);
-  assert.equal(findingRows[0].title, "IDOR");
+  const evidenceRows = [];
+  const evidence = await workspaceSearch.searchWorkspaceStream(workspace, "source:evidence severity:high confidence:>=0.9", { onBatch: (payload) => evidenceRows.push(...payload.results) });
+  assert.equal(evidence.totalCount, 1);
+  assert.match(evidenceRows[0].path, /\.xekute\/evidence\/E-0001\.json/);
 });
 
 test("IDOR and BOLA search correlates cross-identity object evidence without claiming a confirmed vulnerability", async (t) => {

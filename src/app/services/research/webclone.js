@@ -11,11 +11,11 @@ function safeRelativePath(value, fallback = "asset.txt") {
   return parts.join("/").slice(0, 180) || fallback;
 }
 
-function inScope(root, target, fs, path) {
+function inScope(root, target, projectProfileProvider) {
   try {
-    const data = JSON.parse(fs.readFileSync(path.join(root, "scope", "in-scope.json"), "utf8"));
-    const values = (data.targets || []).map((entry) => typeof entry === "string" ? entry : entry?.value).filter(Boolean);
-    if (!values.length) return true;
+    const profile = typeof projectProfileProvider === "function" ? projectProfileProvider(root) : null;
+    const values = (profile?.scope?.inScopeTargets || []).map((entry) => typeof entry === "string" ? entry : entry?.value).filter(Boolean);
+    if (!values.length) return false;
     const host = new URL(target).hostname.toLowerCase();
     return values.some((value) => {
       try { return new URL(value).hostname.toLowerCase() === host; } catch { return String(value).toLowerCase().includes(host); }
@@ -38,7 +38,7 @@ function extractReferences(html, baseUrl) {
   return [...new Set(references)].slice(0, MAX_ASSETS);
 }
 
-function createWebCloneService({ fs, path: pathApi, webResearch } = {}) {
+function createWebCloneService({ fs, path: pathApi, webResearch, projectProfileProvider = null } = {}) {
   async function build({ root, target, maxAssets = MAX_ASSETS } = {}) {
     if (!root || !fs.existsSync(root)) return { error: "Open an assessment before building WebClone." };
     let targetUrl;
@@ -46,10 +46,10 @@ function createWebCloneService({ fs, path: pathApi, webResearch } = {}) {
       targetUrl = new URL(String(target || ""));
       if (!["http:", "https:"].includes(targetUrl.protocol)) throw new Error("Only HTTP and HTTPS targets are supported");
     } catch (error) { return { error: `Invalid WebClone target: ${error.message}` }; }
-    if (!inScope(root, targetUrl.toString(), fs, pathApi)) return { error: "WebClone target is not present in the assessment In-Scope list." };
+    if (!inScope(root, targetUrl.toString(), projectProfileProvider)) return { error: "WebClone target is not present in Project Settings scope." };
 
     const limit = Math.max(1, Math.min(Number(maxAssets) || MAX_ASSETS, MAX_ASSETS));
-    const baseFolder = pathApi.join(root, "webclone");
+    const baseFolder = pathApi.join(root, "WebClone");
     fs.mkdirSync(pathApi.join(baseFolder, "assets"), { recursive: true });
     const page = await webResearch.fetchRawUrl(targetUrl.toString(), { maxBytes: MAX_FILE_BYTES });
     if (page.error) return page;
@@ -62,7 +62,7 @@ function createWebCloneService({ fs, path: pathApi, webResearch } = {}) {
       fs.mkdirSync(pathApi.dirname(full), { recursive: true });
       const value = String(content || "").slice(0, MAX_FILE_BYTES);
       fs.writeFileSync(full, value, "utf8");
-      files.push({ path: `webclone/${safe}`, bytes: Buffer.byteLength(value), contentType, ...(source ? { source } : {}) });
+      files.push({ path: `WebClone/${safe}`, bytes: Buffer.byteLength(value), contentType, ...(source ? { source } : {}) });
     };
     writeText("index.html", page.text, String(page.response?.headers?.get?.("content-type") || "text/html"), page.finalUrl);
     const queue = extractReferences(page.text, page.finalUrl).slice(0, limit);
@@ -84,15 +84,15 @@ function createWebCloneService({ fs, path: pathApi, webResearch } = {}) {
   }
 
   function readManifest(root) {
-    try { return { ok: true, ...JSON.parse(fs.readFileSync(pathApi.join(root, "webclone", "manifest.json"), "utf8")) }; }
+    try { return { ok: true, ...JSON.parse(fs.readFileSync(pathApi.join(root, "WebClone", "manifest.json"), "utf8")) }; }
     catch { return { ok: true, files: [], target: "", builtAt: "" }; }
   }
 
   function readFile(root, relativePath) {
     try {
       if (!root || !relativePath) return { error: "A WebClone assessment and file path are required." };
-      const cloneRoot = pathApi.resolve(root, "webclone");
-      const normalized = String(relativePath).replace(/\\/g, "/").replace(/^webclone\//i, "");
+      const cloneRoot = pathApi.resolve(root, "WebClone");
+      const normalized = String(relativePath).replace(/\\/g, "/").replace(/^WebClone\//i, "");
       const target = pathApi.resolve(cloneRoot, normalized);
       const relation = pathApi.relative(cloneRoot, target);
       if (!relation || relation.startsWith("..") || pathApi.isAbsolute(relation)) return { error: "The WebClone file path is invalid." };

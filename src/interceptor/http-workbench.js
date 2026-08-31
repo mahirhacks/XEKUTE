@@ -78,10 +78,22 @@ function rawResponseText(status, statusText, headers, body) {
   ].join("\r\n");
 }
 
+function wrapIntruderSlot(name) {
+  return `§${name}§`;
+}
+
+function intruderSlotPattern() {
+  return /§([A-Za-z_][\w-]*)§/g;
+}
+
+function findIntruderSlots(rawRequest) {
+  return [...new Set([...String(rawRequest || "").matchAll(intruderSlotPattern())].map((match) => match[1]))];
+}
+
 function buildIntruderRequests(rawRequest, rawPayloadSets, attackType = "sniper", maxRequests = 25) {
   const request = String(rawRequest || "");
-  const slots = [...new Set([...request.matchAll(/\$([A-Za-z_][\w-]*)\$/g)].map((match) => match[1]))];
-  if (!slots.length) return { error: "Add at least one named payload position such as $id$", code: "NO_PAYLOAD_POSITIONS" };
+  const slots = findIntruderSlots(request);
+  if (!slots.length) return { error: "Add at least one named payload position such as §id§", code: "NO_PAYLOAD_POSITIONS" };
   let parsed;
   try { parsed = JSON.parse(String(rawPayloadSets || "{}")); } catch { return { error: "Payload sets must be valid JSON", code: "INVALID_PAYLOADS" }; }
 
@@ -95,7 +107,7 @@ function buildIntruderRequests(rawRequest, rawPayloadSets, attackType = "sniper"
     return { error: `Missing payload array for: ${slots.filter((slot) => !payloads[slot]?.length).join(", ")}`, code: "MISSING_PAYLOAD_SET" };
   }
 
-  const render = (values) => request.replace(/\$([A-Za-z_][\w-]*)\$/g, (_match, name) => values[name] ?? "");
+  const render = (values) => request.replace(intruderSlotPattern(), (_match, name) => values[name] ?? "");
   const combinations = [];
   const base = Object.fromEntries(slots.map((slot) => [slot, payloads[slot][0]]));
 
@@ -134,40 +146,16 @@ function buildIntruderRequests(rawRequest, rawPayloadSets, attackType = "sniper"
 }
 
 function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, assessmentWorkspace }) {
-  function readJson(root, relativePath) {
-    return JSON.parse(fs.readFileSync(path.join(root, ...relativePath.split("/")), "utf8"));
-  }
-
   async function run({ assessmentPath, rawRequest, mode = "repeater", projectProfile = null, runtimeSettings = null } = {}) {
     if (!ALLOWED_MODES.has(mode)) return { error: "Unknown security workbench mode", code: "INVALID_MODE" };
     const verification = assessmentWorkspace.verify(assessmentPath);
     if (verification.error) return verification;
 
-    let inScope;
-    let configuration;
-    let settings;
-    if (projectProfile && runtimeSettings) {
-      const rules = projectProfile.rulesOfEngagement || {};
-      const review = projectProfile.review || {};
-      inScope = {
-        targets: projectProfile.scope?.inScopeTargets || [],
-        authorization: projectProfile.authorization || {},
-      };
-      configuration = {
-        safety: {
-          requestTimeoutSeconds: Number(rules.requestTimeoutSeconds) || 15,
-        },
-      };
-      settings = runtimeSettings;
-    } else {
-      try {
-        inScope = readJson(verification.root, "scope/in-scope.json");
-        configuration = readJson(verification.root, "scope/configurations.json");
-        settings = readJson(verification.root, "settings.config");
-      } catch (error) {
-        return { error: `Could not read project scope: ${error.message}`, code: "SCOPE_READ_FAILED" };
-      }
-    }
+    if (!projectProfile || !runtimeSettings) return { error: "App-managed project settings are required", code: "PROJECT_SETTINGS_REQUIRED" };
+    const rules = projectProfile.rulesOfEngagement || {};
+    const inScope = { targets: projectProfile.scope?.inScopeTargets || [], authorization: projectProfile.authorization || {} };
+    const configuration = { safety: { requestTimeoutSeconds: Number(rules.requestTimeoutSeconds) || 15 } };
+    const settings = runtimeSettings;
 
     const parsed = parseRawHttpRequest(rawRequest);
     if (parsed.error) return parsed;
@@ -236,6 +224,8 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
 module.exports = {
   buildIntruderRequests,
   createSecurityHttpWorkbench,
+  findIntruderSlots,
   parseRawHttpRequest,
   urlMatchesTarget,
+  wrapIntruderSlot,
 };
