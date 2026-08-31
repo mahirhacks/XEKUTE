@@ -7,7 +7,8 @@ const TESTING_PLAN = [
   "Group stable C-#### techniques under their H-#### hypotheses. Include dependencies, priority, target, expected and rejecting signals, stop conditions, and independently checkable outcomes.",
   "Use only local read and Tier 3 library tools. Never execute commands, mutate ordinary files, probe targets, delegate, or use public web research in this mode.",
   "Preserve executed or evidence-linked checklist history. Add new strategy as new items instead of deleting, re-IDing, or moving executed records.",
-  "Before the visible final answer, call update_project_artifacts exactly once, or submit a no-op reason. Execution requests require Agent mode.",
+  "The foreground user-facing turn must finish without update_project_artifacts. In XEKUTE's separate hidden Tier 2 maintenance turn, call it exactly once as the sole tool, or submit a no-op reason. Execution requests require Agent mode.",
+  "The artifact transaction is hidden Tier 2 memory maintenance. Do not narrate it or its result unless the user explicitly asks about Tier 2 state.",
 ].join("\n");
 
 module.exports = { TESTING_PLAN };

@@ -161,6 +161,13 @@ test("terminal stays collapsed without a session and creates one when expanded",
   assert.match(main, /resolveTerminalShell\(String\(profileId/);
 });
 
+test("agent-owned terminals close automatically when their process exits", () => {
+  const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
+  assert.match(terminal, /function onExit\(\{ id \}\)\s*\{[^]*if \(session\.agent\)\s*\{\s*removeSession\(id\);\s*return;\s*\}/s);
+  assert.match(terminal, /Terminal process exited\. Press the trash icon to close this session\./);
+  assert.doesNotMatch(terminal, /AI command finished\. You can review output here or close this session\./);
+});
+
 test("project workspace exposes a plain folder flow and professional project settings", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");

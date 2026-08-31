@@ -24,7 +24,8 @@ test("renderer sends prompts without model schemas and main owns registry catalo
   assert.doesNotMatch(agentRunPayload, /tools\s*:/);
   assert.doesNotMatch(renderer, /window\.api\.chat\(/);
   assert.match(main, /toolCatalogFromRegistry\(container\.toolRegistry\)/);
-  assert.match(main, /tools: selectedCatalog\.tools/);
+  assert.match(main, /const runtimeTools = tier2MemoryMaintenance[\s\S]*?selectedCatalog\.tools/);
+  assert.match(main, /tools: runtimeTools/);
 });
 
 test("active IPC handlers and preload methods include live channels and omit removed approval/chat APIs", () => {

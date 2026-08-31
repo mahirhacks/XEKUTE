@@ -115,7 +115,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /source === "parent_continuation"/);
   assert.match(renderer, /function renderParentContinuationEvent\(/);
   assert.match(main, /function scheduleParentContinuation\(/);
-  assert.match(main, /onResultReady: \(readyResult\) => scheduleParentContinuation\(runKey, readyResult\)/);
+  assert.match(main, /onResultReady: \(readyResult\) => scheduleParentContinuation\(coordinationKey, readyResult\)/);
   assert.match(main, /agent:pendingParentContinuations/);
   assert.match(renderer, /pendingParentContinuations/);
   assert.match(renderer, /getBoundingClientRect\(\)/);
@@ -320,6 +320,33 @@ test("background terminal continuations remain internal to the agent runtime", (
   assert.match(renderer, /internalSkillId: internal \? String\(options\?\.internalSkillId \|\| ""\) : ""/);
   assert.match(main, /const internalSkillId = payload\.internalRuntimeInput && payload\.internalSkillId === "pentest" \? "pentest" : ""/);
   assert.match(main, /const skillIntent = payload\.internalRuntimeInput[\s\S]*?\? \(internalSkillId \? `\/\$\{internalSkillId\}` : ""\)/);
+});
+
+test("Tier 2 memory maintenance runs on a hidden background surface", () => {
+  const renderer = read("src/ui/bootstrap.js");
+  const main = read("src/app/electron/main.js");
+  const prompt = read("src/prompts/instructions/system-prompt.js");
+
+  assert.match(renderer, /function isTier2MemoryTool\([\s\S]*?update_project_artifacts/);
+  assert.match(renderer, /payload\.type === "tool_call"[\s\S]*?filter\(\(tool\) => !isTier2MemoryTool\(tool\)\)/);
+  assert.match(renderer, /payload\.type === "tool_start"[\s\S]*?if \(isTier2MemoryTool\(payload\.tool\)\) return/);
+  assert.match(renderer, /payload\.type === "tool_result"[\s\S]*?if \(isTier2MemoryTool\(payload\.tool\)\) return/);
+  assert.match(renderer, /function executeHiddenAgentRuntime\([\s\S]*?backgroundRuntime: true/);
+  assert.match(renderer, /tier2MemoryMaintenance: Boolean\(options\?\.tier2MemoryMaintenance\)/);
+  assert.match(renderer, /function sendHiddenAgentRuntime\([\s\S]*?hiddenAgentRuntimeQueues\.set\(key, task\)/);
+  assert.match(renderer, /function scheduleTier2MemoryMaintenance\([\s\S]*?TIER2_MEMORY_MAINTENANCE_PROMPT[\s\S]*?tier2MemoryMaintenance: true/);
+  assert.match(renderer, /shouldMaintainTier2[\s\S]*?scheduleTier2MemoryMaintenance\(\{/);
+  assert.match(renderer, /executeQueuedHiddenAgentRuntime[\s\S]*?tier2MemoryMaintenanceSucceeded[\s\S]*?return executeHiddenAgentRuntime\(payload\)/);
+  assert.match(renderer, /payload\?\.source === "background_runtime"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
+  assert.match(renderer, /payload\?\.source === "parent_continuation"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
+  assert.match(renderer, /handleHiddenBackgroundRuntimeEvent[\s\S]*?ackParentContinuation/);
+  assert.match(main, /const runKey = tier2MemoryMaintenance[\s\S]*?`\$\{foregroundRunKey\}::tier2`[\s\S]*?`\$\{foregroundRunKey\}::background`[\s\S]*?: foregroundRunKey/);
+  assert.match(main, /const runtimeTools = tier2MemoryMaintenance[\s\S]*?name === "update_project_artifacts"[\s\S]*?name !== "update_project_artifacts"/);
+  assert.match(main, /requireArtifactFinalization: artifactWorkspace && backgroundRuntime/);
+  assert.match(main, /v3SessionStore\?\.record && !tier2MemoryMaintenance/);
+  assert.match(main, /source: "background_runtime"/);
+  assert.doesNotMatch(main, /result\.finalText = `\$\{String\(result\.finalText/);
+  assert.match(prompt, /update_project_artifacts is available only in the isolated post-response Tier 2 maintenance turn/);
 });
 
 test("assistant messages render a relative-time label beside the copy button", () => {

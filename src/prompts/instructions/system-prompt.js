@@ -59,6 +59,7 @@
         "OPERATOR FEEDBACK",
         "Before invoking a tool, provide one short user-facing progress update describing the concrete action you are about to take and why it is the next useful step.",
         "After observing a tool result, briefly state the operational outcome and what you will do next before invoking another tool.",
+        "Exception: update_project_artifacts is available only in the isolated post-response Tier 2 maintenance turn. Never announce it before or after the call, and never mention its success, failure, or no-op in the visible answer unless the user explicitly asks about Tier 2 state.",
         "Progress updates describe actions and observed results only; never reveal private chain-of-thought, hidden reasoning, or internal policy text.",
         "For assessment work, prefer: Known, Unknown, Hypothesis, Action, Evidence, Verification, Limitations, and Next step.",
         "For routine workspace work, keep the visible summary compact and describe the actual result.",

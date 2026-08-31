@@ -171,3 +171,100 @@ test("missing-finalizer retries once then artifact_sync_failed; verify_finding r
   assert.doesNotMatch(verifySource, /writeFile|appendFile|mkdirSync/);
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test("a completed Tier 2 turn stages and commits project information, checklist state, and evidence together", async () => {
+  const { root, artifacts } = boot();
+  const hypothesis = artifacts.stage(root, {
+    mode: "hypothesis",
+    expected_revisions: artifacts.inspect(root).revisions,
+    operations: [{ kind: "hypothesis.create", client_ref: "h1", title: "Session handling" }],
+  });
+  assert.equal(hypothesis.ok, true, hypothesis.error);
+  assert.equal(artifacts.commit(root, hypothesis.staging_id).ok, true);
+  const checklist = artifacts.stage(root, {
+    mode: "plan",
+    expected_revisions: artifacts.inspect(root).revisions,
+    operations: [{
+      kind: "checklist.create",
+      client_ref: "c1",
+      hypothesis_id: "H-0001",
+      title: "Inspect the session cookie",
+      phase: "execution",
+      target: "app.example",
+    }],
+  });
+  assert.equal(checklist.ok, true, checklist.error);
+  assert.equal(artifacts.commit(root, checklist.staging_id).ok, true);
+
+  const updateTool = createUpdateProjectArtifactsTool({ artifacts });
+  const expectedRevisions = artifacts.inspect(root).revisions;
+  const operations = [
+    { kind: "project.upsert", document: "targets", key: "Host", value: "app.example", source_refs: ["traffic:1"] },
+    { kind: "checklist.execution", id: "C-0001", status: "in_progress", execution_result: "Cookie behavior observed." },
+    {
+      kind: "evidence.create",
+      client_ref: "e1",
+      title: "Session cookie observed",
+      status: "observed",
+      checklist_refs: ["C-0001"],
+      hypothesis_refs: ["H-0001"],
+      target_refs: ["app.example"],
+      source_refs: ["traffic:1"],
+      sanitized_excerpts: "Set-Cookie header observed",
+    },
+  ];
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    workspace: root,
+    userMessage: "Record the completed cookie inspection.",
+    requireArtifactFinalization: true,
+    isFirstAgentTurn: false,
+    tools: [{
+      type: "function",
+      function: {
+        name: updateTool.name,
+        description: "Stage canonical Tier 2 project artifacts.",
+        parameters: updateTool.inputSchema,
+      },
+    }],
+    runModelRound: async () => {
+      if (round++ === 0) {
+        return {
+          fullText: "",
+          toolCalls: [{
+            id: "tier2-finalizer",
+            type: "function",
+            function: {
+              name: "update_project_artifacts",
+              arguments: JSON.stringify({ expected_revisions: expectedRevisions, operations }),
+            },
+          }],
+        };
+      }
+      return { fullText: "Tier 2 maintenance complete.", toolCalls: [] };
+    },
+    executeToolCall: async ({ toolCall, mode }) => {
+      const input = typeof toolCall.function.arguments === "string"
+        ? JSON.parse(toolCall.function.arguments)
+        : toolCall.function.arguments;
+      return artifacts.stage(root, {
+        mode,
+        expected_revisions: input.expected_revisions,
+        operations: input.operations,
+        trusted_provenance: { successfulToolRefs: [] },
+      });
+    },
+  });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.runState.status, "completed", JSON.stringify(result));
+  assert.ok(result.artifactFinalization?.staging_id);
+  const committed = artifacts.commit(root, result.artifactFinalization.staging_id);
+  assert.equal(committed.ok, true, committed.error);
+
+  const snapshot = artifacts.inspect(root);
+  assert.equal(snapshot.project.documents.targets.some((fact) => fact.value === "app.example"), true);
+  assert.equal(snapshot.checklist.find((item) => item.id === "C-0001")?.status, "in_progress");
+  assert.equal(snapshot.evidence.find((item) => item.id === "E-0001")?.title, "Session cookie observed");
+  fs.rmSync(root, { recursive: true, force: true });
+});

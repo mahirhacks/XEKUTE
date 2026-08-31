@@ -682,6 +682,14 @@ let chatHistory  = [];
 const activeChatRuns = new Map();
 const chatSendInFlight = new Set();
 const pentestContinuationTimers = new Map();
+const hiddenAgentRuntimeQueues = new Map();
+const TIER2_MEMORY_MODES = new Set(["agent", "hypothesis", "plan"]);
+const TIER2_MEMORY_MAINTENANCE_PROMPT = [
+  "Perform hidden Tier 2 memory maintenance for the immediately preceding completed user-facing turn.",
+  "Use the completed transcript and canonical artifact context to persist every grounded change owned by the current mode: project information, hypotheses, checklist state, and evidence as applicable.",
+  "Call update_project_artifacts exactly once as the sole tool call. Use typed sourced operations when durable state changed; otherwise provide a specific no_op_reason.",
+  "Do not continue the user conversation, repeat the visible answer, execute target actions, ask questions, or call any other tool.",
+].join(" ");
 const chatSessionsNeedingAttention = new Set();
   let subagentCompletionPending = false;
   let pendingBackgroundWaitEvents = [];
@@ -1785,7 +1793,7 @@ async function recoverPendingSubagentResults() {
     if (typeof window.api?.pendingParentContinuations === "function") {
       const response = await window.api.pendingParentContinuations({ sessionIds });
       for (const entry of Array.isArray(response?.results) ? response.results : []) {
-        queueParentContinuationEvent({
+        handleHiddenBackgroundRuntimeEvent({
           type: "parent_continuation_complete",
           source: "parent_continuation",
           sessionId: entry.parentSessionId || entry.sessionId,
@@ -15105,6 +15113,16 @@ function isTaskListTool(tool) {
   return toolActionName(tool) === "update_task_list";
 }
 
+// Canonical project_info, H-####, C-####, and E-#### maintenance is the
+// durable Tier 2/artifact lane. It is operational state, not chat content.
+function isTier2MemoryTool(tool = {}) {
+  return toolActionName(tool) === "update_project_artifacts";
+}
+
+function isTier2MemoryActivity(text = "") {
+  return /\bupdate_project_artifacts\b/i.test(String(text || ""));
+}
+
 function clearComposerTaskList() {
   activeComposerTaskList = null;
   if (composerTaskListEl) {
@@ -16410,6 +16428,117 @@ function schedulePentestContinuation(sessionId = "", prompt = "") {
   pentestContinuationTimers.set(key, setTimeout(resume, 75));
 }
 
+async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", options = {} } = {}) {
+  const runSession = [...chatSessions, ...closedChatSessions, ...archivedChatSessions]
+    .find((session) => session.id === String(targetSessionId || ""));
+  if (!runSession) return { ok: false, code: "BACKGROUND_SESSION_NOT_FOUND" };
+  const runModel = runSession.selectedModel || selectedModel;
+  if (!runModel) return { ok: false, code: "BACKGROUND_MODEL_NOT_SELECTED" };
+  const runMode = options?.modeOverride
+    ? canonicalChatMode(options.modeOverride)
+    : (runSession.chatMode || chatMode);
+  const runFamily = runSession.chatFamily || chatFamily;
+  const runSettings = getModelSettings(runModel);
+  const runContextPlan = resolvedWorkingContextPlan(runModel);
+  const runtimeSessionId = runSession.memorySessionId || runSession.id;
+  const providedContextFiles = Array.isArray(options?.contextFiles)
+    ? options.contextFiles.filter((file) => file && typeof file.path === "string" && typeof file.content === "string")
+    : [];
+  const runActiveFile = Object.prototype.hasOwnProperty.call(options || {}, "activeFile")
+    ? options.activeFile
+    : (providedContextFiles[0] || getActiveFileContext());
+  const runWorkspace = String(options?.workspace || rootPath || "");
+  try {
+    // Background lanes never open cards or transcript rows. Their global
+    // event sink auto-skips any clarification request that cannot be shown.
+    const result = await window.api.agentRun({
+      workspace: runWorkspace,
+      model: runModel,
+      numCtx: runContextPlan.provider === "ollama" ? runContextPlan.effectiveLimitTokens : null,
+      contextBudget: runContextPlan.effectiveLimitTokens,
+      contextPlan: runContextPlan,
+      thinking: runSettings.thinking,
+      reasoningEffort: runContextPlan.provider === "openrouter" ? runSettings.reasoningEffort : null,
+      mode: runMode,
+      modeFamily: runFamily,
+      authorityProfile: authoritySettingsData.superMode,
+      chatHistory: workingHistoryMessages((runSession.history || []).filter((message) => !isInternalRuntimeInputMessage(message)), runSession),
+      rawSourceTokens: estimateMessagesTokens((runSession.history || []).filter((message) => !isInternalRuntimeInputMessage(message))),
+      sessionId: runtimeSessionId,
+      blockId: runSession.memoryBlockId || "",
+      dirMap: dirMapCache,
+      activeFile: runActiveFile,
+      extraFiles: providedContextFiles,
+      subagentModel: getExploreSubagentModel(),
+      userMessage: options?.continuation ? "" : String(text || ""),
+      internalRuntimeInput: true,
+      internalSkillId: String(options?.internalSkillId || ""),
+      continuation: options?.continuation || null,
+      backgroundRuntime: true,
+      tier2MemoryMaintenance: Boolean(options?.tier2MemoryMaintenance),
+    });
+    if (result?.pentestLoop?.continue === true && !result?.aborted) {
+      schedulePentestContinuation(runSession.id, result.pentestLoop.prompt);
+    }
+    return result;
+  } catch (error) {
+    return { ok: false, error: error?.message || "Background runtime failed.", code: error?.code || "BACKGROUND_RUNTIME_FAILED" };
+  } finally {
+    queueMicrotask(drainPendingBackgroundWaitEvents);
+    scheduleSubagentResultDrain();
+  }
+}
+
+function tier2MemoryMaintenanceSucceeded(result = {}) {
+  return Boolean(
+    result?.ok
+    && !result?.aborted
+    && result?.runState?.status === "completed"
+    && result?.artifactSync?.ok !== false
+  );
+}
+
+async function executeQueuedHiddenAgentRuntime(payload = {}) {
+  const first = await executeHiddenAgentRuntime(payload);
+  if (!payload?.options?.tier2MemoryMaintenance || tier2MemoryMaintenanceSucceeded(first)) return first;
+  // The controller already retries a missing finalizer once. This second
+  // complete background attempt covers transient provider, staging, and
+  // commit failures without ever reopening the visible response.
+  return executeHiddenAgentRuntime(payload);
+}
+
+function sendHiddenAgentRuntime(payload = {}) {
+  const key = String(payload.targetSessionId || "");
+  const prior = hiddenAgentRuntimeQueues.get(key) || Promise.resolve();
+  const task = prior
+    .catch(() => {})
+    .then(() => executeQueuedHiddenAgentRuntime(payload));
+  hiddenAgentRuntimeQueues.set(key, task);
+  task.finally(() => {
+    if (hiddenAgentRuntimeQueues.get(key) === task) hiddenAgentRuntimeQueues.delete(key);
+  });
+  return task;
+}
+
+function scheduleTier2MemoryMaintenance({ targetSessionId = "", mode = "agent", workspace = "" } = {}) {
+  const maintenanceMode = canonicalChatMode(mode);
+  const projectRoot = String(workspace || "");
+  if (!targetSessionId || !projectRoot || !TIER2_MEMORY_MODES.has(maintenanceMode)) {
+    return Promise.resolve({ ok: true, skipped: true });
+  }
+  return sendHiddenAgentRuntime({
+    targetSessionId,
+    text: TIER2_MEMORY_MAINTENANCE_PROMPT,
+    options: {
+      modeOverride: maintenanceMode,
+      workspace: projectRoot,
+      activeFile: null,
+      contextFiles: [],
+      tier2MemoryMaintenance: true,
+    },
+  });
+}
+
 async function sendMessageWithAgentRuntime(options = {}) {
   const internal = Boolean(options?.internal);
   const targetSessionId = String(options?.sessionId || activeChatSessionId || "");
@@ -16441,6 +16570,10 @@ async function sendMessageWithAgentRuntime(options = {}) {
     return;
   }
   closeSlashSuggestions();
+
+  if (internal) {
+    return sendHiddenAgentRuntime({ targetSessionId, text, options });
+  }
 
   const runSession = chatSessions.find((session) => session.id === targetSessionId)
     || (internal ? null : activeChatSession());
@@ -16494,6 +16627,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     model: runModel,
     mode: runMode,
     family: runFamily,
+    workspace: rootPath,
     contextPlan: runContextPlan,
     contextFilesCache: [],
     activeStreamContent: "",
@@ -16615,6 +16749,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
 
     if (payload.type === "activity") {
       if (isSilentToolRoutingActivity(payload.text)) return;
+      if (isTier2MemoryActivity(payload.text)) return;
       const kind = payload.kind || "info";
       if (payload.text && kind !== "meta" && kind !== "success") assistant.setStatus(payload.text);
       assistant.noteTaskActivity(payload.text, kind);
@@ -16692,7 +16827,8 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_call") {
-      const tools = Array.isArray(payload.tools) ? payload.tools : [];
+      const tools = (Array.isArray(payload.tools) ? payload.tools : []).filter((tool) => !isTier2MemoryTool(tool));
+      if (!tools.length) return;
       assistant.finalizeThinking();
       for (const tool of tools) {
         if (!isAgentTerminalTool(tool) && !isTaskListTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
@@ -16719,6 +16855,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_start" && payload.tool) {
+      if (isTier2MemoryTool(payload.tool)) return;
       const toolHistoryWrite = queueChatHistoryEvent({
         type: "tool_usage",
         toolName: payload.tool.toolName || payload.tool.action || payload.tool.name || "tool",
@@ -16742,6 +16879,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_result" && payload.tool && payload.result) {
+      if (isTier2MemoryTool(payload.tool)) return;
       if (isTaskListTool(payload.tool)) {
         assistant.setStatus(payload.result?.error ? "Task list update failed" : "Task list updated");
         return;
@@ -16913,6 +17051,21 @@ async function sendMessageWithAgentRuntime(options = {}) {
       chatInput.readOnly = false;
       chatInput.removeAttribute("aria-disabled");
       chatInput.focus();
+    }
+    const shouldMaintainTier2 = Boolean(
+      agentRunResult?.ok
+      && !agentRunResult?.aborted
+      && !run.stopRequested
+      && ["completed", "inconclusive"].includes(String(agentRunResult?.runState?.status || ""))
+      && assistant?.displayContent?.().trim()
+      && TIER2_MEMORY_MODES.has(runMode)
+    );
+    if (shouldMaintainTier2) {
+      void scheduleTier2MemoryMaintenance({
+        targetSessionId: runSession.id,
+        mode: runMode,
+        workspace: run.workspace,
+      }).catch(() => {});
     }
     if (agentRunResult?.pentestLoop?.continue === true && !run.stopRequested && !agentRunResult?.aborted) {
       schedulePentestContinuation(runSession.id, agentRunResult.pentestLoop.prompt);
@@ -17504,11 +17657,27 @@ function queueParentContinuationEvent(payload = {}) {
   });
 }
 
+function handleHiddenBackgroundRuntimeEvent(payload = {}) {
+  if (payload?.type === "questions_required") {
+    window.api.agentResolveQuestions?.({ requestId: payload.requestId, answers: [], skipped: true });
+    return;
+  }
+  if (payload?.type !== "parent_continuation_complete") return;
+  window.api.ackParentContinuation?.({
+    sessionId: payload.parentSessionId || payload.sessionId || "",
+    resultId: payload.continuationResultId || "",
+  }).catch?.(() => {});
+}
+
 // Global listener for delegated children: the per-run listener inside
 // sendMessageWithAgentRuntime is attached to the parent's session id, so child
 // events (sessionId=childSessionId) never reach it.
 window.api?.onAgentEvent?.((payload) => {
   const type = String(payload?.type || "");
+  if (payload?.source === "background_runtime") {
+    handleHiddenBackgroundRuntimeEvent(payload);
+    return;
+  }
   if (type === "terminal_health") {
     const waitId = String(payload.processId || payload.terminalId || "");
     if (waitId) {
@@ -17520,7 +17689,7 @@ window.api?.onAgentEvent?.((payload) => {
     return;
   }
   if (payload?.source === "parent_continuation") {
-    queueParentContinuationEvent(payload);
+    handleHiddenBackgroundRuntimeEvent(payload);
     return;
   }
   if (type === "subagent_result_ready") {

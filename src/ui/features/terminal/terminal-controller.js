@@ -590,13 +590,13 @@ const TerminalManager = (() => {
   function onExit({ id }) {
     const session = sessions.get(id);
     if (!session) return;
+    if (session.agent) {
+      removeSession(id);
+      return;
+    }
     session.exited = true;
     session.term.writeln("");
-    if (session.agent) {
-      session.term.writeln("\x1b[33mAI command finished. You can review output here or close this session.\x1b[0m");
-    } else {
-      session.term.writeln("\x1b[33mTerminal process exited. Press the trash icon to close this session.\x1b[0m");
-    }
+    session.term.writeln("\x1b[33mTerminal process exited. Press the trash icon to close this session.\x1b[0m");
     renderTabsList();
     updateEmptyState();
   }
