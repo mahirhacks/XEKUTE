@@ -7,6 +7,6 @@ module.exports = Object.freeze({
     "tools:indexWorkspace", "tools:searchWorkspace", "tools:cancelWorkspaceSearch", "tools:findFiles", "tools:runCommand",
     "tools:startProcess", "tools:readProcess", "tools:stopProcess", "commands:parse",
     "commands:customScripts", "ollama:list", "ollama:runtime", "ollama:countTokens",
-    "ollama:summarizeContext", "ollama:abort", "ollama:chat", "openrouter:modelContexts",
+    "ollama:abort", "ollama:chat", "openrouter:modelContexts",
   ]),
 });

@@ -374,16 +374,14 @@ function createDurableProcessManager({
     const stderrFile = pathImpl.join(processRoot, `${id}.stderr.log`);
     const stdoutFd = fsImpl.openSync(stdoutFile, "a", 0o600);
     const stderrFd = fsImpl.openSync(stderrFile, "a", 0o600);
-    const isPowerShell = /(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$/i.test(String(selected.executable || ""));
-    const launchDetached = process.platform !== "win32" || !isPowerShell;
+    // Node's Windows `detached` flag uses DETACHED_PROCESS, which opens a
+    // visible console window for console-subsystem executables (python.exe,
+    // cmd.exe, …). PowerShell also no-ops its command when launched that way.
+    // Keep every Windows child attached to the Electron host; POSIX still uses
+    // a detached process group so the tree can be supervised independently.
+    const launchDetached = process.platform !== "win32";
     let child;
     try {
-      // PowerShell launched with Node's Windows `detached` flag can exit with
-      // code 0 without evaluating its command (and therefore without
-      // producing output or workspace files). The Electron host remains alive
-      // for the supervised run, so keep Windows children attached to the host
-      // while retaining detached process groups on POSIX for independent
-      // process-tree supervision.
       child = spawnProcess(resolveExecutable(selected.executable), selected.args, { cwd: resolved.target || resolved.root, env: { ...process.env, ...(input.env || {}), TERM: "dumb", NO_COLOR: "1", FORCE_COLOR: "0" }, windowsHide: true, detached: launchDetached, shell: false, stdio: ["ignore", stdoutFd, stderrFd] });
     } catch (error) {
       try { fsImpl.closeSync(stdoutFd); fsImpl.closeSync(stderrFd); } catch {}

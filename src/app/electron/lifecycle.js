@@ -49,25 +49,25 @@ function registerLifecycle({
   });
 
   function flushDurableState() {
-    const sessionFlush = typeof container.sessionMemoryStore === "function"
-      ? container.sessionMemoryStore().flush?.()
+    const chatHistoryFlush = typeof container.v3SessionStore?.flush === "function"
+      ? container.v3SessionStore.flush?.()
       : null;
-    const contextFlush = container.contextCompiler?.flush?.() || null;
+    const tier1Flush = container.tier1SensitiveStore?.flush?.() || null;
     const runtimeShutdown = typeof shutdown === "function" ? shutdown() : null;
-    return Promise.all([runtimeShutdown, sessionFlush, contextFlush].map((pending) => Promise.resolve(pending)));
+    return Promise.all([runtimeShutdown, chatHistoryFlush, tier1Flush].map((pending) => Promise.resolve(pending)));
   }
 
   app.on("before-quit", (event) => {
     if (allowImmediateQuit) {
       shuttingDown = true;
-      flushDurableState().catch((error) => console.warn("Session memory flush failed during update install:", error?.message || error));
+      flushDurableState().catch((error) => console.warn("Chat history flush failed during update install:", error?.message || error));
       return;
     }
     if (shuttingDown) return;
     shuttingDown = true;
     event.preventDefault?.();
     flushDurableState()
-      .catch((error) => console.warn("Session memory flush failed during shutdown:", error?.message || error))
+      .catch((error) => console.warn("Chat history flush failed during shutdown:", error?.message || error))
       .finally(async () => {
         try { await container.dispose?.(); } finally { app.quit(); }
       });

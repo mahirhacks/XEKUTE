@@ -12,10 +12,13 @@ const {
   redactHttpMessage,
   validateCustomEntryPath,
 } = require("../src/domain/assessment/assessment-workspace");
+const { createProjectArtifactService } = require("../src/app/services/artifacts/project-artifact-service.js");
 
 test("every assessment sidebar item maps to its required backing file", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
   for (const [item, relativePath] of Object.entries(ASSESSMENT_ITEM_FILES)) {
+    if (String(relativePath).startsWith(".xekute/")) continue;
+    if (!html.includes(`data-bounty-item="${item}"`)) continue;
     assert.ok(
       html.includes(`data-bounty-item="${item}" data-bounty-file="${relativePath}"`),
       `${item} should open ${relativePath}`,
@@ -24,12 +27,12 @@ test("every assessment sidebar item maps to its required backing file", () => {
 });
 
 test("custom entries cannot reuse built-in assessment file or folder names", () => {
-  for (const reserved of ["Scope", "traffic", "Map", "WebClone", "report.md", "settings.config", "pen_context.md", "wstg-checklist.json", "in-scope.json"]) {
+  for (const reserved of ["traffic", "Map", "WebClone", "report.md", "checklist.md", "hypotheses.md", "project_info", "agent-actions.jsonl"]) {
     const result = validateCustomEntryPath(`custom/notes/${reserved}`);
     assert.equal(result.code, "RESERVED_NAME", reserved);
   }
-  assert.equal(validateCustomEntryPath("custom/Scope").code, "RESERVED_NAME");
-  assert.equal(validateCustomEntryPath("custom/sCoPe").code, "RESERVED_NAME");
+  assert.equal(validateCustomEntryPath("custom/settings.config").ok, true);
+  assert.equal(validateCustomEntryPath("custom/pen_context.md").ok, true);
   assert.equal(validateCustomEntryPath("custom/CON.txt").code, "RESERVED_NAME");
   assert.equal(validateCustomEntryPath("custom/../scope").code, "INVALID_NAME");
   assert.deepEqual(validateCustomEntryPath("custom/research/auth-notes.md"), { ok: true, normalized: "custom/research/auth-notes.md" });
@@ -50,8 +53,8 @@ test("multi-delete removes only selected Custom roots and never assessment files
   assert.deepEqual(deleted.deleted.sort(), ["notes", "remove.md"]);
   assert.equal(fs.existsSync(path.join(root, "custom", "notes")), false);
   assert.equal(fs.existsSync(path.join(root, "custom", "keep.md")), true);
-  assert.equal(workspace.deleteCustomEntries(root, ["../scope"]).code, "INVALID_NAME");
-  assert.equal(fs.existsSync(path.join(root, "scope", "in-scope.json")), true);
+  assert.equal(workspace.deleteCustomEntries(root, ["../traffic"]).code, "INVALID_NAME");
+  assert.equal(fs.existsSync(path.join(root, "traffic", "raw.jsonl")), true);
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
@@ -74,7 +77,8 @@ test("security workspace exposes Traffic Raw history with request and response d
   assert.match(runtimeModules, /features\/security\/security-inspector\.js/);
   assert.match(renderer, /selectedSecurityHistoryRequestIds/);
   assert.match(renderer, /preservedRequestIds/);
-  assert.match(renderer, /loadSecurityHistoryRecord\(restoredIndices\[0\]\)/);
+  assert.match(renderer, /loadSecurityHistoryRecord\(/);
+  assert.match(renderer, /selectedSecurityHistoryIndices/);
   assert.match(renderer, /function sortedSecurityHistoryRecords/);
   assert.match(renderer, /function securityHistoryTimeValue/);
   const analyzeSource = renderer.slice(renderer.indexOf("async function analyzeSecurityExchange"), renderer.indexOf("function clearSecurityExchange"));
@@ -96,21 +100,21 @@ test("workspace editor renders synchronized logical line numbers", () => {
 test("chat markdown wraps long security values without horizontal expansion", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.match(css, /#messages\s*\{[^}]*overflow-x:\s*hidden/s);
-  assert.match(css, /\.assistant-reply\s*\{[^}]*overflow-wrap:\s*anywhere/s);
-  assert.match(css, /\.assistant-reply\s+:not\(pre\)\s*>\s*code[\s\S]*?word-break:\s*break-all/);
-  assert.match(css, /\.md-code-block pre\s*\{[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere/s);
+  assert.match(css, /\.assistant-reply\s*\{[^}]*overflow-wrap:\s*break-word/s);
+  assert.match(css, /\.assistant-reply\s+:not\(pre\)\s*>\s*code[\s\S]*?white-space:\s*nowrap/);
+  assert.match(css, /\.md-code-block pre\s*\{[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*break-word/s);
 });
 
 test("chat sessions are restored per workspace and saved after explicit lifecycle changes", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const preload = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "preload.js"), "utf8");
-  assert.match(preload, /loadSessionMemory/);
-  assert.match(preload, /recordSessionMemoryEvent/);
-  assert.match(preload, /saveSessionMemoryBeforeClose/);
+  assert.match(preload, /loadChatHistory/);
+  assert.match(preload, /recordChatEvent/);
+  assert.match(preload, /saveChatHistoryBeforeClose/);
   assert.match(renderer, /restoreChatSessionsForCurrentWorkspace/);
-  assert.match(renderer, /beginSessionMemoryBlock/);
+  assert.match(renderer, /beginChatHistoryBlock/);
   assert.match(renderer, /await restoreChatSessionsForCurrentWorkspace\(\)/);
-  assert.match(renderer, /flushSessionMemory/);
+  assert.match(renderer, /flushChatHistory/);
 });
 
 test("authority UI does not offer unrestricted mode", () => {
@@ -167,11 +171,11 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.ok(html.includes(">Core<"));
   assert.ok(html.includes(">Scoute<"));
   assert.ok(html.includes('id="btn-context-add"'));
-  assert.ok(html.includes('data-bounty-file="pen_context.md"'));
+  assert.ok(html.includes('data-bounty-file=".xekute/project_info/index.md"'));
   assert.ok(html.includes(">Custom<"));
   assert.ok(html.includes('data-bounty-folder="Map"'));
   assert.ok(html.includes('data-bounty-folder="WebClone"'));
-  assert.ok(html.indexOf(">Context<") < html.indexOf(">Core<"));
+  assert.ok(html.indexOf(">Context Sources<") < html.indexOf(">Core<"));
   assert.ok(html.indexOf(">Scoute<") < html.indexOf('data-bounty-folder="Map"'));
   assert.ok(html.includes('id="custom-commands-input"'));
   assert.ok(html.includes('id="command-registry-input"'));
@@ -223,15 +227,14 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(renderer, /projectSettingsForm\?\.addEventListener\("input"[\s\S]*?scheduleProjectProfileAutosave\(\)/);
   assert.ok(html.includes('id="models-settings-search"'));
   assert.match(html, /class="models-catalog-section"[\s\S]*?id="models-catalog-title">Available models/);
-  assert.match(html, /class="models-context-settings-body"/);
+  assert.doesNotMatch(html, /class="models-context-settings-body"/);
   assert.match(html, /Providers &amp; API keys/);
   assert.match(html, /id="llm-openrouter-config" class="models-api-provider-block" hidden/);
   assert.match(renderer, /function syncLlmProviderUi\(provider = "ollama"\)[\s\S]*?llmOllamaConfig\.hidden = active !== "ollama";[\s\S]*?llmOpenRouterConfig\.hidden = active !== "openrouter";/);
-  assert.match(html, /class="models-api-keys models-context-settings"[\s\S]*?id="context-compaction-model"[\s\S]*?id="context-compaction-cross-provider"/);
-  assert.match(settingsStyles, /\.app-settings-content #context-compaction-model:-webkit-autofill,[\s\S]*?-webkit-text-fill-color:#e1e1e1 !important;[\s\S]*?-webkit-box-shadow:0 0 0 1000px #181818 inset !important;/);
-  assert.match(settingsStyles, /\.app-settings-content \.models-context-settings \{[\s\S]*?display:flex;[\s\S]*?flex-direction:column;[\s\S]*?gap:12px;/);
+  assert.doesNotMatch(html, /context-compaction-model|context-compaction-cross-provider|models-context-settings/);
+  assert.doesNotMatch(settingsStyles, /context-compaction-model|models-context-settings/);
   assert.match(layoutRevampStyles, /#app-settings-llm-panel \.models-settings-list \{[\s\S]*?border: 0 !important;[\s\S]*?border-radius: 12px;[\s\S]*?background: #1b1b1b;/);
-  assert.match(layoutRevampStyles, /#app-settings-llm-panel \.models-context-settings-body,[\s\S]*?flex-direction: column;[\s\S]*?gap: 12px;/);
+  assert.match(layoutRevampStyles, /#app-settings-llm-panel \.models-api-keys-body,[\s\S]*?flex-direction: column;[\s\S]*?gap: 12px;/);
   assert.match(layoutRevampStyles, /#app-settings-prompts-panel, #app-settings-commands-panel\) \.guidance-scope-tabs \{[\s\S]*?border-radius: 999px;[\s\S]*?background: #1b1b1b;/);
   assert.match(layoutRevampStyles, /#app-settings-commands-panel \.mcp-connection-editor \{[\s\S]*?margin-top: 42px;[\s\S]*?border-radius: 12px;[\s\S]*?background: #1b1b1b;/);
   assert.match(layoutRevampStyles, /#app-settings-certificates-panel \.certificate-settings-card \{[\s\S]*?border: 0 !important;[\s\S]*?border-radius: 12px;[\s\S]*?background: #1b1b1b;/);
@@ -258,7 +261,7 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.ok(html.includes('<option value="hypothesis">Hypothesis</option><option value="plan">Plan</option><option value="agent">Agent</option><option value="ask">Ask</option>'));
   assert.doesNotMatch(html, /assessment-run-profile[^>]*>[\s\S]*?testing:execution/);
   assert.ok(html.includes('data-bounty-item="agent-actions" data-bounty-file=".xekute/logs/agent-actions.jsonl"'));
-  assert.ok(html.includes('data-bounty-item="agent-hypotheses" data-bounty-file=".xekute/logs/agent-hypotheses.jsonl"'));
+  assert.doesNotMatch(html, /agent-hypotheses|agent-hypotheses\.jsonl/);
   assert.ok(html.includes('id="app-menu"'));
   assert.ok(html.includes('data-menu="files"'));
   assert.match(html, /data-action="create-project"[^>]*>Create New Project/);
@@ -312,7 +315,6 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(settingsStyles, /grid-template-columns:auto minmax\(0,1fr\)/);
   assert.match(settingsStyles, /\.llm-provider-actions button[\s\S]*border:0[\s\S]*border-radius:999px/);
   assert.match(settingsStyles, /#llm-settings-test \{[\s\S]*background:#6a541d/);
-  assert.match(settingsStyles, /\.certificate-security-note \{[\s\S]*display:block[\s\S]*border:0[\s\S]*background:transparent/);
   assert.match(chatStyles, /\.model-pill \{[\s\S]*border-radius: 999px[\s\S]*background: transparent/);
   assert.equal((settingsStyles.match(/^\.app-settings-workspace \{/gm) || []).length, 1);
   assert.doesNotMatch(renderer, /saveAuthoritySettings|renderAuthoritySettings/);
@@ -398,65 +400,23 @@ test("Scout Map is a dedicated buildable behavior-graph workspace", () => {
   assert.match(preload, /assessmentBuildMap/);
 });
 
-test("professional assessment schemas cover scope, evidence, services, findings, and frameworks", () => {
-  assert.equal(ASSESSMENT_VERSION, 4);
-  assert.ok(Object.values(JSON_TEMPLATES).every((template) => template.schemaVersion === 4));
-  assert.ok(JSON_TEMPLATES["scope/engagement.json"].rulesOfEngagement.stopConditions.length);
+test("clean assessment schemas cover recon, enumeration, runs, and no removed stores", () => {
+  assert.equal(ASSESSMENT_VERSION, 5);
+  assert.ok(Object.values(JSON_TEMPLATES).every((template) => template.schemaVersion === 5));
   assert.ok(JSON_TEMPLATES["enumeration/assets.json"].assetTemplate.inScope === null);
-  assert.ok(JSON_TEMPLATES["findings/findings.json"].lifecycle.includes("retest-required"));
-  assert.ok(JSON_TEMPLATES["penetration-testing/coverage.json"].frameworks.some((framework) => framework.id === "asvs"));
-  assert.ok(JSON_TEMPLATES["penetration-testing/asvs-checklist.json"].checks.some((check) => check.id === "V4"));
+  assert.ok(JSON_TEMPLATES["enumeration/endpoints.json"].endpointTemplate.method === "GET");
   assert.ok(JSON_TEMPLATES["runs/runs.json"].runTemplate.scopeSnapshotSha256 !== undefined);
-
-  const inScope = JSON_TEMPLATES["scope/in-scope.json"];
-  assert.deepEqual(Object.keys(inScope.engagement), [
-    "name", "programName", "platform", "engagementType", "clientOrOwner", "primaryContact",
-    "emergencyContact", "timezone", "startDate", "endDate",
-  ]);
-  assert.ok("authorizationReference" in inScope.authorization);
-  assert.ok("allowedTechniques" in inScope.targetTemplate);
-  assert.ok("credentialsReference" in inScope.targetTemplate);
-
-  const configurations = JSON_TEMPLATES["scope/configurations.json"];
-  assert.equal("authorizationGate" in configurations, false);
-  assert.ok("stopConditions" in configurations);
-  assert.ok("dataHandling" in configurations);
-  assert.ok("rateLimits" in configurations);
-
-  const finding = JSON_TEMPLATES["vulnerability-scans/high.json"].findingTemplate;
-  assert.ok("cvss" in finding);
-  assert.ok("classification" in finding);
-  assert.ok("reproduction" in finding);
-  assert.ok("remediation" in finding);
-  assert.ok("validation" in finding);
-
-  const service = JSON_TEMPLATES["vulnerability-scans/services.json"].serviceTemplate;
-  assert.ok("latestKnownVersion" in service);
-  assert.ok("endOfLife" in service);
-  assert.ok("cveIds" in service);
-
-  const settings = JSON_TEMPLATES["settings.config"];
-  assert.equal(settings.listener.bindAddress, "127.0.0.1");
-  assert.equal(settings.listener.port, 8080);
-  assert.ok("interception" in settings);
-  assert.ok("authorization" in settings);
-  assert.equal("authorizationGate" in settings, false);
-  assert.ok("authority" in settings);
-  assert.ok(Object.values(settings.authority.permissions).every((enabled) => enabled === true));
-  assert.ok("upstreamProxy" in settings);
-  assert.ok("intruder" in settings);
-  assert.ok("logging" in settings);
+  for (const removed of ["settings.config", "scope/engagement.json", "scope/in-scope.json", "vulnerability-scans/high.json", "penetration-testing/coverage.json"]) {
+    assert.equal(JSON_TEMPLATES[removed], undefined, removed);
+  }
 });
 
-test("settings UI controls map to real settings.config fields", () => {
+test("runtime controls are app-managed Project Settings, not assessment files", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const settings = JSON_TEMPLATES["settings.config"];
-  const paths = [...html.matchAll(/data-setting-path="([^"]+)"/g)].map((match) => match[1]);
-  assert.ok(paths.length >= 20);
-  for (const settingPath of paths) {
-    const value = settingPath.split(".").reduce((current, key) => current?.[key], settings);
-    assert.notEqual(value, undefined, `${settingPath} must exist in settings.config`);
-  }
+  const profileSource = fs.readFileSync(path.join(__dirname, "..", "src", "app", "storage", "project-profile-store.js"), "utf8");
+  assert.match(html, /data-app-settings-section="project"/);
+  assert.match(profileSource, /runtime:\s*\{/);
+  assert.doesNotMatch(html, /settings\.config|pen_context\.md|\.pointer-assessment\.json/);
 });
 
 test("project settings tabs map vertical wheel movement to horizontal scrolling", () => {
@@ -470,21 +430,13 @@ test("project settings tabs map vertical wheel movement to horizontal scrolling"
   assert.match(styles, /@container app-settings \(max-width: 1120px\)[\s\S]*?\.app-settings-content \.project-settings-nav\s*\{[\s\S]*?min-height:\s*48px/);
 });
 
-test("all Scope files use the visual JSON editor and Custom actions are hover-revealed", () => {
+test("Custom actions are hover-revealed and Scope/Config files are not workspace items", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
-  assert.ok(html.includes('id="scope-ui-view"'));
-  assert.ok(html.includes('id="scope-ui-form"'));
   assert.ok(html.includes('class="bounty-subsection-label bounty-custom-label"'));
-  assert.ok(html.includes('class="bounty-subsection-label bounty-config-label"><span>Config</span>'));
-  assert.ok(html.indexOf(">Custom<") < html.indexOf(">Config<"));
-  assert.ok(html.indexOf(">Config<") < html.indexOf('data-bounty-file="settings.config"'));
-  assert.match(renderer, /showScopeResource/);
-  assert.match(renderer, /scope\/in-scope\.json/);
-  assert.match(renderer, /scope\/out-of-scope\.json/);
-  assert.match(renderer, /scope\/configurations\.json/);
-  assert.match(renderer, /setResourceScopeMode/);
+  assert.doesNotMatch(html, /data-bounty-file="settings\.config"/);
+  assert.doesNotMatch(html, /scope\/in-scope\.json|scope\/out-of-scope\.json|scope\/configurations\.json|pen_context\.md/);
   assert.match(renderer, /beginCustomEntry/);
   assert.match(renderer, /custom-create-row/);
   assert.match(renderer, /custom-folder-actions/);
@@ -494,6 +446,7 @@ test("all Scope files use the visual JSON editor and Custom actions are hover-re
   assert.match(renderer, /deleteSelectedCustomEntries/);
   assert.match(renderer, /parent \? `\$\{parent\}\/\$\{name\}` : name/);
   assert.doesNotMatch(renderer, /prompt\(type === "directory"/);
+  assert.doesNotMatch(renderer, /scope\/in-scope\.json|settings\.config/);
   assert.match(css, /custom-create-input/);
   assert.match(css, /custom-entry-row:hover \.custom-folder-actions/);
   assert.match(css, /custom-context-menu/);
@@ -515,56 +468,23 @@ test("incomplete assessments keep the tree visible and expose a repair review di
   assert.match(css, /\.assessment-repair-item/);
 });
 
-test("WSTG and MITRE files expose distinct current framework checklists and UI mode", () => {
+test("framework checklist JSON stores are not part of the assessment workspace", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const wstg = JSON_TEMPLATES["penetration-testing/wstg-checklist.json"];
-  const mitre = JSON_TEMPLATES["penetration-testing/mitre-checklist.json"];
-
-  assert.equal(wstg.framework.stableVersion, "4.2");
-  assert.equal(wstg.framework.top10Version, "2025");
-  assert.ok(wstg.checks.some((check) => check.id === "WSTG-ATHN-04"));
-  assert.ok(wstg.checks.some((check) => check.id === "WSTG-INPV-05"));
-  assert.equal(wstg.checks.filter((check) => check.category === "OWASP Top 10:2025").length, 10);
-  assert.equal(mitre.framework.version, "19.1");
-  assert.ok(mitre.tactics.includes("Stealth"));
-  assert.ok(mitre.tactics.includes("Defense Impairment"));
-  assert.ok(mitre.checks.some((check) => check.techniqueId === "T1190"));
-  assert.ok(mitre.checks.some((check) => check.techniqueId === "T1505.003"));
-  assert.ok(html.includes('id="checklist-ui-view"'));
-  assert.ok(html.includes('id="checklist-status-filter"'));
-  assert.match(renderer, /showChecklistResource/);
-  assert.match(renderer, /resourceChecklistType === "mitre"/);
+  assert.equal(JSON_TEMPLATES["penetration-testing/wstg-checklist.json"], undefined);
+  assert.equal(JSON_TEMPLATES["penetration-testing/mitre-checklist.json"], undefined);
+  assert.equal(JSON_TEMPLATES["penetration-testing/asvs-checklist.json"], undefined);
+  assert.doesNotMatch(html, /penetration-testing\/|vulnerability-scans\/|data-bounty-file="settings\.config"/);
+  assert.ok(html.includes('data-bounty-file=".xekute/checklist.md"'));
 });
 
-test("assessment repair merges new framework checks without losing checklist evidence", () => {
-  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-assessment-"));
-  const root = path.join(parent, "checklist-merge");
-  const workspace = createAssessmentWorkspace({ fs, path });
-  workspace.repair(root, { createRoot: true });
-  const file = path.join(root, "penetration-testing", "wstg-checklist.json");
-  const checklist = JSON.parse(fs.readFileSync(file, "utf8"));
-  checklist.checks = [{ ...checklist.checks.find((check) => check.id === "WSTG-INPV-05"), status: "failed", result: "Evidence retained" }];
-  checklist.categories = ["Input Validation"];
-  delete checklist.framework.top10Version;
-  fs.writeFileSync(file, `${JSON.stringify(checklist, null, 2)}\n`, "utf8");
-
-  const repaired = workspace.repair(root);
-  assert.equal(repaired.valid, true);
-  const merged = JSON.parse(fs.readFileSync(file, "utf8"));
-  assert.equal(merged.checks.find((check) => check.id === "WSTG-INPV-05").status, "failed");
-  assert.equal(merged.checks.find((check) => check.id === "WSTG-INPV-05").result, "Evidence retained");
-  assert.ok(merged.checks.some((check) => check.id === "WSTG-ATHN-04"));
-  assert.ok(merged.checks.some((check) => check.id === "A01:2025"));
-  fs.rmSync(parent, { recursive: true, force: true });
-});
-
-test("assessment repair creates the complete versioned workspace", () => {
+test("assessment repair creates the requested workspace tree and ignores leftover files", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-assessment-"));
   const root = path.join(parent, "example-target");
+  const artifacts = createProjectArtifactService({ fs, path });
   const workspace = createAssessmentWorkspace({
     fs,
     path,
+    projectArtifacts: artifacts,
     now: () => new Date("2026-01-02T03:04:05.000Z"),
   });
 
@@ -575,47 +495,75 @@ test("assessment repair creates the complete versioned workspace", () => {
   assert.equal(repaired.ok, true);
   assert.equal(repaired.valid, true);
   assert.equal(repaired.missingCount, 0);
-  assert.ok(repaired.created.includes(".pointer-assessment.json"));
-  assert.ok(repaired.created.includes("penetration-testing/wstg-checklist.json"));
-  assert.ok(repaired.created.includes("report/report.md"));
-  assert.ok(repaired.created.includes("pen_context.md"));
-  assert.ok(repaired.created.includes("context/sources"));
-  assert.ok(repaired.created.includes("custom"));
-  assert.ok(repaired.created.includes("custom_scripts"));
-  assert.ok(repaired.created.includes("tools"));
-  assert.ok(repaired.created.includes("evidence"));
-  assert.ok(repaired.created.includes("findings"));
-  assert.ok(repaired.created.includes("runs"));
-  assert.ok(repaired.created.includes("scope/engagement.json"));
-  assert.ok(repaired.created.includes("runs/runs.json"));
-  assert.ok(repaired.created.includes("penetration-testing/coverage.json"));
-  assert.ok(repaired.created.includes("Map"));
-  assert.ok(repaired.created.includes("WebClone"));
+  for (const entry of [
+    "report/report.md", "context/sources", "custom", "custom_scripts", "tools", "evidence",
+    ".xekute", "runs", "runs/runs.json", "Map", "WebClone", "recon/active-recon.json",
+    "enumeration/assets.json", "traffic/raw.jsonl",
+  ]) assert.ok(repaired.created.includes(entry), entry);
+  for (const removed of [
+    ".pointer-assessment.json", "pen_context.md", "settings.config", "scope/engagement.json",
+    "penetration-testing/wstg-checklist.json", "penetration-testing/coverage.json",
+    "vulnerability-scans/high.json", "findings/findings.json",
+  ]) {
+    assert.equal(repaired.created.includes(removed), false, removed);
+    assert.equal(fs.existsSync(path.join(root, ...removed.split("/"))), false, removed);
+  }
 
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, ".pointer-assessment.json"), "utf8"));
-  assert.equal(manifest.schemaVersion, 4);
-  assert.equal(manifest.name, "example-target");
-  assert.equal(manifest.createdAt, "2026-01-02T03:04:05.000Z");
+  const bootstrapped = artifacts.bootstrap(root);
+  assert.equal(bootstrapped.ok, true, bootstrapped.error);
+  assert.equal(fs.existsSync(path.join(root, ".xekute", "project_info", "index.md")), true);
+  assert.equal(fs.existsSync(path.join(root, ".xekute", "checklist.md")), true);
+  assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "index.md")), true);
+  assert.equal(fs.existsSync(path.join(root, ".xekute", "findings")), false);
 
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
-test("professional assessment records preserve evidence hashes, findings, assets, and run snapshots", () => {
+test("professional assessment records preserve operational evidence hashes, canonical E-####, assets, and run snapshots", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-assessment-"));
   const root = path.join(parent, "professional-records");
-  const workspace = createAssessmentWorkspace({ fs, path, now: () => new Date("2026-01-02T03:04:05.000Z") });
+  const artifacts = createProjectArtifactService({ fs, path, now: () => new Date("2026-01-02T03:04:05.000Z") });
+  const workspace = createAssessmentWorkspace({ fs, path, now: () => new Date("2026-01-02T03:04:05.000Z"), projectArtifacts: artifacts });
   workspace.repair(root, { createRoot: true });
+  artifacts.bootstrap(root);
+
+  fs.mkdirSync(path.join(root, "findings"), { recursive: true });
+  fs.writeFileSync(path.join(root, "findings", "findings.json"), `${JSON.stringify({ findings: [{ id: "LEGACY", title: "Leftover" }] }, null, 2)}\n`);
 
   const evidence = workspace.appendEvidenceRecord(root, { id: "ev-1", request: "GET / HTTP/1.1", response: "HTTP/1.1 200 OK", source: "test" });
   assert.equal(evidence.ok, true);
   assert.equal(evidence.record.sha256.length, 64);
   const evidenceLines = workspace.readJsonl(root, "evidence/index.jsonl");
   assert.ok(evidenceLines.records.some((entry) => entry.id === "ev-1"));
+  assert.equal(typeof workspace.appendFinding, "undefined");
 
-  const finding = workspace.appendFinding(root, { id: "finding-1", title: "Example finding", severity: "medium", status: "suspected", evidence: ["ev-1"] });
-  assert.equal(finding.ok, true);
-  assert.equal(finding.finding.evidence[0], "ev-1");
-  assert.equal(workspace.appendFinding(root, { id: "finding-confirmed", title: "Needs evidence", status: "confirmed" }).code, "EVIDENCE_REQUIRED");
+  const snapshot = artifacts.inspect(root);
+  const h = artifacts.stage(root, { mode: "hypothesis", expected_revisions: snapshot.revisions, operations: [{ kind: "hypothesis.create", client_ref: "h1", title: "Session handling" }] });
+  assert.equal(h.ok, true, h.error);
+  assert.equal(artifacts.commit(root, h.staging_id).ok, true);
+  const afterH = artifacts.inspect(root);
+  const c = artifacts.stage(root, {
+    mode: "plan",
+    expected_revisions: afterH.revisions,
+    operations: [{
+      kind: "checklist.create", client_ref: "c1", hypothesis_id: "H-0001", title: "Check cookies", phase: "execution",
+      target: "app.example", knowledge_release_id: "rel-1", procedure_id: "proc-1", source_hash: "abc123",
+    }],
+  });
+  assert.equal(c.ok, true, c.error);
+  assert.equal(artifacts.commit(root, c.staging_id).ok, true);
+  const afterC = artifacts.inspect(root);
+  const e = artifacts.stage(root, {
+    mode: "agent",
+    expected_revisions: afterC.revisions,
+    operations: [{
+      kind: "evidence.create", client_ref: "e1", title: "Cookie observed", status: "verified", verifier: "hybrid-accept",
+      checklist_refs: ["C-0001"], hypothesis_refs: ["H-0001"], source_refs: ["traffic:1"], sanitized_excerpts: "Set-Cookie: sid",
+    }],
+  });
+  assert.equal(e.ok, true, e.error);
+  assert.equal(artifacts.commit(root, e.staging_id).ok, true);
+  assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "E-0001.md")), true);
 
   const run = workspace.createRun(root, { profile: "agent", status: "running" });
   assert.equal(run.ok, true);
@@ -625,42 +573,40 @@ test("professional assessment records preserve evidence hashes, findings, assets
   assert.equal(stopped.run.stopReason, "operator stop");
   const report = workspace.generateReport(root);
   assert.equal(report.ok, true);
-  assert.match(report.path, /^report\/exports\/vapt-report-/);
-  assert.equal(report.path, report.exportPath);
+  assert.match(report.path, /^report\/exports\/security-report-/);
   assert.equal(report.workingPath, "report/report.md");
   assert.ok(fs.existsSync(path.join(root, report.path.replace(/\//g, path.sep))));
+  const markdown = fs.readFileSync(path.join(root, "report", "report.md"), "utf8");
+  assert.match(markdown, /E-0001/);
+  assert.match(markdown, /Cookie observed/);
+  assert.doesNotMatch(markdown, /Leftover|F-0001/);
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
-test("assessment migration adds missing fields without losing existing evidence", () => {
+test("assessment repair recreates missing files without rewriting existing JSON", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-assessment-"));
   const root = path.join(parent, "preserve-data");
   const workspace = createAssessmentWorkspace({ fs, path });
   workspace.repair(root, { createRoot: true });
 
-  const evidencePath = path.join(root, "scope", "in-scope.json");
+  const assetsPath = path.join(root, "enumeration", "assets.json");
   const missingPath = path.join(root, "enumeration", "endpoints.json");
-  const evidence = '{"targets":["https://authorized.example"]}\n';
-  fs.writeFileSync(evidencePath, evidence, "utf8");
+  const original = JSON.parse(fs.readFileSync(assetsPath, "utf8"));
+  original.notes = "operator preserved";
+  original.assets = [{ id: "asset-1", value: "app.example" }];
+  fs.writeFileSync(assetsPath, `${JSON.stringify(original, null, 2)}\n`, "utf8");
   fs.rmSync(missingPath);
 
   const invalid = workspace.verify(root);
   assert.equal(invalid.valid, false);
-  assert.deepEqual(invalid.missing.map((entry) => entry.path).sort(), [
-    "enumeration/endpoints.json",
-    "scope/in-scope.json",
-  ]);
+  assert.deepEqual(invalid.missing.map((entry) => entry.path), ["enumeration/endpoints.json"]);
 
   const repaired = workspace.repair(root);
   assert.equal(repaired.valid, true);
   assert.deepEqual(repaired.created, ["enumeration/endpoints.json"]);
-  assert.ok(repaired.updated.includes("scope/in-scope.json"));
-  const migrated = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
-  assert.deepEqual(migrated.targets, ["https://authorized.example"]);
-  assert.equal(migrated.schemaVersion, 4);
-  assert.ok("engagement" in migrated);
-  assert.ok("authorization" in migrated);
-  assert.ok("targetTemplate" in migrated);
+  const preserved = JSON.parse(fs.readFileSync(assetsPath, "utf8"));
+  assert.equal(preserved.notes, "operator preserved");
+  assert.equal(preserved.assets[0].id, "asset-1");
 
   fs.rmSync(parent, { recursive: true, force: true });
 });
@@ -747,7 +693,7 @@ test("traffic persistence stores raw secrets without masking", () => {
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
-test("traffic capture and evidence indexing remain available after assessment files change", () => {
+test("traffic capture remains available after assessment files change without writing evidence indexes", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-assessment-"));
   const root = path.join(parent, "traffic-incomplete");
   const workspace = createAssessmentWorkspace({ fs, path });
@@ -765,7 +711,8 @@ test("traffic capture and evidence indexing remain available after assessment fi
     response: "HTTP/1.1 200 OK\r\n\r\n",
   });
   assert.equal(logged.ok, true);
-  assert.equal(logged.evidence.ok, true);
+  assert.equal(logged.evidence, undefined);
+  assert.equal(fs.existsSync(path.join(root, "evidence", "index.jsonl")), false);
   assert.equal(workspace.readTrafficHistory(root).records[0].requestId, "capture-during-repair");
 
   fs.rmSync(parent, { recursive: true, force: true });

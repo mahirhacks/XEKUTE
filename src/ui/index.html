@@ -190,29 +190,19 @@
           </div>
         </div>
         <div id="bugbounty-tree" class="bugbounty-tree" role="tree" aria-label="Bug bounty assessment phases" hidden>
-          <div class="bounty-subsection-label"><span>Engagement</span></div>
-          <button type="button" class="bounty-report-item" data-bounty-item="engagement" data-bounty-file="scope/engagement.json" role="treeitem"><span class="codicon codicon-shield"></span><span>Engagement &amp; ROE</span></button>
           <button type="button" class="bounty-report-item" data-bounty-item="runs" data-bounty-file="runs/runs.json" role="treeitem"><span class="codicon codicon-history"></span><span>Run Manager</span></button>
-          <div class="bounty-subsection-label"><span>Context</span><button type="button" id="btn-context-add" class="icon-btn" title="Add files and rebuild pen_context.md"><span class="codicon codicon-add"></span></button></div>
-          <button type="button" class="bounty-report-item" data-bounty-item="pen-context" data-bounty-file="pen_context.md" role="treeitem"><span class="codicon codicon-markdown"></span><span>pen_context.md</span></button>
+          <div class="bounty-subsection-label"><span>Context Sources</span><button type="button" id="btn-context-add" class="icon-btn" title="Import context source files"><span class="codicon codicon-add"></span></button></div>
+          <button type="button" class="bounty-report-item" data-bounty-folder="context/sources" role="treeitem"><span class="codicon codicon-folder"></span><span>Sources</span></button>
+          <div class="bounty-subsection-label"><span>Project Artifacts</span></div>
+          <button type="button" class="bounty-report-item" data-bounty-item="project-info" data-bounty-file=".xekute/project_info/index.md" role="treeitem"><span class="codicon codicon-project"></span><span>Project Info</span></button>
+          <button type="button" class="bounty-report-item" data-bounty-item="hypotheses" data-bounty-file=".xekute/hypotheses.md" role="treeitem"><span class="codicon codicon-lightbulb"></span><span>Hypotheses</span></button>
+          <button type="button" class="bounty-report-item" data-bounty-item="investigation-checklist" data-bounty-file=".xekute/checklist.md" role="treeitem"><span class="codicon codicon-checklist"></span><span>Investigation Checklist</span></button>
+          <button type="button" class="bounty-report-item" data-bounty-item="evidence" data-bounty-file=".xekute/evidence/index.md" role="treeitem"><span class="codicon codicon-file-text"></span><span>Evidence</span></button>
           <div class="bounty-subsection-label"><span>Agent Logs</span></div>
           <button type="button" class="bounty-report-item" data-bounty-item="agent-runs" data-bounty-file=".xekute/logs/agent-runs.jsonl" role="treeitem"><span class="codicon codicon-history"></span><span>Runs</span></button>
           <button type="button" class="bounty-report-item" data-bounty-item="agent-actions" data-bounty-file=".xekute/logs/agent-actions.jsonl" role="treeitem"><span class="codicon codicon-history"></span><span>Agent Actions</span></button>
-          <button type="button" class="bounty-report-item" data-bounty-item="agent-hypotheses" data-bounty-file=".xekute/logs/agent-hypotheses.jsonl" role="treeitem"><span class="codicon codicon-lightbulb"></span><span>Hypotheses</span></button>
           <button type="button" class="bounty-report-item" data-bounty-item="tool-output" data-bounty-file=".xekute/logs/tool-output.jsonl" role="treeitem"><span class="codicon codicon-terminal"></span><span>Tool Output</span></button>
           <div class="bounty-subsection-label"><span>Core</span></div>
-          <section class="bounty-phase expanded" data-bounty-section="scope">
-            <button type="button" class="bounty-phase-toggle" aria-expanded="true">
-              <span class="codicon codicon-chevron-right bounty-chevron" aria-hidden="true"></span>
-              <span class="bounty-phase-name">Scope</span>
-              <span class="bounty-phase-count">0/3</span>
-            </button>
-            <div class="bounty-phase-items" role="group">
-              <button type="button" class="bounty-tree-item" data-bounty-item="in-scope" data-bounty-file="scope/in-scope.json" role="treeitem"><span class="bounty-status"></span><span>In-Scope</span></button>
-              <button type="button" class="bounty-tree-item" data-bounty-item="out-of-scope" data-bounty-file="scope/out-of-scope.json" role="treeitem"><span class="bounty-status"></span><span>Out-of-Scope</span></button>
-              <button type="button" class="bounty-tree-item" data-bounty-item="configurations" data-bounty-file="scope/configurations.json" role="treeitem"><span class="bounty-status"></span><span>Configurations</span></button>
-            </div>
-          </section>
           <section class="bounty-phase expanded" data-bounty-section="recon">
             <button type="button" class="bounty-phase-toggle" aria-expanded="true">
               <span class="codicon codicon-chevron-right bounty-chevron" aria-hidden="true"></span>
@@ -248,38 +238,6 @@
               <button type="button" class="bounty-tree-item" data-bounty-item="filtered-traffic" data-bounty-file="traffic/filtered.jsonl" role="treeitem"><span class="bounty-status"></span><span>Filtered</span></button>
             </div>
           </section>
-          <section class="bounty-phase expanded" data-bounty-section="vulnerability-scans">
-            <button type="button" class="bounty-phase-toggle" aria-expanded="true">
-              <span class="codicon codicon-chevron-right bounty-chevron" aria-hidden="true"></span>
-              <span class="bounty-phase-name">Vulnerability Scans</span>
-              <span class="bounty-phase-count">0/6</span>
-            </button>
-            <div class="bounty-phase-items" role="group">
-              <button type="button" class="bounty-tree-item" data-bounty-item="services" data-bounty-file="vulnerability-scans/services.json" role="treeitem"><span class="bounty-status status-services"></span><span>Services</span></button>
-              <button type="button" class="bounty-tree-item severity-info" data-bounty-item="informational" data-bounty-file="vulnerability-scans/info.json" role="treeitem"><span class="bounty-status"></span><span>Informational</span><span class="bounty-item-count">0</span></button>
-              <button type="button" class="bounty-tree-item severity-easy" data-bounty-item="low" data-bounty-file="vulnerability-scans/easy.json" role="treeitem"><span class="bounty-status"></span><span>Low</span><span class="bounty-item-count">0</span></button>
-              <button type="button" class="bounty-tree-item severity-medium" data-bounty-item="medium" data-bounty-file="vulnerability-scans/medium.json" role="treeitem"><span class="bounty-status"></span><span>Medium</span><span class="bounty-item-count">0</span></button>
-              <button type="button" class="bounty-tree-item severity-high" data-bounty-item="high" data-bounty-file="vulnerability-scans/high.json" role="treeitem"><span class="bounty-status"></span><span>High</span><span class="bounty-item-count">0</span></button>
-              <button type="button" class="bounty-tree-item severity-critical" data-bounty-item="critical" data-bounty-file="vulnerability-scans/critical.json" role="treeitem"><span class="bounty-status"></span><span>Critical</span><span class="bounty-item-count">0</span></button>
-            </div>
-          </section>
-          <div class="bounty-subsection-label"><span>Evidence</span></div>
-          <button type="button" class="bounty-report-item" data-bounty-item="evidence" data-bounty-file="evidence/index.jsonl" role="treeitem"><span class="codicon codicon-file-text"></span><span>Evidence Index</span></button>
-          <div class="bounty-subsection-label"><span>Findings</span></div>
-          <button type="button" class="bounty-report-item" data-bounty-item="findings" data-bounty-file="findings/findings.json" role="treeitem"><span class="codicon codicon-warning"></span><span>Finding Lifecycle</span></button>
-          <section class="bounty-phase expanded" data-bounty-section="penetration-testing">
-            <button type="button" class="bounty-phase-toggle" aria-expanded="true">
-              <span class="codicon codicon-chevron-right bounty-chevron" aria-hidden="true"></span>
-              <span class="bounty-phase-name">Penetration Testing</span>
-              <span class="bounty-phase-count">0/2</span>
-            </button>
-            <div class="bounty-phase-items" role="group">
-              <button type="button" class="bounty-tree-item" data-bounty-item="coverage" data-bounty-file="penetration-testing/coverage.json" role="treeitem"><span class="bounty-status"></span><span>Coverage Matrix</span></button>
-              <button type="button" class="bounty-tree-item" data-bounty-item="asvs-checklists" data-bounty-file="penetration-testing/asvs-checklist.json" role="treeitem"><span class="bounty-status"></span><span>ASVS Checklist</span></button>
-              <button type="button" class="bounty-tree-item" data-bounty-item="wstg-checklists" data-bounty-file="penetration-testing/wstg-checklist.json" role="treeitem"><span class="bounty-status"></span><span>WSTG Checklists</span></button>
-              <button type="button" class="bounty-tree-item" data-bounty-item="mitre-checklists" data-bounty-file="penetration-testing/mitre-checklist.json" role="treeitem"><span class="bounty-status"></span><span>MITRE Checklists</span></button>
-            </div>
-          </section>
           <button type="button" class="bounty-report-item" data-bounty-item="report" data-bounty-file="report/report.md" role="treeitem">
             <span class="codicon codicon-file-text" aria-hidden="true"></span>
             <span>Report</span>
@@ -289,11 +247,6 @@
           <button type="button" class="bounty-report-item" data-bounty-folder="WebClone" role="treeitem"><span class="codicon codicon-copy"></span><span>WebClone</span></button>
           <div class="bounty-subsection-label bounty-custom-label"><span>Custom</span><span class="bounty-subsection-actions"><button type="button" id="btn-custom-file" class="icon-btn" title="New custom file"><span class="codicon codicon-new-file"></span></button><button type="button" id="btn-custom-folder" class="icon-btn" title="New custom folder"><span class="codicon codicon-new-folder"></span></button></span></div>
           <div id="custom-tree-items" class="custom-tree-items"></div>
-          <div class="bounty-subsection-label bounty-config-label"><span>Config</span></div>
-          <button type="button" class="bounty-report-item bounty-settings-item" data-bounty-item="settings" data-bounty-file="settings.config" role="treeitem">
-            <span class="codicon codicon-settings-gear" aria-hidden="true"></span>
-            <span>settings.config</span>
-          </button>
         </div>
         <button type="button" id="bugbounty-repair" class="bugbounty-repair" hidden aria-hidden="true" tabindex="-1">
           <span class="codicon codicon-warning" aria-hidden="true"></span>
@@ -348,7 +301,6 @@
               <div><strong id="assessment-module-title">Assessment module</strong><span id="assessment-module-description"></span></div>
               <div class="assessment-module-actions">
                 <button type="button" id="assessment-module-open-json" class="secondary-button"><span class="codicon codicon-json"></span>Open JSON</button>
-                <button type="button" id="assessment-finding-new" class="secondary-button" hidden><span class="codicon codicon-add"></span>New finding</button>
                 <button type="button" id="assessment-report-generate" class="secondary-button" hidden><span class="codicon codicon-file-text"></span>Generate report</button>
                 <select id="assessment-run-profile" aria-label="Run role"><option value="hypothesis">Hypothesis</option><option value="plan">Plan</option><option value="agent">Agent</option><option value="ask">Ask</option></select>
                 <button type="button" id="assessment-run-start" class="primary-button"><span class="codicon codicon-play"></span>Start run</button>
@@ -378,6 +330,7 @@
                 <button type="button" data-app-settings-section="prompts" aria-label="Rules, Skills, Subagents" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/rulesnskillnsubagent_icon.svg" alt="" aria-hidden="true"><span>Rules, Skills, Subagents</span></button>
                 <button type="button" data-app-settings-section="commands" aria-label="Tools and MCPs" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/tools_icon.svg" alt="" aria-hidden="true"><span>Tools &amp; MCPs</span></button>
                 <button type="button" data-app-settings-section="certificates" aria-label="Browser &amp; Network" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/browse.svg" alt="" aria-hidden="true"><span>Browser &amp; Network</span></button>
+                <button type="button" data-app-settings-section="knowledge" aria-label="Knowledge Library" aria-pressed="false"><span class="codicon codicon-book" aria-hidden="true"></span><span>Knowledge Library</span></button>
               </div>
             </nav>
           </aside>
@@ -537,7 +490,7 @@
                 </section>
 
                 <section id="project-settings-context" class="project-settings-section">
-                  <header><div><span class="codicon codicon-book"></span><div><h2>Application &amp; Engagement Context</h2><p>Keep the context useful to operators and AI without generating or importing a pen_context file.</p></div></div></header>
+                  <header><div><span class="codicon codicon-book"></span><div><h2>Application &amp; Engagement Context</h2><p>Keep app and engagement context in app-managed Project Settings.</p></div></div></header>
                   <div class="project-settings-card">
                     <div class="project-field-grid">
                       <label class="wide">Background<textarea data-project-field="context.background" rows="4" placeholder="Business purpose, history, and why this assessment is happening"></textarea></label>
@@ -677,24 +630,6 @@
                 <button type="button" id="models-view-all" class="models-view-all" hidden>View more</button>
               </section>
 
-              <section class="models-api-keys models-context-settings" aria-label="Context compaction">
-                <header class="settings-redesign-section-heading">
-                  <div><h3>Context compaction</h3><p>Control how long conversations are condensed when they approach the model limit.</p></div>
-                </header>
-                <div class="models-context-settings-body">
-                  <div class="models-api-row">
-                    <div><strong>Context compaction model</strong><p>Optional. Uses the active chat model when blank; the model only selects trusted record groups.</p></div>
-                    <select id="context-compaction-provider" class="models-select" aria-label="Context compaction provider"><option value="">Active provider</option><option value="ollama">Ollama</option><option value="openrouter">OpenRouter</option></select>
-                    <input id="context-compaction-model" class="models-select" list="context-compaction-models" spellcheck="false" placeholder="Use active chat model" aria-label="Context compaction model">
-                    <datalist id="context-compaction-models"></datalist>
-                  </div>
-                  <div class="models-api-row models-api-row-toggle">
-                    <div><strong>Allow OpenRouter fallback</strong><p>Try vetted hosted models if same-provider compaction fails. Off by default.</p></div>
-                    <label class="general-toggle" aria-label="Allow cross-provider context compaction fallback"><input id="context-compaction-cross-provider" type="checkbox"><span aria-hidden="true"></span></label>
-                  </div>
-                </div>
-              </section>
-
               <details id="models-api-keys" class="models-api-keys" open>
                 <summary class="models-api-keys-summary"><span><strong>Providers &amp; API keys</strong><small>Configure the active inference provider and its connection details.</small></span><span class="codicon codicon-chevron-down" aria-hidden="true"></span></summary>
                 <div class="models-api-keys-body">
@@ -775,14 +710,32 @@
           </section>
           <section id="app-settings-certificates-panel" class="app-settings-panel certificate-settings-panel" hidden>
             <div class="certificate-settings-content browser-network-page">
-              <header class="settings-redesign-section-heading"><div><h3>Proxy certificate</h3><p>XEKUTE uses one shared certificate authority for every assessment. Install it only in browsers and systems dedicated to authorized testing.</p></div></header>
+              <header class="settings-redesign-section-heading"><div><h3>Proxy certificate</h3></div></header>
               <section class="certificate-settings-card">
                 <div class="certificate-setting-heading"><div><strong>Central CA storage folder</strong><small>All assessment proxy listeners use this location. The private key is never copied into an assessment.</small></div><span id="certificate-location-badge" class="certificate-location-badge">Default</span></div>
                 <div class="certificate-location-row"><input id="certificate-directory" type="text" readonly aria-label="Central CA storage folder"><button type="button" id="certificate-browse" class="secondary-button"><span class="codicon codicon-folder-opened"></span>Choose folder</button></div>
                 <div class="certificate-setting-actions"><button type="button" id="certificate-open-folder" class="secondary-button"><span class="codicon codicon-folder"></span>Open folder</button><button type="button" id="certificate-reset" class="secondary-button">Use default location</button></div>
               </section>
-              <section class="certificate-settings-card certificate-status-card"><div><strong>Certificate status</strong><span id="certificate-status">Checking…</span></div><div><strong>Public certificate</strong><code id="certificate-file-path">Generated when the proxy listener first starts</code></div></section>
-               <aside class="certificate-security-note"><span class="codicon codicon-shield"></span><p>The CA private key grants interception authority. Keep this directory restricted to your Windows account, never add it to an assessment or repository, and rotate it if the folder is exposed.</p></aside>
+            </div>
+          </section>
+          <section id="app-settings-knowledge-panel" class="app-settings-panel" hidden>
+            <div class="certificate-settings-content">
+              <header class="settings-redesign-section-heading"><div><h3>Knowledge Library</h3></div></header>
+              <section class="certificate-settings-card">
+                <div class="certificate-setting-heading"><div><strong>Installed releases</strong><small>Methodology packages available to Hypothesis and Plan retrieval.</small></div></div>
+                <div id="knowledge-library-releases" class="assessment-module-table-wrap"></div>
+              </section>
+              <section class="certificate-settings-card">
+                <div class="certificate-setting-heading"><div><strong>Model</strong><small id="knowledge-library-model">Not loaded</small></div></div>
+                <p id="knowledge-library-health">Index not built.</p>
+              </section>
+              <section class="certificate-settings-card">
+                <div class="certificate-setting-actions">
+                  <button type="button" id="knowledge-library-install" class="secondary-button">Install package</button>
+                  <button type="button" id="knowledge-library-reindex" class="secondary-button">Reindex</button>
+                </div>
+                <p id="knowledge-library-status">Ready</p>
+              </section>
             </div>
           </section>
             </div>
@@ -1083,14 +1036,10 @@
                 <span id="security-workbench-mode" class="security-workbench-mode">Interceptor</span>
                 <span id="security-workbench-status" class="security-workbench-status">Ready</span>
               </div>
-              <div id="security-intruder-controls" class="security-intruder-controls" hidden>
-                <label for="security-attack-type">Attack</label>
-                <select id="security-attack-type" title="Intruder attack type">
-                  <option value="sniper">Sniper</option>
-                  <option value="battering-ram">Battering Ram</option>
-                  <option value="pitchfork">Pitchfork</option>
-                  <option value="cluster-bomb">Cluster Bomb</option>
-                </select>
+              <div id="security-repeater-history" class="security-repeater-history" hidden>
+                <button type="button" id="security-repeater-prev" class="security-workbench-icon" title="Previous response" aria-label="Previous response"><span class="codicon codicon-chevron-left"></span></button>
+                <span id="security-repeater-position" class="security-repeater-position">0 / 0</span>
+                <button type="button" id="security-repeater-next" class="security-workbench-icon" title="Next response" aria-label="Next response"><span class="codicon codicon-chevron-right"></span></button>
               </div>
               <button type="button" id="security-intercept-toggle" class="security-intercept-toggle" title="Pause or resume request interception" hidden>
                 <span id="security-intercept-toggle-icon" class="codicon codicon-debug-pause" aria-hidden="true"></span>
@@ -1101,16 +1050,65 @@
               <button type="button" id="security-run-button" class="security-run-button"><span class="codicon codicon-play"></span><span id="security-run-label">Forward</span></button>
             </div>
             <div class="security-workbench-main">
-              <div class="security-exchange" id="security-exchange">
-                <section class="security-message-pane security-request-pane">
-                  <header><span>Request</span><span id="security-request-size">0 B</span></header>
-                  <textarea id="security-request-editor" spellcheck="false" aria-label="Raw HTTP request" placeholder="GET / HTTP/1.1&#10;Host: authorized.example&#10;Accept: */*"></textarea>
-                </section>
-                <div id="security-exchange-sash" class="security-exchange-sash sash-v" role="separator" aria-label="Resize request and response panels" aria-orientation="vertical" tabindex="0"></div>
-                <section class="security-message-pane security-response-pane">
-                  <header><span>Response</span><span id="security-response-size">0 B</span></header>
-                  <textarea id="security-response-editor" spellcheck="false" aria-label="Raw HTTP response" readonly placeholder="Response appears here"></textarea>
-                </section>
+              <div class="security-workbench-center">
+                <div id="security-repeater-tabs" class="security-repeater-tabs" hidden>
+                  <div id="security-repeater-tab-list" class="security-repeater-tab-list" role="tablist" aria-label="Workbench tabs"></div>
+                  <button type="button" id="security-repeater-add" class="security-repeater-add" title="New tab" aria-label="New tab"><span class="codicon codicon-add"></span></button>
+                </div>
+                <div id="security-intruder-panel" class="security-intruder-panel" hidden>
+                  <nav class="security-subtabs" role="tablist" aria-label="Intruder sections">
+                    <button type="button" class="active" data-intruder-tab="positions" role="tab" aria-selected="true"><span>Positions</span><span id="security-positions-count" class="security-subtab-badge">0</span></button>
+                    <button type="button" data-intruder-tab="payloads" role="tab" aria-selected="false"><span>Payloads</span><span id="security-payloads-count" class="security-subtab-badge">0</span></button>
+                    <button type="button" data-intruder-tab="results" role="tab" aria-selected="false"><span>Results</span><span id="security-results-count" class="security-subtab-badge">0</span></button>
+                  </nav>
+                  <section class="security-intruder-section" data-intruder-panel="positions">
+                    <div class="security-attack-picker" role="radiogroup" aria-label="Attack type">
+                      <button type="button" class="active" data-attack-type="sniper" role="radio" aria-checked="true"><strong>Sniper</strong><small>One position at a time</small></button>
+                      <button type="button" data-attack-type="battering-ram" role="radio" aria-checked="false"><strong>Battering Ram</strong><small>Same payload everywhere</small></button>
+                      <button type="button" data-attack-type="pitchfork" role="radio" aria-checked="false"><strong>Pitchfork</strong><small>Sets advance together</small></button>
+                      <button type="button" data-attack-type="cluster-bomb" role="radio" aria-checked="false"><strong>Cluster Bomb</strong><small>Every combination</small></button>
+                    </div>
+                    <div class="security-position-bar">
+                      <div class="security-position-actions">
+                        <button type="button" id="security-position-mark" class="security-mini-button"><span class="codicon codicon-symbol-variable"></span>Mark selection</button>
+                        <button type="button" id="security-position-auto" class="security-mini-button"><span class="codicon codicon-lightbulb"></span>Auto-detect</button>
+                        <button type="button" id="security-position-clear" class="security-mini-button"><span class="codicon codicon-clear-all"></span>Clear all</button>
+                      </div>
+                      <div id="security-position-chips" class="security-position-chips" aria-live="polite"></div>
+                    </div>
+                  </section>
+                  <section class="security-intruder-section" data-intruder-panel="payloads" hidden>
+                    <div class="security-payload-toolbar">
+                      <span id="security-payload-hint" class="security-payload-hint">Mark a payload position first.</span>
+                      <button type="button" id="security-payload-json-toggle" class="security-mini-button" aria-pressed="false"><span class="codicon codicon-json"></span>Raw JSON</button>
+                    </div>
+                    <div id="security-payload-sets" class="security-payload-sets"></div>
+                    <div id="security-payload-panel" class="security-payload-panel" hidden>
+                      <label for="security-payload-editor">Payload sets (JSON)</label>
+                      <textarea id="security-payload-editor" spellcheck="false" aria-label="Intruder payload sets">{"value":["test"]}</textarea>
+                    </div>
+                  </section>
+                  <section class="security-intruder-section security-results-section" data-intruder-panel="results" hidden>
+                    <div class="security-results-wrap">
+                      <table class="security-results-table">
+                        <thead><tr><th>#</th><th>Payload</th><th>Status</th><th>Length</th><th>Time</th></tr></thead>
+                        <tbody id="security-results-rows"></tbody>
+                      </table>
+                      <div id="security-results-empty" class="security-results-empty">Run an attack to collect results.</div>
+                    </div>
+                  </section>
+                </div>
+                <div class="security-exchange" id="security-exchange">
+                  <section class="security-message-pane security-request-pane">
+                    <header><span>Request</span><span id="security-request-size">0 B</span></header>
+                    <textarea id="security-request-editor" spellcheck="false" aria-label="Raw HTTP request" placeholder="GET / HTTP/1.1&#10;Host: authorized.example&#10;Accept: */*"></textarea>
+                  </section>
+                  <div id="security-exchange-sash" class="security-exchange-sash sash-v" role="separator" aria-label="Resize request and response panels" aria-orientation="vertical" tabindex="0"></div>
+                  <section class="security-message-pane security-response-pane">
+                    <header><span>Response</span><span id="security-response-size">0 B</span></header>
+                    <textarea id="security-response-editor" spellcheck="false" aria-label="Raw HTTP response" readonly placeholder="Response appears here"></textarea>
+                  </section>
+                </div>
               </div>
               <aside id="security-inspector" class="security-inspector collapsed" aria-label="Inspector utilities">
                 <button type="button" id="security-inspector-toggle" class="security-inspector-toggle" aria-expanded="false" title="Open Inspector"><span class="codicon codicon-inspect"></span><span>Inspector</span></button>
@@ -1153,10 +1151,6 @@
                 </div>
               </aside>
             </div>
-            <div id="security-payload-panel" class="security-payload-panel" hidden>
-              <label for="security-payload-editor">Payload sets (JSON)</label>
-              <textarea id="security-payload-editor" spellcheck="false" aria-label="Intruder payload sets">{"value":["test"]}</textarea>
-            </div>
           </div>
           <div id="terminal-tabs-list" hidden></div>
         </div>
@@ -1187,6 +1181,7 @@
       <div id="messages"></div>
 
       <div id="input-bar">
+        <div id="chat-history-security-warning" class="chat-history-security-warning" role="status" aria-live="polite" hidden></div>
         <div id="composer-questions" class="composer-questions" hidden aria-live="polite"></div>
         <div id="composer-task-list" class="composer-task-list" hidden aria-live="polite"></div>
         <div class="composer">
@@ -1221,7 +1216,7 @@
                   <circle id="context-ring-fill" class="context-ring-fill" cx="10" cy="10" r="8"></circle>
                 </svg>
               </button>
-              <button id="send-btn" class="send-btn" title="Send message" aria-label="Send message" disabled>
+              <button type="button" id="send-btn" class="send-btn" title="Send message" aria-label="Send message" disabled>
                 <span class="codicon codicon-arrow-up"></span>
               </button>
             </div>
@@ -1238,7 +1233,7 @@
       <header><div><span class="codicon codicon-book"></span><div><strong id="help-guide-title">XEKUTE Guide</strong><small>Quick orientation for the local-first pentesting workspace.</small></div></div><button type="button" id="help-guide-close" class="icon-btn" title="Close guide" aria-label="Close guide"><span class="codicon codicon-close"></span></button></header>
       <div class="help-guide-body">
         <section><h3>Start with a project</h3><p>Use <strong>Files → Create New Project</strong> to create a workspace, or <strong>Open Project</strong> to open an existing folder. The Target sidebar holds assessment files and custom files.</p></section>
-        <section><h3>Workspaces</h3><p><strong>Search</strong> finds evidence, <strong>Target</strong> organizes scope and findings, <strong>Security Tools</strong> handles request/response work, and <strong>Map</strong> visualizes application behavior.</p></section>
+        <section><h3>Workspaces</h3><p><strong>Search</strong> finds evidence, <strong>Target</strong> organizes project scope and investigation state, <strong>Security Tools</strong> handles request/response work, and <strong>Map</strong> visualizes application behavior.</p></section>
         <section><h3>Chat guidance</h3><p>Type <code>/</code> to choose a read-only <strong>System Skill</strong> or one of your <strong>Custom Skills</strong>. System skills can also be selected automatically from an ordinary request; their Markdown instructions remain internal.</p></section>
         <section><h3>Authority and modes</h3><p><strong>Modes</strong> (Hypothesis, Plan, Agent, Ask) set which tools the model can call. <strong>Authority</strong> (Full Authority, Ask for Approval, Approve for me) controls scope and whether sensitive actions auto-run or need your approval. Switch both from the Chat composer.</p></section>
         <section><h3>Terminal and safety</h3><p>Use Terminal for local commands and keep testing within the authorization and scope recorded in the assessment. Tool configurations and results stay inside the current project.</p></section>
@@ -1283,6 +1278,19 @@
     <button type="button" data-workspace-context-action="delete" role="menuitem">
       <span id="workspace-context-delete-label">Delete</span>
     </button>
+  </div>
+
+  <div id="editor-tab-context-menu" class="custom-context-menu editor-tab-context-menu" role="menu" hidden>
+    <button type="button" data-editor-tab-action="close-all" role="menuitem">Close All</button>
+    <button type="button" data-editor-tab-action="close-right" role="menuitem">Close to the right</button>
+    <button type="button" data-editor-tab-action="close" role="menuitem">Close</button>
+    <div class="context-menu-separator" aria-hidden="true"></div>
+    <button type="button" data-editor-tab-action="toggle-pin" role="menuitem">Pin</button>
+    <div class="context-menu-separator" data-editor-tab-separator="explorer" aria-hidden="true"></div>
+    <button type="button" data-editor-tab-action="reveal-explorer" role="menuitem">Reveal in File Explorer</button>
+    <div class="context-menu-separator" data-editor-tab-separator="copy" aria-hidden="true"></div>
+    <button type="button" data-editor-tab-action="copy-path" role="menuitem">Copy path</button>
+    <button type="button" data-editor-tab-action="copy-relative-path" role="menuitem">Copy Relative Path</button>
   </div>
 
   <div id="update-toast" class="update-toast" role="status" aria-label="Update available" hidden>
@@ -1340,14 +1348,13 @@
     <div class="context-usage-header">
       <div class="context-usage-heading-group">
         <div class="context-usage-heading">Context Usage</div>
-        <button type="button" id="context-usage-compact" class="context-usage-compact-btn" title="Summarize and compress context" aria-label="Compress context"><span aria-hidden="true">&gt;&lt;</span></button>
       </div>
       <button type="button" id="context-usage-close" class="context-usage-close" title="Close context usage">
         <span class="codicon codicon-close"></span>
       </button>
     </div>
     <div class="context-usage-summary">
-      <span id="context-usage-heading-value" class="context-usage-summary-left">Context: 0 / 0</span>
+      <span id="context-usage-heading-value" class="context-usage-summary-left">0 / 0</span>
       <span id="context-usage-used" class="context-usage-summary-left">0%</span>
     </div>
     <div class="context-usage-track">
@@ -1369,6 +1376,15 @@
   </div>
 
   <div id="security-history-menu" class="security-history-menu" role="menu" hidden>
+    <button type="button" class="security-history-menu-item" data-action="send-repeater" role="menuitem">
+      <span class="codicon codicon-sync"></span>
+      <span id="security-history-repeater-label">Send to Repeater</span>
+    </button>
+    <button type="button" class="security-history-menu-item" data-action="send-intruder" role="menuitem">
+      <span class="codicon codicon-symbol-event"></span>
+      <span id="security-history-intruder-label">Send to Intruder</span>
+    </button>
+    <div class="security-tool-menu-separator" role="separator"></div>
     <button type="button" class="security-history-menu-item" data-action="delete" role="menuitem">
       <span class="codicon codicon-trash"></span>
       <span id="security-history-delete-label">Delete</span>

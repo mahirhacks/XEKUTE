@@ -488,7 +488,7 @@
 .agent-command-approval-preview code {
   display: -webkit-box;
   overflow: hidden;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   white-space: pre-wrap;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -655,8 +655,14 @@
   color: #bcbcbc;
 }
 
-.chat-mode-option:hover,
-.chat-mode-option.active { background: #37383a; color: #f0f0f0; }
+.chat-mode-option:hover {
+  background: #1c1c1c;
+  color: #e8e8e8;
+}
+.chat-mode-option.active {
+  background: #1a1a1a;
+  color: #e8e8e8;
+}
 .chat-mode-option-icon,
 .chat-mode-option-check { color: currentColor; }
 
@@ -876,33 +882,6 @@
   line-height: 1.55;
 }
 
-.agent-progress-feed {
-  display: grid;
-  gap: 6px;
-  margin: 1px 0 4px;
-  color: #b8b8b8;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.agent-progress-entry {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  min-width: 0;
-}
-
-.agent-progress-icon {
-  flex: 0 0 auto;
-  margin-top: 2px;
-  color: #8c8c8c;
-  font-size: 12px;
-}
-
-.agent-progress-entry[data-state="success"] .agent-progress-icon { color: #73a88a; }
-.agent-progress-entry[data-state="error"] .agent-progress-icon { color: #d87872; }
-.agent-progress-text { min-width: 0; overflow-wrap: anywhere; }
-
 .agent-command-event {
   width: 100%;
   margin: 3px 0;
@@ -946,7 +925,7 @@
   color: inherit;
   font: 400 11px/1.5 var(--font-mono);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   user-select: text;
 }
 
@@ -1524,6 +1503,19 @@
   min-width:0;
 }
 
+.chat-history-security-warning {
+  width: min(760px, calc(100% - 24px));
+  margin: 0 auto 6px;
+  padding: 7px 10px;
+  border: 1px solid rgba(222, 175, 73, .38);
+  border-radius: 6px;
+  background: rgba(126, 88, 19, .18);
+  color: #d9bd7b;
+  font: 500 11px/1.35 var(--font-ui);
+}
+
+.chat-history-security-warning[hidden] { display: none; }
+
 .composer-input-row #chat-input {
   display:block;
   min-width:0;
@@ -1560,14 +1552,14 @@
   pointer-events:none;
 }
 
-#messages .agent-status-line[data-final="true"]:not([data-state="error"]) .agent-status-icon {
+#messages .agent-status-line[data-final="true"] .agent-status-icon {
   display: none;
 }
 
 #messages .agent-status-line[data-state="error"] { color: #b7a09c; }
 #messages .agent-status-line.status-updated .agent-status-text { animation: agent-status-update 150ms ease-out both; }
 
-#messages .context-compaction-notice {
+#messages .context-checkpoint-notice {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -1685,6 +1677,7 @@
 #messages .tool-card.pending .tool-card-icon { animation: agent-tool-pulse 1.3s ease-in-out infinite; }
 #messages .tool-card[data-state="success"] { opacity: .76 !important; }
 #messages .tool-card[data-state="success"] .tool-card-file { color: #929292 !important; }
+#messages .tool-card[data-state="error"] .tool-card-icon { display: none !important; }
 #messages .tool-card[data-state="error"] .tool-card-file { color: #b7a09c !important; }
 #messages .tool-card.status-updated .tool-card-file { animation: agent-status-update 150ms ease-out both; }
 
@@ -1807,7 +1800,6 @@
   border-color: transparent !important;
   opacity: .7 !important;
 }
-.chat-mode-option.mode-hypothesis { color: #f0a6c8 !important; }
 .chat-mode-button.mode-ask {
   color: #81d99c !important;
   background: #243d2c !important;
@@ -1836,8 +1828,6 @@
   border-color: transparent !important;
   opacity: .7 !important;
 }
-.chat-mode-option.mode-ask { color: #7ee29f !important; }
-.chat-mode-option.mode-plan { color: #f2cc67 !important; }
 
 /* Chat history popover (lists all persisted chat sessions) */
 #chat-history-popover {

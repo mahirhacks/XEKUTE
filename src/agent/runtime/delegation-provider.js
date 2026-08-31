@@ -15,6 +15,17 @@ const MAX_ACTIONS = 50;
 const WORKSPACE_MUTATION_TOOLS = new Set(["apply_patch"]);
 const LIFECYCLE_EVENTS = new Set(["subagent_queued", "subagent_started", "subagent_activity", "subagent_completed", "subagent_stopped", "subagent_failed"]);
 
+// Tier 1's encrypted transcript/checkpoint store is keyed by a stable
+// session identity, not by the random run ID generated for one child turn.
+// Keep this derivation aligned with main.js so child finalization and the
+// child controller reopen the same durable session after a restart.
+function memorySessionIdFor(rawSessionId, stableKey = "") {
+  const value = String(rawSessionId || "").trim();
+  if (/^session_[a-z0-9._:-]{8,240}$/i.test(value)) return value;
+  const digest = crypto.createHash("sha256").update(`${value}|${String(stableKey || "")}`).digest("hex").slice(0, 40);
+  return `session_${digest}`;
+}
+
 function oneLiner(task, fallback = "") {
   const value = String(task || "").trim().replace(/\s+/g, " ");
   return (value || String(fallback || "")).slice(0, 160);
@@ -24,7 +35,6 @@ function buildChildContextText(input, executionContext) {
   const contextPackage = input?.contextPackage && typeof input.contextPackage === "object"
     ? { ...input.contextPackage }
     : {};
-  delete contextPackage.projectMemory;
   const safeContext = redactStructuredValue({
     task: String(input?.task || "").slice(0, MAX_TASK_CHARS),
     context: contextPackage,
@@ -116,11 +126,9 @@ function createRuntimeDelegationProvider({
   projectId = "",
   parentBlockId = "",
   getActiveProvider = () => "",
-  modeWorkflow = null,
   intelligence = null,
-  contextCompiler = null,
-  contextAssembly = null,
-  planBinding = null,
+  tier1Context = null,
+  workingReferences = [],
   toolMetadataForName = () => null,
   getBrowserTarget = () => "",
   checkpointRun = () => Promise.resolve(),
@@ -129,6 +137,7 @@ function createRuntimeDelegationProvider({
   if (typeof runAgentTurn !== "function") throw new TypeError("runAgentTurn is required");
   if (typeof runModelRound !== "function") throw new TypeError("runModelRound is required");
   if (typeof executeToolCall !== "function") throw new TypeError("executeToolCall is required");
+  const childSessionBindings = new Map();
 
   function assignmentInput(input = {}) {
     const resources = input?.contextPackage?.resources && typeof input.contextPackage.resources === "object"
@@ -253,8 +262,11 @@ function createRuntimeDelegationProvider({
   });
 
   function sendChildEvent(childSessionId, childInvocationId, event = {}, parentEvent = false) {
+    const binding = childSessionBindings.get(String(childSessionId || "")) || {};
     sendToRenderer?.({
       ...event,
+      blockId: event.blockId || binding.blockId || "",
+      projectId: event.projectId || binding.projectId || "",
       sessionId: childSessionId,
       parentSessionId: sessionId,
       childInvocationId,
@@ -266,6 +278,8 @@ function createRuntimeDelegationProvider({
     if (parentEvent || LIFECYCLE_EVENTS.has(String(event.type || ""))) {
       sendToRenderer?.({
         ...event,
+        blockId: event.blockId || binding.blockId || "",
+        projectId: event.projectId || binding.projectId || "",
         sessionId,
         parentSessionId: sessionId,
         childInvocationId,
@@ -297,11 +311,14 @@ function createRuntimeDelegationProvider({
       operation,
     });
     const resolvedSessionId = String(result?.sessionId || childSessionId || `subagent-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`);
-    return {
+    const binding = {
       sessionId: resolvedSessionId,
       blockId: String(result?.blockId || ""),
       projectId: String(result?.projectId || ""),
     };
+    childSessionBindings.set(resolvedSessionId, binding);
+    if (String(childSessionId || "") && childSessionId !== resolvedSessionId) childSessionBindings.set(String(childSessionId), binding);
+    return binding;
   }
 
   function buildRun({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation, operation, previousHistory = [], model = "" }) {
@@ -322,12 +339,6 @@ function createRuntimeDelegationProvider({
           blockId,
           nested: true,
           authorityProfile,
-          // Preserve the binding validated by the child controller so the
-          // central executor applies the same plan policy a second time.
-          planBinding: request?.planBinding
-            || modeWorkflow?.loadState?.(workspace)?.planBinding
-            || planBinding
-            || null,
           childInvocationId,
         });
       } catch (error) {
@@ -357,16 +368,13 @@ function createRuntimeDelegationProvider({
         mode,
         modeFamily,
         projectProfile,
-        projectMemory: input?.contextPackage?.projectMemory || null,
-        modeWorkflow,
         intelligence,
-        contextCompiler,
-        contextAssembly,
-        planBinding: modeWorkflow?.loadState?.(workspace)?.planBinding || planBinding || null,
+        tier1Context,
+        workingReferences,
         authorityProfile,
         sessionId: childSessionId,
+        memorySessionId: memorySessionIdFor(childSessionId, childInvocationId),
         userMessage: String(input?.task || ""),
-        contextSummary: childContextText,
         chatHistory: Array.isArray(previousHistory) ? previousHistory : [],
         signal: childController.signal,
         sendEvent: (event) => sendChildEvent(childSessionId, childInvocationId, event),

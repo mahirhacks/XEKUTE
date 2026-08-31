@@ -191,8 +191,8 @@ test("canonical agent exec projects terminal output only when explicitly request
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
 
   assert.match(main, /runSupervisedCommand/);
-  assert.match(main, /exposeTerminal:\s*args\.show_in_terminal === true/);
-  assert.match(main, /const exposeTerminal = input\.show_in_terminal === true/);
+  assert.match(main, /exposeTerminal:\s*args\.show_in_terminal !== false/);
+  assert.match(main, /const exposeTerminal = input\.show_in_terminal !== false/);
   assert.match(main, /if \(exposeTerminal\) sendTerminalData/);
   assert.match(main, /if \(result\?\.value\) result\.value\.showInTerminal = terminal\.exposeTerminal/);
   assert.match(main, /terminalHost\.runExecutable/);
@@ -201,6 +201,10 @@ test("canonical agent exec projects terminal output only when explicitly request
   assert.match(runner, /exposeTerminal = false/);
   assert.match(runner, /if \(exposeTerminal\) sendTerminalData/);
   assert.match(runner, /if \(exposeTerminal\) \{[\s\S]*?announceAgentTerminal/);
+  const terminalHost = main.slice(main.indexOf("function createAgentTerminalHost"), main.indexOf("const assessmentIngestQueues"));
+  assert.doesNotMatch(terminalHost, /artifactProvenance/, "terminal supervision must not reference tool-only provenance outside its scope");
+  assert.match(main, /commandCallId: String\(toolCall\?\.id \|\| toolCall\?\.callId \|\| ""\)/);
+  assert.match(terminalHost, /type: "terminal_complete"[\s\S]{0,300}commandCallId[\s\S]{0,100}commandInvocationId/);
 });
 
 test("typed exec cancellation settles cleanly and removes its AbortSignal listener", async () => {

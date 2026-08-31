@@ -13,8 +13,7 @@ const {
 } = require("./memory-storage-utils.js");
 const { createOpaqueId, isMemoryId } = require("../../../contracts/memory/memory-identity.js");
 
-const REGISTRY_SCHEMA_VERSION = 2;
-const LEGACY_PROJECT_ID = /^(?:project[-_:])[a-z0-9._:-]{8,240}$/i;
+const REGISTRY_SCHEMA_VERSION = 3;
 
 function createProjectIdentityStore({
   fs = nodeFs,
@@ -38,17 +37,13 @@ function createProjectIdentityStore({
     return process.platform === "win32" ? workspace.toLowerCase() : workspace;
   }
 
-  function manifestFile(rawWorkspace) {
-    return path.join(displayWorkspace(rawWorkspace), ".xekute", "memory", "manifest.json");
-  }
-
   function defaultRegistry() {
     return { schema_version: REGISTRY_SCHEMA_VERSION, updated_at: timestamp(now), projects: {} };
   }
 
   function validProjectId(value) {
     const input = String(value == null ? "" : value).trim();
-    return isMemoryId(input, "proj") || LEGACY_PROJECT_ID.test(input);
+    return isMemoryId(input, "proj");
   }
 
   function normalizeEntry(value, canonical, fallbackTime) {
@@ -106,19 +101,6 @@ function createProjectIdentityStore({
     return { ok: true, path: result.path, registry: normalized };
   }
 
-  function readManifestProjectId(workspace) {
-    const file = manifestFile(workspace);
-    if (!fs.existsSync(file)) return { ok: true, exists: false, projectId: "", path: file };
-    try {
-      const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-      const projectId = String(parsed?.project_id || parsed?.projectId || "").trim();
-      if (!validProjectId(projectId)) return operationFailure("MEMORY_PROJECT_MANIFEST_INVALID", "The workspace memory manifest contains an invalid project ID.", { path: file });
-      return { ok: true, exists: true, projectId, path: file };
-    } catch (error) {
-      return operationFailure("MEMORY_PROJECT_MANIFEST_INVALID", `The workspace memory manifest could not be read: ${error.message}.`, { path: file });
-    }
-  }
-
   function registryEntry(registry, canonical) {
     const entry = registry?.projects?.[canonical];
     return entry && typeof entry === "object" ? entry : entry ? { project_id: entry } : null;
@@ -151,28 +133,21 @@ function createProjectIdentityStore({
       return operationFailure("MEMORY_WORKSPACE_REQUIRED", error.message);
     }
     const canonical = canonicalWorkspace(workspace);
-    const manifest = readManifestProjectId(workspace);
-    if (!manifest.ok) return manifest;
-
     const loaded = readRegistry();
     if (!loaded.ok) return loaded;
     const entry = registryEntry(loaded.registry, canonical);
     const registryProjectId = String(entry?.project_id || "").trim();
-    const manifestProjectId = manifest.projectId;
-    if (manifestProjectId && registryProjectId && manifestProjectId !== registryProjectId) {
-      return operationFailure("MEMORY_PROJECT_ID_CONFLICT", "The workspace manifest and protected registry disagree about project identity.", {
-        canonical,
-        manifestProjectId,
-        registryProjectId,
-      });
-    }
     const requested = String(requestedProjectId || "").trim();
     if (requested && !validProjectId(requested)) return operationFailure("MEMORY_PROJECT_ID_INVALID", "The requested project ID is invalid.", { projectId: requested });
-    if (requested && ((manifestProjectId && requested !== manifestProjectId) || (registryProjectId && requested !== registryProjectId))) {
-      return operationFailure("MEMORY_PROJECT_ID_CONFLICT", "The requested project ID conflicts with the known workspace binding.", { requestedProjectId: requested, manifestProjectId, registryProjectId });
+    if (requested && registryProjectId && requested !== registryProjectId) {
+      return operationFailure("MEMORY_PROJECT_ID_CONFLICT", "The requested project ID conflicts with the protected workspace binding.", { requestedProjectId: requested, registryProjectId });
     }
 
-    const projectId = manifestProjectId || registryProjectId || requested;
+    // The protected registry is the sole project identity source.  In
+    // particular, do not inspect a workspace `.xekute/memory/manifest.json`:
+    // that path belonged to a retired workspace memory implementation and must
+    // remain inert in the clean-slate runtime.
+    const projectId = registryProjectId || requested;
     if (projectId) {
       if (persist && (!entry || entry.project_id !== projectId || entry.project_path !== workspace)) {
         const bound = persistBinding(loaded.registry, canonical, workspace, projectId, { alias: entry?.project_path || "" });
@@ -187,8 +162,8 @@ function createProjectIdentityStore({
         workspace,
         canonical,
         projectId,
-        persisted: Boolean(entry || manifestProjectId),
-        source: manifestProjectId ? "workspace_manifest" : "protected_registry",
+        persisted: Boolean(entry) || persist,
+        source: entry ? "protected_registry" : "requested",
         registryRecovered: Boolean(loaded.recovered),
         warning: loaded.warning || "",
       };
@@ -202,6 +177,12 @@ function createProjectIdentityStore({
       return operationFailure("MEMORY_PROJECT_REGISTRY_WRITE_FAILED", `The project registry could not be created: ${error.message}.`, { path: registryFile }, true);
     }
     return { ok: true, initialized: true, workspace, canonical, projectId: createdProjectId, persisted: true, source: "created", registryRecovered: false, warning: "" };
+  }
+
+  // V3 resolution deliberately consults only the protected project registry.
+  // It never opens a workspace memory manifest or any prior memory store.
+  function resolveV3Project(rawWorkspace, { persist = false, projectId: requestedProjectId = "" } = {}) {
+    return resolveProject(rawWorkspace, { persist, projectId: requestedProjectId });
   }
 
   function bindWorkspace(rawWorkspace, projectId, { persist = true } = {}) {
@@ -239,12 +220,12 @@ function createProjectIdentityStore({
 
   return Object.freeze({
     registryFile,
-    manifestFile,
     canonicalWorkspace,
     displayWorkspace,
     readRegistry,
     listBindings,
     resolveProject,
+    resolveV3Project,
     bindWorkspace,
     enqueue,
     REGISTRY_SCHEMA_VERSION,

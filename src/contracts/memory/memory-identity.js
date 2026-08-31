@@ -3,20 +3,34 @@
 const crypto = require("node:crypto");
 const { assert } = require("./memory-errors.js");
 
+// V3 uses opaque, typed identifiers.  The older prefixes are retained as
+// parser aliases for non-memory application records, but every V3 identifier
+// has one of the explicit prefixes below.  Keeping the validation here means
+// storage, IPC, model output, and tests all agree on identity semantics.
 const ID_PREFIXES = Object.freeze([
   "proj", "session", "block", "entity", "claim", "rel", "inv", "attempt",
-  "finding", "artifact", "kb", "procedure", "sel", "op", "event",
+  "finding", "verification", "artifact", "kb", "procedure", "sel", "op", "event",
+  "txn", "job", "checkpoint", "blocker",
 ]);
 const ID_PREFIX_SET = new Set(ID_PREFIXES);
-const ID_PATTERN = /^(proj|session|block|entity|claim|rel|inv|attempt|finding|artifact|kb|procedure|sel|op|event)_[A-Za-z0-9][A-Za-z0-9._:-]{0,239}$/;
+const ID_PATTERN = /^(proj|session|block|entity|claim|rel|inv|attempt|finding|verification|artifact|kb|procedure|sel|op|event|txn|job|checkpoint|blocker)_[A-Za-z0-9][A-Za-z0-9._:-]{0,239}$/;
+const MAX_CANONICAL_DEPTH = 32;
+const TOO_DEEP = "[OMITTED_TOO_DEEP]";
+const CIRCULAR = "[CIRCULAR]";
 
-function canonicalize(value, depth = 0) {
-  assert(depth <= 12, "MEMORY_CANONICAL_VALUE_TOO_DEEP", "Canonical values may not exceed the supported nesting depth.");
+function canonicalize(value, depth = 0, seen = null) {
+  // Prefix hashing wraps tool JSON Schema several levels deep. A hard throw at
+  // depth 12 aborted ordinary chat turns (including "hi") before the model ran.
+  // Truncate instead of failing the turn; the sentinel is stable for hashes.
+  if (depth > MAX_CANONICAL_DEPTH) return TOO_DEEP;
   if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
-  if (Array.isArray(value)) return value.map((entry) => canonicalize(entry, depth + 1));
-  if (value && typeof value === "object") {
+  if (Array.isArray(value) || (value && typeof value === "object")) {
+    const nextSeen = seen || new WeakSet();
+    if (nextSeen.has(value)) return CIRCULAR;
+    nextSeen.add(value);
+    if (Array.isArray(value)) return value.map((entry) => canonicalize(entry, depth + 1, nextSeen));
     return Object.keys(value).sort().reduce((result, key) => {
-      result[String(key)] = canonicalize(value[key], depth + 1);
+      result[String(key)] = canonicalize(value[key], depth + 1, nextSeen);
       return result;
     }, {});
   }
@@ -44,7 +58,15 @@ function isMemoryId(value, expectedPrefix = "") {
 }
 
 function assertMemoryId(value, expectedPrefix = "") {
-  assert(isMemoryId(value, expectedPrefix), "MEMORY_ID_INVALID", "Memory IDs must be opaque, prefixed, and bounded.", { value: String(value || ""), expectedPrefix: String(expectedPrefix || "") });
+  // Validation failures may be surfaced through IPC/diagnostics.  Never echo
+  // the rejected value: callers can pass secrets, credentials, or arbitrary
+  // attacker-controlled text in an ID-shaped field.  The length is enough to
+  // make malformed-input diagnostics useful without retaining the payload.
+  const supplied = String(value == null ? "" : value);
+  assert(isMemoryId(value, expectedPrefix), "MEMORY_ID_INVALID", "Memory IDs must be opaque, prefixed, and bounded.", {
+    expectedPrefix: String(expectedPrefix || ""),
+    valueLength: supplied.length,
+  });
   return String(value);
 }
 

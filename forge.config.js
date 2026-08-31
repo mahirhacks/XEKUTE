@@ -7,8 +7,15 @@ module.exports = {
     executableName: "XEKUTE",
     appBundleId: "com.xekute.securityworkspace",
     icon: "xekute_icon.ico",
-    asar: true,
-    asarUnpack: ["**/node_modules/node-pty/**"],
+    // Native ONNX loads model files through real filesystem paths. Keep the
+    // quantized BGE bundle and native runtimes outside ASAR while the rest of
+    // the application remains packaged and integrity-checked. `asarUnpack`
+    // is an electron-builder option; Electron Forge passes the unpack rules
+    // through the nested @electron/packager `asar` object instead.
+    asar: {
+      unpack: "**/{node_modules/node-pty,node_modules/onnxruntime-node,resources/memory-v3/models,resources/memory-v3/knowledge}/**/*",
+      unpackDir: "resources/memory-v3/models",
+    },
     // Optional offline packaging path for a pre-downloaded Electron ZIP.
     electronZipDir: process.env.XEKUTE_ELECTRON_ZIP_DIR || undefined,
     ignore: [

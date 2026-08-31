@@ -32,17 +32,18 @@ test("content and tool events replace thinking and completion settles to elapsed
   assert.match(renderer, /completeReasoningActivity\(\)/);
   assert.match(renderer, /finishLiveState\(outcome = "complete"\)/);
   assert.match(renderer, /`Worked for \$\{duration\}`/);
-  assert.match(renderer, /`Stopped after \$\{duration\}`/);
+  assert.match(renderer, /`Finished in \$\{duration\}`/);
+  assert.match(renderer, /if \(outcome === "error" \|\| outcome === "stopped"\) \{[\s\S]*?this\.liveStateEl\?\.remove\(\)/);
   assert.match(renderer, /this\.settlePendingActivities\(outcome\)/);
-  assert.match(renderer, /icon\.hidden = !stopped/);
-  assert.doesNotMatch(renderer, /stopped \? "codicon-debug-stop" : "codicon-check"/);
-  assert.match(chatStyles, /\.agent-status-line\[data-final="true"\]:not\(\[data-state="error"\]\) \.agent-status-icon[\s\S]*?display: none/);
+  assert.match(renderer, /icon\.hidden = true/);
+  assert.doesNotMatch(renderer, /codicon-debug-stop/);
+  assert.match(chatStyles, /\.agent-status-line\[data-final="true"\] \.agent-status-icon[\s\S]*?display: none/);
   assert.doesNotMatch(renderer, /message\.textContent = "Reasoning complete"|completedThinkingLabel/);
 });
 
-test("turn finalization settles orphaned progress, file, and command activity", () => {
+test("turn finalization settles orphaned file and command activity without a progress checklist", () => {
   assert.match(renderer, /settlePendingActivities\(outcome = "complete"\)/);
-  assert.match(renderer, /entry\?\.dataset\.state !== "running"/);
+  assert.doesNotMatch(renderer, /progressEntries|setProgressUpdate/);
   assert.match(renderer, /\.tool-card\.pending, \.tool-card\[data-state='queued'\], \.tool-card\[data-state='running'\]/);
   assert.match(renderer, /\^Editing[\s\S]*?"Edited"/);
   assert.match(renderer, /\.agent-command-event\[data-state='running'\]/);

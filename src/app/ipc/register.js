@@ -4,7 +4,6 @@ const features = Object.freeze({
   agent: require("./agent.js"),
   assessment: require("./assessment.js"),
   interceptor: require("./interceptor.js"),
-  memory: require("./memory.js"),
   project: require("./project.js"),
   settings: require("./settings.js"),
   terminal: require("./terminal.js"),

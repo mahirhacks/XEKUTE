@@ -118,6 +118,25 @@ function buildSystemContext({ mode = "agent", modeFamily = "xekute", promptConfi
   return PromptCompiler.compile({ family: profile.family, mode: profile.key, overrides: promptConfig, depth });
 }
 
+function buildSystemContextParts({ mode = "agent", modeFamily = "xekute", promptConfig = null, depth = "operational" } = {}) {
+  const profile = normalizeProfile(modeFamily, mode);
+  const parts = typeof PromptCompiler.compileParts === "function"
+    ? PromptCompiler.compileParts({ family: profile.family, mode: profile.key, overrides: promptConfig, depth })
+    : null;
+  if (parts?.systemPrompt && parts?.rules) return parts;
+  // Keep the fallback structurally safe for browser bundles or older injected
+  // compilers: the complete prompt remains exact, while the rules row is
+  // intentionally empty rather than inventing text.
+  return {
+    profile,
+    depth,
+    systemPrompt: buildSystemContext({ mode, modeFamily, promptConfig, depth }),
+    rules: "",
+    rendered: buildSystemContext({ mode, modeFamily, promptConfig, depth }),
+    sections: { system: [], rules: [] },
+  };
+}
+
 function buildSkillContext({ mode = "agent", modeFamily = "xekute", specialSkillPrompt = "" } = {}) {
   const profile = normalizeProfile(modeFamily, mode);
   const sections = [ModeSkills.render(profile.key), String(specialSkillPrompt || "").trim()].filter(Boolean);
@@ -147,6 +166,7 @@ function buildUntrustedContext({ dirMap = "", activeFile = null, extraFiles = []
 
 module.exports = {
   buildSystemContext,
+  buildSystemContextParts,
   buildSkillContext,
   buildUntrustedContext,
   contextLimits,

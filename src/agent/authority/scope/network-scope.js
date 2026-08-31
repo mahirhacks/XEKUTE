@@ -1,18 +1,8 @@
 "use strict";
 
-const fs = require("node:fs");
 const path = require("node:path");
 const ScopeEngine = require("../../../domain/scope/scope-engine");
 const { evaluateExclusions } = require("./scope-exclusions");
-
-function readJson(filePath, fallback = {}) {
-  try {
-    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    return value && typeof value === "object" ? value : fallback;
-  } catch {
-    return fallback;
-  }
-}
 
 function entriesFrom(value) {
   return Array.isArray(value) ? value.filter(Boolean) : [];
@@ -21,24 +11,11 @@ function entriesFrom(value) {
 function loadScopePolicy(workspace, projectProfile = null) {
   const root = path.resolve(String(workspace || "."));
   const profileScope = projectProfile?.scope && typeof projectProfile.scope === "object" ? projectProfile.scope : {};
-  const inScope = readJson(path.join(root, "scope", "in-scope.json"), {});
-  const outOfScope = readJson(path.join(root, "scope", "out-of-scope.json"), {});
-  const settings = readJson(path.join(root, "settings.config"), {});
-  const targets = [
-    ...entriesFrom(profileScope.inScopeTargets),
-    ...entriesFrom(inScope.targets),
-    ...entriesFrom(settings.targets),
-  ];
-  const wildcardRules = [
-    ...entriesFrom(profileScope.wildcardRules),
-    ...entriesFrom(inScope.wildcardRules),
-  ];
+  const targets = entriesFrom(profileScope.inScopeTargets);
+  const wildcardRules = entriesFrom(profileScope.wildcardRules);
   const excludedTargets = [
     ...entriesFrom(profileScope.outOfScopeTargets),
     ...entriesFrom(profileScope.exclusions),
-    ...entriesFrom(outOfScope.targets),
-    ...entriesFrom(outOfScope.exclusions),
-    ...entriesFrom(settings.excludedTargets),
   ];
   return {
     workspaceRoot: root,

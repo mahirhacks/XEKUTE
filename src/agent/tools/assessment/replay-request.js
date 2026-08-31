@@ -142,7 +142,7 @@ function identitySecretValues(identity) {
   return values;
 }
 
-function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvider = null, redirectGuard = null, maxRedirects = 10, sensitiveWorkingMemory = null, sensitiveWorkingMemoryEnabled = false, identityVault = null } = {}) {
+function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvider = null, redirectGuard = null, maxRedirects = 10 } = {}) {
   const fetchFn = typeof fetchImpl === "function" ? fetchImpl : globalThis.fetch;
 
   function resolveIdentity(identityId, executionContext) {
@@ -185,30 +185,9 @@ function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvide
 
       const identity = identityResolution.identity;
       const baseHeaders = safeRequestHeaders(mergeHeaders(input.request.headers, input.config?.headers));
-      const sensitiveEnabled = Boolean(sensitiveWorkingMemoryEnabled && sensitiveWorkingMemory && runtime.authorityDecision?.ok === true);
-      const sensitiveContext = {
-        workspace: executionContext.workspace?.root || "",
-        sessionId: executionContext.sessionId || "direct",
-        agentId: executionContext.agentId || executionContext.requestMetadata?.actorId || "agent-main",
-        identityId: input.identityId || "",
-        browserContext: `replay:${executionContext.invocationId || "direct"}`,
-        trusted: true,
-        authorityDecision: runtime.authorityDecision || null,
-        purpose: "replay_request",
-        adapter: "replay_request",
-      };
-      if (sensitiveWorkingMemoryEnabled && input.identityId && runtime.authorityDecision?.ok !== true) {
-        return structuredFailure("REPLAY_REQUEST_SENSITIVE_AUTHORITY_REQUIRED", "Sensitive replay state requires the successful authority pipeline capability.", { identityId: input.identityId });
-      }
-      if (sensitiveEnabled && input.identityId && typeof sensitiveWorkingMemory.importIdentityVaultState === "function" && identityVault) {
-        const imported = sensitiveWorkingMemory.importIdentityVaultState({
-          ...sensitiveContext,
-          identityVault,
-          source: "identity_vault",
-          purpose: "replay_identity_import",
-        });
-        if (!imported?.ok) return structuredFailure(imported.code || "REPLAY_REQUEST_SENSITIVE_STATE_UNAVAILABLE", imported.error || "Sensitive identity state could not be prepared.", { identityId: input.identityId });
-      }
+      // Identity material is read from the dedicated identity vault and is
+      // redacted from replay output before it leaves the main process.
+      const sensitiveEnabled = Boolean(identity);
 
       const startedAt = Date.now();
       let response;
@@ -240,26 +219,7 @@ function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvide
           try {
           let identityHeaders = identity ? headersForUrl(identity, currentUrl) : {};
           let cookieHeader = identity ? cookiesForUrl(identity, currentUrl) : "";
-          if (sensitiveEnabled && input.identityId) {
-            const lease = sensitiveWorkingMemory.issueRequestLease({
-              ...sensitiveContext,
-              url: currentUrl,
-              method: currentMethod,
-              entryTypes: ["cookie", "authorization_header", "access_token", "refresh_token", "csrf_token", "nonce"],
-              includeClientCertificate: false,
-            });
-            if (!lease?.ok) return structuredFailure(lease.code || "REPLAY_REQUEST_SENSITIVE_STATE_UNAVAILABLE", lease.error || "Sensitive request state could not be leased.", { url: currentUrl });
-            if (lease.lease && typeof sensitiveWorkingMemory.materializeRequestForTrustedAdapter === "function") {
-              const materialized = sensitiveWorkingMemory.materializeRequestForTrustedAdapter({ ...sensitiveContext, leaseId: lease.lease.lease_id, trusted: true, adapter: "replay_request" });
-              if (!materialized?.ok) return structuredFailure(materialized.code || "REPLAY_REQUEST_SENSITIVE_MATERIALIZATION_FAILED", materialized.error || "Sensitive request state could not be materialized.", { url: currentUrl });
-              identityHeaders = materialized.request?.headers || {};
-              cookieHeader = materialized.request?.cookieHeader || "";
-            } else {
-              identityHeaders = {};
-              cookieHeader = "";
-            }
-          }
-          const requestHeaders = { ...baseHeaders, ...identityHeaders };
+           const requestHeaders = { ...baseHeaders, ...identityHeaders };
           if (cookieHeader) requestHeaders.Cookie = cookieHeader;
           response = await fetchFn(currentUrl, {
             method: currentMethod,
@@ -278,23 +238,6 @@ function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvide
             return structuredFailure(REPLAY_ERROR_CODES.TIMEOUT, `request timed out after ${timeoutMs}ms`, { url: currentUrl, timeoutMs });
           }
           return structuredFailure(REPLAY_ERROR_CODES.NETWORK_FAILED, error.message, { url: currentUrl });
-        }
-        if (sensitiveEnabled && typeof sensitiveWorkingMemory.rotateFromBrowserState === "function") {
-          const setCookieHeaders = typeof response?.headers?.getSetCookie === "function"
-            ? response.headers.getSetCookie()
-            : typeof response?.headers?.get === "function" && response.headers.get("set-cookie")
-            ? [response.headers.get("set-cookie")]
-            : [];
-          if (setCookieHeaders.length) {
-            const rotated = sensitiveWorkingMemory.rotateFromBrowserState({
-              ...sensitiveContext,
-              url: currentUrl,
-              setCookieHeaders,
-              source: "trusted_response",
-              purpose: "replay_response_state_rotation",
-            });
-            if (!rotated?.ok) return structuredFailure(rotated.code || "REPLAY_REQUEST_SENSITIVE_ROTATION_FAILED", rotated.error || "Rotated sensitive response state could not be stored.", { url: currentUrl });
-          }
         }
         const statusCode = response?.status ?? response?.statusCode ?? 0;
         if (!manualRedirects || statusCode < 300 || statusCode >= 400) break;

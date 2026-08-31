@@ -171,17 +171,14 @@ function registerInspectEnvironment(toolRegistry, adapter) {
   });
 }
 
-function registerManagePlan(toolRegistry, adapter) {
+function registerUpdateProjectArtifacts(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
-    name: "manage_plan",
+    name: "update_project_artifacts",
     adapter,
     inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["workspace", "plan"],
-      mutating: true,
-      reversible: true,
-    },
+    description: adapter.description,
+    metadata: { mutating: true, reversible: true, targetTypes: ["workspace", "project-artifacts"] },
   });
 }
 
@@ -297,20 +294,6 @@ function registerVerifyFinding(toolRegistry, adapter) {
   });
 }
 
-function registerStoreFinding(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "store_finding",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["finding", "workspace"],
-      mutating: true,
-      reversible: true,
-    },
-  });
-}
-
 function registerAttackGraph(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
@@ -377,7 +360,7 @@ module.exports = {
   registerSearchWorkspace,
   registerApplyPatch,
   registerInspectEnvironment,
-  registerManagePlan,
+  registerUpdateProjectArtifacts,
   registerManageState,
   registerIngestTraffic,
   registerManageIdentity,
@@ -386,7 +369,6 @@ module.exports = {
   registerBrowserAction,
   registerCompareResponses,
   registerVerifyFinding,
-  registerStoreFinding,
   registerAttackGraph,
   registerDelegateAgent,
   registerQueryAssessment,

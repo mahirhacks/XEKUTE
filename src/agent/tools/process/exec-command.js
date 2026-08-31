@@ -16,7 +16,7 @@ const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
     cwd: { type: "string", description: "Working directory inside the active workspace. Defaults to the workspace root." },
     env: { type: "object", additionalProperties: { type: "string" }, description: "Environment variables merged over the application environment for this process." },
     timeout_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "Optional timeout in milliseconds. Zero or omission means no timeout." },
-    show_in_terminal: { type: "boolean", default: false, description: "For run/start only. Set true only when the command is long-running, interactive, important, or needs operator attention. Omit or set false for small/background commands; they still execute and return results without appearing in the Terminal panel." },
+    show_in_terminal: { type: "boolean", default: true, description: "For run/start only. When true or omitted, the command streams into Xekute's in-app Terminal panel. Set false only for small background commands that should not open a terminal tab. Commands never open an external OS console." },
     process_id: { type: "string", description: "Durable process ID used by status or stop." },
     tail_chars: { type: "integer", minimum: 0, maximum: 200000, description: "Maximum recent stdout/stderr characters returned by status." },
     wait_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "For status, wait up to this many milliseconds for process state or output to change. This is an observation window, not a process timeout." },

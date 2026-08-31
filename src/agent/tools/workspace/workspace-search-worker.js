@@ -55,33 +55,8 @@ function flush() {
   batch = [];
 }
 
-function readJson(relative) {
-  try { return JSON.parse(fs.readFileSync(path.join(root, ...relative.split("/")), "utf8")); }
-  catch { return null; }
-}
-
 function createScopeDecision() {
-  const inside = readJson("scope/in-scope.json") || {};
-  const outside = readJson("scope/out-of-scope.json") || {};
-  const targets = Array.isArray(inside.targets) ? inside.targets : [];
-  const wildcardRules = Array.isArray(inside.wildcardRules) ? inside.wildcardRules : [];
-  const excludedTargets = Array.isArray(outside.assets) ? outside.assets : [];
-  if (!targets.length && !wildcardRules.length && !excludedTargets.length) return null;
-  // This mirrors saved scope strings for search metadata only. Execution
-  // authorization remains centralized in the authority pipeline.
-  const targetText = (entry) => String(entry?.value || entry?.target || entry?.host || entry?.url || entry?.pattern || entry || "").trim().toLowerCase();
-  const included = [...targets, ...wildcardRules].map(targetText).filter(Boolean);
-  const excluded = excludedTargets.map(targetText).filter(Boolean);
-  const matches = (candidate, pattern) => {
-    const clean = pattern.replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^\*\./, "");
-    return candidate === pattern || candidate.includes(pattern) || Boolean(clean && (candidate === clean || candidate.endsWith(`.${clean}`) || candidate.includes(`://${clean}`)));
-  };
-  return (target) => {
-    if (!target) return undefined;
-    const value = String(target).toLowerCase();
-    if (excluded.some((entry) => matches(value, entry))) return false;
-    return included.some((entry) => matches(value, entry));
-  };
+  return null;
 }
 
 function emitAdvancedResult(result) {
@@ -151,8 +126,7 @@ function advancedSearch() {
     const sources = (parsedQuery.fields.source || []).map((value) => String(value).toLowerCase());
     if (parsedQuery.options.correlation && relative === "traffic") return 0;
     if (sources.includes("traffic") && relative === "traffic") return 0;
-    if ((sources.includes("finding") || sources.includes("findings")) && /^(?:findings|vulnerability-scans|\.xekute\/findings)$/.test(relative)) return 0;
-    if ((sources.includes("evidence")) && relative === "evidence") return 0;
+    if (sources.includes("evidence") && /^(?:evidence|\.xekute\/evidence)$/.test(relative)) return 0;
     if ((sources.includes("map")) && /^(?:map|traffic)$/.test(relative)) return 0;
     if ((sources.includes("javascript") || sources.includes("js")) && relative === "traffic") return 1;
     return 20;

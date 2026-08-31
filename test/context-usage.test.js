@@ -21,12 +21,10 @@ test("context meter uses routed previews and Ollama's measured last prompt", () 
   assert.ok(runtimeModules.includes('"../../prompts/skills/context-router.js"'));
   assert.ok(html.includes('id="context-usage-heading-value"'));
   assert.ok(html.includes('id="context-usage-breakdown"'));
-  assert.ok(html.includes('id="context-usage-compact"'));
-  for (const section of ["System prompt", "Tool definitions", "Project", "Investigation", "Evidence", "Conversation", "Rules", "Skills"]) {
+  for (const section of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "Summarized Conversation", "Active Conversation", "Current Workflow", "Working References"]) {
     assert.match(renderer, new RegExp(`label: "${section}"`));
   }
-  assert.match(renderer, /active_workflow:\s*"conversation"/);
-  assert.match(renderer, /recent_working_set:\s*"conversation"/);
+  assert.doesNotMatch(renderer, /recent_tail|label: "Project"|label: "Investigation"|label: "Evidence"/);
   assert.doesNotMatch(html, /id="context-memory-open"/);
   assert.doesNotMatch(html, /context-usage-measure-note|context-usage-diagnostics/);
   assert.doesNotMatch(html, /id="context-usage-model"/);
@@ -34,37 +32,19 @@ test("context meter uses routed previews and Ollama's measured last prompt", () 
   assert.doesNotMatch(html, /class="model-edit-description"/);
 });
 
-test("context compaction keeps trusted validation and supports ordinary conversation fallback", () => {
+test("context checkpointing is automatic and renderer-owned compaction is absent", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
 
-  assert.match(renderer, /CONTEXT_SUMMARY_RENDERER_TIMEOUT_MS\s*=\s*35_000/);
-  assert.match(renderer, /window\.api\.compactContext\(/);
-  assert.match(renderer, /\["NO_TRUSTED_RECORDS", "CAPSULE_SNAPSHOT_FAILED"\]\.includes\(compacted\?\.code\)/);
-  assert.match(renderer, /compactTranscriptFallback/);
-  assert.match(renderer, /ContextMemory\?\.projectDurableMessages\?\.\(newMessagesToSummarize\)/);
-  assert.match(renderer, /compactContextManually/);
-  assert.match(renderer, /maybeCompactContext\(getContextUsage\(\), \{ force: true \}\)/);
-  assert.match(renderer, /throughMessageId:\s*split\.oldMessages\.at\(-1\)\?\.id/);
-  assert.match(renderer, /transcript:\s*summaryTranscript/);
-  assert.match(renderer, /messages:\s*durableMessages/);
-  assert.match(renderer, /Compression changes model-visible memory only/);
-  assert.doesNotMatch(renderer, /body\.dataset\.loaded\s*=\s*"false"/);
-  assert.match(renderer, /CONTEXT_POST_COMPRESSION_TARGET\s*=\s*0\.22/);
-  assert.match(renderer, /CONTEXT_POST_COMPRESSION_URGENT_TARGET\s*=\s*0\.16/);
-  assert.match(renderer, /Math\.floor\(promptBudget \* targetRatio\) - fixedTokens - summaryReserveTokens/);
-  assert.match(renderer, /ContextMemory\.projectRecentContextMessages\(messages\)/);
-  assert.match(renderer, /ContextMemory\.projectRecentContextMessages\(recent\)/);
-  assert.match(renderer, /finally\s*\{[\s\S]*setContextCompactionUi\(false\)/);
-  assert.match(main, /CONTEXT_SUMMARY_PROVIDER_TIMEOUT_MS\s*=\s*30_000/);
-  assert.match(main, /timeoutMs:\s*CONTEXT_SUMMARY_PROVIDER_TIMEOUT_MS/);
-  assert.match(main, /maxCompletionTokens:\s*Math\.max\(420, Math\.ceil\(maxChars \/ 3\)\)/);
-  assert.match(main, /responseFormat:\s*null/);
-  assert.match(main, /controller\.abort\("CONTEXT_SUMMARY_TIMEOUT"\)/);
-  assert.match(main, /CONTEXT_COMPACTION_TIMEOUT_MS\s*=\s*180_000/);
-  assert.match(main, /ipcMain\.handle\("context:compact"/);
-  assert.match(main, /CapsuleReducer\.renderCanonicalMarkdown/);
-  assert.match(main, /CapsuleReducer\.defaultSynthesisPlan\(reduced\)/);
-  assert.doesNotMatch(html, /id="context-compaction-status"|Context compressed using bounded/);
+  const preload = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "preload.js"), "utf8");
+  const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
+  assert.doesNotMatch(renderer, /maybeCompactContext|v3_checkpoint_owned/);
+  assert.doesNotMatch(renderer, /window\.api\.(?:compactContext|summarizeContext|consolidateContext)\(/);
+  assert.doesNotMatch(renderer, /recent_tail/);
+  assert.doesNotMatch(preload, /(?:compactContext|summarizeContext|consolidateContext|recordContextEvent|operationalContext)/);
+  assert.doesNotMatch(projectIpc, /ipcMain\.(?:handle|on)\("context:/);
+  assert.doesNotMatch(main, /(?:context:compact|CONTEXT_SUMMARY_PROVIDER_TIMEOUT|CONTEXT_COMPACTION_TIMEOUT|CapsuleReducer|summarizeOpenRouterContext)/);
+  assert.match(renderer, /Context checkpointing…/);
+  assert.doesNotMatch(html, /id="context-usage-compact"|id="context-compaction-status"/);
 });

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "model_id": "BAAI/bge-base-en-v1.5",
+  "transformers_model_id": "Xenova/bge-base-en-v1.5",
+  "upstream_revision": "main",
+  "license": "mit",
+  "embedding_dimension": 768,
+  "max_input_tokens": 512,
+  "dtype": "q8",
+  "files": {
+    "config.json": {
+      "sha256": "d83c21fa7366994560727112ef0a31d8a2ec1c280c2a3e66326fdb877f64c91e",
+      "bytes": 717
+    },
+    "quantize_config.json": {
+      "sha256": "b379d94222f11c36cd062e85a017c79241896a52e67f2576b592a9aa49a32dc9",
+      "bytes": 674
+    },
+    "special_tokens_map.json": {
+      "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3",
+      "bytes": 125
+    },
+    "tokenizer_config.json": {
+      "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3",
+      "bytes": 366
+    },
+    "tokenizer.json": {
+      "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+      "bytes": 711396
+    },
+    "vocab.txt": {
+      "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+      "bytes": 231508
+    },
+    "onnx/model_quantized.onnx": {
+      "sha256": "c9729cc84cbd0e9fecc759505d2be65916c9fe05222d7ea26c65fcb3382af38d",
+      "bytes": 110083337
+    }
+  }
+}

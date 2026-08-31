@@ -15,56 +15,19 @@ const { createJavascriptCollector } = require("../../app/services/assessment/tra
 const { buildIntruderRequests, createSecurityHttpWorkbench } = require("../../interceptor/http-workbench.js");
 const { createProxyListenerService } = require("../../interceptor/proxy-listener.js");
 const { createProxyBrowserService } = require("../../interceptor/proxy-browser.js");
-const { createSessionMemoryStore } = require("../../app/storage/session-memory-store.js");
+const { createV3SessionStore } = require("../../app/storage/memory/v3-session-store.js");
 const { createIdentityVault } = require("../../app/storage/identity-vault-store.js");
 const { createBrowserSessionManager } = require("../../agent/tools/assessment/browser-session-manager.js");
 const { createAssessmentIntelligenceService } = require("../../app/services/assessment/intelligence/assessment-intelligence-service.js");
-const { createAssessmentModeWorkflow } = require("../../app/services/assessment/mode-workflow.js");
-const { createProjectMemoryStore } = require("../../app/storage/project-memory-store.js");
 const { createProjectIdentityStore } = require("../../app/storage/memory/project-identity-store.js");
-const { createMemoryManifestStore } = require("../../app/storage/memory/memory-manifest-store.js");
-const { createMemoryEventStore } = require("../../app/storage/memory/event-store.js");
-const { createMemorySnapshotStore } = require("../../app/storage/memory/snapshot-store.js");
-const { createArtifactRegistry } = require("../../app/storage/memory/artifact-registry.js");
-const { createDerivedMemoryIndex } = require("../../app/storage/memory/derived-memory-index.js");
-const { createMemoryGraphStore } = require("../../app/storage/memory/memory-graph-store.js");
-const { createMemoryFinalizationStore } = require("../../app/storage/memory/finalization-store.js");
-const { createMemoryOutboxStore } = require("../../app/storage/memory/outbox-store.js");
-const { createMemoryWatermarkStore } = require("../../app/storage/memory/watermark-store.js");
-const { createProjectMemoryRepository } = require("../../app/storage/memory/project-memory-store.js");
-const { createInvestigationMemoryRepository } = require("../../app/storage/memory/investigation-memory-store.js");
-const { createEvidenceMemoryRepository } = require("../../app/storage/memory/evidence-memory-store.js");
-const { createProjectMemoryV1Adapter } = require("../../app/storage/memory/project-memory-v1-adapter.js");
-const { createExecutionCapture } = require("../../app/services/memory/execution-capture.js");
-const { createBlockFinalizer } = require("../../app/services/memory/block-finalizer.js");
-const { createBlockMemoryUpdater } = require("../../app/services/memory/block-memory-updater.js");
-const { createMemoryRetrievalService } = require("../../app/services/memory/memory-retrieval-service.js");
-const { createKnowledgeSelectionService } = require("../../app/services/memory/knowledge-selection-service.js");
-const { createInvestigationMemoryService } = require("../../app/services/memory/investigation-memory-service.js");
-const { createEvidenceMemoryService } = require("../../app/services/memory/evidence-memory-service.js");
-const { createSensitiveWorkingMemory } = require("../../app/services/memory/sensitive-working-memory.js");
-const { createMemoryStatus } = require("../../app/services/memory/memory-status.js");
-const { createKnowledgeReleaseStore } = require("../../app/storage/memory/knowledge-release-store.js");
-const { createKnowledgeReleaseIngestor } = require("../../app/services/assessment/knowledge/knowledge-release-ingestor.js");
-const { createContextCompiler } = require("../../agent/memory/context/context-compiler.js");
-const { createTranscriptBoundaryService } = require("../../app/services/memory/transcript-boundary.js");
-const { createOperationalContextStore } = require("../../app/storage/memory/operational-context-store.js");
-const { createContextSummarizer } = require("../../app/services/memory/context-summarizer.js");
-const { createContextCheckpointService } = require("../../app/services/memory/context-checkpoint-service.js");
-const { reduceToolEvents } = require("../../app/services/memory/tool-event-ledger.js");
-const { createContextAssemblyService } = require("../../app/services/memory/context-assembly-service.js");
-const { createDerivedMemoryProjectionService } = require("../../app/services/memory/derived-memory-projection-service.js");
-const { createMemoryGraphView } = require("../../app/services/memory/memory-graph-view.js");
-const { createInvestigationAssignmentLeaseService } = require("../../app/services/memory/investigation-assignment-leases.js");
-const { createSpecialistDispatchService } = require("../../app/services/memory/specialist-dispatch-service.js");
-const { createSpecialistReturnService } = require("../../app/services/memory/specialist-return-service.js");
-const { createAgentMemoryHandoffService } = require("../../app/services/memory/agent-memory-handoff-service.js");
-const { createMemoryIpcService } = require("../../app/services/memory/memory-ipc-service.js");
-const { createMemoryAuditStore } = require("../../app/storage/memory/memory-audit-store.js");
-const { createMigrationStore } = require("../../app/storage/memory/migration-store.js");
-const { createLegacyMemoryMigration } = require("../../app/services/memory/legacy-memory-migration.js");
-const { createMemorySecurityAudit } = require("../../app/services/memory/memory-security-audit.js");
-const { createMemoryMaintenanceService } = require("../../app/services/memory/memory-maintenance-service.js");
+const { createProjectArtifactService } = require("../../app/services/artifacts/project-artifact-service.js");
+const { createKnowledgeLibraryService } = require("../../app/services/knowledge/knowledge-library-service.js");
+const { createTier1SensitiveStore } = require("../../app/storage/memory/tier1-sensitive-store.js");
+const { createTier1ContextCoordinator } = require("../../app/services/memory/tier1-context-coordinator.js");
+const { createKnowledgeProcedureStore } = require("../../app/services/memory/knowledge-procedure-store.js");
+const { createNativeKagService } = require("../../app/services/memory/native-kag-service.js");
+const { createLocalEmbeddingService } = require("../../app/services/memory/local-embedding-service.js");
+const { createMemorySchemaRegistry } = require("../../contracts/memory/schema-registry.js");
 const { createMcpRuntime } = require("../../app/services/assessment/knowledge/mcp-runtime.js");
 const { createWorkspaceFiles } = require("../../app/services/workspace/workspace-files.js");
 const { createProjectProfileStore } = require("../../app/storage/project-profile-store.js");
@@ -76,7 +39,7 @@ const { createLongHorizonRunStore } = require("../../app/storage/long-horizon-ru
 const { createDurableProcessManager } = require("../../app/services/terminal/durable-process-manager.js");
 
 // Tool registry + raw adapters (the 23 canonical tools).
-const { createToolRegistry, registerAskQuestions, registerUpdateTaskList, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerInspectEnvironment, registerManagePlan, registerManageState, registerIngestTraffic, registerManageIdentity, registerReplayRequest, registerRunTestCase, registerBrowserAction, registerCompareResponses, registerVerifyFinding, registerStoreFinding, registerAttackGraph, registerDelegateAgent, registerQueryAssessment, registerExpandEvidence, registerQueryKnowledge, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
+const { createToolRegistry, registerAskQuestions, registerUpdateTaskList, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerInspectEnvironment, registerUpdateProjectArtifacts, registerManageState, registerIngestTraffic, registerManageIdentity, registerReplayRequest, registerRunTestCase, registerBrowserAction, registerCompareResponses, registerVerifyFinding, registerAttackGraph, registerDelegateAgent, registerQueryAssessment, registerExpandEvidence, registerQueryKnowledge, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
 const { createAskQuestionsTool } = require("../../agent/tools/process/ask-questions.js");
 const { createUpdateTaskListTool } = require("../../agent/tools/process/update-task-list.js");
 const { createExecCommandTool } = require("../../agent/tools/process/exec-command.js");
@@ -84,7 +47,7 @@ const { createReadFileTool } = require("../../agent/tools/workspace/read-file.js
 const { createSearchWorkspaceTool } = require("../../agent/tools/workspace/search-workspace.js");
 const { createApplyPatchTool } = require("../../agent/tools/workspace/apply-patch.js");
 const { createInspectEnvironmentTool } = require("../../agent/tools/workspace/inspect-environment.js");
-const { createManagePlanTool } = require("../../agent/tools/workspace/manage-plan.js");
+const { createUpdateProjectArtifactsTool } = require("../../agent/tools/workspace/update-project-artifacts.js");
 const { createManageStateTool } = require("../../agent/tools/workspace/manage-state.js");
 const { createIngestTrafficTool } = require("../../agent/tools/assessment/ingest-traffic.js");
 const { createManageIdentityTool } = require("../../agent/tools/assessment/manage-identity.js");
@@ -93,7 +56,6 @@ const { createRunTestCaseTool } = require("../../agent/tools/assessment/run-test
 const { createBrowserActionTool } = require("../../agent/tools/assessment/browser-action.js");
 const { createCompareResponsesTool } = require("../../agent/tools/assessment/compare-responses.js");
 const { createVerifyFindingTool } = require("../../agent/tools/assessment/verify-finding.js");
-const { createStoreFindingTool } = require("../../agent/tools/assessment/store-finding.js");
 const { createAttackGraphTool } = require("../../agent/tools/assessment/attack-graph.js");
 const { createDelegateAgentTool } = require("../../agent/tools/process/delegate-agent.js");
 const { createQueryAssessmentTool } = require("../../agent/tools/assessment/query-assessment.js");
@@ -110,7 +72,12 @@ const { evaluateToolScopeAsync, evaluateRedirectScopeAsync, evaluateLoginNavigat
  * services and the `dispose()` path; no production module outside this file
  * constructs concrete adapters.
  */
-function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWindow = () => null } = {}) {
+function createContainer({
+  app,
+  safeStorage,
+  sendToWindow = () => {},
+  getMainWindow = () => null,
+} = {}) {
   if (!app?.getPath) throw new TypeError("DI container requires an Electron app instance");
 
   const config = createAppConfig({ app });
@@ -131,211 +98,47 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
       if (win && !win.isDestroyed()) win.webContents.send("assessment:intelligence", event);
     },
   });
-  const modeWorkflow = createAssessmentModeWorkflow();
-  const memoryFeatureFlags = config.memoryFeatures();
-  const memoryKnowledgeReleaseStore = createKnowledgeReleaseStore({
-    fs,
-    path,
-    crypto,
-    baseDir: path.join(config.sessionMemoryDirectory(), "memory"),
-  });
-  const memoryKnowledgeReleaseIngestor = createKnowledgeReleaseIngestor({
-    graph: assessmentIntelligence.knowledge?.graph,
-    releaseStore: memoryKnowledgeReleaseStore,
-    crypto,
-  });
   const memoryProjectIdentityStore = createProjectIdentityStore({
     fs,
     path,
     crypto,
-    baseDir: config.sessionMemoryDirectory(),
+    baseDir: config.memoryV3IdentityDirectory(),
   });
-  const memoryManifestStore = createMemoryManifestStore({ fs, path, crypto });
-  const memoryEventStore = createMemoryEventStore({ fs, path, crypto, manifestStore: memoryManifestStore });
-  const memorySnapshotStore = createMemorySnapshotStore({ fs, path, crypto, manifestStore: memoryManifestStore });
-  const memoryArtifactRegistry = createArtifactRegistry({ fs, path, crypto });
-  const memoryExecutionCapture = createExecutionCapture({
+  const identityVaultProjectIdentityStore = createProjectIdentityStore({
     fs,
     path,
     crypto,
-    eventStore: memoryEventStore,
-    artifactRegistry: memoryArtifactRegistry,
+    baseDir: config.identityVaultDirectory(),
   });
-  const memoryFinalizationStore = createMemoryFinalizationStore({
-    fs,
-    path,
-    crypto,
-    baseDir: path.join(config.sessionMemoryDirectory(), "memory", "recovery", "context-finalization"),
-    protector: memoryProtector,
-  });
-  const memoryOutboxStore = createMemoryOutboxStore({ fs, path, crypto, manifestStore: memoryManifestStore });
-  const memoryWatermarkStore = createMemoryWatermarkStore({ fs, path, crypto, manifestStore: memoryManifestStore });
-  const memoryMigrationStore = createMigrationStore({ fs, path, crypto });
-  const memoryProjectMemoryRepository = createProjectMemoryRepository({
-    fs,
-    path,
-    crypto,
-    manifestStore: memoryManifestStore,
-    eventStore: memoryEventStore,
-    snapshotStore: memorySnapshotStore,
-  });
-  const memoryInvestigationMemoryRepository = createInvestigationMemoryRepository({
-    fs,
-    path,
-    crypto,
-    manifestStore: memoryManifestStore,
-    eventStore: memoryEventStore,
-    snapshotStore: memorySnapshotStore,
-  });
-  const memoryEvidenceMemoryRepository = createEvidenceMemoryRepository({
-    fs,
-    path,
-    crypto,
-    manifestStore: memoryManifestStore,
-    eventStore: memoryEventStore,
-    snapshotStore: memorySnapshotStore,
-  });
-  const memoryDerivedMemoryIndex = createDerivedMemoryIndex({ fs, path, crypto });
-  const memoryGraphStore = createMemoryGraphStore({ fs, path, crypto });
-  const memoryDerivedProjection = createDerivedMemoryProjectionService({
-    index: memoryDerivedMemoryIndex,
-    projectRepository: memoryProjectMemoryRepository,
-    investigationRepository: memoryInvestigationMemoryRepository,
-    evidenceRepository: memoryEvidenceMemoryRepository,
-    artifactRegistry: memoryArtifactRegistry,
-    manifestStore: memoryManifestStore,
-    watermarkStore: memoryWatermarkStore,
-    featureFlags: memoryFeatureFlags,
-    crypto,
-  });
-  const memoryStatus = createMemoryStatus();
-  const memoryAuditStore = createMemoryAuditStore({ fs, path, crypto });
-  let memoryGraphView = null;
-  const memoryIpcContainer = {
-    memoryFeatureFlags,
-    memoryProjectIdentityStore,
-    memoryStatus,
-    memoryAuditStore,
-    memoryProjectMemoryRepository,
-    memoryInvestigationMemoryRepository,
-    memoryEvidenceMemoryRepository,
-    memoryWatermarkStore,
-    memoryOutboxStore,
-    memoryMigrationStore,
-    memoryMigration: null,
-    memorySecurityAudit: null,
-    memoryMaintenance: null,
-    memoryDerivedMemoryIndex,
-    memoryGraphView: null,
-    memoryContextCheckpoint: null,
-    memoryArtifactRegistry,
-    memoryDerivedProjection,
-  };
-  const memoryProjectMemoryV1Adapter = createProjectMemoryV1Adapter({
-    fs,
-    path,
-    crypto,
-    repository: memoryProjectMemoryRepository,
-    artifactRegistry: memoryArtifactRegistry,
-  });
-  // These providers are assigned after the checkpoint coordinator is built;
-  // the retrieval service remains a singleton and never owns checkpoint data.
-  let memoryContextCheckpoint = null;
-  const memoryRetrievalService = createMemoryRetrievalService({
-    projectRepository: memoryProjectMemoryRepository,
-    investigationRepository: memoryInvestigationMemoryRepository,
-    evidenceRepository: memoryEvidenceMemoryRepository,
-    knowledgeStore: memoryKnowledgeReleaseStore,
-    artifactRegistry: memoryArtifactRegistry,
-    checkpointProvider: (input) => memoryContextCheckpoint?.read?.({
-      workspace: input.workspace,
-      projectId: input.project_id || input.projectId,
-      sessionId: input.sessionId || input.session_id,
-    }) || { ok: true, initialized: false, records: [], recentTail: [] },
-    recentTailProvider: (input) => {
-      const current = memoryContextCheckpoint?.read?.({
-        workspace: input.workspace,
-        projectId: input.project_id || input.projectId,
-        sessionId: input.sessionId || input.session_id,
-      });
-      return current?.ok === false ? current : { ok: true, records: (current?.recentTail || []).map((message) => ({ record_id: message.id, record_type: "transcript_message", record: message })) };
-    },
-    graphProvider: async ({ workspace, projectId, request }) => {
-      if (memoryFeatureFlags.derivedMemoryViews === true && memoryGraphView?.query) return memoryGraphView.query(workspace, projectId, {
-        operation: request.filters?.operation || "search",
-        node_id: request.filters?.node_id || request.filters?.nodeId || "",
-        from: request.filters?.from || "",
-        to: request.filters?.to || "",
-        query: request.objective || request.filters?.query || "",
-        limit: request.limit,
-        depth: request.graph_depth,
-        edge_type: request.filters?.edge_type || request.filters?.edgeType || "",
-      });
-      return assessmentIntelligence.knowledge?.query?.({ query: request.objective || "knowledge", limit: request.limit }, { activateMcp: false }) || { ok: true, items: [] };
-    },
-  });
-  const memoryKnowledgeSelectionService = createKnowledgeSelectionService({
-    fs,
-    path,
-    crypto,
-    releaseStore: memoryKnowledgeReleaseStore,
-    projectRepository: memoryProjectMemoryRepository,
-    manifestStore: memoryManifestStore,
-  });
-  const memoryInvestigationMemoryService = createInvestigationMemoryService({
-    repository: memoryInvestigationMemoryRepository,
-    projectRepository: memoryProjectMemoryRepository,
-    knowledgeSelectionService: memoryKnowledgeSelectionService,
-    crypto,
-  });
-  const memoryEvidenceMemoryService = createEvidenceMemoryService({
-    repository: memoryEvidenceMemoryRepository,
-    investigationRepository: memoryInvestigationMemoryRepository,
-    artifactRegistry: memoryArtifactRegistry,
-    outboxStore: memoryOutboxStore,
-    crypto,
-  });
-  const memorySensitiveWorkingMemory = createSensitiveWorkingMemory({
-    fs,
-    path,
-    crypto,
-    baseDir: path.join(config.sessionMemoryDirectory(), "sensitive"),
-    protector: memoryProtector,
-    projectResolver: (workspace, options) => sessionMemoryStore().resolveProject(workspace, options),
-  });
-  const memoryBlockFinalizer = createBlockFinalizer({
-    eventStore: memoryEventStore,
-    projectRepository: memoryProjectMemoryRepository,
-    investigationMemoryService: memoryInvestigationMemoryService,
-    derivedProjection: memoryDerivedProjection,
-    derivedGraph: { scheduleRebuild: (input) => memoryGraphView?.scheduleRebuild?.(input) || Promise.resolve({ ok: true, skipped: true }) },
-    watermarkStore: memoryWatermarkStore,
-    finalizationStore: memoryFinalizationStore,
-    featureFlags: memoryFeatureFlags,
-    crypto,
-  });
-  const memoryBlockUpdater = createBlockMemoryUpdater({
-    executionCapture: memoryExecutionCapture,
-    blockFinalizer: memoryBlockFinalizer,
-    projectIdentityStore: memoryProjectIdentityStore,
-    memoryStatus,
-    memoryAuditStore,
-    featureFlags: memoryFeatureFlags,
-    path,
-    crypto,
-  });
-  const projectMemoryStore = createProjectMemoryStore({ fs, path, crypto, featureFlags: memoryFeatureFlags });
-  const contextCompiler = createContextCompiler({
-    projectMemoryStore,
-    intelligence: assessmentIntelligence,
-    modeWorkflow,
-    finalizationDirectory: path.join(config.sessionMemoryDirectory(), "context-finalization"),
-    protector: memoryProtector,
-    fs,
-    path,
-    crypto,
-  });
-  contextCompiler.drainFinalizationJobs().catch(() => {});
+  const memorySchemaRegistry = createMemorySchemaRegistry();
+  const tier1SensitiveStore = createTier1SensitiveStore({ fs, path, crypto, baseDir: config.memoryV3SensitiveDirectory(), protector: memoryProtector, schemaRegistry: memorySchemaRegistry });
+  const v3SessionStore = createV3SessionStore({ sensitiveStore: tier1SensitiveStore, projectIdentityStore: memoryProjectIdentityStore, crypto });
+  const memoryTier1Coordinator = createTier1ContextCoordinator({ sensitiveStore: tier1SensitiveStore, schemaRegistry: memorySchemaRegistry, crypto });
+  const projectArtifacts = createProjectArtifactService({ fs, path, crypto });
+  // In a packaged Electron app the model is deliberately unpacked beside
+  // app.asar because ONNX requires a real filesystem path.  Knowledge JSON
+  // remains readable from ASAR, but prefer the unpacked resource directory
+  // when a packager provides one so both assets follow the same resolution
+  // rules.  Development and test runs use the source-tree bundle.
+  const memoryModelRelativePath = path.join("resources", "memory-v3", "models", "bge-base-en-v1.5");
+  const packagedResourceRoot = typeof process?.resourcesPath === "string" ? process.resourcesPath : "";
+  const memoryKnowledgeRelativePath = path.join("resources", "memory-v3", "knowledge");
+  const memoryKnowledgeCandidates = [
+    packagedResourceRoot ? path.join(packagedResourceRoot, "app.asar.unpacked", memoryKnowledgeRelativePath) : "",
+    packagedResourceRoot ? path.join(packagedResourceRoot, memoryKnowledgeRelativePath) : "",
+    path.join(config.appRoot, memoryKnowledgeRelativePath),
+  ].filter(Boolean);
+  const memoryKnowledgePath = memoryKnowledgeCandidates.find((candidate) => fs.existsSync(candidate)) || memoryKnowledgeCandidates[memoryKnowledgeCandidates.length - 1];
+  const knowledgeStore = createKnowledgeProcedureStore({ fs, path, crypto, baseDir: config.memoryV3KnowledgeDirectory(), bundledDir: memoryKnowledgePath, schemaRegistry: memorySchemaRegistry });
+  const memoryModelCandidates = [
+    packagedResourceRoot ? path.join(packagedResourceRoot, "app.asar.unpacked", memoryModelRelativePath) : "",
+    packagedResourceRoot ? path.join(packagedResourceRoot, memoryModelRelativePath) : "",
+    path.join(config.appRoot, memoryModelRelativePath),
+  ].filter(Boolean);
+  const memoryModelPath = memoryModelCandidates.find((candidate) => fs.existsSync(path.join(candidate, "manifest.json"))) || memoryModelCandidates[memoryModelCandidates.length - 1];
+  const knowledgeEmbeddingService = createLocalEmbeddingService({ modelPath: memoryModelPath });
+  const knowledgeKag = createNativeKagService({ knowledgeStore, cacheDirectory: config.memoryV3CacheDirectory(), embeddingProvider: knowledgeEmbeddingService, schemaRegistry: memorySchemaRegistry, fs, path, crypto });
+  const knowledgeLibrary = createKnowledgeLibraryService({ store: knowledgeStore, kag: knowledgeKag, artifacts: projectArtifacts, projectIdentityStore: memoryProjectIdentityStore });
 
   let identityVaultInstance = null;
   function identityVault() {
@@ -344,9 +147,9 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
         fs,
         path,
         crypto,
-        baseDir: config.sessionMemoryDirectory(),
+        baseDir: config.identityVaultDirectory(),
         protector: memoryProtector,
-        projectResolver: (workspace, options) => sessionMemoryStore().resolveProject(workspace, options),
+        projectResolver: (workspace, options) => identityVaultProjectIdentityStore.resolveProject(workspace, options),
       });
     }
     return identityVaultInstance;
@@ -377,7 +180,7 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
   registerSearchWorkspace(toolRegistry, createSearchWorkspaceTool());
   registerApplyPatch(toolRegistry, createApplyPatchTool());
   registerInspectEnvironment(toolRegistry, createInspectEnvironmentTool());
-  registerManagePlan(toolRegistry, createManagePlanTool());
+  registerUpdateProjectArtifacts(toolRegistry, createUpdateProjectArtifactsTool({ artifacts: projectArtifacts }));
   registerManageState(toolRegistry, createManageStateTool());
   registerIngestTraffic(toolRegistry, createIngestTrafficTool());
   registerManageIdentity(toolRegistry, createManageIdentityTool({
@@ -405,8 +208,6 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
         projectProfile: projectProfileStore().read(executionContext?.workspace?.root || "")?.profile || null,
       },
     ),
-    sensitiveWorkingMemory: memorySensitiveWorkingMemory,
-    sensitiveWorkingMemoryEnabled: Boolean(memoryFeatureFlags.sensitiveWorkingMemory),
     identityVault: identityVault(),
   }));
   registerRunTestCase(toolRegistry, createRunTestCaseTool());
@@ -432,8 +233,6 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
       executionContext?.workspace?.root || "",
     ),
     sharedContextProvider: ({ workspace, identityId }) => proxyBrowser.getAgentContext(workspace, identityId),
-    sensitiveWorkingMemory: memorySensitiveWorkingMemory,
-    sensitiveWorkingMemoryEnabled: Boolean(memoryFeatureFlags.sensitiveWorkingMemory),
   });
   registerBrowserAction(toolRegistry, createBrowserActionTool({
     browserProvider: {
@@ -449,23 +248,18 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
 
   registerCompareResponses(toolRegistry, createCompareResponsesTool());
   registerVerifyFinding(toolRegistry, createVerifyFindingTool());
-  registerStoreFinding(toolRegistry, createStoreFindingTool());
   registerAttackGraph(toolRegistry, createAttackGraphTool());
-  registerDelegateAgent(toolRegistry, createDelegateAgentTool({
-    projectMemoryProvider: (workspace) => projectMemoryStore.projectMemoryProjection(projectMemoryStore.load(workspace).memory, workspace),
-  }));
+  registerDelegateAgent(toolRegistry, createDelegateAgentTool());
   registerQueryAssessment(toolRegistry, createQueryAssessmentTool({
     intelligence: assessmentIntelligence,
-    memoryRetrieval: memoryRetrievalService,
-    projectIdentityStore: memoryProjectIdentityStore,
-    memoryFeatureFlags,
+    artifacts: projectArtifacts,
   }));
-  registerExpandEvidence(toolRegistry, createExpandEvidenceTool({ intelligence: assessmentIntelligence }));
+  registerExpandEvidence(toolRegistry, createExpandEvidenceTool({
+    intelligence: assessmentIntelligence,
+    artifacts: projectArtifacts,
+  }));
   registerQueryKnowledge(toolRegistry, createQueryKnowledgeTool({
-    knowledge: assessmentIntelligence.knowledge,
-    memoryRetrieval: memoryRetrievalService,
-    projectIdentityStore: memoryProjectIdentityStore,
-    memoryFeatureFlags,
+    knowledge: knowledgeLibrary,
   }));
   registerWebResearch(toolRegistry, createWebResearchTool({ webResearch }));
   const toolAuditStore = createToolAuditStore({ fsImpl: fs, pathImpl: path });
@@ -486,26 +280,16 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     resolveExecutable: require("../../agent/tools/process/executable-resolver.js").resolveSecurityExecutable,
     terminateProcessTree,
   });
-  const webClone = createWebCloneService({ fs, path, webResearch });
+  const webClone = createWebCloneService({ fs, path, webResearch, projectProfileProvider: (workspace) => projectProfileStore().read(workspace)?.profile || null });
   const assessmentWorkspace = createAssessmentWorkspace({
     fs,
     path,
-    promptDefaults: () => require("../../agent/runtime/prompt-compiler.js").defaults(),
+    projectArtifacts,
+    projectProfileProvider: (workspace) => projectProfileStore().read(workspace)?.profile || null,
   });
   const javascriptArtifacts = createJavascriptArtifactStore({ fs, path, crypto });
   const webArtifacts = createWebArtifactStore({ fs, path, crypto });
-  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligence: assessmentIntelligence, javascriptArtifacts, webArtifacts });
-  memoryGraphView = createMemoryGraphView({
-    store: memoryGraphStore,
-    derivedProjection: memoryDerivedProjection,
-    knowledgeStore: memoryKnowledgeReleaseStore,
-    mapProvider: (workspace) => assessmentMap.read?.(workspace),
-    manifestStore: memoryManifestStore,
-    featureFlags: memoryFeatureFlags,
-    crypto,
-    featureFlags: memoryFeatureFlags,
-  });
-  memoryIpcContainer.memoryGraphView = memoryGraphView;
+  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace, projectProfileProvider: (workspace) => projectProfileStore().read(workspace)?.profile || null, intelligence: assessmentIntelligence, javascriptArtifacts, webArtifacts });
   assessmentIntelligence.setGraphProvider?.(assessmentMap);
   const graphBuildService = createGraphBuildService({
     assessmentMap,
@@ -562,132 +346,6 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     }
     return projectProfiles;
   }
-
-  let sessionMemoryStoreInstance = null;
-  function sessionMemoryStore() {
-    if (!sessionMemoryStoreInstance) {
-      sessionMemoryStoreInstance = createSessionMemoryStore({
-        fs,
-        path,
-        crypto,
-        baseDir: config.sessionMemoryDirectory(),
-        protector: memoryProtector,
-      });
-    }
-    return sessionMemoryStoreInstance;
-  }
-
-  // Phase I Operational Context services are constructed in the composition
-  // root, but remain inert until their feature flag is enabled.  The legacy
-  // session store remains the owner of the exact transcript; these services
-  // only read transcript boundaries and persist resumable checkpoint state.
-  const memoryTranscriptBoundary = createTranscriptBoundaryService({
-    sessionMemoryStore: sessionMemoryStore(),
-    projectIdentityStore: memoryProjectIdentityStore,
-    crypto,
-  });
-  const memoryOperationalContextStore = createOperationalContextStore({
-    fs,
-    path,
-    crypto,
-    baseDir: config.sessionMemoryDirectory(),
-    protector: memoryProtector,
-    projectIdentityStore: memoryProjectIdentityStore,
-  });
-  const memoryContextSummarizer = createContextSummarizer();
-  memoryContextCheckpoint = createContextCheckpointService({
-    boundaryService: memoryTranscriptBoundary,
-    contextStore: memoryOperationalContextStore,
-    ledgerService: { reduceToolEvents },
-    summarizer: memoryContextSummarizer,
-    watermarkStore: memoryWatermarkStore,
-    sensitiveWorkingMemory: memorySensitiveWorkingMemory,
-    crypto,
-  });
-  memoryIpcContainer.memoryContextCheckpoint = memoryContextCheckpoint;
-  const memoryContextAssembly = createContextAssemblyService({
-    retrievalService: memoryRetrievalService,
-    checkpointProvider: memoryContextCheckpoint,
-    watermarkStore: memoryWatermarkStore,
-    projectIdentityStore: memoryProjectIdentityStore,
-    sensitiveWorkingMemory: memorySensitiveWorkingMemory,
-    crypto,
-  });
-  const memorySecurityAudit = createMemorySecurityAudit({
-    fs,
-    path,
-    crypto,
-    projectIdentityStore: memoryProjectIdentityStore,
-    sensitiveWorkingMemory: memorySensitiveWorkingMemory,
-  });
-  const memoryMaintenance = createMemoryMaintenanceService({
-    path,
-    crypto,
-    projectIdentityStore: memoryProjectIdentityStore,
-    projectProfileStore: (workspace) => projectProfileStore().read(workspace),
-    manifestStore: memoryManifestStore,
-    eventStore: memoryEventStore,
-    watermarkStore: memoryWatermarkStore,
-    retrievalService: memoryRetrievalService,
-    contextCheckpoint: memoryContextCheckpoint,
-    derivedProjection: memoryDerivedProjection,
-    graphView: () => memoryGraphView,
-    artifactRegistry: memoryArtifactRegistry,
-    sensitiveWorkingMemory: memorySensitiveWorkingMemory,
-    operationalContextStore: memoryOperationalContextStore,
-    sessionMemoryStore,
-    auditStore: memoryAuditStore,
-    memoryStatus,
-  });
-  memoryIpcContainer.memorySecurityAudit = memorySecurityAudit;
-  memoryIpcContainer.memoryMaintenance = memoryMaintenance;
-  const memoryAssignmentLeases = createInvestigationAssignmentLeaseService({
-    fs,
-    path,
-    crypto,
-    baseDir: config.sessionMemoryDirectory(),
-    now: () => new Date(),
-    enabled: memoryFeatureFlags.multiAgentMemoryV2,
-  });
-  const memorySpecialistDispatch = createSpecialistDispatchService({
-    contextAssembly: memoryContextAssembly,
-    projectIdentityStore: memoryProjectIdentityStore,
-    featureFlags: memoryFeatureFlags,
-    crypto,
-  });
-  const memorySpecialistReturn = createSpecialistReturnService({
-    featureFlags: memoryFeatureFlags,
-    crypto,
-  });
-  const memoryAgentHandoff = createAgentMemoryHandoffService({
-    specialistDispatch: memorySpecialistDispatch,
-    sensitiveWorkingMemory: memorySensitiveWorkingMemory,
-    featureFlags: memoryFeatureFlags,
-  });
-  const memoryMigration = createLegacyMemoryMigration({
-    fs,
-    path,
-    crypto,
-    featureFlags: memoryFeatureFlags,
-    projectIdentityStore: memoryProjectIdentityStore,
-    projectMemoryV1Adapter: memoryProjectMemoryV1Adapter,
-    projectRepository: memoryProjectMemoryRepository,
-    investigationRepository: memoryInvestigationMemoryRepository,
-    investigationMemoryService: memoryInvestigationMemoryService,
-    evidenceRepository: memoryEvidenceMemoryRepository,
-    artifactRegistry: memoryArtifactRegistry,
-    knowledgeReleaseStore: memoryKnowledgeReleaseStore,
-    migrationStore: memoryMigrationStore,
-    sessionMemoryStore,
-    legacyChatDirectory: path.join(config.userData(), "xekute-app"),
-    outboxStore: memoryOutboxStore,
-  });
-  memoryIpcContainer.memoryMigration = memoryMigration;
-  const memoryIpc = createMemoryIpcService({
-    container: memoryIpcContainer,
-    featureFlags: memoryFeatureFlags,
-    crypto,
-  });
 
   const terminals = new Map();
   const toolProcesses = new Map();
@@ -752,10 +410,7 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
       await assessmentIntelligence.dispose();
       await graphBuildService.flush();
       await javascriptArtifacts.flush();
-      contextCompiler.dispose();
-      try { await memoryOperationalContextStore.flush?.(); } catch { /* Checkpoint writes are queued and best effort during shutdown. */ }
-      try { await memoryDerivedProjection.whenIdle?.(); } catch { /* Derived views are rebuildable and never block shutdown. */ }
-      try { await memoryGraphView?.whenIdle?.(); } catch { /* Derived graphs are rebuildable and never block shutdown. */ }
+      try { await tier1SensitiveStore.flush?.(); } catch { /* Exact Tier 1 writes are queued and best effort during shutdown. */ }
       mcpRuntime.clearAll();
       if (proxyListener) {
         try { await proxyListener.stop(); } catch { /* ignore */ }
@@ -788,6 +443,12 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
       try { await proxyBrowser.close(); } catch { /* The operator may already have closed the browser. */ }
       try { await identityVaultInstance?.flush?.(); } catch { /* Encrypted persistence warnings were already surfaced. */ }
       try { await longHorizonRunStore.flush(); } catch { /* Durable checkpoints are best effort during shutdown. */ }
+      // Tier 1 exact buffers are encrypted when secure storage is available;
+      // in degraded mode they live only in this process and must be cleared
+      // explicitly during shutdown.  The embedding worker is likewise
+      // disposable and must not keep model state alive after app exit.
+      try { tier1SensitiveStore.clearEphemeral?.(); } catch { /* best effort */ }
+      try { knowledgeEmbeddingService.dispose?.(); } catch { /* best effort */ }
     })();
     return disposePromise;
   }
@@ -840,52 +501,15 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     javascriptCollector,
     graphBuildService,
     assessmentIntelligence,
-    modeWorkflow,
-    memoryFeatureFlags,
+    projectArtifacts,
+    knowledgeLibrary,
     memoryProjectIdentityStore,
-    memoryManifestStore,
-    memoryEventStore,
-    memorySnapshotStore,
-    memoryArtifactRegistry,
-    memoryDerivedMemoryIndex,
-    memoryDerivedProjection,
-    memoryGraphStore,
-    memoryGraphView,
-    memoryExecutionCapture,
-    memoryFinalizationStore,
-    memoryOutboxStore,
-    memoryMigrationStore,
-    memoryMigration,
-    memorySecurityAudit,
-    memoryMaintenance,
-    memoryWatermarkStore,
-    memoryProjectMemoryRepository,
-    memoryInvestigationMemoryRepository,
-    memoryEvidenceMemoryRepository,
-    memoryProjectMemoryV1Adapter,
-    memoryBlockFinalizer,
-    memoryBlockUpdater,
-    memoryStatus,
-    memoryAuditStore,
-    memoryKnowledgeReleaseStore,
-    memoryKnowledgeReleaseIngestor,
-    memoryRetrievalService,
-    memoryKnowledgeSelectionService,
-    memoryInvestigationMemoryService,
-    memoryEvidenceMemoryService,
-    memorySensitiveWorkingMemory,
-    memoryTranscriptBoundary,
-    memoryOperationalContextStore,
-    memoryContextSummarizer,
-    memoryContextCheckpoint,
-    memoryContextAssembly,
-    memoryAssignmentLeases,
-    memorySpecialistDispatch,
-    memorySpecialistReturn,
-    memoryAgentHandoff,
-    memoryIpc,
-    projectMemoryStore,
-    contextCompiler,
+    memorySchemaRegistry,
+    tier1SensitiveStore,
+    memoryTier1Coordinator,
+    knowledgeStore,
+    knowledgeEmbeddingService,
+    knowledgeKag,
     mcpRuntime,
     securityHttpWorkbench,
     buildIntruderRequests,
@@ -894,7 +518,7 @@ function createContainer({ app, safeStorage, sendToWindow = () => {}, getMainWin
     projectProfileStore,
     identityVault,
     browserSessionManager,
-    sessionMemoryStore,
+    v3SessionStore,
     authorityRegistry: authorityComposition.registry,
     invocationPipeline,
     toolAuditStore,

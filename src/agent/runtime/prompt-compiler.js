@@ -76,6 +76,17 @@
   }
 
   function compile({ family = "assist", mode = "ask", overrides = null, depth = "operational", moduleKeys = null } = {}) {
+    const parts = compileParts({ family, mode, overrides, depth, moduleKeys });
+    return parts.rendered;
+  }
+
+  // Return the same canonical prompt as `compile`, but expose the exact
+  // runtime-instruction boundary used by Tier 1 Block A.  `system_prompt`
+  // and `rules` are still joined into one provider system message by the
+  // controller, so this is a structural view—not a second instruction set.
+  // Keeping the split here means the Tier 1 meter can account for the real
+  // rule/role text instead of reporting empty placeholder rows.
+  function compileParts({ family = "assist", mode = "ask", overrides = null, depth = "operational", moduleKeys = null } = {}) {
     const profile = normalizeProfile(family, mode);
     const validation = validatePromptConfig(overrides);
     const config = validation.ok ? validation.config : normalizeOverrides(null);
@@ -98,12 +109,31 @@
     const overlay = compact
       ? COMPACT_MODE_OVERLAYS[profile.id]
       : config.overlays[profile.id] || MODE_OVERLAYS[profile.id];
-    return [
+    const header = `XEKUTE VAPT SYSTEM PROMPT v${VERSION}`;
+    const profileLine = `SELECTED PROFILE: ${profile.id.toUpperCase()}. Current profile wins over conversation history.`;
+    // The role/routing prefix is pinned Block A system context.  The
+    // evidence/loop/failure/feedback/guardrail modules and profile overlay
+    // are the exact Rules component.  Joining these fields reproduces the
+    // historical prompt byte-for-byte.
+    const systemPromptParts = [header, profileLine, sections[0], sections[1]].filter(Boolean);
+    const ruleParts = [
+      ...sections.slice(2),
+      `MODE OVERLAY\n${overlay}`,
+    ].filter(Boolean);
+    const rendered = [
       `XEKUTE VAPT SYSTEM PROMPT v${VERSION}`,
       `SELECTED PROFILE: ${profile.id.toUpperCase()}. Current profile wins over conversation history.`,
       ...sections,
       `MODE OVERLAY\n${overlay}`,
     ].filter(Boolean).join("\n\n");
+    return {
+      profile,
+      depth,
+      systemPrompt: systemPromptParts.join("\n\n"),
+      rules: ruleParts.join("\n\n"),
+      rendered,
+      sections: { system: systemPromptParts, rules: ruleParts },
+    };
   }
 
   function defaults() {
@@ -116,5 +146,5 @@
     return config.overlays[profile.id] || MODE_OVERLAYS[profile.id];
   }
 
-  return { VERSION, MODULE_ORDER, CLAIM_STATES, COMPACT_ROLE, ROUTING_PROMPT, DEFAULT_MODULES, MODE_OVERLAYS, normalizeProfile, normalizeOverrides, validatePromptConfig, validate: validatePromptConfig, compile, defaults, modeOverlay, checksum };
+  return { VERSION, MODULE_ORDER, CLAIM_STATES, COMPACT_ROLE, ROUTING_PROMPT, DEFAULT_MODULES, MODE_OVERLAYS, normalizeProfile, normalizeOverrides, validatePromptConfig, validate: validatePromptConfig, compile, compileParts, defaults, modeOverlay, checksum };
 });

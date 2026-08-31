@@ -33,9 +33,9 @@ function postToolSummary({ mode = "agent", lastVerification = null } = {}) {
 
 function planGrounding(userMessage = "") {
   return [
-    "Plan mode — create or update the structured Markdown plan with manage_plan, not in chat.",
-    "Use the exact path and create/update operation in the PLAN DOCUMENT CONTRACT; never modify a non-plan file.",
-    "Use a clear Overview followed by concrete, ordered Markdown checkbox Tasks that can be executed sequentially.",
+    "Plan mode — create or update .xekute/checklist.md with update_project_artifacts, not in chat.",
+    "Do not apply_patch canonical investigation Markdown. Checklist item phase is one of preflight, passive_recon, active_recon, planning, execution, verification, retest.",
+    "Use a clear Overview followed by concrete, ordered C-#### items that can be executed sequentially.",
     `Original user request: ${userMessage}`,
   ].join(" ");
 }

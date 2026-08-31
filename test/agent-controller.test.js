@@ -10,8 +10,6 @@ const {
   buildEngagementPromptContext,
   isReasonablyLargeAgentRequest,
   runAgentTurn,
-  trimHistoryForContext,
-  selectHistoryGroups,
   fitMessagesToContext,
   advanceTowardPhase,
   toolCallSignature,
@@ -46,8 +44,8 @@ test("the temporary task-list tool is exposed only for reasonably large Agent re
   await run("Implement the following:\n- inspect the updater\n- fix notification state\n- update the tests\n- verify packaging");
   assert.equal(seen[0].includes("update_task_list"), false);
   assert.equal(seen[1].includes("update_task_list"), true);
-  assert.equal(seen[0].includes("manage_plan"), true);
-  assert.equal(seen[1].includes("manage_plan"), true);
+  assert.equal(seen[0].includes("update_project_artifacts"), true);
+  assert.equal(seen[1].includes("update_project_artifacts"), true);
 });
 
 test("a large Agent task publishes checklist updates and removes the checklist on completion", async () => {
@@ -73,90 +71,6 @@ test("a large Agent task publishes checklist updates and removes the checklist o
   assert.equal(events.some((event) => event.type === "task_brief"), false);
   assert.equal(events.some((event) => event.type === "task_list" && event.tasks?.length === 4), true);
   assert.equal(events.some((event) => event.type === "task_list" && event.clear === true), true);
-});
-
-test("nested plan-bound turns validate against the binding without closing the parent plan", async () => {
-  const planBinding = { planId: "plan-1", contentHash: "hash-1", runId: "parent-run" };
-  const lifecycleCalls = [];
-  const modeWorkflow = {
-    loadState: () => ({ planBinding }),
-    contextPacket: () => null,
-    finishPlanRun: () => lifecycleCalls.push("finish-plan"),
-  };
-  const intelligence = { completeRun: () => lifecycleCalls.push("complete-intelligence") };
-  const run = async (nested) => runAgentTurn({
-    workspace: "",
-    model: "local:small",
-    numCtx: 8192,
-    contextBudget: 8192,
-    tools: [],
-    mode: "agent",
-    modeFamily: "assist",
-    modeWorkflow,
-    intelligence,
-    planBinding,
-    nested,
-    userMessage: "summarize the delegated result",
-    chatHistory: [],
-    sendEvent() {},
-    async runModelRound() { return { ok: true, fullText: "done", toolCalls: [], finishReason: "stop" }; },
-    async executeToolCall() { return { ok: true }; },
-  });
-
-  await run(true);
-  assert.deepEqual(lifecycleCalls, [], "child completion must not finalize the parent plan");
-  await run(false);
-  assert.deepEqual(lifecycleCalls, ["complete-intelligence", "finish-plan"]);
-});
-
-test("nested plan-bound actions remain provisional until the parent records them", async () => {
-  const planBinding = { planId: "plan-1", contentHash: "hash-1", runId: "parent-run" };
-  const calls = [];
-  let round = 0;
-  const modeWorkflow = {
-    loadState: () => ({ planBinding }),
-    contextPacket: () => null,
-    validateAction: () => ({ ok: true, stepId: "step-1" }),
-    recordProducedEvidence: () => calls.push("produced-evidence"),
-    recordPlanAction: () => calls.push("plan-action"),
-  };
-  const intelligence = {
-    recordRunEvidence: () => calls.push("run-evidence"),
-  };
-  const result = await runAgentTurn({
-    workspace: "",
-    model: "local:small",
-    numCtx: 8192,
-    contextBudget: 8192,
-    tools: [{ type: "function", function: { name: "apply_patch", description: "patch", parameters: { type: "object" } } }],
-    mode: "agent",
-    modeFamily: "assist",
-    modeWorkflow,
-    intelligence,
-    planBinding,
-    nested: true,
-    userMessage: "apply the delegated patch",
-    chatHistory: [],
-    sendEvent() {},
-    async runModelRound() {
-      round += 1;
-      if (round === 1) {
-        return {
-          ok: true,
-          fullText: "",
-          toolCalls: [{ id: "call-1", type: "function", function: { name: "apply_patch", arguments: {} } }],
-          finishReason: "tool_calls",
-        };
-      }
-      return { ok: true, fullText: "done", toolCalls: [], finishReason: "stop" };
-    },
-    async executeToolCall() { return { ok: true, evidenceIds: ["ev-1"] }; },
-  });
-
-  assert.deepEqual(calls, [], "child execution must not mutate parent workflow state");
-  assert.deepEqual(result.provisionalPlan?.evidenceIds, ["ev-1"]);
-  assert.equal(result.provisionalPlan?.actions.length, 1);
-  assert.equal(result.provisionalPlan?.actions[0].stepId, "step-1");
 });
 
 test("scope-only dispatch returns raw tool results to the model", async (t) => {
@@ -216,6 +130,66 @@ test("scope-only dispatch returns raw tool results to the model", async (t) => {
   const content = toolMessages[toolMessages.length - 1].content;
   assert.ok(!content.includes('"payload":"{}"'), "model must not see empty {} payload");
   assert.ok(content.includes("REAL_STDOUT_MARKER"), "model must see the real stdout");
+});
+
+test("Tier 1 keeps the current prompt before assistant/tool turns and preserves the exact turn transcript", async () => {
+  const rounds = [];
+  let round = 0;
+  const projectId = "proj_00000000-0000-4000-8000-000000004101";
+  const sessionId = "session_00000000-0000-4000-8000-000000004102";
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  const result = await runAgentTurn({
+    workspace: "",
+    model: "local:small",
+    numCtx: 32768,
+    contextBudget: 32768,
+    tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    mode: "agent",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    userMessage: "run the check",
+    chatHistory: [],
+    sendEvent() {},
+    async runModelRound(payload) {
+      rounds.push(payload.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        tool_calls: message.tool_calls,
+        tool_call_id: message.tool_call_id,
+      })));
+      round += 1;
+      if (round === 1) {
+        return {
+          ok: true,
+          fullText: "",
+          toolCalls: [{ id: "call-check", type: "function", function: { name: "exec_command", arguments: {} } }],
+          finishReason: "tool_calls",
+        };
+      }
+      return { ok: true, fullText: "done", toolCalls: [], finishReason: "stop" };
+    },
+    async executeToolCall() {
+      return { ok: true, value: { summary: "check completed" } };
+    },
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result.error || ""));
+  assert.equal(rounds.length, 2);
+  const currentPrompt = (message) => message.role === "user" && message.content === "run the check";
+  const firstPromptIndex = rounds[0].findIndex(currentPrompt);
+  const secondPromptIndex = rounds[1].findIndex(currentPrompt);
+  const assistantToolIndex = rounds[1].findIndex((message) => message.role === "assistant" && Array.isArray(message.tool_calls));
+  const toolResultIndex = rounds[1].findIndex((message) => message.role === "tool");
+  assert.equal(rounds[0].filter(currentPrompt).length, 1);
+  assert.equal(firstPromptIndex, rounds[0].length - 1, "the initial provider request ends with the current user prompt");
+  assert.equal(rounds[1].filter(currentPrompt).length, 1);
+  assert.ok(secondPromptIndex >= 0 && secondPromptIndex < assistantToolIndex, "the current prompt precedes the assistant tool call");
+  assert.ok(assistantToolIndex < toolResultIndex, "the tool result follows the assistant tool call");
+  assert.equal(rounds[1].at(-1).role, "tool");
+  assert.deepEqual(result.appendedMessages.map((message) => message.role), ["assistant", "tool", "assistant"]);
+  assert.equal(result.appendedMessages.some(currentPrompt), false, "the protected prompt is not duplicated in appended transcript messages");
 });
 
 test("simple conversation uses compact context with no tool execution and no workspace writes", async (t) => {
@@ -477,21 +451,20 @@ test("passive scan routing is not reduced by the selected mode", () => {
   assert.ok(route.cyberCapabilities.includes("active"));
 });
 
-test("project prompt context merges workspace scope files with app-managed profile", () => {
+test("project prompt context uses app-managed profile scope", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-scope-context-"));
   const root = path.join(parent, "assessment");
   const workspace = createAssessmentWorkspace({ fs, path });
   workspace.repair(root, { createRoot: true });
-  const inScopePath = path.join(root, "scope", "in-scope.json");
-  const inScope = JSON.parse(fs.readFileSync(inScopePath, "utf8"));
-  inScope.targets = [{ id: "target-1", assetType: "domain", value: "app.example.com", notes: "primary app" }];
-  fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`, "utf8");
 
   const context = buildEngagementPromptContext({
     workspace: root,
     projectProfile: {
       project: { name: "Example App" },
-      scope: { inScopeTargets: [], notes: "profile note" },
+      scope: {
+        inScopeTargets: [{ id: "target-1", assetType: "domain", value: "app.example.com", notes: "primary app" }],
+        notes: "profile note",
+      },
       context: { applicationOverview: "Customer portal" },
     },
   });
@@ -508,15 +481,15 @@ test("scope questions in an open project inject project settings and scope guida
   const root = path.join(parent, "assessment");
   const workspaceApi = createAssessmentWorkspace({ fs, path });
   workspaceApi.repair(root, { createRoot: true });
-  const inScopePath = path.join(root, "scope", "in-scope.json");
-  const inScope = JSON.parse(fs.readFileSync(inScopePath, "utf8"));
-  inScope.targets = [{ id: "target-1", assetType: "domain", value: "app.example.com" }];
-  fs.writeFileSync(inScopePath, `${JSON.stringify(inScope, null, 2)}\n`, "utf8");
   t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
 
   let roundPayload = null;
   const result = await runAgentTurn({
     workspace: root,
+    projectProfile: {
+      project: { name: "Example App" },
+      scope: { inScopeTargets: [{ id: "target-1", assetType: "domain", value: "app.example.com" }] },
+    },
     model: "local:small",
     numCtx: 8192,
     thinking: false,
@@ -546,7 +519,7 @@ test("scope questions in an open project inject project settings and scope guida
   assert.match(prompt, /UNTRUSTED CONTEXT DATA/);
   assert.ok(Array.isArray(roundPayload.tools) && roundPayload.tools.length > 0, "ask mode exposes the canonical tool set");
   assert.ok(roundPayload.tools.some((tool) => tool.function?.name === "query_assessment"), "ask mode can analyze assessment evidence");
-  assert.ok(roundPayload.tools.some((tool) => tool.function?.name === "exec_command"), "ask mode can honor explicit action requests");
+  assert.equal(roundPayload.tools.some((tool) => tool.function?.name === "exec_command"), false, "ask mode does not include exec_command");
   assert.equal(result.contextRoute.includeProjectContext, true);
 });
 
@@ -589,8 +562,8 @@ test("mode prompts stay distinct while the tool surface is registry-backed", () 
   assert.match(askPrompt, /PROFILE — Ask/);
   assert.match(ModeSkills.render("agent"), /tools/i);
   assert.match(planPrompt, /PROFILE — Plan/i);
-  assert.match(planPrompt, /honor explicit user-requested/i);
-  assert.match(askPrompt, /honor explicit requests/i);
+  assert.match(planPrompt, /read-only planning plus one final checklist artifact transaction/i);
+  assert.match(askPrompt, /read-only questions and analysis/i);
   assert.match(askPrompt, /inconclusive/i);
   assert.match(hypothesisPrompt, /PROFILE — Hypothesis/i);
   assert.match(askPrompt, /Runtime scope checks are enforced/i);
@@ -625,42 +598,12 @@ test("response evidence classification stays quiet for workspace work and escala
   assert.equal(producedRequirement.reason, "evidence-produced");
 });
 
-test("context limits remain operational without command policy branches", () => {
-  const history = Array.from({ length: 30 }, (_, index) => ({
-    role: index % 2 ? "assistant" : "user",
-    content: `${index}: ${"context ".repeat(120)}`,
-  }));
-  const trimmed = trimHistoryForContext(history, 4096);
-  assert.ok(trimmed.length < history.length);
-  assert.equal(trimmed.at(-1).content, history.at(-1).content);
-});
-
-test("selectHistoryGroups restores chronological order after anchor pinning", () => {
-  const objective = "scan the target";
-  const groups = [
-    [{ role: "user", content: objective }],
-    [{ role: "assistant", content: "older reply" }],
-    [{ role: "user", content: "recent follow-up" }],
-  ];
-  const selection = selectHistoryGroups(groups, {
-    budget: 10_000,
-    anchorOptions: { objectiveMessage: objective },
-  });
-  assert.equal(selection.ok, true);
-  assert.deepEqual(selection.selected.map((group) => group[0].content), [
-    objective,
-    "older reply",
-    "recent follow-up",
-  ]);
-});
-
 test("fitMessagesToContext fails closed when mandatory anchors exceed the budget", () => {
   const objective = Array.from({ length: 3000 }, (_, index) => `word${index}`).join(" ");
   const fitted = fitMessagesToContext({
     baseMessages: [{ role: "system", content: "fixed prompt" }],
     history: [{ role: "user", content: objective }],
     promptBudget: 512,
-    anchorOptions: { objectiveMessage: objective },
   });
   assert.equal(fitted.ok, false);
   assert.equal(fitted.overflow, true);

@@ -13,8 +13,8 @@ summary: Required structure for a professional evidence-linked vulnerability ass
 5. Rules of engagement
 6. Methodology
 7. Attack-surface summary
-8. Findings summary
-9. Detailed findings
+8. Verified evidence summary
+9. Detailed verified vulnerabilities
 10. Positive control observations
 11. Risk and business impact
 12. Remediation roadmap
@@ -24,6 +24,6 @@ summary: Required structure for a professional evidence-linked vulnerability ass
 16. Evidence index
 17. Appendices and framework mappings
 
-## Detailed finding contract
+## Detailed verified-evidence contract
 
-Each confirmed finding includes an ID, title, severity, affected asset/component, prerequisites, expected behavior, observed behavior, reproduction outline, technical impact, business impact, evidence IDs, confidence/verifier status, references, remediation, retest criteria, and disclosure/limitation state.
+Each verified `E-####` record includes a title, severity, affected asset/component, prerequisites, expected behavior, observed behavior, reproduction outline, technical impact, business impact, confidence/verifier status, references, remediation, retest criteria, and disclosure/limitation state.

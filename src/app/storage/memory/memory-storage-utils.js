@@ -153,8 +153,23 @@ function readJsonWithBackup({ fs: fsImpl = nodeFs } = {}, target, {
     { path: `${file}.bak`, recovered: true },
   ];
   let primaryError = null;
+  let backupError = null;
+  let sawCandidate = false;
   for (const candidate of candidates) {
-    if (!fsImpl.existsSync(candidate.path)) continue;
+    let present = false;
+    try {
+      present = fsImpl.existsSync(candidate.path);
+    } catch (error) {
+      // A permissions/ACL failure must be represented as a structured read
+      // failure, not escape from every store that uses this helper.  Keep
+      // looking for a validated backup because a readable backup is still a
+      // safe degraded recovery path.
+      if (!candidate.recovered) primaryError = error;
+      else backupError = error;
+      continue;
+    }
+    if (!present) continue;
+    sawCandidate = true;
     try {
       const raw = fsImpl.readFileSync(candidate.path, "utf8");
       const value = typeof parse === "function" ? parse(raw) : JSON.parse(raw);
@@ -170,9 +185,26 @@ function readJsonWithBackup({ fs: fsImpl = nodeFs } = {}, target, {
       };
     } catch (error) {
       if (!candidate.recovered) primaryError = error;
+      else backupError = error;
     }
   }
-  if (primaryError) return { ok: false, exists: true, recovered: false, path: file, error: primaryError };
+  // If a backup exists but cannot be parsed/read, returning `exists:false`
+  // would let lazy initialization scaffold over an interrupted/corrupt
+  // memory pair.  Fail closed whenever either candidate was present and no
+  // valid value could be recovered; prefer the primary error because it is
+  // the file the caller attempted to read, while retaining the backup error
+  // as bounded diagnostic context.
+  if (primaryError || backupError || sawCandidate) {
+    const error = primaryError || backupError || new Error("The memory file could not be read.");
+    return {
+      ok: false,
+      exists: true,
+      recovered: false,
+      path: file,
+      error,
+      ...(primaryError && backupError ? { backupError } : {}),
+    };
+  }
   return { ok: true, exists: false, recovered: false, path: file, value: null };
 }
 
@@ -204,8 +236,21 @@ function readJsonLines({ fs: fsImpl = nodeFs } = {}, target, {
   maxBytes = 1_048_576,
   validate = null,
 } = {}) {
-  if (!fsImpl.existsSync(target)) return { ok: true, exists: false, records: [], warnings: [], bytes: 0, validBytes: 0, complete: true };
-  const raw = fsImpl.readFileSync(target, "utf8");
+  let present;
+  try {
+    present = fsImpl.existsSync(target);
+  } catch (error) {
+    error.code = error.code || "MEMORY_EVENT_READ_FAILED";
+    return { ok: false, exists: true, records: [], warnings: [], bytes: 0, validBytes: 0, complete: false, error };
+  }
+  if (!present) return { ok: true, exists: false, records: [], warnings: [], bytes: 0, validBytes: 0, complete: true };
+  let raw;
+  try {
+    raw = fsImpl.readFileSync(target, "utf8");
+  } catch (error) {
+    error.code = error.code || "MEMORY_EVENT_READ_FAILED";
+    return { ok: false, exists: true, records: [], warnings: [], bytes: 0, validBytes: 0, complete: false, error };
+  }
   const records = [];
   const warnings = [];
   const lines = raw.split("\n");
@@ -251,7 +296,17 @@ function operationFailure(code, message, details = {}, retryable = false) {
   };
 }
 
-const RAW_SECRET_KEY = /^(?:raw[_-]?cookie|cookie[_-]?value|authorization(?:[_-]?header)?|access[_-]?token|refresh[_-]?token|csrf[_-]?token|bearer[_-]?token|private[_-]?key|client[_-]?private[_-]?key|passphrase|secret[_-]?value|raw[_-]?value|password)$/i;
+// Semantic memory is readable and may be indexed, so credential-shaped keys
+// are rejected even when a caller forgot to mark the surrounding value as
+// sensitive.  Keep this list exact-key based (rather than scanning arbitrary
+// prose) to avoid rejecting harmless technical terms such as `token_count`.
+const RAW_SECRET_KEY = /^(?:raw[_-]?cookie|cookie(?:[_-]?value)?|authorization(?:[_-]?header)?|access[_-]?token|refresh[_-]?token|csrf[_-]?token|bearer[_-]?token|private[_-]?key|client[_-]?private[_-]?key|client[_-]?secret|api[_-]?key|api[_-]?token|passphrase|secret(?:[_-]?value)?|raw[_-]?value|password|credentials?|token)$/i;
+const RAW_SECRET_VALUE = [
+  /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----/i,
+  /\b(?:Bearer|Basic)\s+[A-Za-z0-9+\/=._-]{8,}/i,
+  /\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*[^\s]{8,}/i,
+  /\b(?:access[_-]?token|refresh[_-]?token|csrf[_-]?token|api[_-]?key|api[_-]?token|password|passphrase|secret)\s*[:=]\s*["']?[^\s,;"']{8,}/i,
+];
 
 function assertNoSecretKeys(value, { maxDepth = 12 } = {}, key = "", depth = 0) {
   if (depth > maxDepth) {
@@ -260,7 +315,7 @@ function assertNoSecretKeys(value, { maxDepth = 12 } = {}, key = "", depth = 0) 
     throw error;
   }
   if (RAW_SECRET_KEY.test(String(key || ""))) {
-    const error = new Error("Raw secret fields are not permitted outside Sensitive Working Memory.");
+    const error = new Error("Raw secret fields are not permitted in readable semantic memory.");
     error.code = "MEMORY_SECRET_FIELD";
     error.details = { field: String(key) };
     throw error;
@@ -276,6 +331,28 @@ function assertNoSecretKeys(value, { maxDepth = 12 } = {}, key = "", depth = 0) 
     throw error;
   }
   for (const [childKey, child] of Object.entries(value)) assertNoSecretKeys(child, { maxDepth }, childKey, depth + 1);
+  return true;
+}
+
+// Readable Tier 2 state, journal events, indexes, and diagnostics must not
+// become a covert credential store merely because a secret was placed under a
+// harmless-looking key such as `summary` or `value`.  Keep this detector
+// deliberately focused on unmistakable credential formats; ordinary words
+// such as "token_count" remain valid semantic metadata.
+function assertNoSecretValues(value, { maxDepth = 12 } = {}, key = "", depth = 0) {
+  assertNoSecretKeys(value, { maxDepth }, key, depth);
+  if (typeof value === "string" && RAW_SECRET_VALUE.some((pattern) => pattern.test(value))) {
+    const error = new Error("Credential-like values are not permitted in readable semantic memory.");
+    error.code = "MEMORY_SECRET_VALUE";
+    throw error;
+  }
+  if (value === null || value === undefined || typeof value !== "object") return true;
+  if (depth >= maxDepth) return true;
+  if (Array.isArray(value)) {
+    for (const item of value) assertNoSecretValues(item, { maxDepth }, "", depth + 1);
+    return true;
+  }
+  for (const [childKey, child] of Object.entries(value)) assertNoSecretValues(child, { maxDepth }, childKey, depth + 1);
   return true;
 }
 
@@ -297,4 +374,5 @@ module.exports = Object.freeze({
   fileSha256,
   operationFailure,
   assertNoSecretKeys,
+  assertNoSecretValues,
 });

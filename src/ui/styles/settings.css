@@ -343,6 +343,7 @@
 
 /* Project: one section at a time, with a compact in-page section switcher. */
 .app-settings-content .project-settings-panel { display:block; background:transparent; }
+
 .app-settings-content .project-settings-shell {
   display:block;
   min-height:0;
@@ -727,7 +728,6 @@
 .app-settings-content #llm-openrouter-config input[type="text"] { border-color:var(--settings-border-strong); border-radius:7px; background:#181818; }
 .app-settings-content .certificate-location-row button,
 .app-settings-content .certificate-setting-actions button { border-radius:7px; }
-.app-settings-content .certificate-status-card { background:#1d1d1d; }
 .app-settings-content .llm-provider-actions { gap:8px; }
 .app-settings-content .llm-provider-actions button,
 .app-settings-content .llm-provider-actions .primary-button,
@@ -745,17 +745,6 @@
 .app-settings-content .llm-provider-actions button:focus-visible { outline:1px solid #69747a; outline-offset:2px; }
 .app-settings-content .llm-provider-actions #llm-settings-test { background:#6a541d; color:#f2d782; }
 .app-settings-content .llm-provider-actions #llm-settings-test:hover:not(:disabled) { background:#806522; color:#ffe8a3; }
-.app-settings-content .certificate-security-note {
-  display:block;
-  padding:10px 0 0;
-  border:0;
-  border-radius:0;
-  background:transparent;
-  color:#858585;
-}
-.app-settings-content .certificate-security-note .codicon { display:none; }
-.app-settings-content .certificate-security-note p { margin:0; color:#858585; font:10px/1.45 var(--font-ui); }
-.app-settings-content .certificate-security-note code { padding:0; background:transparent; color:#999; }
 .app-settings-content .llm-provider-option { min-height:96px; padding:18px; border-color:var(--settings-border); border-radius:12px; background:var(--settings-panel); }
 .app-settings-content .llm-provider-option:hover { border-color:#4a4a4a; background:#242424; }
 .app-settings-content .llm-provider-option.selected { border-color:#4c5a5f; background:#242a2c; box-shadow:none; }
@@ -776,8 +765,7 @@
   .app-settings-content > #app-settings-prompts-panel { grid-template-columns:1fr; min-height:0; overflow:visible; }
   .app-settings-content .guidance-settings-sidebar { max-height:270px; border-right:0; border-bottom:1px solid var(--settings-border); }
   .app-settings-content .guidance-settings-main { min-height:400px; }
-  .app-settings-content .certificate-location-row,
-  .app-settings-content .certificate-status-card > div { grid-template-columns:1fr; }
+  .app-settings-content .certificate-location-row { grid-template-columns:1fr; }
   .app-settings-content .certificate-setting-actions { flex-wrap:wrap; }
 }
 
@@ -970,8 +958,7 @@
   .app-settings-content > #app-settings-prompts-panel { grid-template-columns:1fr; min-height:0; overflow:visible; }
   .app-settings-content .guidance-settings-sidebar { max-height:270px; border-right:0; border-bottom:1px solid var(--settings-border); }
   .app-settings-content .guidance-settings-main { min-height:400px; }
-  .app-settings-content .certificate-location-row,
-  .app-settings-content .certificate-status-card > div { grid-template-columns:1fr; }
+  .app-settings-content .certificate-location-row { grid-template-columns:1fr; }
 }
 
 @container app-settings (max-width: 520px) {
@@ -1227,22 +1214,6 @@
   border-color:#69747a;
   box-shadow:0 0 0 1px rgba(158,172,180,.16);
 }
-.app-settings-content #context-compaction-model {
-  color-scheme:dark;
-  background-color:#181818;
-  color:#e1e1e1;
-  caret-color:#e1e1e1;
-}
-.app-settings-content #context-compaction-model:-webkit-autofill,
-.app-settings-content #context-compaction-model:-webkit-autofill:hover,
-.app-settings-content #context-compaction-model:-webkit-autofill:focus,
-.app-settings-content #context-compaction-model:-webkit-autofill:active {
-  background-color:#181818 !important;
-  color:#e1e1e1 !important;
-  -webkit-text-fill-color:#e1e1e1 !important;
-  -webkit-box-shadow:0 0 0 1000px #181818 inset !important;
-  caret-color:#e1e1e1;
-}
 .app-settings-content .models-search-row {
   position:relative;
   margin:22px 0 0;
@@ -1357,11 +1328,6 @@
 .app-settings-content .models-api-keys {
   margin-top:28px;
   border:0;
-}
-.app-settings-content .models-context-settings {
-  display:flex;
-  flex-direction:column;
-  gap:12px;
 }
 .app-settings-content .models-api-keys-summary {
   min-height:36px;

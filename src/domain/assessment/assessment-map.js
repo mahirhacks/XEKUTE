@@ -538,7 +538,7 @@ function decorateGraphForAgent(graph) {
   return graph;
 }
 
-function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligence = null, javascriptArtifacts = null, webArtifacts = null, graphStore = null, now = () => new Date(), domainExtractor } = {}) {
+function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, projectProfileProvider = null, intelligence = null, javascriptArtifacts = null, webArtifacts = null, graphStore = null, now = () => new Date(), domainExtractor } = {}) {
   if (!crypto?.createHash || !crypto?.createHmac || !crypto?.randomBytes) throw new TypeError("crypto hashing, HMAC, and random bytes are required");
   const registrableDomain = typeof domainExtractor === "function" ? domainExtractor : defaultDomainExtractor();
   const hash = (value, length = 20) => crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, length);
@@ -613,13 +613,12 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligen
   }
 
   function mapScope(root) {
-    const readJson = (relative, fallback) => {
-      try {
-        const target = path.join(root, relative);
-        return fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, "utf8")) : fallback;
-      } catch { return fallback; }
+    let profile = null;
+    try { profile = typeof projectProfileProvider === "function" ? projectProfileProvider(root) : null; } catch { profile = null; }
+    return {
+      inScope: { targets: profile?.scope?.inScopeTargets || [], wildcardRules: profile?.scope?.wildcardRules || [] },
+      outOfScope: { assets: profile?.scope?.outOfScopeTargets || [] },
     };
-    return { inScope: readJson("scope/in-scope.json", {}), outOfScope: readJson("scope/out-of-scope.json", {}) };
   }
 
   function readAgentAnnotations(root) {
@@ -644,10 +643,10 @@ function createAssessmentMap({ fs, path, crypto, assessmentWorkspace, intelligen
     const outAssets = Array.isArray(outOfScope.assets) ? outOfScope.assets : [];
     const wildcards = Array.isArray(inScope.wildcardRules) ? inScope.wildcardRules : [];
     const outMatch = outAssets.some((asset) => hostMatches(host, asset?.value || asset?.host || asset));
-    if (outMatch) return { status: "out-of-scope", reason: "Matched scope/out-of-scope.json" };
+    if (outMatch) return { status: "out-of-scope", reason: "Matched Project Settings exclusions" };
     const inMatch = inAssets.some((asset) => hostMatches(host, asset?.value || asset?.host || asset))
       || wildcards.some((rule) => hostMatches(host, rule?.pattern || rule?.value || rule));
-    if (inMatch) return { status: "in-scope", reason: "Matched scope/in-scope.json" };
+    if (inMatch) return { status: "in-scope", reason: "Matched Project Settings scope" };
     if (!inAssets.length && !wildcards.length) return { status: "unknown", reason: "No in-scope targets are configured" };
     return { status: "out-of-scope", reason: "No matching in-scope target" };
   }

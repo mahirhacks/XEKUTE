@@ -99,16 +99,3 @@ $RECYCLE.BIN/
 /tmp/
 /version_tracking/
 temp_test
-test/*
-!test/delegation-provider.test.js
-!test/subagent-coordinator.test.js
-!test/ask-questions.test.js
-!test/command-approval.test.js
-!test/editor-shortcuts.test.js
-!test/explorer-selection.test.js
-!test/plan-markdown.test.js
-!test/update-task-list.test.js
-!test/chat-exchange-footer.test.js
-!test/special-skill-capabilities.test.js
-!test/special-skill-platform.test.js
-!test/vulnerability-library.test.js

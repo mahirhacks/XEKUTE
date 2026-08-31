@@ -1,0 +1,30 @@
+{
+    "per_channel": true,
+    "reduce_range": true,
+    "per_model_config": {
+        "model": {
+            "op_types": [
+                "Cast",
+                "Softmax",
+                "Sub",
+                "Shape",
+                "Constant",
+                "Transpose",
+                "Concat",
+                "ReduceMean",
+                "Gather",
+                "Pow",
+                "Mul",
+                "Sqrt",
+                "Reshape",
+                "Slice",
+                "Erf",
+                "MatMul",
+                "Div",
+                "Unsqueeze",
+                "Add"
+            ],
+            "weight_type": "QInt8"
+        }
+    }
+}

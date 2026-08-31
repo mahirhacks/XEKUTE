@@ -15,8 +15,6 @@ const {
 const { createDelegateAgentTool } = require("../src/agent/tools/process/delegate-agent.js");
 const { createExecutionContext, projectExecutionContext } = require("../src/contracts/tool/execution-context");
 const { createAssessmentIntelligenceService } = require("../src/app/services/assessment/intelligence/assessment-intelligence-service.js");
-const { createProjectMemoryStore } = require("../src/app/storage/project-memory-store.js");
-const { createContextCompiler } = require("../src/agent/memory/context/context-compiler.js");
 
 function execContext(root, overrides = {}) {
   return projectExecutionContext(createExecutionContext({
@@ -150,10 +148,8 @@ test("main-owned result handoff marks renderer events observational and invokes 
   assert.equal(events.at(-1).continuationOwner, "main");
 });
 
-test("child runs inherit plan policy, tool metadata, browser scope, and checkpoints", async () => {
-  const planBinding = { planId: "plan-1", executionHash: "hash-1", objective: "verify" };
+test("child runs inherit tool metadata, browser scope, and checkpoints", async () => {
   const received = {};
-  const contextAssembly = { assemble: async () => ({ ok: true, state: "current" }) };
   const executed = [];
   const checkpointContexts = [];
   const provider = createRuntimeDelegationProvider({
@@ -163,21 +159,14 @@ test("child runs inherit plan policy, tool metadata, browser scope, and checkpoi
     workspace: "G:/ws",
     sessionId: "parent-session-1",
     tools: PARENT_TOOLS,
-    modeWorkflow: { loadState: () => ({ planBinding }) },
     intelligence: { status: () => ({ ok: true }) },
-    contextCompiler: { compile: () => ({}) },
-    contextAssembly,
-    planBinding,
     toolMetadataForName: (name, sessionId) => ({ name, sessionId }),
     getBrowserTarget: (workspace, sessionId) => `${workspace}/${sessionId}`,
     checkpointRun: (_patch, context) => { checkpointContexts.push(context); },
     runAgentTurn: async (payload) => {
       received.payload = payload;
       assert.equal(payload.nested, true);
-      assert.equal(payload.modeWorkflow.loadState().planBinding, planBinding);
-      assert.equal(payload.intelligence.status().ok, true);
-      assert.equal(payload.contextCompiler.compile() !== undefined, true);
-      assert.equal(payload.contextAssembly, contextAssembly);
+      assert.equal(payload.mode, "agent");
       assert.deepEqual(payload.toolMetadataForName("read_file"), { name: "read_file", sessionId: payload.sessionId });
       assert.equal(payload.getBrowserTarget("G:/ws", payload.sessionId), `G:/ws/${payload.sessionId}`);
       await payload.executeToolCall({
@@ -200,50 +189,9 @@ test("child runs inherit plan policy, tool metadata, browser scope, and checkpoi
   }, execContext("G:/ws"));
 
   assert.equal(result.status, "completed");
-  assert.equal(received.payload.planBinding, planBinding);
-  assert.equal(executed[0].planBinding, planBinding);
+  assert.equal(received.payload.nested, true);
   assert.equal(executed[0].sessionId, "child-policy");
   assert.equal(checkpointContexts[0].childSessionId, "child-policy");
-});
-
-test("child receives the bounded delegation context instead of only the task text", async () => {
-  let receivedContextSummary = "";
-  let receivedProjectMemory = null;
-  const provider = createRuntimeDelegationProvider({
-    senderId: "s",
-    runKey: "s::parent",
-    parentModel: "m",
-    workspace: "G:/ws",
-    sessionId: "parent-session-1",
-    tools: PARENT_TOOLS,
-    runAgentTurn: async (payload) => {
-      receivedContextSummary = payload.contextSummary;
-      receivedProjectMemory = payload.projectMemory;
-      return { ok: true, finalText: "analysis complete", executedTools: false, runState: { status: "completed" } };
-    },
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
-    executeToolCall: async () => ({ ok: true }),
-    beginChildSession: async () => ({ ok: true, sessionId: "child-context" }),
-    sendToRenderer: () => {},
-  });
-
-  await provider({
-    task: "Analyze the supplied context",
-    contextPackage: {
-      role: "reviewer",
-      authority: "approve_for_me",
-      scope: { files: ["src/a.js"] },
-      identity: {},
-      resources: {},
-      projectMemory: { revision: 9 },
-    },
-    expectedOutput: { description: "analysis", format: "text" },
-  }, execContext("G:/ws"), {});
-
-  assert.match(receivedContextSummary, /reviewer/);
-  assert.match(receivedContextSummary, /src\/a\.js/);
-  assert.doesNotMatch(receivedContextSummary, /projectMemory/);
-  assert.deepEqual(receivedProjectMemory, { revision: 9 });
 });
 
 test("child project context is finalized before the delegated result returns", async () => {
@@ -305,27 +253,6 @@ test("assessment intelligence exposes an awaitable idle boundary for child hando
     assert.equal((await service.flush()).ok, true);
   } finally {
     await service.dispose();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("an existing agent compiler sees project memory written by a newer agent", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-shared-context-"));
-  const store = createProjectMemoryStore();
-  const compiler = createContextCompiler({ projectMemoryStore: store });
-  try {
-    const before = compiler.compile({ workspace: root, sessionId: "old-agent", baseMessages: [{ role: "system", content: "System" }], history: [] });
-    assert.equal(before.memoryPacket.revision, 0);
-    store.consolidate(root, {
-      sessionId: "new-agent",
-      observations: [{ id: "shared-observation", summary: "A newer agent recorded this observation", sourceRefs: ["e-shared"] }],
-    });
-    const after = compiler.compile({ workspace: root, sessionId: "old-agent", baseMessages: [{ role: "system", content: "System" }], history: [] });
-    assert.equal(after.memoryPacket.revision, 1);
-    assert.ok(after.memoryPacket.observations.some((item) => item.id === "shared-observation"));
-    assert.ok(after.baseMessages.some((message) => /A newer agent recorded this observation/.test(message.content)));
-  } finally {
-    compiler.dispose();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

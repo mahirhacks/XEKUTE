@@ -114,7 +114,7 @@ function defaultProcedure(input) {
   };
 }
 
-function createVerifyFindingTool({ procedureRunner = null } = {}) {
+function createVerifyFindingTool({ procedureRunner = null, v3Adapter = null } = {}) {
   const runProcedure = typeof procedureRunner === "function" ? procedureRunner : defaultProcedure;
 
   const adapter = {
@@ -125,6 +125,21 @@ function createVerifyFindingTool({ procedureRunner = null } = {}) {
       if (!validation.ok) return validation;
       if (!isRestrictedToolContext(executionContext)) {
         return structuredFailure(VERIFY_ERROR_CODES.INVALID_CONTEXT, "verify_finding requires a restricted tool execution context projection");
+      }
+
+      // V3 keeps the canonical tool name and invocation pipeline, but routes
+      // verified proof through the append-only Tier 2 Evidence gate.  The
+      // legacy adapter remains available for isolated non-V3 callers/tests;
+      // it is never selected for a V3-backed execution context.
+      const memoryContext = executionContext.memoryContext || executionContext.requestMetadata;
+      if (memoryContext?.version === 3 || memoryContext?.memoryVersion === 3) {
+        const adapter = typeof v3Adapter === "function" ? v3Adapter() : v3Adapter;
+        if (typeof adapter !== "function") return structuredFailure(VERIFY_ERROR_CODES.PROCEDURE_FAILED, "V3 Evidence verification service is unavailable");
+        try {
+          return await adapter(input, executionContext);
+        } catch (error) {
+          return structuredFailure(VERIFY_ERROR_CODES.PROCEDURE_FAILED, `V3 Evidence verification failed: ${error.message}`);
+        }
       }
 
       let outcome;

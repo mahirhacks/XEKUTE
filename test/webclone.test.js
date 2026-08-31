@@ -34,11 +34,11 @@ test("WebClone preview uses a dedicated no-preload view and a loopback-only docu
 test("WebClone reads bundled assets above the editor limit without allowing path escape", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-webclone-"));
   try {
-    fs.mkdirSync(path.join(root, "webclone", "assets"), { recursive: true });
+    fs.mkdirSync(path.join(root, "WebClone", "assets"), { recursive: true });
     const content = "x".repeat(1_200_000);
-    fs.writeFileSync(path.join(root, "webclone", "assets", "bundle.js"), content);
+    fs.writeFileSync(path.join(root, "WebClone", "assets", "bundle.js"), content);
     const service = createWebCloneService({ fs, path, webResearch: {} });
-    assert.equal(service.readFile(root, "webclone/assets/bundle.js").content.length, content.length);
+    assert.equal(service.readFile(root, "WebClone/assets/bundle.js").content.length, content.length);
     assert.match(service.readFile(root, "../secret.txt").error, /invalid/i);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

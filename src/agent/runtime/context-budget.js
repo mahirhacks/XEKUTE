@@ -230,10 +230,18 @@
     };
   }
 
+  function roundContextTokens(tokens, maximum) {
+    const limit = positiveInteger(maximum) || tokens;
+    const rounded = Math.ceil(tokens / 1000) * 1000;
+    return Math.min(limit, Math.max(MIN_CONTEXT_TOKENS, rounded));
+  }
+
   function contextOptions(maximum) {
     const limit = positiveInteger(maximum) || MAX_CONTEXT_TOKENS;
-    const values = [4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]
-      .filter((value) => value >= MIN_CONTEXT_TOKENS && value <= limit);
+    const values = [1, 2, 3]
+      .map((divisor) => Math.floor(limit / divisor))
+      .filter((value) => value >= MIN_CONTEXT_TOKENS)
+      .map((value) => roundContextTokens(value, limit));
     if (!values.length && limit >= MIN_CONTEXT_TOKENS) values.push(limit);
     return [...new Set(values)];
   }
