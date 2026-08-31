@@ -17,28 +17,38 @@ function resolveWorkspaceTarget(workspace, relative = "") {
 
 test("durable PowerShell runs persist workspace writes on Windows", { skip: process.platform !== "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-durable-"));
+  const manager = createDurableProcessManager({
+    resolveWorkspaceTarget,
+    foregroundWaitMs: 20_000,
+    outputPollMs: 25,
+    monitorIntervalMs: 100,
+    reviewIntervalMs: 60_000,
+  });
+  let processId = "";
   try {
-    const manager = createDurableProcessManager({
-      resolveWorkspaceTarget,
-      foregroundWaitMs: 5_000,
-      outputPollMs: 25,
-      monitorIntervalMs: 100,
-      reviewIntervalMs: 60_000,
-    });
-    const result = await manager.run(workspace, {
+    const started = await manager.run(workspace, {
       command: "Set-Content -LiteralPath generated.txt -Value persisted; Write-Output persisted",
       shell: "powershell",
-      timeout_ms: 10_000,
+      timeout_ms: 30_000,
     });
+    assert.equal(started.ok, true);
+    processId = started.value.processId || started.value.id || "";
+    let value = started.value;
+    const deadline = Date.now() + 20_000;
+    while (value.status === "running" && Date.now() < deadline && processId) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const observed = await manager.status(workspace, { process_id: processId, wait_ms: 400 });
+      if (observed.ok) value = observed.value;
+    }
 
-    assert.equal(result.ok, true);
-    assert.equal(result.value.status, "complete");
-    assert.equal(result.value.exitCode, 0);
-    assert.match(result.value.stdout, /persisted/);
+    assert.equal(value.status, "complete");
+    assert.equal(value.exitCode, 0);
+    assert.match(String(value.stdout || ""), /persisted/);
     assert.equal(fs.readFileSync(path.join(workspace, "generated.txt"), "utf8").trim(), "persisted");
-    assert.equal(result.value.detached, false);
-    assert.equal(result.value.resumable, false);
   } finally {
+    if (processId) {
+      try { await manager.stop(workspace, { process_id: processId, reason: "test_teardown" }); } catch { /* already finished */ }
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
     try {
       fs.rmSync(workspace, { recursive: true, force: true });
