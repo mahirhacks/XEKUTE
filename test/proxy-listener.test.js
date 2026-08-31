@@ -340,3 +340,62 @@ test("passive browsing capture events omit bodies and include a history summary"
     fs.rmSync(parent, { recursive: true, force: true });
   }
 });
+
+test("proxy listener creates traffic/ and writes captures on an empty project folder", { timeout: 15000 }, async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-proxy-empty-"));
+  const root = path.join(parent, "project");
+  fs.mkdirSync(root, { recursive: true });
+  const assessment = createAssessmentWorkspace({ fs, path });
+  const targetServer = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end("ok");
+  });
+  const targetPort = await listen(targetServer);
+  let resolveResponse;
+  const capturedResponse = new Promise((resolve) => { resolveResponse = resolve; });
+  const service = createProxyListenerService({
+    fs,
+    path,
+    assessmentWorkspace: assessment,
+    sendEvent(channel, payload) {
+      if (channel === "proxy:capture" && payload.phase === "response") resolveResponse(payload);
+    },
+  });
+
+  try {
+    const started = await configureListener(service, root, `http://127.0.0.1:${targetPort}`, {
+      interception: { enabled: false, interceptRequests: false, onlyInScope: false },
+    });
+    assert.equal(started.ok, true);
+    assert.equal(started.running, true);
+    assert.equal(fs.existsSync(path.join(root, "traffic", "raw.jsonl")), true);
+
+    const status = await new Promise((resolve, reject) => {
+      const request = http.request({
+        hostname: "127.0.0.1",
+        port: started.port,
+        method: "GET",
+        path: `http://127.0.0.1:${targetPort}/hello`,
+        headers: { host: `127.0.0.1:${targetPort}` },
+      }, (response) => {
+        response.resume();
+        response.on("end", () => resolve(response.statusCode));
+      });
+      request.on("error", reject);
+      request.end();
+    });
+    assert.equal(status, 200);
+    const capture = await capturedResponse;
+    assert.equal(capture.logged?.error, undefined);
+
+    const traffic = fs.readFileSync(path.join(root, "traffic", "raw.jsonl"), "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.recordType === "http-exchange");
+    assert.equal(traffic.at(-1).tool, "interceptor");
+    assert.match(traffic.at(-1).url, /\/hello/);
+  } finally {
+    await service.stop();
+    await close(targetServer);
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});

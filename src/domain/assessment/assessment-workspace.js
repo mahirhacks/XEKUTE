@@ -46,6 +46,14 @@ function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function isPlainObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function sha256(value) { return crypto.createHash("sha256").update(Buffer.isBuffer(value) ? value : String(value ?? "")).digest("hex"); }
 function formatTrafficTimestamp(date) { const pad = (value, width = 2) => String(value).padStart(width, "0"); return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${pad(date.getFullYear() % 100)}-${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}:${pad(date.getMilliseconds(), 3)}`; }
+function serializeTrafficRecord(record, maximumRecordBytes) {
+  let serialized = JSON.stringify(record);
+  if (Buffer.byteLength(serialized, "utf8") <= maximumRecordBytes) return { record, serialized };
+  const slim = { ...record, request: "", response: "", truncated: true, requestBodyTruncated: true, omittedBodies: true };
+  serialized = JSON.stringify(slim);
+  if (Buffer.byteLength(serialized, "utf8") > maximumRecordBytes) return { error: `Traffic record exceeds the ${maximumRecordBytes} byte log limit`, code: "RECORD_TOO_LARGE" };
+  return { record: slim, serialized };
+}
 function redactHttpMessage(value) { return String(value || ""); }
 function redactTrafficRecord(record = {}) { return { ...record, redacted: false }; }
 
@@ -245,12 +253,24 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
       return { ok: true, path: relativePath, records: records.slice(-boundedLimit).reverse(), invalidCount, truncated: start > 0 || records.length > boundedLimit };
     } catch (error) { return { error: error.message, code: "JSONL_READ_FAILED" }; }
   }
+  function ensureTrafficLog(rawRoot) {
+    const verification = verify(rawRoot); if (verification.error) return verification;
+    const trafficDir = path.join(verification.root, "traffic"), rawPath = path.join(trafficDir, "raw.jsonl");
+    try {
+      fs.mkdirSync(trafficDir, { recursive: true });
+      if (!fs.existsSync(rawPath)) fs.writeFileSync(rawPath, "", { encoding: "utf8", flag: "wx" });
+      return { ok: true, root: verification.root, path: "traffic/raw.jsonl" };
+    } catch (error) {
+      if (error.code === "EEXIST") return { ok: true, root: verification.root, path: "traffic/raw.jsonl" };
+      return { error: error.message, code: "TRAFFIC_LOG_FAILED" };
+    }
+  }
   function appendTrafficRecord(rawRoot, record, { filtered = false } = {}) {
-    const verification = verify(rawRoot); if (verification.error) return verification; const date = now();
-    const safeRecord = { recordType: "http-exchange", schemaVersion: ASSESSMENT_VERSION, timestamp: formatTrafficTimestamp(date), isoTimestamp: date.toISOString(), ...record, redacted: false }, serialized = JSON.stringify(safeRecord);
-    if (Buffer.byteLength(serialized, "utf8") > 1_500_000) return { error: "Traffic record exceeds the 1500000 byte log limit", code: "RECORD_TOO_LARGE" };
+    const prepared = ensureTrafficLog(rawRoot); if (prepared.error) return prepared; const date = now();
+    const fitted = serializeTrafficRecord({ recordType: "http-exchange", schemaVersion: ASSESSMENT_VERSION, timestamp: formatTrafficTimestamp(date), isoTimestamp: date.toISOString(), ...record, redacted: false }, 1_500_000);
+    if (fitted.error) return fitted;
     const relativePath = filtered ? "traffic/filtered.jsonl" : "traffic/raw.jsonl";
-    try { fs.appendFileSync(path.join(verification.root, ...relativePath.split("/")), `${serialized}\n`, "utf8"); return { ok: true, path: relativePath, timestamp: safeRecord.timestamp, record: safeRecord }; } catch (error) { return { error: error.message, code: "TRAFFIC_LOG_FAILED" }; }
+    try { fs.mkdirSync(path.dirname(path.join(prepared.root, ...relativePath.split("/"))), { recursive: true }); fs.appendFileSync(path.join(prepared.root, ...relativePath.split("/")), `${fitted.serialized}\n`, "utf8"); return { ok: true, path: relativePath, timestamp: fitted.record.timestamp, record: fitted.record }; } catch (error) { return { error: error.message, code: "TRAFFIC_LOG_FAILED" }; }
   }
   function readTrafficHistory(rawRoot, options = {}) {
     const read = readJsonl(rawRoot, "traffic/raw.jsonl", { limit: Math.min(Number(options.limit) || 500, 1000), maxBytes: options.maxBytes });
@@ -295,7 +315,7 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
     for (const relativePath of requested) { const validated = validateCustomEntryPath(`custom/${relativePath}`); if (validated.error) return validated; const target = path.resolve(verification.root, ...validated.normalized.split("/")); if (target === customRoot || !target.startsWith(`${customRoot}${path.sep}`)) return { error: "Only Custom items can be deleted", code: "UNSAFE_DELETE" }; if (!fs.existsSync(target)) return { error: `Custom item no longer exists: ${relativePath}`, code: "NOT_FOUND" }; resolved.push({ relativePath, target }); }
     const roots = resolved.filter((entry) => !resolved.some((candidate) => candidate !== entry && entry.relativePath.startsWith(`${candidate.relativePath}/`))); try { for (const entry of roots) fs.rmSync(entry.target, { recursive: true, force: false }); return { ok: true, deleted: roots.map((entry) => entry.relativePath), requestedCount: requested.length }; } catch (error) { return { error: `Could not delete Custom items: ${error.message}`, code: "DELETE_FAILED" }; }
   }
-  return Object.freeze({ verify, repair, appendTrafficRecord, appendEvidenceRecord, readJsonl, createRun, updateRun, generateReport, deleteTrafficRecords, deleteCustomEntries, readTrafficHistory, readTrafficRecords, expectedEntries, requiredDirectories: [...REQUIRED_DIRECTORIES] });
+  return Object.freeze({ verify, repair, ensureTrafficLog, appendTrafficRecord, appendEvidenceRecord, readJsonl, createRun, updateRun, generateReport, deleteTrafficRecords, deleteCustomEntries, readTrafficHistory, readTrafficRecords, expectedEntries, requiredDirectories: [...REQUIRED_DIRECTORIES] });
 }
 
 module.exports = { ASSESSMENT_ITEM_FILES, ASSESSMENT_VERSION, JSON_TEMPLATES, REQUIRED_DIRECTORIES, RESERVED_ASSESSMENT_NAMES, createAssessmentWorkspace, formatTrafficTimestamp, redactHttpMessage, redactTrafficRecord, summarizeTrafficRecord, validateCustomEntryPath };
