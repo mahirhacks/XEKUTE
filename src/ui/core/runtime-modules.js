@@ -13,6 +13,7 @@ import "../../agent/runtime/prompt-compiler.js";
 import "../features/toolbox/toolbox-controller.js";
 import "../../agent/runtime/context-budget.js";
 import "../features/editor/editor-controller.js";
+import "../features/project/seti-icon-theme.js";
 import "../features/project/explorer-selection.js";
 import "../../agent/runtime/tunables.js";
 import "./message-identity.js";

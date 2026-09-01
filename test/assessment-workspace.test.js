@@ -137,6 +137,22 @@ test("terminal sash resizing is frame-synchronized and deduplicates PTY dimensio
   assert.match(css, /#terminal-pane\s*\{[^}]*contain:\s*layout paint/s);
 });
 
+test("panel dividers keep a thin line with an expanded pointer hit area", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+  const layoutCss = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+
+  assert.match(css, /--sash-hit-size:\s+12px;/);
+  assert.match(css, /\.sash-v::before\s*\{[^}]*width:\s*var\(--sash-hit-size\);/s);
+  assert.match(css, /\.sash-h::before\s*\{[^}]*height:\s*var\(--sash-hit-size\);/s);
+  assert.match(css, /\.sash-v\s*\{[^}]*touch-action:\s*none;/s);
+  assert.match(css, /\.sash-h\s*\{[^}]*touch-action:\s*none;/s);
+  assert.match(layoutCss, /\.sash-v\s*\{[^}]*width:\s*1px;/s, "the visible project/chat divider remains one pixel");
+  for (const id of ["sidebar-resize", "chat-resize", "terminal-resize", "security-workbench-resize", "security-exchange-sash"]) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*class="[^"]*sash-[vh]`));
+  }
+});
+
 test("terminal stays collapsed without a session and creates one when expanded", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
@@ -201,6 +217,22 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.ok(html.includes('id="app-settings-certificates-panel"'));
   assert.match(html, /class="certificate-settings-content browser-network-page"/);
   assert.match(html, /id="security-proxy-browser"[\s\S]*?codicon-globe/);
+  const securityToolsMarkup = html.slice(
+    html.indexOf('id="security-workspace-tools"'),
+    html.indexOf('</header>', html.indexOf('id="security-workspace-tools"')),
+  );
+  const chatControlsMarkup = html.slice(
+    html.indexOf('class="chat-session-controls"'),
+    html.indexOf('<div id="messages"', html.indexOf('class="chat-session-controls"')),
+  );
+  assert.doesNotMatch(securityToolsMarkup, /id="security-proxy-browser"/);
+  assert.ok(chatControlsMarkup.indexOf('id="btn-chat-history"') < chatControlsMarkup.indexOf('id="security-proxy-browser"'));
+  assert.ok(chatControlsMarkup.indexOf('id="security-proxy-browser"') < chatControlsMarkup.indexOf('id="btn-chat-more"'));
+  assert.match(layoutRevampStyles, /\.chat-session-controls \.security-proxy-browser\s*\{[^}]*width:\s*25px;[^}]*height:\s*var\(--revamp-tab-height\);[^}]*border:\s*0;/);
+  assert.match(baseStyles, /\.security-workspace-tools\s*\{[^}]*display:\s*flex;[^}]*gap:\s*6px;/);
+  assert.match(baseStyles, /\.security-history-toggle\s*\{[^}]*margin-right:\s*0;/);
+  assert.match(baseStyles, /\.security-proxy-browser\s*\{[^}]*margin-right:\s*0;/);
+  assert.match(baseStyles, /\.security-graph-button\s*\{\s*margin-right:\s*0;/);
   assert.match(renderer, /proxyBrowserLaunch\(\{ assessmentPath, identityId:/);
   assert.match(renderer, /setSecurityHistoryVisible\(true\)/);
   const engagementMarkup = html.slice(html.indexOf('id="project-settings-engagement"'), html.indexOf('id="project-settings-authorization"'));

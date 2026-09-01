@@ -37,6 +37,7 @@ const { createInvocationPipeline } = require("../../agent/authority/invocation-p
 const { createToolAuditStore } = require("../../app/storage/tool-audit-store.js");
 const { createLongHorizonRunStore } = require("../../app/storage/long-horizon-run-store.js");
 const { createDurableProcessManager } = require("../../app/services/terminal/durable-process-manager.js");
+const ContextBudget = require("../../agent/runtime/context-budget.js");
 
 // Tool registry + raw adapters (the 23 canonical tools).
 const { createToolRegistry, registerAskQuestions, registerUpdateTaskList, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerInspectEnvironment, registerUpdateProjectArtifacts, registerManageState, registerIngestTraffic, registerManageIdentity, registerReplayRequest, registerRunTestCase, registerBrowserAction, registerCompareResponses, registerVerifyFinding, registerAttackGraph, registerDelegateAgent, registerQueryAssessment, registerExpandEvidence, registerQueryKnowledge, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
@@ -113,7 +114,18 @@ function createContainer({
   const memorySchemaRegistry = createMemorySchemaRegistry();
   const tier1SensitiveStore = createTier1SensitiveStore({ fs, path, crypto, baseDir: config.memoryV3SensitiveDirectory(), protector: memoryProtector, schemaRegistry: memorySchemaRegistry });
   const v3SessionStore = createV3SessionStore({ sensitiveStore: tier1SensitiveStore, projectIdentityStore: memoryProjectIdentityStore, crypto });
-  const memoryTier1Coordinator = createTier1ContextCoordinator({ sensitiveStore: tier1SensitiveStore, schemaRegistry: memorySchemaRegistry, crypto });
+  const memoryTier1Coordinator = createTier1ContextCoordinator({
+    sensitiveStore: tier1SensitiveStore,
+    schemaRegistry: memorySchemaRegistry,
+    crypto,
+    // Section attribution must use the same local lexical counter as the
+    // provider payload preflight. Provider usage later calibrates and
+    // reconciles these weights to the model's authoritative prompt total.
+    tokenCounter: (value) => ({
+      tokens: ContextBudget.estimateTokenCount(typeof value === "string" ? value : JSON.stringify(value == null ? "" : value)),
+      exact: false,
+    }),
+  });
   const projectArtifacts = createProjectArtifactService({ fs, path, crypto });
   // In a packaged Electron app the model is deliberately unpacked beside
   // app.asar because ONNX requires a real filesystem path.  Knowledge JSON

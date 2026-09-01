@@ -208,8 +208,8 @@ body,
 #explorer-title {
   flex: 1 1 auto;
   color: var(--revamp-text);
-  font-size: 14px;
-  font-weight: 400;
+  font-size: 12px;
+  font-weight: 700;
   line-height: 32px;
   text-transform: uppercase;
   opacity: .78;
@@ -246,20 +246,20 @@ body,
 }
 
 .tree-item {
-  height: 24px;
+  height: 22px;
   color: var(--revamp-text);
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .tree-chevron,
 .tree-icon,
 .tree-file-icon {
-  height: 24px;
+  height: 22px;
 }
 
 .tree-name {
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 13px;
+  line-height: 22px;
 }
 
 .tree-item:hover {
@@ -362,17 +362,18 @@ body,
 }
 
 .editor-tab .tab-icon {
-  display: none !important;
-}
-
-/* Built-in workspace pages are easier to distinguish from ordinary files
-   when several tabs are open. Their renderer assigns the page-specific
-   Codicon; regular file-tab icons remain intentionally hidden. */
-.editor-tab.special-workspace-tab .tab-icon {
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
+  width: 16px;
+  flex: 0 0 16px;
+}
+
+/* Built-in workspace pages keep their page-specific Codicon while regular
+   editor tabs use the corresponding VS Code Seti file glyph. */
+.editor-tab.special-workspace-tab .tab-icon {
   width: 14px;
+  flex-basis: 14px;
   color: currentColor;
 }
 
@@ -570,6 +571,31 @@ body,
   width: 25px;
   height: var(--revamp-tab-height);
   color: var(--revamp-text);
+}
+
+.chat-session-controls .security-proxy-browser-wrap {
+  height: var(--revamp-tab-height);
+  align-items: center;
+}
+
+.chat-session-controls .security-proxy-browser {
+  width: 25px;
+  height: var(--revamp-tab-height);
+  border: 0;
+  background: transparent;
+  color: var(--revamp-text);
+}
+
+.chat-session-controls .security-proxy-browser:hover,
+.chat-session-controls .security-proxy-browser:focus-visible,
+.chat-session-controls .security-proxy-browser.active {
+  border: 0;
+  background: var(--revamp-control);
+  color: #fff;
+}
+
+.chat-session-controls .security-proxy-browser-menu {
+  top: calc(100% + 4px);
 }
 
 #btn-chat-more,
@@ -2953,7 +2979,6 @@ body,
     --revamp-chat-width: min(420px, 34vw);
   }
 
-  #explorer-title,
   .tree-name,
   .chat-session-label,
   #chat-input {

@@ -18,7 +18,12 @@ const SECRET_VALUE = [
   /\b(?:session|token|secret|password)\s*[=:]\s*["']?[A-Za-z0-9._~+\/-]{12,}/i,
 ];
 const MODE_CATALOGS = Object.freeze({
-  agent: new Set(["project.upsert", "project.correct", "hypothesis.execution", "checklist.execution", "evidence.create", "evidence.update"]),
+  agent: new Set([
+    "project.upsert", "project.correct",
+    "hypothesis.create", "hypothesis.refine", "hypothesis.support", "hypothesis.reject", "hypothesis.inconclusive", "hypothesis.close", "hypothesis.execution",
+    "checklist.create", "checklist.revise", "checklist.reorder", "checklist.close", "checklist.phase", "checklist.annotate", "checklist.execution",
+    "evidence.create", "evidence.update",
+  ]),
   hypothesis: new Set(["hypothesis.create", "hypothesis.refine", "hypothesis.support", "hypothesis.reject", "hypothesis.inconclusive", "hypothesis.close"]),
   plan: new Set(["checklist.create", "checklist.revise", "checklist.reorder", "checklist.close", "checklist.phase", "checklist.annotate"]),
 });

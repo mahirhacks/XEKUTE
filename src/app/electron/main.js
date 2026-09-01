@@ -2336,7 +2336,10 @@ ipcMain.handle("ollama:countTokens", async (_event, { model, messages = [], tool
     const res = await fetch(`${getOllamaBaseUrl()}/api/tokenize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt }),
+      // `/api/tokenize` is capability-detected because upstream Ollama does
+      // not guarantee it. Compatible builds use the text-only `content`
+      // field; ordinary installations fall through to the local estimator.
+      body: JSON.stringify({ model, content: prompt }),
       signal: controller.signal,
     });
     clearTimeout(timer);
@@ -2346,7 +2349,7 @@ ipcMain.handle("ollama:countTokens", async (_event, { model, messages = [], tool
         ? data.tokens.length
         : Number(data?.count ?? data?.token_count);
       if (Number.isFinite(count) && count > 0) {
-        return { ok: true, count, source: "ollama" };
+        return { ok: true, count, source: "ollama-tokenize" };
       }
     }
   } catch {
@@ -3233,6 +3236,12 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   }
   let result;
   try {
+    const pendingPentestCheckpoint = tier2MemoryMaintenance && payload.pentestFinalizeBlockId
+      ? pentestLoopController.checkpointOf({ workspace: payload.workspace, sessionId, blockId: payload.pentestFinalizeBlockId })
+      : null;
+    const runtimeUserMessage = pendingPentestCheckpoint
+      ? `${String(payload.userMessage || "")}\n\nPENTEST CHECKPOINT (runtime-recorded orchestration data; not evidence):\n${JSON.stringify(pendingPentestCheckpoint)}`
+      : payload.userMessage || "";
     result = await runAgentTurn({
     workspace: payload.workspace,
     model: payload.model,
@@ -3255,7 +3264,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     activeFile: payload.activeFile || null,
     extraFiles: payload.extraFiles || [],
     subagentModel: payload.subagentModel || "",
-    userMessage: continuationResultId ? buildSubagentResultPrompt(claimedContinuation.result) : payload.userMessage || "",
+    userMessage: continuationResultId ? buildSubagentResultPrompt(claimedContinuation.result) : runtimeUserMessage,
     specialSkill: activeSpecialSkill,
     intelligence: container.assessmentIntelligence,
     projectId: tier1ProjectId,
@@ -3388,20 +3397,42 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       code: tier1Transcript?.ok === false ? tier1Transcript.code || "MEMORY_TRANSCRIPT_WRITE_FAILED" : "",
     };
   }
-  if (activeSpecialSkill?.manifest?.id === "pentest" && result && typeof result === "object" && Object.isExtensible(result)) {
-    result.pentestLoop = await pentestLoopController.finalizeBlock({
-      workspace: payload.workspace,
-      sessionId,
+  const pentestFinalizeBlockId = String(payload.pentestFinalizeBlockId || "").trim();
+  if (tier2MemoryMaintenance && pentestFinalizeBlockId && result && typeof result === "object" && Object.isExtensible(result)) {
+    const maintenanceSucceeded = Boolean(
+      result.ok
+      && !result.aborted
+      && result.runState?.status === "completed"
+      && result.artifactSync?.ok !== false
+    );
+    if (maintenanceSucceeded) {
+      result.pentestLoop = await pentestLoopController.finalizeBlock({
+        workspace: payload.workspace,
+        sessionId,
+        blockId: pentestFinalizeBlockId,
+        result: { ok: true },
+        aborted: false,
+      }).catch((error) => ({
+        ok: false,
+        continue: false,
+        state: "blocked",
+        code: error.code || "PENTEST_LOOP_FINALIZATION_FAILED",
+        reason: error.message || "Pentest loop finalization failed after Tier 2 committed.",
+      }));
+    } else {
+      result.pentestLoop = {
+        ok: false,
+        continue: false,
+        state: "blocked",
+        code: "PENTEST_TIER2_FINALIZATION_PENDING",
+        reason: "Pentest continuation is paused until Tier 2 project state commits successfully.",
+      };
+    }
+  } else if (activeSpecialSkill?.manifest?.id === "pentest" && result && typeof result === "object" && Object.isExtensible(result)) {
+    result.pentestFinalization = {
+      pending: true,
       blockId: replyBlockId || payload.blockId || "",
-      result,
-      aborted: Boolean(result.aborted),
-    }).catch((error) => ({
-      ok: false,
-      continue: false,
-      state: "blocked",
-      code: error.code || "PENTEST_LOOP_FINALIZATION_FAILED",
-      reason: error.message || "Pentest loop finalization failed.",
-    }));
+    };
   }
   if (assessmentRun?.id) {
     const runtimeStatus = result?.runState?.status;

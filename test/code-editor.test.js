@@ -48,7 +48,8 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
   assert.match(renderer, /el\.draggable = true;[\s\S]*?el\.addEventListener\("dragstart"[\s\S]*?el\.addEventListener\("drop"/);
   assert.match(renderer, /key === "s" && activeTabPath[\s\S]*?await saveActiveTab\(\)/);
   assert.doesNotMatch(styles, /\.editor-tab\.preview/);
-  assert.match(layoutStyles, /\.editor-tab\.special-workspace-tab \.tab-icon \{[\s\S]*?display: inline-flex !important;/);
+  assert.match(layoutStyles, /\.editor-tab \.tab-icon \{[\s\S]*?display: inline-flex !important;/);
+  assert.match(layoutStyles, /\.editor-tab\.special-workspace-tab \.tab-icon \{[\s\S]*?color: currentColor;/);
   assert.match(layoutStyles, /\.chat-mode-button \{[\s\S]*?min-width: 0;[\s\S]*?width: fit-content;/);
   assert.match(layoutStyles, /#terminal-pane,[\s\S]*?#terminal-tabs-list,[\s\S]*?background: var\(--revamp-surface\) !important;/);
   assert.match(styles, /\.app-dialog \{[\s\S]*?background: var\(--revamp-surface, var\(--bg-0\)\)/);

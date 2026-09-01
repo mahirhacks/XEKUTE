@@ -440,7 +440,9 @@ assert.match(electronMain, /createPentestLoopController/, "pentest must coordina
 assert.match(electronMain, /createPentestCheckpointToolDefinition/, "pentest must expose its checkpoint only while the internal skill is active");
 const rendererBootstrap = read("src/ui/bootstrap.js");
 assert.match(rendererBootstrap, /internalSkillId:\s*"pentest"/, "pentest continuation must remain an internal runtime input");
-assert.match(rendererBootstrap, /agentRunResult\?\.pentestLoop\?\.continue/, "the renderer must schedule only an explicit Pentest continuation result");
+assert.match(rendererBootstrap, /pentestFinalizeBlockId:\s*String\(agentRunResult\?\.pentestFinalization\?\.blockId/, "foreground Pentest completion must hand its checkpoint block to hidden Tier 2 maintenance");
+assert.match(rendererBootstrap, /executeHiddenAgentRuntime[\s\S]*?result\?\.pentestLoop\?\.continue/, "only the post-maintenance Pentest result may schedule a continuation");
+assert.match(electronMain, /tier2MemoryMaintenance && pentestFinalizeBlockId[\s\S]*?maintenanceSucceeded[\s\S]*?pentestLoopController\.finalizeBlock/, "Pentest continuation must be decided only after Tier 2 commits and canonical artifacts are re-inspected");
 
 /*
  * Named-path contract (artifact-driven investigation state).

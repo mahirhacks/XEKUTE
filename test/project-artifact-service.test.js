@@ -129,9 +129,24 @@ test("mode ownership is enforced at the service boundary", () => {
     ["ask", { kind: "hypothesis.create", client_ref: "h", title: "H" }, "ARTIFACT_MODE_READ_ONLY"],
     ["hypothesis", { kind: "project.upsert", document: "targets", key: "host", value: "a", source_refs: ["x"] }, "ARTIFACT_OPERATION_FORBIDDEN"],
     ["plan", { kind: "evidence.create", client_ref: "e", title: "E", checklist_refs: ["C-1"], source_refs: ["x"] }, "ARTIFACT_OPERATION_FORBIDDEN"],
-    ["agent", { kind: "hypothesis.refine", id: "H-1", title: "x" }, "ARTIFACT_OPERATION_FORBIDDEN"],
   ];
   for (const [mode, operation, code] of attempts) assert.equal(commitOps(artifacts, root, mode, [operation]).code, code);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("Agent Tier 2 maintenance can atomically populate Pentest project, hypothesis, checklist, and evidence state", () => {
+  const { root, artifacts } = boot();
+  const result = commitOps(artifacts, root, "agent", [
+    { kind: "project.upsert", document: "surface", key: "endpoint", value: "GET /api/profile", source_refs: ["traffic:1"], scope_decision: "in_scope" },
+    { kind: "hypothesis.create", client_ref: "h-profile", title: "Profile object authorization", objective: "Compare object access across authorized identities." },
+    { kind: "checklist.create", client_ref: "c-profile", hypothesis_id: "h-profile", title: "Profile authorization baseline", phase: "assessment_l1", target: "GET /api/profile", knowledge_release_id: "wstg-v3", procedure_id: "wstg-athz-04", source_hash: "abc123" },
+    { kind: "evidence.create", client_ref: "e-profile", title: "Profile baseline observed", status: "observed", checklist_refs: ["c-profile"], hypothesis_refs: ["h-profile"], target_refs: ["GET /api/profile"], source_refs: ["traffic:1"] },
+  ]);
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.inspect.project.documents.surface.length, 1);
+  assert.equal(result.inspect.hypotheses[0].id, "H-0001");
+  assert.equal(result.inspect.checklist[0].phase, "assessment_l1");
+  assert.equal(result.inspect.evidence[0].checklist_refs[0], "C-0001");
   fs.rmSync(root, { recursive: true, force: true });
 });
 

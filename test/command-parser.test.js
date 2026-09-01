@@ -24,7 +24,7 @@ test("system skills expose safe slash metadata without exposing package instruct
     assert.equal(parsed.role, "special");
   }
 
-  for (const removed of ["/passive example.com", "/active example.com", "/map", "/settings"]) {
+  for (const removed of ["/passive example.com", "/active example.com", "/map", "/webclone", "/settings"]) {
     const parsed = runParser({ command: removed });
     assert.equal(parsed.ok, false, `${removed} should no longer be shipped`);
     assert.equal(parsed.code, "UNKNOWN_COMMAND");

@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-test("context meter uses routed previews and Ollama's measured last prompt", () => {
+test("context meter uses the nine Tier 1 sections and current usage snapshots", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const controller = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "controller", "agent-controller.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
@@ -13,7 +13,7 @@ test("context meter uses routed previews and Ollama's measured last prompt", () 
 
   assert.match(renderer, /selectedCatalog|toolsForProfile|availableTools/i);
   assert.match(renderer, /storeLastContextUsage\(payload\.usage, \{ session: runSession, model: runModel, contextPlan: runContextPlan \}\)/);
-  assert.match(renderer, /source: \["ollama", "openrouter"\]\.includes\(stored\?\.source\) \? "actual" : "estimate"/);
+  assert.match(renderer, /liveDeltaTokens === 0 \? "actual" : "estimate"/);
   assert.match(controller, /result\?\.usage\?\.promptTokens/);
   assert.match(controller, /type: "context_usage"/);
   assert.match(controller, /selectedCatalog|toolsForProfile|availableTools/i);
@@ -21,9 +21,12 @@ test("context meter uses routed previews and Ollama's measured last prompt", () 
   assert.ok(runtimeModules.includes('"../../prompts/skills/context-router.js"'));
   assert.ok(html.includes('id="context-usage-heading-value"'));
   assert.ok(html.includes('id="context-usage-breakdown"'));
-  for (const section of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "Summarized Conversation", "Active Conversation", "Current Workflow", "Working References"]) {
+  for (const section of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP", "Summarized Conversation", "Active Conversation", "Current Workflow"]) {
     assert.match(renderer, new RegExp(`label: "${section}"`));
   }
+  assert.doesNotMatch(renderer, /label: "Working References"/);
+  assert.match(controller, /sections: tier1Assembly \? tier1UsageSections\(tier1Assembly\) : \[\]/);
+  assert.match(renderer, /fallbackUsage\.breakdown\?\.authoritative/);
   assert.doesNotMatch(renderer, /recent_tail|label: "Project"|label: "Investigation"|label: "Evidence"/);
   assert.doesNotMatch(html, /id="context-memory-open"/);
   assert.doesNotMatch(html, /context-usage-measure-note|context-usage-diagnostics/);

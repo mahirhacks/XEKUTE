@@ -13,6 +13,7 @@
     "prepare:update-config": "node scripts/prepare-update-config.js",
     "make": "npm run package && npm run prepare:update-config && electron-builder --win nsis --x64 --prepackaged out/XEKUTE-win32-x64 --config ./electron-builder.config.js --publish never",
     "release:metadata": "node scripts/release-metadata.js",
+    "update:seti-icons": "node scripts/update-vscode-seti-icons.js",
     "verify:native": "node -e \"require('node-pty'); console.log('node-pty prebuild available')\"",
     "verify:memory-assets": "node scripts/verify-memory-assets.js",
     "audit:runtime": "npm audit --omit=dev --audit-level=high"

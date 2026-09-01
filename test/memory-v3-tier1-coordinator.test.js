@@ -3,10 +3,62 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { createTier1ContextCoordinator } = require("../src/app/services/memory/tier1-context-coordinator.js");
+const { createTier1ContextCoordinator, METER_ROWS } = require("../src/app/services/memory/tier1-context-coordinator.js");
 
 const projectId = "proj_00000000-0000-4000-8000-000000004001";
 const sessionId = "session_00000000-0000-4000-8000-000000004002";
+
+test("Tier 1 exposes exactly the simplified nine sections", async () => {
+  const coordinator = createTier1ContextCoordinator({ now: () => new Date("2026-08-29T00:00:00.000Z") });
+  const initial = coordinator.assemble({
+    project_id: projectId,
+    session_id: sessionId,
+    system_prompt: "system",
+    tool_definitions: [{ type: "function", function: { name: "read_file" } }],
+    rules: ["rule"],
+    active_skills: ["skill"],
+    active_subagent_instructions: ["subagent"],
+    mcp_definitions: [{ type: "function", function: { name: "mcp__docs__search" } }],
+    active_conversation: [{ role: "user", content: "Inspect the target." }],
+    effective_context_limit: 100_000,
+  });
+
+  assert.deepEqual(Object.keys(initial.rows), METER_ROWS);
+  assert.equal(initial.rows["Current Workflow"], 0);
+  assert.ok(initial.rows.MCP > 0);
+  assert.equal(Object.hasOwn(initial.rows, "Working References"), false);
+
+  const checkpoint = await coordinator.checkpoint({
+    project_id: projectId,
+    session_id: sessionId,
+    active_conversation: [{ role: "user", content: "Inspect the target." }],
+    objective: "Inspect the target.",
+    allow_model: false,
+    effective_context_limit: 100_000,
+  });
+  assert.equal(checkpoint.ok, true);
+
+  const after = coordinator.assemble({
+    project_id: projectId,
+    session_id: sessionId,
+    effective_context_limit: 100_000,
+  });
+  assert.ok(after.rows["Summarized Conversation"] > 0);
+  assert.ok(after.rows["Current Workflow"] > 0);
+  assert.equal(after.rows["Active Conversation"], 0);
+});
+
+test("checkpoint reduction preserves the model-facing executed tool result", () => {
+  const coordinator = createTier1ContextCoordinator();
+  const reduction = coordinator.reduceConversation([
+    { role: "user", content: "Run the check." },
+    { role: "assistant", content: "", tool_calls: [{ id: "call-1", function: { name: "exec_command", arguments: { command: "check" } } }] },
+    { role: "tool", tool_name: "exec_command", tool_call_id: "call-1", content: '{"ok":true,"stdout":"CHECK_RESULT"}' },
+  ], [{ event_id: "event_1", tool_name: "exec_command", outcome: "success", safe_excerpt: "CHECK_RESULT" }]);
+
+  assert.equal(reduction.messages[2].content.includes("CHECK_RESULT"), true);
+  assert.equal(reduction.tool_events[0].safe_excerpt, "CHECK_RESULT");
+});
 
 test("checkpoint uses the session's protected current prompt when the caller omits it", async () => {
   const writes = [];

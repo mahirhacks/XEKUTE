@@ -151,9 +151,6 @@
             <button id="btn-open-folder" class="icon-btn" title="Open Folder">
               <span class="codicon codicon-folder-opened"></span>
             </button>
-            <button id="btn-project-settings" class="icon-btn" title="Project Settings" disabled>
-              <span class="codicon codicon-settings-gear"></span>
-            </button>
           </div>
         </div>
         <div id="file-tree" role="tree" aria-multiselectable="true"></div>
@@ -750,12 +747,6 @@
               </div>
             </div>
             <div id="security-workspace-tools" class="security-workspace-tools">
-              <div id="security-proxy-browser-wrap" class="security-proxy-browser-wrap">
-                <button type="button" id="security-proxy-browser" class="security-proxy-browser" aria-label="Open browser through XEKUTE proxy" title="Open browser through XEKUTE proxy" aria-haspopup="menu" aria-expanded="false">
-                  <span class="codicon codicon-globe" aria-hidden="true"></span>
-                </button>
-                <div id="security-proxy-browser-menu" class="security-proxy-browser-menu" role="menu" hidden></div>
-              </div>
               <button type="button" id="security-graph-button" class="security-proxy-browser security-graph-button" aria-label="Build application graph" title="Build or update the application graph">
                 <span class="codicon codicon-type-hierarchy" aria-hidden="true"></span>
               </button>
@@ -1169,6 +1160,12 @@
           <button type="button" id="btn-chat-history" class="icon-btn chat-session-action" title="Chat history">
             <span class="codicon codicon-history"></span>
           </button>
+          <div id="security-proxy-browser-wrap" class="security-proxy-browser-wrap">
+            <button type="button" id="security-proxy-browser" class="security-proxy-browser chat-session-action" aria-label="Open browser through XEKUTE proxy" title="Open browser through XEKUTE proxy" aria-haspopup="menu" aria-expanded="false">
+              <span class="codicon codicon-globe" aria-hidden="true"></span>
+            </button>
+            <div id="security-proxy-browser-menu" class="security-proxy-browser-menu" role="menu" hidden></div>
+          </div>
           <button type="button" id="btn-chat-more" class="icon-btn chat-session-action" title="Chat options">
             <span class="codicon codicon-ellipsis"></span>
           </button>

@@ -190,6 +190,96 @@ test("Tier 1 keeps the current prompt before assistant/tool turns and preserves 
   assert.equal(rounds[1].at(-1).role, "tool");
   assert.deepEqual(result.appendedMessages.map((message) => message.role), ["assistant", "tool", "assistant"]);
   assert.equal(result.appendedMessages.some(currentPrompt), false, "the protected prompt is not duplicated in appended transcript messages");
+  const active = tier1.state(projectId, sessionId).active;
+  assert.deepEqual(active.map((message) => message.role), ["user", "assistant", "tool", "assistant"]);
+  assert.equal(active[0].content, "run the check");
+  assert.equal(active[1].tool_calls[0].function.name, "exec_command");
+  assert.equal(active[2].content.includes("check completed"), true);
+  assert.equal(active[3].content, "done");
+  assert.deepEqual(result.contextUsage.sections.map((section) => section.label), ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP", "Summarized Conversation", "Active Conversation", "Current Workflow"]);
+});
+
+test("Tier 1 excludes tool attempts that never crossed the execution boundary", async () => {
+  const projectId = "proj_00000000-0000-4000-8000-000000004111";
+  const sessionId = "session_00000000-0000-4000-8000-000000004112";
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  let round = 0;
+  const result = await runAgentTurn({
+    model: "local:small",
+    numCtx: 32768,
+    contextBudget: 32768,
+    tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    mode: "agent",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    userMessage: "try the unavailable reader",
+    chatHistory: [],
+    sendEvent() {},
+    async runModelRound() {
+      round += 1;
+      if (round === 1) return { ok: true, fullText: "Trying.", toolCalls: [{ id: "call-missing", type: "function", function: { name: "read_file", arguments: { path: "missing.txt" } } }], finishReason: "tool_calls" };
+      return { ok: true, fullText: "The reader was unavailable.", toolCalls: [], finishReason: "stop" };
+    },
+    async executeToolCall() { throw new Error("an unavailable tool must not execute"); },
+  });
+
+  assert.equal(result.ok, true);
+  const active = tier1.state(projectId, sessionId).active;
+  assert.deepEqual(active.map((message) => message.role), ["user", "assistant"]);
+  assert.equal(JSON.stringify(active).includes("call-missing"), false);
+  assert.equal(JSON.stringify(active).includes("TOOL_UNAVAILABLE"), false);
+});
+
+test("Tier 1 provider measurements reconcile all nine section rows to the authoritative prompt total", async () => {
+  const projectId = "proj_00000000-0000-4000-8000-000000004121";
+  const sessionId = "session_00000000-0000-4000-8000-000000004122";
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  const events = [];
+  const result = await runAgentTurn({
+    model: "provider/reconciled-model",
+    numCtx: 32_768,
+    contextBudget: 32_768,
+    contextPlan: { provider: "openrouter", effectiveLimitTokens: 32_768 },
+    mode: "ask",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    userMessage: "Explain the result.",
+    chatHistory: [],
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      return {
+        ok: true,
+        provider: "openrouter",
+        fullText: "Done.",
+        toolCalls: [],
+        finishReason: "stop",
+        usage: { promptTokens: 777, completionTokens: 9, source: "openrouter" },
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  const measured = events.find((event) => event.type === "context_usage" && event.usage?.source === "openrouter");
+  assert.ok(measured, "the provider-measured snapshot must be emitted");
+  assert.equal(measured.usage.promptTokens, 777);
+  assert.equal(measured.usage.sections.length, 9);
+  assert.equal(measured.usage.sections.reduce((sum, section) => sum + section.tokens, 0), 777);
+  assert.equal(measured.usage.tokenCalculation.method, "provider-reconciled");
+  assert.equal(measured.usage.tokenCalculation.calibrationSamples, 1);
+
+  const snapshots = events.filter((event) => event.type === "context_usage" && event.usage?.sections?.length === 9);
+  assert.ok(snapshots.length >= 2);
+  for (const snapshot of snapshots) {
+    assert.equal(
+      snapshot.usage.sections.reduce((sum, section) => sum + section.tokens, 0),
+      snapshot.usage.promptTokens,
+      `section rows must match ${snapshot.usage.source} total`,
+    );
+  }
 });
 
 test("simple conversation uses compact context with no tool execution and no workspace writes", async (t) => {

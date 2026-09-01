@@ -131,7 +131,8 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(chatMarkup, /id="send-btn"[\s\S]*?codicon-arrow-up/);
   assert.match(html, /id="context-usage-popover"[\s\S]*?Context Usage[\s\S]*?id="context-usage-heading-value"[\s\S]*?id="context-usage-used"[\s\S]*?id="context-usage-breakdown"/);
   assert.doesNotMatch(html, /context-usage-free|context-usage-diagnostics|context-compaction-status|context-usage-measure-note/);
-  for (const label of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "Summarized Conversation", "Active Conversation", "Current Workflow", "Working References"]) assert.match(renderer, new RegExp(`label: "${label}"`));
+  for (const label of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP", "Summarized Conversation", "Active Conversation", "Current Workflow"]) assert.match(renderer, new RegExp(`label: "${label}"`));
+  assert.doesNotMatch(renderer, /label: "Working References"/);
   assert.ok(renderer.indexOf("const CONTEXT_USAGE_ROW_LABELS") < renderer.indexOf("\nsyncChatModeUi();"), "context labels must initialize before the first context render");
   assert.match(renderer, /contextUsageUsed\.textContent = `\$\{Math\.round\(pct \* 100\)\}%`/);
   assert.doesNotMatch(renderer, /context-usage-row-value">~/);
@@ -336,6 +337,7 @@ test("Tier 2 memory maintenance runs on a hidden background surface", () => {
   assert.match(renderer, /function sendHiddenAgentRuntime\([\s\S]*?hiddenAgentRuntimeQueues\.set\(key, task\)/);
   assert.match(renderer, /function scheduleTier2MemoryMaintenance\([\s\S]*?TIER2_MEMORY_MAINTENANCE_PROMPT[\s\S]*?tier2MemoryMaintenance: true/);
   assert.match(renderer, /shouldMaintainTier2[\s\S]*?scheduleTier2MemoryMaintenance\(\{/);
+  assert.match(renderer, /pentestFinalizeBlockId: String\(agentRunResult\?\.pentestFinalization\?\.blockId \|\| ""\)/);
   assert.match(renderer, /executeQueuedHiddenAgentRuntime[\s\S]*?tier2MemoryMaintenanceSucceeded[\s\S]*?return executeHiddenAgentRuntime\(payload\)/);
   assert.match(renderer, /payload\?\.source === "background_runtime"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
   assert.match(renderer, /payload\?\.source === "parent_continuation"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
@@ -344,6 +346,9 @@ test("Tier 2 memory maintenance runs on a hidden background surface", () => {
   assert.match(main, /const runtimeTools = tier2MemoryMaintenance[\s\S]*?name === "update_project_artifacts"[\s\S]*?name !== "update_project_artifacts"/);
   assert.match(main, /requireArtifactFinalization: artifactWorkspace && backgroundRuntime/);
   assert.match(main, /v3SessionStore\?\.record && !tier2MemoryMaintenance/);
+  assert.match(main, /tier2MemoryMaintenance && pentestFinalizeBlockId[\s\S]*?maintenanceSucceeded[\s\S]*?pentestLoopController\.finalizeBlock/);
+  assert.match(main, /pentestFinalization = \{[\s\S]*?pending: true[\s\S]*?blockId:/);
+  assert.match(main, /pendingPentestCheckpoint[\s\S]*?checkpointOf\([\s\S]*?runtime-recorded orchestration data; not evidence/);
   assert.match(main, /source: "background_runtime"/);
   assert.doesNotMatch(main, /result\.finalText = `\$\{String\(result\.finalText/);
   assert.match(prompt, /update_project_artifacts is available only in the isolated post-response Tier 2 maintenance turn/);

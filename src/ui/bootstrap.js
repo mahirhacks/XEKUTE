@@ -9,6 +9,7 @@ import {
 } from "./features/history/history-model.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
+const SetiIconTheme = globalThis.XekuteSetiIconTheme;
 const MessageIdentity = globalThis.XekuteMessageIdentity;
 
 const $ = (id) => globalThis.XekuteDom?.getById(id) || document.getElementById(id);
@@ -104,7 +105,6 @@ const explorerTitle    = $("explorer-title");
 const explorerRootToggle = $("explorer-root-toggle");
 const explorerRootChevron = $("explorer-root-chevron");
 const btnOpenFolder    = $("btn-open-folder");
-const btnProjectSettings = $("btn-project-settings");
 const fileTree         = $("file-tree");
 const activityExplorer = $("activity-explorer");
 const activitySearch   = $("activity-search");
@@ -235,10 +235,10 @@ const CONTEXT_USAGE_SECTIONS = Object.freeze([
   Object.freeze({ key: "rules", label: "Rules", color: "#67b7a5" }),
   Object.freeze({ key: "skills", label: "Skills", color: "#d58dbc" }),
   Object.freeze({ key: "subagents", label: "Subagents", color: "#b58de8" }),
+  Object.freeze({ key: "mcp", label: "MCP", color: "#e0a15d" }),
   Object.freeze({ key: "summarized_conversation", label: "Summarized Conversation", color: "#8ca6e8" }),
   Object.freeze({ key: "active_conversation", label: "Active Conversation", color: "#5d9ee8" }),
   Object.freeze({ key: "current_workflow", label: "Current Workflow", color: "#67b7a5" }),
-  Object.freeze({ key: "working_references", label: "Working References", color: "#e1a85b" }),
 ]);
 const CONTEXT_USAGE_ROW_LABELS = Object.freeze(Object.fromEntries(
   CONTEXT_USAGE_SECTIONS.map((section) => [section.key, section.label]),
@@ -248,18 +248,13 @@ const CONTEXT_USAGE_SECTION_ALIASES = Object.freeze({
   system_prompt: "system_prompt",
   tool_definitions: "tool_definitions",
   tools: "tool_definitions",
-  project: "working_references",
-  project_memory: "working_references",
-  project_intelligence: "working_references",
-  graph: "working_references",
-  investigation: "working_references",
-  evidence: "working_references",
+  mcp: "mcp",
+  mcp_definitions: "mcp",
   conversation: "active_conversation",
   active_conversation: "active_conversation",
   summarized_conversation: "summarized_conversation",
   active_workflow: "current_workflow",
   current_workflow: "current_workflow",
-  recent_working_set: "working_references",
   checkpoint: "summarized_conversation",
   rules: "rules",
   authority: "rules",
@@ -267,7 +262,6 @@ const CONTEXT_USAGE_SECTION_ALIASES = Object.freeze({
   subagents: "subagents",
   knowledge: "skills",
   knowledge_lease: "skills",
-  working_references: "working_references",
 });
 const modelPicker      = $("model-picker");
 const modelLabel       = $("model-label");
@@ -8529,15 +8523,12 @@ function normalizeContextUsageSections(sections = [], { legacyToolTokens = 0 } =
 
 function getContextBreakdown(requestText = chatInput.value.trim()) {
   const activeFile = getActiveFileContext();
-  const contextPlan = resolvedWorkingContextPlan();
-  const contextBudget = contextPlan.promptBudgetTokens || contextPlan.effectiveLimitTokens || AUTO_CONTEXT_ESTIMATE;
   const workingHistory = workingHistoryMessages();
   const latestUserText = [...workingHistory].reverse().find((message) => message?.role === "user")?.content || "";
   const routedText = requestText || latestUserText;
   const route = contextPreviewRoute(routedText);
-  // Context meter mirrors the V3 three-block Tier 1 contract.  Tier 2 data is
-  // represented only by the bounded Working References row; Project,
-  // Investigation, and Evidence are never rendered as separate rows.
+  // The context meter mirrors the same nine authoritative Tier 1 sections
+  // used by the controller and checkpoint coordinator.
   const previewTools = (() => {
     const modeList = modeTools();
     if (String(chatMode || "").toLowerCase() !== "agent" && !/:agent$/i.test(String(chatMode || ""))) {
@@ -8547,6 +8538,8 @@ function getContextBreakdown(requestText = chatInput.value.trim()) {
     return ToolMap.compactTools(modeList.filter((tool) => hot.has(tool?.function?.name)));
   })();
   const routedTools = previewTools;
+  const nativeTools = routedTools.filter((tool) => !String(tool?.function?.name || "").startsWith("mcp__"));
+  const mcpTools = routedTools.filter((tool) => String(tool?.function?.name || "").startsWith("mcp__"));
   const compiledPrompt = globalThis.XekutePromptCompiler?.compile({
     family: chatFamily,
     mode: chatMode,
@@ -8558,14 +8551,6 @@ function getContextBreakdown(requestText = chatInput.value.trim()) {
   const guidanceUsage = splitGuidanceContextForUsage(guidanceContext);
   const baseSystemPrompt = [compiledPrompt, guidanceUsage.system].filter(Boolean).join("\n\n").trim();
   const systemPrompt = [compiledPrompt, guidanceUsage.system].filter(Boolean).join("\n\n").trim();
-  const projectContext = route.includeWorkspaceContext
-    ? buildProjectContextMessage({
-        dirMap: dirMapCache,
-        activeFile,
-        extraFiles: contextFilesCache,
-        contextBudget,
-      })
-    : "";
   const checkpointTokens = Math.max(0, Number(memoryRecord(activeChatSession())?.checkpointTokens) || 0);
   const draft = requestText;
   const streamTokens = activeStreamContent ? estimateTokens(activeStreamContent) + 4 : 0;
@@ -8580,7 +8565,7 @@ function getContextBreakdown(requestText = chatInput.value.trim()) {
       key: "tool_definitions",
       label: "Tool Definitions",
       color: "#77a8d8",
-      tokens: (routedTools.length ? estimateTokens(JSON.stringify(routedTools)) : 0)
+      tokens: (nativeTools.length ? estimateTokens(JSON.stringify(nativeTools)) : 0)
         + (toolMenu ? estimateMessagesTokens([{ role: "system", content: toolMenu }]) : 0),
     },
     {
@@ -8600,6 +8585,12 @@ function getContextBreakdown(requestText = chatInput.value.trim()) {
       label: "Subagents",
       color: "#b58de8",
       tokens: guidanceUsage.subagents ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.subagents }]) : 0,
+    },
+    {
+      key: "mcp",
+      label: "MCP",
+      color: "#e0a15d",
+      tokens: mcpTools.length ? estimateTokens(JSON.stringify(mcpTools)) : 0,
     },
     {
       key: "summarized_conversation",
@@ -8625,14 +8616,6 @@ function getContextBreakdown(requestText = chatInput.value.trim()) {
         const workflow = activeChatSession()?.currentWorkflow || activeChatSession()?.workflow || null;
         return workflow ? estimateMessagesTokens([{ role: "user", content: JSON.stringify(workflow) }]) : 0;
       })(),
-    },
-    {
-      key: "working_references",
-      label: "Working References",
-      color: "#e1a85b",
-      // Workspace/context packets are bounded working references in V3.  The
-      // authoritative Tier 2 domains remain outside the renderer meter.
-      tokens: projectContext ? estimateMessagesTokens([{ role: "user", content: projectContext }]) : 0,
     },
   ];
   const summaryTokens = checkpointTokens;
@@ -8794,7 +8777,7 @@ function getContextUsage(usedOverride = null) {
   const settings = selectedModel ? getModelSettings(selectedModel) : { context: AUTO_CONTEXT };
   const plan = resolvedWorkingContextPlan();
   const draft = chatInput.value.trim();
-  const storedCandidate = !draft && !isRunningChatActive() ? normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage) : null;
+  const storedCandidate = normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage);
   const stored = storedCandidate && (!storedCandidate.model || !selectedModel || storedCandidate.model === selectedModel) && (!storedCandidate.provider || storedCandidate.provider === plan.provider) ? storedCandidate : null;
   const storedToolNames = new Set(stored?.toolNames || []);
   const legacyToolDefinitions = storedToolNames.size
@@ -8804,9 +8787,18 @@ function getContextUsage(usedOverride = null) {
   const storedSections = stored
     ? normalizeContextUsageSections(stored.sections, { legacyToolTokens })
     : [];
-  const storedTotal = stored ? stored.promptTokens : null;
+  const draftDeltaTokens = draft ? estimateTokens(draft) + 4 : 0;
+  const streamDeltaTokens = stored && ["ollama", "openrouter"].includes(stored.source) && activeStreamContent
+    ? estimateTokens(activeStreamContent) + 4
+    : 0;
+  const liveDeltaTokens = draftDeltaTokens + streamDeltaTokens;
+  if (storedSections.length && liveDeltaTokens > 0) {
+    const activeSection = storedSections.find((section) => section.key === "active_conversation");
+    if (activeSection) activeSection.tokens += liveDeltaTokens;
+  }
+  const storedTotal = stored ? stored.promptTokens + liveDeltaTokens : null;
   const breakdown = stored
-    ? { sections: storedSections, estimatedTotal: storedTotal, tools: [], messages: [] }
+    ? { sections: storedSections, estimatedTotal: storedTotal, tools: [], messages: [], authoritative: true }
     : getContextBreakdown(draft);
   const total = plan.effectiveLimitTokens || resolvedContextCapacity.tokens || AUTO_CONTEXT_ESTIMATE;
   const capacityApproximate = Boolean(plan.approximate);
@@ -8836,7 +8828,7 @@ function getContextUsage(usedOverride = null) {
     compileLatencyMs: stored?.compileLatencyMs ?? null,
     knowledgeLease: stored?.knowledgeLease || null,
     breakdown,
-    source: ["ollama", "openrouter"].includes(stored?.source) ? "actual" : "estimate",
+    source: ["ollama", "openrouter"].includes(stored?.source) && liveDeltaTokens === 0 ? "actual" : "estimate",
     capacityApproximate,
   };
 }
@@ -8906,7 +8898,7 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
 function updateContextUsage() {
   const fallbackUsage = getContextUsage();
   renderContextUsage(fallbackUsage);
-  if (fallbackUsage.source === "actual" || !window.api?.countTokens || !selectedModel) return;
+  if (fallbackUsage.breakdown?.authoritative || fallbackUsage.source === "actual" || !window.api?.countTokens || !selectedModel) return;
 
   if (contextUsageTimer) clearTimeout(contextUsageTimer);
   const seq = ++contextUsageSeq;
@@ -8991,20 +8983,35 @@ function toggleContextPopover() {
 function setExplorerActionsEnabled(enabled) {
   btnNewFile.disabled = !enabled;
   btnNewFolder.disabled = !enabled;
-  if (btnProjectSettings) btnProjectSettings.disabled = !enabled;
 }
 
 setExplorerActionsEnabled(false);
 
 btnNewFile.addEventListener("click", () => createNewItemInput(false));
 btnNewFolder.addEventListener("click", () => createNewItemInput(true));
-btnProjectSettings?.addEventListener("click", () => {
-  openAppSettings("project");
-});
 fileTree?.addEventListener("click", (event) => {
   if (event.target?.closest?.(".tree-item")) return;
   selectItem(null);
 });
+
+const EXPLORER_TREE_BASE_PADDING = 8;
+const EXPLORER_TREE_LEVEL_INDENT = 14;
+
+function explorerTreeDepth(item) {
+  const explicit = Number(item?.dataset?.treeDepth);
+  if (Number.isSafeInteger(explicit) && explicit >= 0) return explicit;
+  const padding = Number.parseInt(item?.style?.paddingLeft, 10);
+  if (!Number.isFinite(padding)) return 0;
+  return Math.max(0, Math.round((padding - EXPLORER_TREE_BASE_PADDING) / EXPLORER_TREE_LEVEL_INDENT));
+}
+
+function setExplorerTreeDepth(item, depth = 0) {
+  const normalized = Math.max(0, Number.isSafeInteger(Number(depth)) ? Number(depth) : 0);
+  item.dataset.treeDepth = String(normalized);
+  item.style.paddingLeft = `${EXPLORER_TREE_BASE_PADDING + (normalized * EXPLORER_TREE_LEVEL_INDENT)}px`;
+  item.setAttribute("aria-level", String(normalized + 1));
+  return normalized;
+}
 
 let creatingItem = false;
 async function createNewItemInput(isFolder) {
@@ -9013,7 +9020,7 @@ async function createNewItemInput(isFolder) {
 
   let targetDir = rootPath;
   let targetContainer = fileTree;
-  let paddingLeft = "8px";
+  let inputDepth = 0;
 
   // If an item is highlighted, contextualize where to add the new element
   if (selectedItem) {
@@ -9032,27 +9039,27 @@ async function createNewItemInput(isFolder) {
       
       // Force directory load if it hasn't been cached/expanded yet
       if (childrenContainer && (childrenContainer.childElementCount === 0 || (childrenContainer.children.length === 1 && childrenContainer.children[0].textContent === "Loading…"))) {
-        const currentDepth = (parseInt(selectedItem.style.paddingLeft) - 8) / 8;
+        const currentDepth = explorerTreeDepth(selectedItem);
         childrenContainer.innerHTML = "";
         await renderTree(targetDir, childrenContainer, currentDepth + 1);
       }
       
       targetContainer = childrenContainer;
-      paddingLeft = `${parseInt(selectedItem.style.paddingLeft) + 8}px`;
+      inputDepth = explorerTreeDepth(selectedItem) + 1;
     } else {
       // If a file is selected, create adjacent to it inside its parent folder
       const filePath = selectedItem.dataset.path;
       const lastIdx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
       targetDir = filePath.substring(0, lastIdx);
       targetContainer = selectedItem.parentElement;
-      paddingLeft = selectedItem.style.paddingLeft;
+      inputDepth = explorerTreeDepth(selectedItem);
     }
   }
 
   // Generate the temporary tree input node
   const inputRow = document.createElement("div");
-  inputRow.className = "tree-item tree-input-row";
-  inputRow.style.paddingLeft = paddingLeft;
+  inputRow.className = `tree-item tree-input-row ${isFolder ? "tree-dir" : "tree-file"}`;
+  setExplorerTreeDepth(inputRow, inputDepth);
 
   const chevron = document.createElement("span");
   chevron.className = isFolder ? "tree-chevron codicon codicon-chevron-right" : "tree-chevron codicon hidden";
@@ -9107,7 +9114,7 @@ async function createNewItemInput(isFolder) {
         await rerenderExplorer({ preserveSelectionPath: newPath });
       } else {
         const parentItem = targetContainer.previousElementSibling;
-        const parentDepth = (parseInt(parentItem.style.paddingLeft) - 8) / 8;
+        const parentDepth = explorerTreeDepth(parentItem);
         await renderTree(targetDir, targetContainer, parentDepth + 1);
       }
       
@@ -10564,7 +10571,6 @@ function quickFileItems(query) {
   return files
     .map((file) => {
       const name = basenameOf(file);
-      const info = fileIconInfo(name);
       const score = Math.max(
         scoreQuickMatch(name, query) + 40,
         scoreQuickMatch(file, query),
@@ -10572,9 +10578,9 @@ function quickFileItems(query) {
       return {
         title: name,
         detail: file,
-        icon: `${info.icon} ${info.className}`,
+        icon: "codicon-file",
         score,
-        run: () => showResourcePreview(joinWorkspacePath(file), name, file, { icon: info.icon }),
+        run: () => showResourcePreview(joinWorkspacePath(file), name, file, { icon: "codicon-file" }),
       };
     })
     .filter((item) => item.score > 0)
@@ -10937,7 +10943,6 @@ function syncQuickSelection() {
 function workspaceSearchResultItem(row, query) {
   const name = basenameOf(row.path);
   const sourceIcons = { correlation: "codicon-shield", traffic: "codicon-globe", finding: "codicon-warning", evidence: "codicon-archive", map: "codicon-type-hierarchy", asset: "codicon-server", tool: "codicon-tools" };
-  const info = fileIconInfo(name);
   const line = Number(row.line) || parseSnippetLine(row.snippet);
   const column = Number(row.column) || 1;
   const matchDetail = row.lineText || firstSnippetLine(row.snippet);
@@ -10949,7 +10954,7 @@ function workspaceSearchResultItem(row, query) {
     title: row.title || row.path,
     detail,
     detailHtml: highlightExactText(detail, query),
-    icon: `${sourceIcons[row.source] || info.icon} ${info.className}`,
+    icon: sourceIcons[row.source] || "codicon-file",
     key: row.key || `${sourceLabel}L${line}:C${column}`,
     run: async () => {
       await openFile(joinWorkspacePath(row.path), name, {
@@ -11641,14 +11646,18 @@ async function renderTree(dirPath, container, depth) {
   const entries = await window.api.readdir(dirPath);
 
   if (entries.error) {
-    container.innerHTML = `<div class="tree-item dimmed">${entries.error}</div>`;
+    const errorRow = document.createElement("div");
+    errorRow.className = "tree-item dimmed";
+    setExplorerTreeDepth(errorRow, depth);
+    errorRow.textContent = entries.error;
+    container.replaceChildren(errorRow);
     return;
   }
 
   for (const entry of entries) {
     const item = document.createElement("div");
     item.className = `tree-item ${entry.isDir ? "tree-dir" : "tree-file"}`;
-    item.style.paddingLeft = `${depth * 8 + 8}px`;
+    setExplorerTreeDepth(item, depth);
     item.dataset.path  = entry.path;
     item.dataset.isDir = entry.isDir;
     item.tabIndex = -1;
@@ -11664,9 +11673,12 @@ async function renderTree(dirPath, container, depth) {
     if (entry.isDir) {
       icon.className = "tree-icon codicon codicon-folder";
     } else {
-      const info = fileIconInfo(entry.name);
-      icon.className = `tree-file-icon codicon ${info.icon} ${info.className}`;
+      const info = SetiIconTheme.iconForFile(entry.name);
+      icon.className = "tree-file-icon seti-icon";
+      icon.textContent = info.glyph;
+      icon.style.color = info.color;
     }
+    icon.setAttribute("aria-hidden", "true");
 
     const name = document.createElement("span");
     name.className = "tree-name";
@@ -11748,7 +11760,11 @@ async function renderTree(dirPath, container, depth) {
         icon.className = `tree-icon codicon ${expanded ? "codicon-folder-opened" : "codicon-folder"}`;
         childrenContainer.style.display = expanded ? "block" : "none";
         if (expanded && childrenContainer.childElementCount === 0) {
-          childrenContainer.innerHTML = `<div class="tree-item dimmed" style="padding-left:${(depth + 1) * 8 + 24}px">Loading…</div>`;
+          const loading = document.createElement("div");
+          loading.className = "tree-item dimmed";
+          setExplorerTreeDepth(loading, depth + 1);
+          loading.textContent = "Loading…";
+          childrenContainer.replaceChildren(loading);
           await renderTree(entry.path, childrenContainer, depth + 1);
         }
       });
@@ -12908,14 +12924,22 @@ function renderTabs() {
     });
 
     const icon = document.createElement("span");
-    const info = isSettingsTab(tab)
-      ? { icon: "codicon-settings-gear", className: "file-icon-config" }
+    const specialIcon = isSettingsTab(tab)
+      ? "codicon-settings-gear"
       : isInterceptorTab(tab)
-        ? { icon: "codicon-debug-disconnect", className: "file-icon-config" }
+        ? "codicon-debug-disconnect"
         : isApplicationGraphTab(tab)
-          ? { icon: "codicon-type-hierarchy", className: "file-icon-config" }
-        : fileIconInfo(tab.name);
-    icon.className = `tab-icon codicon ${info.icon} ${info.className}`;
+          ? "codicon-type-hierarchy"
+          : "";
+    if (specialIcon) {
+      icon.className = `tab-icon codicon ${specialIcon}`;
+    } else {
+      const info = SetiIconTheme.iconForFile(tab.name);
+      icon.className = "tab-icon seti-icon";
+      icon.textContent = info.glyph;
+      icon.style.color = info.color;
+    }
+    icon.setAttribute("aria-hidden", "true");
 
     const label = document.createElement("span");
     label.className = "tab-label" + (tab.dirty ? " tab-dirty" : "");
@@ -13228,30 +13252,6 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function fileIconInfo(name) {
-  const ext = name.split(".").pop().toLowerCase();
-  const map = {
-    py: ["codicon-symbol-method", "file-icon-py"], pyw: ["codicon-symbol-method", "file-icon-py"],
-    c: ["codicon-file-code", "file-icon-c"], h: ["codicon-file-code", "file-icon-c"],
-    cpp: ["codicon-file-code", "file-icon-cpp"], cxx: ["codicon-file-code", "file-icon-cpp"], cc: ["codicon-file-code", "file-icon-cpp"], hpp: ["codicon-file-code", "file-icon-cpp"],
-    js: ["codicon-file-code", "file-icon-js"], mjs: ["codicon-file-code", "file-icon-js"], cjs: ["codicon-file-code", "file-icon-js"],
-    jsx: ["codicon-file-code", "file-icon-js"], ts: ["codicon-symbol-interface", "file-icon-ts"], tsx: ["codicon-symbol-interface", "file-icon-ts"],
-    json: ["codicon-json", "file-icon-json"], jsonc: ["codicon-json", "file-icon-json"],
-    html: ["codicon-code", "file-icon-html"], htm: ["codicon-code", "file-icon-html"],
-    css: ["codicon-symbol-color", "file-icon-css"], scss: ["codicon-symbol-color", "file-icon-css"],
-    md: ["codicon-markdown", "file-icon-md"], yml: ["codicon-settings", "file-icon-yaml"], yaml: ["codicon-settings", "file-icon-yaml"],
-    rs: ["codicon-file-code", "file-icon-rust"], go: ["codicon-file-code", "file-icon-go"], rb: ["codicon-file-code", "file-icon-ruby"],
-    sh: ["codicon-terminal", "file-icon-shell"], ps1: ["codicon-terminal", "file-icon-shell"], bat: ["codicon-terminal", "file-icon-shell"],
-    toml: ["codicon-settings", "file-icon-config"], env: ["codicon-key", "file-icon-config"], ini: ["codicon-settings", "file-icon-config"], config: ["codicon-settings-gear", "file-icon-config"],
-    lock: ["codicon-lock", "file-icon-lock"], gitignore: ["codicon-git-branch", "file-icon-git"],
-    png: ["codicon-file-media", "file-icon-media"], jpg: ["codicon-file-media", "file-icon-media"], jpeg: ["codicon-file-media", "file-icon-media"],
-    svg: ["codicon-file-media", "file-icon-media"], gif: ["codicon-file-media", "file-icon-media"], ico: ["codicon-file-media", "file-icon-media"],
-    pdf: ["codicon-file-pdf", "file-icon-pdf"],
-  };
-  const [icon, className] = map[ext] || ["codicon-file", "file-icon-text"];
-  return { icon, className };
 }
 
 // ── Model picker ──────────────────────────────────────────────────────────────
@@ -16476,6 +16476,7 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
       continuation: options?.continuation || null,
       backgroundRuntime: true,
       tier2MemoryMaintenance: Boolean(options?.tier2MemoryMaintenance),
+      pentestFinalizeBlockId: String(options?.pentestFinalizeBlockId || ""),
     });
     if (result?.pentestLoop?.continue === true && !result?.aborted) {
       schedulePentestContinuation(runSession.id, result.pentestLoop.prompt);
@@ -16520,7 +16521,7 @@ function sendHiddenAgentRuntime(payload = {}) {
   return task;
 }
 
-function scheduleTier2MemoryMaintenance({ targetSessionId = "", mode = "agent", workspace = "" } = {}) {
+function scheduleTier2MemoryMaintenance({ targetSessionId = "", mode = "agent", workspace = "", pentestFinalizeBlockId = "" } = {}) {
   const maintenanceMode = canonicalChatMode(mode);
   const projectRoot = String(workspace || "");
   if (!targetSessionId || !projectRoot || !TIER2_MEMORY_MODES.has(maintenanceMode)) {
@@ -16528,13 +16529,16 @@ function scheduleTier2MemoryMaintenance({ targetSessionId = "", mode = "agent", 
   }
   return sendHiddenAgentRuntime({
     targetSessionId,
-    text: TIER2_MEMORY_MAINTENANCE_PROMPT,
+    text: pentestFinalizeBlockId
+      ? `${TIER2_MEMORY_MAINTENANCE_PROMPT} This transaction finalizes a structured Pentest cycle: preserve its phase, WSTG procedure provenance, completed and remaining coverage, blockers, and evidence distinctions without treating checkpoint claims as proof.`
+      : TIER2_MEMORY_MAINTENANCE_PROMPT,
     options: {
       modeOverride: maintenanceMode,
       workspace: projectRoot,
       activeFile: null,
       contextFiles: [],
       tier2MemoryMaintenance: true,
+      pentestFinalizeBlockId: String(pentestFinalizeBlockId || ""),
     },
   });
 }
@@ -17065,10 +17069,8 @@ async function sendMessageWithAgentRuntime(options = {}) {
         targetSessionId: runSession.id,
         mode: runMode,
         workspace: run.workspace,
+        pentestFinalizeBlockId: String(agentRunResult?.pentestFinalization?.blockId || ""),
       }).catch(() => {});
-    }
-    if (agentRunResult?.pentestLoop?.continue === true && !run.stopRequested && !agentRunResult?.aborted) {
-      schedulePentestContinuation(runSession.id, agentRunResult.pentestLoop.prompt);
     }
     queueMicrotask(drainPendingBackgroundWaitEvents);
     scheduleSubagentResultDrain();
