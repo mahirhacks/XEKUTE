@@ -67,7 +67,7 @@ test("restored exchanges attach metadata after text and tool-only assistant turn
   assert.ok(replaceAt > attachAt, "the finalized exchange should enter the visible transcript with its footer last");
 });
 
-test("assistant footer keeps copy visible and reveals time only on hover", () => {
+test("assistant footer keeps copy visible and reveals time on exchange-body hover", () => {
   const footerStyles = baseStyles.match(/\.assistant-reply-footer \{[\s\S]*?\.chat-empty-state \{/);
   assert.ok(footerStyles, "Could not find assistant footer styles");
   const source = footerStyles[0];
@@ -75,5 +75,10 @@ test("assistant footer keeps copy visible and reveals time only on hover", () =>
   assert.match(source, /border: 1px solid transparent/);
   assert.match(source, /background: transparent/);
   assert.match(source, /\.assistant-reply-time \{[^]*?opacity: 0;[^]*?visibility: hidden/);
-  assert.match(source, /\.chat-exchange:hover \.assistant-reply-time,[\s\S]*?\.chat-exchange:focus-within \.assistant-reply-time[\s\S]*?opacity: 1;[\s\S]*?visibility: visible/);
+  assert.match(
+    source,
+    /\.chat-exchange-body:hover ~ \.assistant-reply-footer \.assistant-reply-time,[\s\S]*?opacity: 0\.5;[\s\S]*?visibility: visible/,
+  );
+  assert.doesNotMatch(source, /\.assistant-reply-time:hover/);
+  assert.match(source, /\.assistant-reply-copy \{[^]*?opacity: 0\.5;/);
 });

@@ -16,8 +16,8 @@ test("the registry is explicit and rejects malformed or duplicate entries", () =
 
 test("mode registry is the only mode/capability mapping", () => {
   assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
-  assert.deepEqual(Object.keys(ModeRegistry.MODES).sort(), ["agent", "ask", "hypothesis", "plan"]);
-  assert.equal(ModeRegistry.normalizeProfile("planner").key, "plan");
+  assert.deepEqual(Object.keys(ModeRegistry.MODES).sort(), ["agent", "ask"]);
+  assert.equal(ModeRegistry.normalizeProfile("planner").key, "ask");
   assert.equal(ModeRegistry.normalizeProfile("ask").key, "ask");
 });
 

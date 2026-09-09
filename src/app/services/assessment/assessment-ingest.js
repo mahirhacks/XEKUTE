@@ -13,12 +13,34 @@ const MAX_TEXT = 20_000;
 const MAX_PAYLOAD_BYTES = 1_000_000;
 
 const RESOURCE_SPECS = Object.freeze({
-  "active-recon": { path: "recon/active-recon.json", collection: "discoveredAssets", template: "discoveredAssetTemplate", keys: ["type", "value"], mapRole: "asset" },
-  "passive-recon": { path: "recon/passive-recon.json", collection: "discoveredAssets", template: "discoveredAssetTemplate", keys: ["type", "value"], mapRole: "asset" },
-  endpoints: { path: "enumeration/endpoints.json", collection: "endpoints", template: "endpointTemplate", keys: ["method", "url"], mapRole: "route" },
-  pages: { path: "enumeration/pages.json", collection: "pages", template: "pageTemplate", keys: ["url"], mapRole: "route" },
-  subdomains: { path: "enumeration/subdomains.json", collection: "subdomains", template: "subdomainTemplate", keys: ["hostname"], mapRole: "host" },
-  assets: { path: "enumeration/assets.json", collection: "assets", template: "assetTemplate", keys: ["assetType", "value"], mapRole: "asset" },
+  "active-recon": {
+    path: "recon/active-recon.json", collection: "discoveredAssets", template: "discoveredAssetTemplate", keys: ["type", "value"], mapRole: "asset",
+    recordTemplate: { targetId: "", type: "", value: "", source: "", discoveredAt: "", confidence: "", inScope: null, notes: "" },
+  },
+  "passive-recon": {
+    path: "recon/passive-recon.json", collection: "discoveredAssets", template: "discoveredAssetTemplate", keys: ["type", "value"], mapRole: "asset",
+    recordTemplate: { targetId: "", type: "", value: "", source: "", firstSeen: "", lastSeen: "", confidence: "", inScope: null, notes: "" },
+  },
+  endpoints: {
+    path: "enumeration/endpoints.json", collection: "endpoints", template: "endpointTemplate", keys: ["method", "url"], mapRole: "route",
+    recordTemplate: { id: "", targetId: "", method: "GET", scheme: "https", host: "", port: 443, path: "", url: "", parameters: [], headers: {}, requestContentTypes: [], responseContentTypes: [], authentication: "unknown", authorizationRoles: [], statusCodes: [], technologies: [], discoveredBy: "", firstSeen: "", lastSeen: "", deprecated: false, tested: false, evidence: [], notes: "", tags: [] },
+    statistics: { total: 0, authenticated: 0, unauthenticated: 0, tested: 0, untested: 0 },
+  },
+  pages: {
+    path: "enumeration/pages.json", collection: "pages", template: "pageTemplate", keys: ["url"], mapRole: "route",
+    recordTemplate: { id: "", targetId: "", url: "", path: "", title: "", statusCode: null, contentType: "", contentLength: null, authentication: "unknown", roles: [], technologies: [], forms: [], scripts: [], apiCalls: [], parameters: [], securityHeaders: {}, cacheControls: {}, discoveredBy: "", firstSeen: "", lastSeen: "", screenshotPath: "", tested: false, evidence: [], notes: "", tags: [] },
+    statistics: { total: 0, authenticated: 0, unauthenticated: 0, tested: 0, untested: 0 },
+  },
+  subdomains: {
+    path: "enumeration/subdomains.json", collection: "subdomains", template: "subdomainTemplate", keys: ["hostname"], mapRole: "host",
+    recordTemplate: { id: "", targetId: "", hostname: "", rootDomain: "", inScope: null, source: "", firstSeen: "", lastSeen: "", dns: { a: [], aaaa: [], cname: [], mx: [], ns: [], txt: [] }, resolvedIps: [], httpStatus: null, httpsStatus: null, title: "", technologies: [], cdn: "", cloudProvider: "", takeoverStatus: "not-checked", takeoverEvidence: [], live: null, tested: false, notes: "", tags: [] },
+    statistics: { total: 0, live: 0, inScope: 0, takeoverCandidates: 0, tested: 0 },
+  },
+  assets: {
+    path: "enumeration/assets.json", collection: "assets", template: "assetTemplate", keys: ["assetType", "value"], mapRole: "asset",
+    recordTemplate: { id: "", assetType: "host", value: "", rootDomain: "", owner: "", environment: "production", source: "", firstSeen: "", lastSeen: "", inScope: null, scopeReason: "", status: "unknown", services: [], relationships: [], confidence: "unconfirmed", evidence: [], tags: [], notes: "" },
+    statistics: { total: 0, inScope: 0, outOfScope: 0, unknownScope: 0, live: 0, stale: 0, untested: 0 },
+  },
 });
 
 const IngestError = class extends Error {
@@ -82,19 +104,35 @@ function statistics(resource, rows) {
   return {};
 }
 
-function atomicWrite(target, document) {
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
-  fs.writeFileSync(temp, `${JSON.stringify(document, null, 2)}\n`, "utf8");
-  JSON.parse(fs.readFileSync(temp, "utf8"));
-  if (fs.existsSync(target)) fs.copyFileSync(target, `${target}.bak`);
-  try { fs.renameSync(temp, target); } catch { fs.copyFileSync(temp, target); fs.rmSync(temp, { force: true }); }
+const documents = new Map();
+
+function documentKey(workspace, resource) {
+  return `${path.resolve(workspace)}::${resource}`;
+}
+
+function leftoverDocument(workspace, spec) {
+  return readJsonFile(path.resolve(workspace, spec.path), null);
+}
+
+function loadDocument(workspace, resource, spec) {
+  const key = documentKey(workspace, resource);
+  if (documents.has(key)) return clone(documents.get(key));
+  const leftover = leftoverDocument(workspace, spec);
+  if (leftover && typeof leftover === "object" && !Array.isArray(leftover)) {
+    documents.set(key, clone(leftover));
+    return clone(leftover);
+  }
+  return null;
+}
+
+function persistDocument(workspace, resource, document) {
+  documents.set(documentKey(workspace, resource), clone(document));
 }
 
 function provisionedDocument(spec, provision, resource) {
   const template = provision?.[spec.template] && typeof provision[spec.template] === "object" && !Array.isArray(provision[spec.template])
     ? provision[spec.template]
-    : {};
+    : clone(spec.recordTemplate || {});
   if (provision && typeof provision === "object" && !Array.isArray(provision)) {
     const document = structuredClone(provision);
     document.schemaVersion = document.schemaVersion || 1;
@@ -111,7 +149,7 @@ function provisionedDocument(spec, provision, resource) {
     resource,
     [spec.template]: structuredClone(template),
     [spec.collection]: [],
-    statistics: {},
+    statistics: clone(spec.statistics || {}),
     updatedAt: now(),
     source: "xekute-provisioned",
   };
@@ -121,8 +159,8 @@ function readJsonFile(filePath, fallback = null) {
   try { return JSON.parse(fs.readFileSync(filePath, "utf8")); } catch { return fallback; }
 }
 
-function templateFieldsForDataset(workspace, spec) {
-  const doc = readJsonFile(path.resolve(workspace, spec.path), null);
+function templateFieldsForDataset(workspace, resource, spec) {
+  const doc = loadDocument(workspace, resource, spec);
   const template = doc?.[spec.template];
   if (template && typeof template === "object" && !Array.isArray(template)) return Object.keys(template);
   return [...spec.keys];
@@ -196,20 +234,16 @@ function datasetExists(workspaceRaw, resource) {
   const workspace = path.resolve(workspaceRaw);
   const spec = RESOURCE_SPECS[resource];
   if (!spec) return { ok: false, error: "Unknown resource", code: "RESOURCE_NOT_ALLOWED" };
-  try {
-    const target = path.resolve(workspace, spec.path);
-    const doc = JSON.parse(fs.readFileSync(target, "utf8"));
-    return { ok: true, exists: true, resource, ...statistics(resource, Array.isArray(doc?.[spec.collection]) ? doc[spec.collection] : []) };
-  } catch {
-    return { ok: false, error: "Canonical dataset does not exist yet", code: "DATASET_NOT_FOUND", resource, exists: false };
-  }
+  const doc = loadDocument(workspace, resource, spec);
+  if (!doc) return { ok: false, error: "Canonical dataset does not exist yet", code: "DATASET_NOT_FOUND", resource, exists: false };
+  return { ok: true, exists: true, resource, ...statistics(resource, Array.isArray(doc?.[spec.collection]) ? doc[spec.collection] : []) };
 }
 
 function listDatasets(workspaceRaw) {
   const workspace = path.resolve(String(workspaceRaw || "").trim() || ".");
   const datasets = Object.entries(RESOURCE_SPECS).map(([resource, spec]) => {
     const probe = datasetExists(workspace, resource);
-    const templateFields = templateFieldsForDataset(workspace, spec);
+    const templateFields = templateFieldsForDataset(workspace, resource, spec);
     return {
       resource,
       path: spec.path,
@@ -245,16 +279,11 @@ function ingest(payload = {}) {
   const workspace = path.resolve(workspaceRaw);
   if (!fs.existsSync(workspace) || !fs.statSync(workspace).isDirectory()) throw new IngestError("Assessment workspace does not exist", "WORKSPACE_NOT_FOUND");
   const spec = RESOURCE_SPECS[resource];
-  const target = path.resolve(workspace, spec.path);
-  if (target !== workspace && !target.startsWith(`${workspace}${path.sep}`)) throw new IngestError("Resolved dataset escaped the assessment workspace", "PATH_ESCAPE");
   const coverageBefore = readCoverageSummary(workspace);
   const scopePolicy = loadScopePolicy(workspace, payload.projectProfile || null);
-  const expectProvision = !fs.existsSync(target);
-  if (expectProvision) {
-    const provisioned = provisionedDocument(spec, payload.provision, resource);
-    atomicWrite(target, provisioned);
-  }
-  const document = JSON.parse(fs.readFileSync(target, "utf8"));
+  let document = loadDocument(workspace, resource, spec);
+  const expectProvision = !document;
+  if (expectProvision) document = provisionedDocument(spec, payload.provision, resource);
   const template = document[spec.template];
   const existing = document[spec.collection];
   if (!template || typeof template !== "object" || Array.isArray(template)) throw new IngestError("The canonical dataset template is missing or invalid", "SCHEMA_INVALID");
@@ -277,7 +306,7 @@ function ingest(payload = {}) {
   document[spec.collection] = rows;
   if (Object.prototype.hasOwnProperty.call(document, "statistics")) document.statistics = statistics(resource, rows);
   if (resource === "assets") document.lastReconciledAt = timestamp;
-  atomicWrite(target, document);
+  persistDocument(workspace, resource, document);
   const coverageAfter = readCoverageSummary(workspace);
   return {
     ok: true,
@@ -291,6 +320,7 @@ function ingest(payload = {}) {
     source,
     provisioned: expectProvision,
     coverageDelta: computeCoverageDelta(coverageBefore, coverageAfter),
+    records: rows,
   };
 }
 
@@ -299,6 +329,7 @@ module.exports = {
   ingest,
   listDatasets,
   datasetExists,
+  loadDocument,
   readCoverageSummary,
   computeCoverageDelta,
   validateRecordScope,

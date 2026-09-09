@@ -15,9 +15,9 @@ function nine(overrides = {}) {
 
 test("source_refs cite the new canonical paths and never leftover files", () => {
   const base = artifactSourceRefs({ evidenceSliceInjected: false });
-  assert.deepEqual(base, [".xekute/project_info/index.md", ".xekute/hypotheses.md", ".xekute/checklist.md"]);
+  assert.deepEqual(base, [".xekute/project_info/index.md"]);
   const withEvidence = artifactSourceRefs({ evidenceSliceInjected: true });
-  assert.deepEqual(withEvidence, [".xekute/project_info/index.md", ".xekute/hypotheses.md", ".xekute/checklist.md", ".xekute/evidence/index.md"]);
+  assert.deepEqual(withEvidence, [".xekute/project_info/index.md"]);
   assert.equal(base.includes(".xekute/project_info.md"), false);
   assert.equal(base.includes(".xekute/investigation_checklist.md"), false);
 });
@@ -25,8 +25,6 @@ test("source_refs cite the new canonical paths and never leftover files", () => 
 test("first Agent turn tracker is true then false for the same session/workspace pair", () => {
   const tracker = createFirstAgentTurnTracker();
   assert.equal(tracker.isFirstAgentTurn({ sessionId: "s1", workspace: "ws", profileKey: "ask" }), false);
-  assert.equal(tracker.isFirstAgentTurn({ sessionId: "s1", workspace: "ws", profileKey: "hypothesis" }), false);
-  assert.equal(tracker.isFirstAgentTurn({ sessionId: "s1", workspace: "ws", profileKey: "plan" }), false);
   assert.equal(tracker.isFirstAgentTurn({ sessionId: "s1", workspace: "ws", profileKey: "agent" }), true);
   assert.equal(tracker.isFirstAgentTurn({ sessionId: "s1", workspace: "ws", profileKey: "agent" }), false);
   assert.equal(tracker.isFirstAgentTurn({ sessionId: "s2", workspace: "ws", profileKey: "agent" }), true);

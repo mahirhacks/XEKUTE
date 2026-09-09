@@ -111,6 +111,10 @@ test("agent terminal runner can start a background process with a terminal id", 
   assert.match(result.id, /^proc-agent-/);
   assert.equal(terminals.size, 1);
   assert.equal(toolProcesses.size, 1);
+  const record = [...terminals.values()][0];
+  assert.equal(record.ownerId, webContents.id);
+  const stopped = runner.stopProcess(result.id, "agent");
+  assert.equal(stopped.ok, true);
 });
 
 test("typed exec commands remain hidden from the terminal UI while capturing output", async () => {
@@ -191,12 +195,20 @@ test("canonical agent exec projects terminal output only when explicitly request
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
 
   assert.match(main, /runSupervisedCommand/);
-  assert.match(main, /exposeTerminal:\s*args\.show_in_terminal !== false/);
   assert.match(main, /const exposeTerminal = input\.show_in_terminal !== false/);
   assert.match(main, /if \(exposeTerminal\) sendTerminalData/);
   assert.match(main, /if \(result\?\.value\) result\.value\.showInTerminal = terminal\.exposeTerminal/);
-  assert.match(main, /terminalHost\.runExecutable/);
-  assert.match(main, /terminalHost\.runShellCommand/);
+  assert.match(main, /createSupervisedTerminal/);
+  assert.doesNotMatch(main.slice(main.indexOf("const executeRaw = async"), main.indexOf("} else {", main.indexOf("const executeRaw = async"))), /terminalHost\.runShellCommand/);
+  assert.doesNotMatch(main.slice(main.indexOf("const executeRaw = async"), main.indexOf("} else {", main.indexOf("const executeRaw = async"))), /terminalHost\.runExecutable\(workspace, args\.executable/);
+  assert.match(main, /ipcMain\.handle\("tools:execute", async \(_event, payload = \{\}\) => executeToolCall\(\{ workspace: payload\.workspace, toolCall: payload\.toolCall \|\| payload \}\)\)/);
+  assert.doesNotMatch(main, /ipcMain\.handle\("tools:execute"[\s\S]{0,200}terminalHost/);
+  assert.match(main, /typeof container\.durableProcessManager\?\.run === "function"/);
+  assert.doesNotMatch(main, /name === "exec_command" \? Boolean\(terminalHost\?\.runExecutable\)/);
+  const executeRaw = main.slice(main.indexOf("const executeRaw = async"), main.indexOf("} else {", main.indexOf("const executeRaw = async")));
+  assert.match(executeRaw, /commandCallId: commandRuntime\.commandCallId/);
+  assert.match(executeRaw, /commandInvocationId: commandRuntime\.commandInvocationId/);
+  assert.doesNotMatch(executeRaw, /\bpid:/);
   assert.match(runner, /function runShellCommand/);
   assert.match(runner, /exposeTerminal = false/);
   assert.match(runner, /if \(exposeTerminal\) sendTerminalData/);

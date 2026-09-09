@@ -99,3 +99,10 @@ $RECYCLE.BIN/
 /tmp/
 /version_tracking/
 temp_test
+
+# Vite renderer output is produced by `npm run build:ui`
+/src/ui/dist/
+
+# Local throwaway repro scripts
+/tmp-electron-chrome-launch.js
+/tmp-intercept-browser-repro.js

@@ -89,14 +89,11 @@ const SOURCE_ENTRY_PATHS = Object.freeze([
   PATHS.projectIdentities,
   PATHS.projectSurface,
   PATHS.projectControls,
-  PATHS.hypotheses,
-  PATHS.checklist,
 ]);
 
 const CANONICAL_EXACT_PATHS = Object.freeze([
   ...SOURCE_ENTRY_PATHS,
   PATHS.projectIndex,
-  PATHS.evidenceIndex,
 ]);
 
 function cleanText(value, max = 12_000) {
@@ -151,9 +148,12 @@ function normalizeRelativePath(relativePath) {
 
 function isCanonicalInvestigationPath(relativePath) {
   const normalized = normalizeRelativePath(relativePath);
-  if (CANONICAL_EXACT_PATHS.includes(normalized)) return true;
-  if (/^\.xekute\/evidence\/[^/]+\.md$/i.test(normalized)) return true;
-  return false;
+  return CANONICAL_EXACT_PATHS.includes(normalized);
+}
+
+function isPersistedArtifactPath(relativePath) {
+  const normalized = normalizeRelativePath(relativePath);
+  return CANONICAL_EXACT_PATHS.includes(normalized);
 }
 
 function gitignoreTemplate() {
@@ -555,6 +555,7 @@ module.exports = Object.freeze({
   gitignoreTemplate,
   mapCheckpointPhaseToChecklistPhase,
   isCanonicalInvestigationPath,
+  isPersistedArtifactPath,
   headingForFact,
   projectDocumentTemplate,
   parseProjectDocument,

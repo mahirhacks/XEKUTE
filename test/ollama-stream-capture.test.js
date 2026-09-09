@@ -27,7 +27,7 @@ test("losslessly demultiplexes fragmented UTF-8 thinking, content, and tool call
     JSON.stringify({ message: {
       thinking: "evidence",
       content: "Partial answer",
-      tool_calls: [{ index: 0, function: { name: "read_file", arguments: { path: "Map/application-map.json" } } }],
+      tool_calls: [{ index: 0, function: { name: "read_file", arguments: { path: "enumeration/endpoints.json" } } }],
     }, done: false }),
     JSON.stringify({ message: { content: " complete." }, done: true, done_reason: "stop", prompt_eval_count: 42, eval_count: 7 }),
   ];
@@ -53,7 +53,7 @@ test("losslessly demultiplexes fragmented UTF-8 thinking, content, and tool call
   assert.equal(result.thinking, thinking.join(""));
   assert.equal(result.fullText, content.join(""));
   assert.equal(result.toolCalls[0].function.name, "read_file");
-  assert.equal(result.toolCalls[0].function.arguments.path, "Map/application-map.json");
+  assert.equal(result.toolCalls[0].function.arguments.path, "enumeration/endpoints.json");
   assert.equal(tools.length, 1);
   assert.deepEqual(events, [1, 2, 3]);
   assert.equal(result.done, true);

@@ -226,7 +226,7 @@ function createSkillKnowledgeGraph({ fs = fsDefault, path = pathDefault, library
     }).filter((item) => (!phase || item.entry.phase === phase) && (!terms.length || item.score > 0)).sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id)).map((item) => item.entry);
   }
   function query(input = {}, context = {}) {
-    if (!input.skill && !input.phase && !input.query) return { ok: false, error: "query_knowledge requires skill, phase, or query.", code: "KNOWLEDGE_QUERY_REQUIRED" };
+    if (!input.skill && !input.phase && !input.query) return { ok: false, error: "knowledge domain query requires skill, phase, or query.", code: "KNOWLEDGE_QUERY_REQUIRED" };
     const limit = Math.max(1, Math.min(Number(input.limit) || 10, 30));
     const offset = Math.max(0, Math.min(Number(input.offset) || 0, 100_000));
     const matches = find(input);

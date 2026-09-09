@@ -27,23 +27,19 @@ function createDurableProcessManager({
   monitorIntervalMs = DEFAULT_MONITOR_INTERVAL_MS,
   outputPollMs = DEFAULT_OUTPUT_POLL_MS,
   reviewIntervalMs = DEFAULT_REVIEW_INTERVAL_MS,
-  foregroundWaitMs = DEFAULT_FOREGROUND_WAIT_MS,
   cpuCount = Math.max(1, os.cpus?.().length || 1),
 } = {}) {
   const live = new Map();
+  const records = new Map();
 
-  function rootFor(workspace) { return pathImpl.join(pathImpl.resolve(workspace), ".xekute", "state", "processes"); }
-  function recordFile(workspace, id) { return pathImpl.join(rootFor(workspace), `${id}.json`); }
-  function writeRecord(workspace, record) {
-    const file = recordFile(workspace, record.id);
-    fsImpl.mkdirSync(pathImpl.dirname(file), { recursive: true, mode: 0o700 });
-    const temp = `${file}.${process.pid}.tmp`;
-    fsImpl.writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    try { fsImpl.renameSync(temp, file); } catch { try { fsImpl.rmSync(file, { force: true }); } catch {} fsImpl.renameSync(temp, file); }
-    try { fsImpl.chmodSync(file, 0o600); } catch {}
+  function rootFor(workspace) {
+    const digest = crypto.createHash("sha256").update(pathImpl.resolve(workspace)).digest("hex").slice(0, 16);
+    return pathImpl.join(os.tmpdir(), "xekute-processes", digest);
   }
+  function recordKey(workspace, id) { return `${pathImpl.resolve(workspace)}::${id}`; }
+  function writeRecord(workspace, record) { records.set(recordKey(workspace, record.id), record); }
   function readRecord(workspace, id) {
-    try { return JSON.parse(fsImpl.readFileSync(recordFile(workspace, id), "utf8")); } catch { return null; }
+    return records.get(recordKey(workspace, id)) || live.get(id)?.record || null;
   }
   function isAlive(pid) {
     if (!Number(pid)) return false;
@@ -86,8 +82,12 @@ function createDurableProcessManager({
     if (typeof input.command === "string") return resolveShellInvocation(input.command, input.shell || "auto");
     return { shell: null, executable: input.executable, args: Array.isArray(input.args) ? input.args : [] };
   }
+  function resolveLogPath(workspace, stored) {
+    if (!stored) return "";
+    return pathImpl.isAbsolute(stored) ? stored : pathImpl.join(workspace, stored);
+  }
   function pathsFor(workspace, record) {
-    return { stdoutFile: pathImpl.join(workspace, record.stdoutFile), stderrFile: pathImpl.join(workspace, record.stderrFile) };
+    return { stdoutFile: resolveLogPath(workspace, record.stdoutFile), stderrFile: resolveLogPath(workspace, record.stderrFile) };
   }
   function currentAlive(entry, record) {
     if (entry?.tree?.alive !== undefined) return Boolean(entry.tree.alive);
@@ -108,6 +108,34 @@ function createDurableProcessManager({
       sampledAt: health.sampledAt || null,
       note: health.note || "Quiet output is not by itself evidence that the process is stuck.",
     } : null;
+  }
+  function projectMetrics(metrics) {
+    if (!metrics || typeof metrics !== "object") return metrics;
+    const { pids, ...rest } = metrics;
+    return rest;
+  }
+  function projectAgentFacing(value) {
+    if (!value || typeof value !== "object") return value;
+    const projected = { ...value };
+    delete projected.pid;
+    delete projected.stdoutFile;
+    delete projected.stderrFile;
+    delete projected.foregroundWaitMs;
+    delete projected.foreground_wait_ms;
+    if (projected.metrics) projected.metrics = projectMetrics(projected.metrics);
+    if (projected.health && typeof projected.health === "object") projected.health = projectMetrics(projected.health);
+    if (!projected.processId && projected.id) projected.processId = projected.id;
+    return projected;
+  }
+  function projectResult(result) {
+    if (!result?.value) return result;
+    return { ...result, value: projectAgentFacing({ ...result.value }) };
+  }
+  function listInternal(workspace) {
+    const prefix = `${pathImpl.resolve(workspace)}::`;
+    const listed = [];
+    for (const [key, record] of records) if (key.startsWith(prefix)) listed.push(record);
+    return listed.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).slice(0, 200);
   }
   function snapshot(workspace, record, input = {}, entry = live.get(record.id)) {
     const { stdoutFile, stderrFile } = pathsFor(workspace, record);
@@ -389,7 +417,7 @@ function createDurableProcessManager({
     }
     try { fsImpl.closeSync(stdoutFd); fsImpl.closeSync(stderrFd); } catch {}
     const stamp = now().toISOString();
-    const record = { schemaVersion: 2, id, pid: child.pid, status: "running", executable: pathImpl.basename(String(selected.executable)), shell: selected.shell || "direct", command: redactSecrets(input.command || [input.executable, ...(input.args || [])].join(" ")), cwd: resolved.target || resolved.root, stdoutFile: pathImpl.relative(workspace, stdoutFile).replace(/\\/g, "/"), stderrFile: pathImpl.relative(workspace, stderrFile).replace(/\\/g, "/"), startedAt: stamp, updatedAt: stamp, lastOutputAt: stamp, exitCode: null, signal: null, detached: launchDetached, resumable: launchDetached, terminalId: runtime.terminalId || "", sessionId: runtime.sessionId || "" };
+    const record = { schemaVersion: 2, id, pid: child.pid, status: "running", executable: pathImpl.basename(String(selected.executable)), shell: selected.shell || "direct", command: redactSecrets(input.command || [input.executable, ...(input.args || [])].join(" ")), cwd: resolved.target || resolved.root, stdoutFile: stdoutFile.replace(/\\/g, "/"), stderrFile: stderrFile.replace(/\\/g, "/"), startedAt: stamp, updatedAt: stamp, lastOutputAt: stamp, exitCode: null, signal: null, detached: launchDetached, resumable: launchDetached, terminalId: runtime.terminalId || "", sessionId: runtime.sessionId || "" };
     writeRecord(workspace, record);
     const entry = makeEntry(workspace, record, child, runtime);
     live.set(id, entry);
@@ -403,7 +431,7 @@ function createDurableProcessManager({
       entry.timeoutTimer.unref?.();
     }
     child.unref?.();
-    return { ok: true, value: { mode: "process_start", processId: id, pid: child.pid, status: "running", command: record.command, cwd: record.cwd, startedAt: stamp, terminalId: runtime.terminalId || "", detached: launchDetached, resumable: launchDetached } };
+    return projectResult({ ok: true, value: { mode: "process_start", processId: id, pid: child.pid, status: "running", command: record.command, cwd: record.cwd, startedAt: stamp, terminalId: runtime.terminalId || "", detached: launchDetached, resumable: launchDetached } });
   }
   async function run(workspace, input = {}, runtime = {}) {
     const started = await start(workspace, input, runtime);
@@ -415,14 +443,14 @@ function createDurableProcessManager({
     const onAbort = () => { if (!detached) stop(workspace, { process_id: processId, reason: "agent_cancelled" }).catch(() => {}); };
     if (runtime.signal?.aborted) onAbort();
     else runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
-    const grace = Math.max(0, Number(runtime.foregroundWaitMs ?? input.foreground_wait_ms ?? foregroundWaitMs) || 0);
+    const waitMs = Math.max(0, input.wait_ms ?? DEFAULT_FOREGROUND_WAIT_MS);
     let timer;
-    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), grace); });
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), waitMs); });
     const completed = await Promise.race([entry.donePromise, timeout]);
     if (timer) clearTimeout(timer);
     if (completed) {
       runtime.signal?.removeEventListener?.("abort", onAbort);
-      return { ok: completed.status === "complete" && completed.exitCode === 0, value: { ...completed, mode: "command" } };
+      return projectResult({ ok: completed.status === "complete" && completed.exitCode === 0, value: { ...completed, mode: "command" } });
     }
     detached = true;
     runtime.signal?.removeEventListener?.("abort", onAbort);
@@ -438,7 +466,7 @@ function createDurableProcessManager({
     value.waiting = true;
     runtime.onDetached?.(value);
     emit(runtime, { type: "terminal_wait", processId, terminalId: value.terminalId, command: record.command, ...value });
-    return { ok: true, value };
+    return projectResult({ ok: true, value });
   }
   async function status(workspace, input = {}, runtime = {}) {
     let record = readRecord(workspace, input.process_id);
@@ -477,14 +505,14 @@ function createDurableProcessManager({
     value.observation.waitedMs = observation.waitedMs;
     value.observation.state = value.alive ? (value.observation.changed ? "progressing" : value.metrics?.state || "quiet") : "finished";
     runtime.progress?.({ kind: "durable_process_status", processId: record.id, status: record.status, alive: value.alive, health: value.metrics });
-    return { ok: true, value };
+    return projectResult({ ok: true, value });
   }
   async function stop(workspace, input = {}) {
     const record = readRecord(workspace, input.process_id);
     if (!record) return { ok: false, error: { code: "PROCESS_NOT_FOUND", message: `Unknown durable process: ${input.process_id}`, retryable: false } };
     const entry = live.get(record.id);
     const active = entry?.child || { pid: record.pid, kill: () => process.kill(record.pid) };
-    if (entry?.finished) return { ok: true, value: { processId: record.id, pid: record.pid, status: record.status, completedAt: record.completedAt } };
+    if (entry?.finished) return projectResult({ ok: true, value: { processId: record.id, pid: record.pid, status: record.status, completedAt: record.completedAt } });
     let tree = entry?.tree || null;
     let treeAlive = tree?.alive;
     if (treeAlive === undefined && record.status === "running") {
@@ -506,14 +534,11 @@ function createDurableProcessManager({
         writeRecord(workspace, record);
         return snapshot(workspace, record, {}, null);
       })();
-    return { ok: true, value: { ...value, processId: record.id, pid: record.pid, status: "stopped", completedAt: record.completedAt } };
+    return projectResult({ ok: true, value: { ...value, processId: record.id, pid: record.pid, status: "stopped", completedAt: record.completedAt } });
   }
   async function list(workspace) {
-    const root = rootFor(workspace);
-    let records = [];
-    try { records = fsImpl.readdirSync(root).filter((name) => /^process-.*\.json$/.test(name)).map((name) => JSON.parse(fsImpl.readFileSync(pathImpl.join(root, name), "utf8"))); } catch { records = []; }
     const processes = [];
-    for (const record of records.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).slice(0, 200)) {
+    for (const record of listInternal(workspace)) {
       let alive = record.status === "running" ? (live.has(record.id) || isAlive(record.pid)) : false;
       // After an app restart there is no in-memory entry. If the detached
       // shell exited while a descendant remains, sample the persisted PID's
@@ -521,15 +546,14 @@ function createDurableProcessManager({
       if (record.status === "running" && !live.has(record.id) && !alive) {
         try { alive = Boolean((await sampleTree(record.pid, { fsImpl, platform: process.platform }))?.alive); } catch { /* retain the root-PID result */ }
       }
-      processes.push({ ...record, alive, metrics: formatMetrics(live.get(record.id), record) });
+      processes.push(projectAgentFacing({ ...record, alive, metrics: formatMetrics(live.get(record.id), record) }));
     }
     return { ok: true, value: { processes } };
   }
   async function reconcile(workspace) {
-    const result = await list(workspace);
     const changed = [];
-    for (const record of result.value.processes) {
-      let alive = record.alive;
+    for (const record of listInternal(workspace)) {
+      let alive = record.status === "running" ? (live.has(record.id) || isAlive(record.pid)) : false;
       if (record.status === "running" && !live.has(record.id)) {
         try {
           const tree = await sampleTree(record.pid, { fsImpl, platform: process.platform });

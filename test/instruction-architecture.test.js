@@ -26,16 +26,26 @@ test("the system prompt has exactly one readable source", () => {
   assert.deepEqual(promptFiles, ["src/prompts/instructions/system-prompt.js"]);
 });
 
-test("skills and guardrails are model guidance, not runtime gates", () => {
+test("skills are model guidance, not runtime gates", () => {
   const controller = read("src/agent/controller/agent-controller.js");
   const compiler = read("src/agent/runtime/prompt-compiler.js");
   const skills = read("src/prompts/skills/mode-skills.js");
-  const guardrails = read("src/prompts/guardrails/README.md");
+  const system = read("src/prompts/instructions/system-prompt.js");
   const redaction = read("src/shared/secret-redaction.js");
   assert.match(controller, /context-router/);
   assert.match(skills, /render|MODE_SKILL/);
-  assert.match(guardrails, /model-facing|guidance/i);
+  assert.match(system, /MODEL GUIDANCE/);
   assert.match(redaction, /redactStructuredValue|secret/i);
   assert.match(compiler, /MODE_OVERLAYS|guardrails/i);
   assert.doesNotMatch(controller, /evaluateAction|requestApproval|approval_required|GATES_DISABLED/);
+});
+
+test("agent skill teaches wait-then-background and status as secondary", () => {
+  const agentSkill = read("src/prompts/skills/modes/agent-skill.js");
+  assert.match(agentSkill, /1500/);
+  assert.match(agentSkill, /wait_ms:\s*0/);
+  assert.match(agentSkill, /timeout_ms/);
+  assert.match(agentSkill, /terminal_complete/);
+  assert.match(agentSkill, /secondary/);
+  assert.doesNotMatch(agentSkill, /operation=status[\s\S]{0,120}wait mechanism/i);
 });

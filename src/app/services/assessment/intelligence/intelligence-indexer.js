@@ -11,25 +11,10 @@ const Artifacts = require("../../../../domain/artifacts/investigation-artifacts.
 const SOURCE_FILES = Object.freeze([
   ["traffic/raw.jsonl", "traffic"],
   ["traffic/filtered.jsonl", "traffic"],
-  ["evidence/index.jsonl", "evidence"],
-  [".xekute/evidence/runtime.jsonl", "evidence"],
-  ["enumeration/endpoints.json", "endpoints"],
-  ["enumeration/assets.json", "assets"],
-  [".xekute/logs/agent-actions.jsonl", "actions"],
-  ["Map/application-map.json", "map"],
 ]);
 
-function sourceFilesForWorkspace(workspace) {
-  const sources = SOURCE_FILES.filter(([relativePath]) => relativePath !== "Map/application-map.json");
-  try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(workspace, "traffic", "graph", "manifest.json"), "utf8"));
-    const relative = String(manifest?.latest?.file || "").replace(/\\/g, "/");
-    if (/^traffic\/graph\/[^/\\]+\.json$/i.test(relative)) sources.push([relative, "map"]);
-    else if (fs.existsSync(path.join(workspace, "Map", "application-map.json"))) sources.push(["Map/application-map.json", "map"]);
-  } catch {
-    if (fs.existsSync(path.join(workspace, "Map", "application-map.json"))) sources.push(["Map/application-map.json", "map"]);
-  }
-  return sources;
+function sourceFilesForWorkspace(_workspace) {
+  return SOURCE_FILES;
 }
 
 function fingerprint(filePath, stat) {
@@ -196,10 +181,11 @@ function indexHypothesesMarkdown(db, workspace, state = {}) {
   return indexMarkdownRecords(db, workspace, relativePath, "hypotheses", parsed.value, state);
 }
 
-async function indexWorkspaceSync({ workspace, indexPath, onProgress = () => {}, runId = "", planId = "", shouldPause = () => false } = {}) {
+async function indexWorkspaceSync({ workspace, indexPath, db: existingDb, onProgress = () => {}, runId = "", planId = "", shouldPause = () => false } = {}) {
   const root = path.resolve(String(workspace || ""));
   if (!root || !fs.existsSync(root)) return { ok: false, error: "Assessment workspace does not exist.", code: "WORKSPACE_NOT_FOUND" };
-  const db = Store.openDatabase(indexPath || path.join(root, ".xekute", "intelligence", "index.sqlite"));
+  const owned = !existingDb;
+  const db = existingDb || Store.openDatabase(indexPath || ":memory:");
   Store.setMeta(db, "status", "indexing");
   Store.setMeta(db, "started_at", new Date().toISOString());
   let total = 0;
@@ -230,7 +216,7 @@ async function indexWorkspaceSync({ workspace, indexPath, onProgress = () => {},
     Store.setMeta(db, "error", error.message);
     return { ok: false, error: error.message, code: "INTELLIGENCE_BUILD_FAILED" };
   } finally {
-    try { db.close(); } catch { /* already closed */ }
+    if (owned) try { db.close(); } catch { /* already closed */ }
   }
 }
 

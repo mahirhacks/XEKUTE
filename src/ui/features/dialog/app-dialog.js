@@ -56,7 +56,7 @@
     const message = String(options.message || "");
     const confirmLabel = String(options.confirmLabel || (kind === "alert" ? "OK" : "Confirm"));
     const cancelLabel = String(options.cancelLabel || "Cancel");
-    const icon = options.icon || (tone === "danger" ? "codicon-warning" : kind === "alert" ? "codicon-info" : "codicon-question");
+    const icon = options.icon || (tone === "danger" ? "danger" : kind === "alert" ? "codicon-info" : "codicon-question");
 
     if (titleEl) titleEl.textContent = title;
     if (subtitleEl) {
@@ -64,7 +64,15 @@
       subtitleEl.textContent = subtitle;
       subtitleEl.hidden = !subtitle;
     }
-    if (iconEl) iconEl.className = `codicon ${icon}`;
+    if (iconEl) {
+      if (tone === "danger" || icon === "danger") {
+        iconEl.className = "app-dialog-icon app-dialog-icon-custom";
+        iconEl.innerHTML = '<img src="assets/icons/Danger_icon.svg" alt="" width="20" height="20">';
+      } else {
+        iconEl.innerHTML = "";
+        iconEl.className = `app-dialog-icon codicon ${icon}`;
+      }
+    }
     messageEl.textContent = message;
     dialogEl?.classList.toggle("tone-danger", tone === "danger");
     confirmBtn.textContent = confirmLabel;

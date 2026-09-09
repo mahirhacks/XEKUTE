@@ -10,12 +10,13 @@ const { normalizeGenericRecord } = require("../../../../domain/assessment/intell
 const SCHEMA_VERSION = 1;
 
 function ensureDirectory(filePath) {
+  if (!filePath || filePath === ":memory:") return;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
-function openDatabase(indexPath) {
+function openDatabase(indexPath = ":memory:") {
   ensureDirectory(indexPath);
-  const db = new DatabaseSync(indexPath);
+  const db = new DatabaseSync(indexPath === ":memory:" ? ":memory:" : indexPath);
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
@@ -322,9 +323,14 @@ function sourceHash(value) {
 }
 
 function readSourceRecord(workspace, row) {
-  if (!workspace || !row.source_path || !row.source_path.endsWith(".jsonl")) return { ok: false, code: "SOURCE_NOT_LINE_ADDRESSABLE" };
+  const sourcePath = String(row?.source_path || "");
+  if (sourcePath === "runtime-evidence") {
+    try { return { ok: true, value: JSON.parse(row.sanitized_json) }; }
+    catch (error) { return { ok: false, code: "SOURCE_READ_FAILED", error: error.message }; }
+  }
+  if (!workspace || !sourcePath.endsWith(".jsonl")) return { ok: false, code: "SOURCE_NOT_LINE_ADDRESSABLE" };
   const root = path.resolve(workspace);
-  const filePath = path.resolve(root, ...String(row.source_path).split("/"));
+  const filePath = path.resolve(root, ...sourcePath.split("/"));
   const relative = path.relative(root, filePath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) return { ok: false, code: "SOURCE_OUTSIDE_WORKSPACE" };
   try {

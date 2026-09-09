@@ -7,11 +7,8 @@ const { createWorkspaceSearch } = require("../../agent/tools/workspace/workspace
 const { createWebResearch } = require("../../app/services/research/web-research.js");
 const { createWebCloneService } = require("../../app/services/research/webclone.js");
 const { createAssessmentWorkspace } = require("../../domain/assessment/assessment-workspace");
-const { createAssessmentMap } = require("../../domain/assessment/assessment-map");
 const { createJavascriptArtifactStore } = require("../../domain/assessment/javascript-artifact-store.js");
 const { createWebArtifactStore } = require("../../domain/assessment/web-artifact-store.js");
-const { createGraphBuildService } = require("../../app/services/assessment/traffic-graph/graph-build-service.js");
-const { createJavascriptCollector } = require("../../app/services/assessment/traffic-graph/javascript-collector.js");
 const { buildIntruderRequests, createSecurityHttpWorkbench } = require("../../interceptor/http-workbench.js");
 const { createProxyListenerService } = require("../../interceptor/proxy-listener.js");
 const { createProxyBrowserService } = require("../../interceptor/proxy-browser.js");
@@ -21,12 +18,8 @@ const { createBrowserSessionManager } = require("../../agent/tools/assessment/br
 const { createAssessmentIntelligenceService } = require("../../app/services/assessment/intelligence/assessment-intelligence-service.js");
 const { createProjectIdentityStore } = require("../../app/storage/memory/project-identity-store.js");
 const { createProjectArtifactService } = require("../../app/services/artifacts/project-artifact-service.js");
-const { createKnowledgeLibraryService } = require("../../app/services/knowledge/knowledge-library-service.js");
 const { createTier1SensitiveStore } = require("../../app/storage/memory/tier1-sensitive-store.js");
 const { createTier1ContextCoordinator } = require("../../app/services/memory/tier1-context-coordinator.js");
-const { createKnowledgeProcedureStore } = require("../../app/services/memory/knowledge-procedure-store.js");
-const { createNativeKagService } = require("../../app/services/memory/native-kag-service.js");
-const { createLocalEmbeddingService } = require("../../app/services/memory/local-embedding-service.js");
 const { createMemorySchemaRegistry } = require("../../contracts/memory/schema-registry.js");
 const { createMcpRuntime } = require("../../app/services/assessment/knowledge/mcp-runtime.js");
 const { createWorkspaceFiles } = require("../../app/services/workspace/workspace-files.js");
@@ -39,29 +32,17 @@ const { createLongHorizonRunStore } = require("../../app/storage/long-horizon-ru
 const { createDurableProcessManager } = require("../../app/services/terminal/durable-process-manager.js");
 const ContextBudget = require("../../agent/runtime/context-budget.js");
 
-// Tool registry + raw adapters (the 23 canonical tools).
-const { createToolRegistry, registerAskQuestions, registerUpdateTaskList, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerInspectEnvironment, registerUpdateProjectArtifacts, registerManageState, registerIngestTraffic, registerManageIdentity, registerReplayRequest, registerRunTestCase, registerBrowserAction, registerCompareResponses, registerVerifyFinding, registerAttackGraph, registerDelegateAgent, registerQueryAssessment, registerExpandEvidence, registerQueryKnowledge, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
+// Tool registry + raw adapters (the 10 canonical tools).
+const { createToolRegistry, registerAskQuestions, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerManageIdentity, registerReplayRequest, registerBrowserAction, registerDelegateAgent, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
 const { createAskQuestionsTool } = require("../../agent/tools/process/ask-questions.js");
-const { createUpdateTaskListTool } = require("../../agent/tools/process/update-task-list.js");
 const { createExecCommandTool } = require("../../agent/tools/process/exec-command.js");
 const { createReadFileTool } = require("../../agent/tools/workspace/read-file.js");
 const { createSearchWorkspaceTool } = require("../../agent/tools/workspace/search-workspace.js");
 const { createApplyPatchTool } = require("../../agent/tools/workspace/apply-patch.js");
-const { createInspectEnvironmentTool } = require("../../agent/tools/workspace/inspect-environment.js");
-const { createUpdateProjectArtifactsTool } = require("../../agent/tools/workspace/update-project-artifacts.js");
-const { createManageStateTool } = require("../../agent/tools/workspace/manage-state.js");
-const { createIngestTrafficTool } = require("../../agent/tools/assessment/ingest-traffic.js");
 const { createManageIdentityTool } = require("../../agent/tools/assessment/manage-identity.js");
 const { createReplayRequestTool } = require("../../agent/tools/assessment/replay-request.js");
-const { createRunTestCaseTool } = require("../../agent/tools/assessment/run-test-case.js");
 const { createBrowserActionTool } = require("../../agent/tools/assessment/browser-action.js");
-const { createCompareResponsesTool } = require("../../agent/tools/assessment/compare-responses.js");
-const { createVerifyFindingTool } = require("../../agent/tools/assessment/verify-finding.js");
-const { createAttackGraphTool } = require("../../agent/tools/assessment/attack-graph.js");
 const { createDelegateAgentTool } = require("../../agent/tools/process/delegate-agent.js");
-const { createQueryAssessmentTool } = require("../../agent/tools/assessment/query-assessment.js");
-const { createExpandEvidenceTool } = require("../../agent/tools/assessment/expand-evidence.js");
-const { createQueryKnowledgeTool } = require("../../agent/tools/assessment/query-knowledge.js");
 const { createWebResearchTool } = require("../../agent/tools/assessment/web-research.js");
 const { evaluateToolScopeAsync, evaluateRedirectScopeAsync, evaluateLoginNavigation } = require("../../agent/authority/scope/scope-policy.js");
 
@@ -118,39 +99,15 @@ function createContainer({
     sensitiveStore: tier1SensitiveStore,
     schemaRegistry: memorySchemaRegistry,
     crypto,
-    // Section attribution must use the same local lexical counter as the
-    // provider payload preflight. Provider usage later calibrates and
-    // reconciles these weights to the model's authoritative prompt total.
+    // Section attribution uses the same local lexical counter as the provider
+    // payload preflight. The context meter displays these Tier 1 row tokens
+    // and does not scale them to provider-measured prompt totals.
     tokenCounter: (value) => ({
       tokens: ContextBudget.estimateTokenCount(typeof value === "string" ? value : JSON.stringify(value == null ? "" : value)),
       exact: false,
     }),
   });
   const projectArtifacts = createProjectArtifactService({ fs, path, crypto });
-  // In a packaged Electron app the model is deliberately unpacked beside
-  // app.asar because ONNX requires a real filesystem path.  Knowledge JSON
-  // remains readable from ASAR, but prefer the unpacked resource directory
-  // when a packager provides one so both assets follow the same resolution
-  // rules.  Development and test runs use the source-tree bundle.
-  const memoryModelRelativePath = path.join("resources", "memory-v3", "models", "bge-base-en-v1.5");
-  const packagedResourceRoot = typeof process?.resourcesPath === "string" ? process.resourcesPath : "";
-  const memoryKnowledgeRelativePath = path.join("resources", "memory-v3", "knowledge");
-  const memoryKnowledgeCandidates = [
-    packagedResourceRoot ? path.join(packagedResourceRoot, "app.asar.unpacked", memoryKnowledgeRelativePath) : "",
-    packagedResourceRoot ? path.join(packagedResourceRoot, memoryKnowledgeRelativePath) : "",
-    path.join(config.appRoot, memoryKnowledgeRelativePath),
-  ].filter(Boolean);
-  const memoryKnowledgePath = memoryKnowledgeCandidates.find((candidate) => fs.existsSync(candidate)) || memoryKnowledgeCandidates[memoryKnowledgeCandidates.length - 1];
-  const knowledgeStore = createKnowledgeProcedureStore({ fs, path, crypto, baseDir: config.memoryV3KnowledgeDirectory(), bundledDir: memoryKnowledgePath, schemaRegistry: memorySchemaRegistry });
-  const memoryModelCandidates = [
-    packagedResourceRoot ? path.join(packagedResourceRoot, "app.asar.unpacked", memoryModelRelativePath) : "",
-    packagedResourceRoot ? path.join(packagedResourceRoot, memoryModelRelativePath) : "",
-    path.join(config.appRoot, memoryModelRelativePath),
-  ].filter(Boolean);
-  const memoryModelPath = memoryModelCandidates.find((candidate) => fs.existsSync(path.join(candidate, "manifest.json"))) || memoryModelCandidates[memoryModelCandidates.length - 1];
-  const knowledgeEmbeddingService = createLocalEmbeddingService({ modelPath: memoryModelPath });
-  const knowledgeKag = createNativeKagService({ knowledgeStore, cacheDirectory: config.memoryV3CacheDirectory(), embeddingProvider: knowledgeEmbeddingService, schemaRegistry: memorySchemaRegistry, fs, path, crypto });
-  const knowledgeLibrary = createKnowledgeLibraryService({ store: knowledgeStore, kag: knowledgeKag, artifacts: projectArtifacts, projectIdentityStore: memoryProjectIdentityStore });
 
   let identityVaultInstance = null;
   function identityVault() {
@@ -181,20 +138,28 @@ function createContainer({
     },
   });
 
-  // The canonical tool registry includes the two read-only intelligence tools.
   // Provider-optional adapters degrade to structured "unavailable" responses
   // when no provider is injected (see each adapter's contract).
+  const {
+    resolveWorkspaceTarget,
+    editWorkspaceFile,
+    deleteWorkspaceFile,
+    transferWorkspacePath,
+  } = createWorkspaceFiles({ fs, path, workspaceSearch });
+  const { listProjectFiles } = workspaceSearch;
+  const durableProcessManager = createDurableProcessManager({
+    fsImpl: fs,
+    pathImpl: path,
+    resolveWorkspaceTarget,
+    resolveExecutable: require("../../agent/tools/process/executable-resolver.js").resolveSecurityExecutable,
+    terminateProcessTree,
+  });
   const toolRegistry = createToolRegistry();
   registerAskQuestions(toolRegistry, createAskQuestionsTool());
-  registerUpdateTaskList(toolRegistry, createUpdateTaskListTool());
-  registerExecCommand(toolRegistry, createExecCommandTool());
+  registerExecCommand(toolRegistry, createExecCommandTool({ processManager: durableProcessManager }));
   registerReadFile(toolRegistry, createReadFileTool());
   registerSearchWorkspace(toolRegistry, createSearchWorkspaceTool());
   registerApplyPatch(toolRegistry, createApplyPatchTool());
-  registerInspectEnvironment(toolRegistry, createInspectEnvironmentTool());
-  registerUpdateProjectArtifacts(toolRegistry, createUpdateProjectArtifactsTool({ artifacts: projectArtifacts }));
-  registerManageState(toolRegistry, createManageStateTool());
-  registerIngestTraffic(toolRegistry, createIngestTrafficTool());
   registerManageIdentity(toolRegistry, createManageIdentityTool({
     identityVault: identityVault(),
     onDelete: async (workspace, identityId) => {
@@ -222,7 +187,6 @@ function createContainer({
     ),
     identityVault: identityVault(),
   }));
-  registerRunTestCase(toolRegistry, createRunTestCaseTool());
 
   // browser_action reuses a matching operator-opened proxied context when one
   // exists; otherwise it uses an isolated installed Edge/Chrome context. The
@@ -258,40 +222,12 @@ function createContainer({
     },
   }));
 
-  registerCompareResponses(toolRegistry, createCompareResponsesTool());
-  registerVerifyFinding(toolRegistry, createVerifyFindingTool());
-  registerAttackGraph(toolRegistry, createAttackGraphTool());
   registerDelegateAgent(toolRegistry, createDelegateAgentTool());
-  registerQueryAssessment(toolRegistry, createQueryAssessmentTool({
-    intelligence: assessmentIntelligence,
-    artifacts: projectArtifacts,
-  }));
-  registerExpandEvidence(toolRegistry, createExpandEvidenceTool({
-    intelligence: assessmentIntelligence,
-    artifacts: projectArtifacts,
-  }));
-  registerQueryKnowledge(toolRegistry, createQueryKnowledgeTool({
-    knowledge: knowledgeLibrary,
-  }));
   registerWebResearch(toolRegistry, createWebResearchTool({ webResearch }));
   const toolAuditStore = createToolAuditStore({ fsImpl: fs, pathImpl: path });
   const longHorizonRunStore = createLongHorizonRunStore({ fsImpl: fs, pathImpl: path });
   const authorityComposition = createAuthorityComposition({ evaluateScope: evaluateToolScopeAsync, fsImpl: fs });
   const invocationPipeline = createInvocationPipeline({ authorityRegistry: authorityComposition.registry, concurrency: authorityComposition.concurrency });
-  const {
-    resolveWorkspaceTarget,
-    editWorkspaceFile,
-    deleteWorkspaceFile,
-    transferWorkspacePath,
-  } = createWorkspaceFiles({ fs, path, workspaceSearch });
-  const { listProjectFiles } = workspaceSearch;
-  const durableProcessManager = createDurableProcessManager({
-    fsImpl: fs,
-    pathImpl: path,
-    resolveWorkspaceTarget,
-    resolveExecutable: require("../../agent/tools/process/executable-resolver.js").resolveSecurityExecutable,
-    terminateProcessTree,
-  });
   const webClone = createWebCloneService({ fs, path, webResearch, projectProfileProvider: (workspace) => projectProfileStore().read(workspace)?.profile || null });
   const assessmentWorkspace = createAssessmentWorkspace({
     fs,
@@ -301,31 +237,6 @@ function createContainer({
   });
   const javascriptArtifacts = createJavascriptArtifactStore({ fs, path, crypto });
   const webArtifacts = createWebArtifactStore({ fs, path, crypto });
-  const assessmentMap = createAssessmentMap({ fs, path, crypto, assessmentWorkspace, projectProfileProvider: (workspace) => projectProfileStore().read(workspace)?.profile || null, intelligence: assessmentIntelligence, javascriptArtifacts, webArtifacts });
-  assessmentIntelligence.setGraphProvider?.(assessmentMap);
-  const graphBuildService = createGraphBuildService({
-    assessmentMap,
-    javascriptArtifacts,
-    webArtifacts,
-    onEvent: (event) => {
-      const win = getMainWindow();
-      if (win && !win.isDestroyed()) win.webContents.send("assessment:graphStatus", event);
-    },
-  });
-  const javascriptCollector = createJavascriptCollector({
-    artifacts: javascriptArtifacts,
-    webArtifacts,
-    assessmentMap,
-    authorizeUrl: (target, { workspace, initialUrl, redirect } = {}) => {
-      const projectProfile = projectProfileStore().read(workspace)?.profile || null;
-      if (redirect > 0) return evaluateRedirectScopeAsync(initialUrl, target, { workspace, projectProfile });
-      return evaluateToolScopeAsync({ workspace, toolName: "browser_action", args: { action: "navigate", url: target }, projectProfile });
-    },
-    onEvent: (event) => {
-      const win = getMainWindow();
-      if (win && !win.isDestroyed()) win.webContents.send("assessment:graphStatus", event);
-    },
-  });
   const securityHttpWorkbench = createSecurityHttpWorkbench({ fs, path, assessmentWorkspace });
 
   let proxyListener = null;
@@ -420,7 +331,6 @@ function createContainer({
     if (disposePromise) return disposePromise;
     disposePromise = (async () => {
       await assessmentIntelligence.dispose();
-      await graphBuildService.flush();
       await javascriptArtifacts.flush();
       try { await tier1SensitiveStore.flush?.(); } catch { /* Exact Tier 1 writes are queued and best effort during shutdown. */ }
       mcpRuntime.clearAll();
@@ -457,10 +367,8 @@ function createContainer({
       try { await longHorizonRunStore.flush(); } catch { /* Durable checkpoints are best effort during shutdown. */ }
       // Tier 1 exact buffers are encrypted when secure storage is available;
       // in degraded mode they live only in this process and must be cleared
-      // explicitly during shutdown.  The embedding worker is likewise
-      // disposable and must not keep model state alive after app exit.
+      // explicitly during shutdown.
       try { tier1SensitiveStore.clearEphemeral?.(); } catch { /* best effort */ }
-      try { knowledgeEmbeddingService.dispose?.(); } catch { /* best effort */ }
     })();
     return disposePromise;
   }
@@ -507,21 +415,14 @@ function createContainer({
     webResearch,
     webClone,
     assessmentWorkspace,
-    assessmentMap,
     javascriptArtifacts,
     webArtifacts,
-    javascriptCollector,
-    graphBuildService,
     assessmentIntelligence,
     projectArtifacts,
-    knowledgeLibrary,
     memoryProjectIdentityStore,
     memorySchemaRegistry,
     tier1SensitiveStore,
     memoryTier1Coordinator,
-    knowledgeStore,
-    knowledgeEmbeddingService,
-    knowledgeKag,
     mcpRuntime,
     securityHttpWorkbench,
     buildIntruderRequests,

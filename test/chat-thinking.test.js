@@ -102,7 +102,8 @@ test("command approval shows an expandable command and resolves immediately with
 test("agent question tool supports recommended-first single select and explicit multi-select paging", () => {
   assert.match(renderer, /const isToolQuestionnaire = questionnaire\?\.kind === "agent_questions"/);
   assert.match(renderer, /const inputType = question\.multiple \? "checkbox" : "radio"/);
-  assert.match(renderer, /isToolQuestionnaire && input\.checked\) queueMicrotask\(\(\) => submitButton\?\.click\(\)\)/);
+  assert.match(renderer, /isToolQuestionnaire && input\.checked && input\.dataset\.freeWrite !== "1"/);
+  assert.match(renderer, /queueMicrotask\(\(\) => submitButton\?\.click\(\)\)/);
   assert.match(renderer, /selectedOptionIds: selectedInputs\.map/);
   assert.match(renderer, /Select more than one if applicable/);
   assert.match(chatStyles, /data-questions-action="skip"\] \{ order: 1/);

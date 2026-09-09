@@ -7,6 +7,7 @@ import {
   paginateRecentHistory,
   sortHistorySessions,
 } from "./features/history/history-model.js";
+import { ensureChatMemorySessionId } from "./features/history/chat-memory-session.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
 const SetiIconTheme = globalThis.XekuteSetiIconTheme;
@@ -18,12 +19,10 @@ const appController = new globalThis.XekuteCore.AppController(xekuteStore);
 const appLifecycle = new globalThis.XekuteCore.LifecycleCollection();
 const ToolMap = globalThis.ToolMap || (() => {
   const MODE_TOOL_GROUPS = globalThis.XekuteOperatingModes?.MODE_TOOL_GROUPS || {
-    ask: ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge"],
-    hypothesis: ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge", "update_project_artifacts"],
-    plan: ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge", "update_project_artifacts"],
+    ask: ["ask_questions", "read_file", "search_workspace"],
     agent: null,
   };
-  const MUTATING = new Set(["apply_patch", "update_project_artifacts", "manage_state", "manage_identity", "attack_graph"]);
+  const MUTATING = new Set(["apply_patch", "manage_identity"]);
   let catalog = []; // [{name, description, inputSchema, metadata}]
   const TOOL_META = {}; // populated by ensureCatalog; consumed as ToolMap.TOOL_META[tool]
 
@@ -424,7 +423,6 @@ const APP_SETTINGS_SECTION_META = Object.freeze({
   prompts: { title: "Rules, Skills, Subagents", subtitle: "Add project guidance files without changing protected system instructions" },
   llm: { title: "Models", subtitle: "" },
   certificates: { title: "Browser & Network", subtitle: "Manage certificates and isolated authorized identities" },
-  knowledge: { title: "Knowledge Library", subtitle: "Installed methodology releases, integrity, model, and index state" },
 });
 const checklistUIView = $("checklist-ui-view");
 const checklistFrameworkName = $("checklist-framework-name");
@@ -448,41 +446,6 @@ const assessmentRunProfile = $("assessment-run-profile");
 const assessmentRunStart = $("assessment-run-start");
 const assessmentRunStop = $("assessment-run-stop");
 const securityWorkspace = $("security-workspace");
-const mapWorkspace = $("map-workspace");
-const mapWorkspaceSubtitle = $("map-workspace-subtitle");
-const mapBuildAction = $("map-build-action");
-const mapDeepCollectAction = $("map-deep-collect-action");
-const mapBuiltAt = $("map-built-at");
-const mapIntelligenceStatus = $("map-intelligence-status");
-const mapIntelligenceStartAction = $("map-intelligence-start-action");
-const mapIntelligencePause = $("map-intelligence-pause");
-const mapIntelligenceResume = $("map-intelligence-resume");
-const mapIntelligenceRebuild = $("map-intelligence-rebuild");
-const mapIntelligencePrompt = $("map-intelligence-prompt");
-const mapIntelligencePromptDetail = $("map-intelligence-prompt-detail");
-const mapIntelligenceStart = $("map-intelligence-start");
-const mapIntelligenceDefer = $("map-intelligence-defer");
-const mapLoading = $("map-loading");
-const mapEmpty = $("map-empty");
-const mapContent = $("map-content");
-const mapSearch = $("map-search");
-const mapHostFilter = $("map-host-filter");
-const mapHostFilterToggle = $("map-host-filter-toggle");
-const mapHostFilterLabel = $("map-host-filter-label");
-const mapHostFilterMenu = $("map-host-filter-menu");
-const mapHostFilterAll = $("map-host-filter-all");
-const mapHostFilterOptions = $("map-host-filter-options");
-let selectedMapHosts = new Set();
-const mapMethodFilter = $("map-method-filter");
-const mapVisibilityFilter = $("map-visibility-filter");
-const mapGraph = $("map-graph");
-const mapViewport = $("map-viewport");
-const mapNoResults = $("map-no-results");
-const mapMain = document.querySelector(".map-main");
-const mapDetailToggle = $("map-detail-toggle");
-const mapDetailBody = $("map-detail-body");
-const mapDetailEmpty = $("map-detail-empty");
-const mapDetailContent = $("map-detail-content");
 const webcloneWorkspace = $("webclone-workspace");
 const webcloneBuildAction = $("webclone-build-action");
 const webclonePreviewAction = $("webclone-preview-action");
@@ -527,7 +490,7 @@ const securityWorkbenchStatus = $("security-workbench-status");
 const securityProxyBrowser = $("security-proxy-browser");
 const securityProxyBrowserWrap = $("security-proxy-browser-wrap");
 const securityProxyBrowserMenu = $("security-proxy-browser-menu");
-const securityGraphButton = $("security-graph-button");
+let proxyBrowserMenuHome = securityProxyBrowserMenu?.parentElement || null;
 const securityHistoryToggle = $("security-history-toggle");
 const securityHistoryPanel = $("security-history-panel");
 const securityHistoryRefresh = $("security-history-refresh");
@@ -635,18 +598,6 @@ let resourceScopeActive = false;
 let resourceScopeData = null;
 let resourceScopeRelativePath = "";
 let resourceScopeSaveTimer = null;
-let applicationMap = null;
-let applicationMapMode = "route";
-let selectedMapNodeId = "";
-let mapZoom = 1;
-let mapPanX = 0;
-let mapPanY = 0;
-let mapPointerState = null;
-let mapNodeDragState = null;
-let mapNodeClickSuppressed = false;
-let currentMapPositions = new Map();
-const mapNodePositionsByMode = new Map(["route", "workflow", "state", "risk"].map((mode) => [mode, new Map()]));
-let mapLoadSequence = 0;
 let webcloneManifest = null;
 let webcloneSelectedFile = "";
 let webcloneFilesCollapsed = false;
@@ -675,15 +626,7 @@ let deletingCustomEntries = false;
 let chatHistory  = [];
 const activeChatRuns = new Map();
 const chatSendInFlight = new Set();
-const pentestContinuationTimers = new Map();
 const hiddenAgentRuntimeQueues = new Map();
-const TIER2_MEMORY_MODES = new Set(["agent", "hypothesis", "plan"]);
-const TIER2_MEMORY_MAINTENANCE_PROMPT = [
-  "Perform hidden Tier 2 memory maintenance for the immediately preceding completed user-facing turn.",
-  "Use the completed transcript and canonical artifact context to persist every grounded change owned by the current mode: project information, hypotheses, checklist state, and evidence as applicable.",
-  "Call update_project_artifacts exactly once as the sole tool call. Use typed sourced operations when durable state changed; otherwise provide a specific no_op_reason.",
-  "Do not continue the user conversation, repeat the visible answer, execute target actions, ask questions, or call any other tool.",
-].join(" ");
 const chatSessionsNeedingAttention = new Set();
   let subagentCompletionPending = false;
   let pendingBackgroundWaitEvents = [];
@@ -711,6 +654,9 @@ let chatHistoryWarning = "";
 let contextCheckpointing = false;
 let contextCheckpointingSessionId = "";
 let contextCheckpointNotice = null;
+let tier1PreviewTimer = 0;
+let tier1PreviewSignatureValue = "";
+let tier1PreviewInFlight = false;
 
 const CONTEXT_RING_R = 8;
 const CONTEXT_RING_C = 2 * Math.PI * CONTEXT_RING_R;
@@ -722,8 +668,6 @@ const LEGACY_DEFAULT_CONTEXT = "8K";
 
 const SETTINGS_TAB_PATH = "xekute:settings";
 const INTERCEPTOR_TAB_PATH = "xekute:interceptor";
-const APPLICATION_GRAPH_TAB_PATH = "xekute:application-graph";
-
 /** @type {Map<string, { path: string, diskPath: string, name: string, content: string | null, savedContent: string, dirty: boolean, error: string | null, preview?: boolean, special?: string, securityTool?: string }>} */
 const openTabs      = new Map();
 let activeTabPath   = null;
@@ -801,8 +745,7 @@ const MARKDOWN_VIEW_MODE_KEY = "pointer:markdownViewMode";
 const CUSTOM_COMMANDS_KEY = "pointer:customSlashCommands";
 const COMMAND_REGISTRY_KEY = "pointer:commandRegistry";
 const AUTHORITY_SETTINGS_KEY = "pointer:authoritySettings:v1";
-const MAP_INSPECT_COLLAPSED_KEY = "pointer:mapInspectCollapsed";
-const CHAT_ROLES = new Set(["hypothesis", "plan", "agent", "ask"]);
+const CHAT_ROLES = new Set(["agent", "ask"]);
 const CHAT_FAMILIES = new Set(["testing", "assist", "xekute"]);
 const CHAT_PROFILE_DEFS = ToolParser.MODE_PROFILES || {};
 const CHAT_PROFILE_KEYS = new Set(Object.keys(CHAT_PROFILE_DEFS));
@@ -815,17 +758,17 @@ const CHAT_ROLE_ALIASES = Object.freeze({
   "assist:verifier": "ask",
   "assist:reporter": "ask",
   "assist:ask": "ask",
-  "assist:hypothesis": "hypothesis",
-  "assist:planner": "plan",
+  "assist:hypothesis": "ask",
+  "assist:planner": "ask",
   "assist:agent": "agent",
   "testing:ask": "ask",
-  "testing:hypothesis": "hypothesis",
-  "testing:planner": "plan",
+  "testing:hypothesis": "ask",
+  "testing:planner": "ask",
   "testing:agent": "agent",
   ask: "ask",
-  hypothesis: "hypothesis",
-  plan: "plan",
-  planner: "plan",
+  hypothesis: "ask",
+  plan: "ask",
+  planner: "ask",
   agent: "agent",
 });
 let selectedModel = localStorage.getItem("pointer:model") || "";
@@ -833,6 +776,7 @@ let allModels     = [];
 let activeLlmProvider = "ollama";
 let openRouterModelMeta = {};
 const openRouterContextLengthsCache = new Map();
+const ollamaRuntimeContext = {};
 let resolvedContextCapacity = {
   tokens: AUTO_CONTEXT_ESTIMATE,
   source: "fallback",
@@ -943,11 +887,13 @@ function createChatSession(title = "New Agent") {
       version: 3,
       checkpointId: null,
       checkpointRevision: 0,
+      checkpointTokens: 0,
       status: "empty",
       updatedAt: null,
       warning: "",
     },
     lastContextUsage: null,
+    currentWorkflow: null,
     messagesHtml: "",
     activeStreamContent: "",
     chatMode,
@@ -965,13 +911,34 @@ function memoryRecord(session) {
       version: 3,
       checkpointId: null,
       checkpointRevision: 0,
+      checkpointTokens: 0,
       status: "empty",
       updatedAt: null,
       warning: "",
     };
   }
   session.memory.version = 3;
+  if (!Number.isFinite(Number(session.memory.checkpointTokens))) session.memory.checkpointTokens = 0;
   return session.memory;
+}
+
+function applyCheckpointToSession(session, payload = {}) {
+  if (!session) return;
+  const memory = memoryRecord(session);
+  const status = String(payload.status || "").toLowerCase();
+  if (status === "completed") {
+    memory.status = "ready";
+    memory.checkpointId = String(payload.checkpointId || payload.checkpointRevision || memory.checkpointId || "") || null;
+    memory.updatedAt = new Date().toISOString();
+    const summarized = Number(payload.summarizedConversationTokens);
+    if (Number.isFinite(summarized) && summarized >= 0) memory.checkpointTokens = summarized;
+    if (payload.currentWorkflow && typeof payload.currentWorkflow === "object") {
+      session.currentWorkflow = payload.currentWorkflow;
+    }
+  } else if (status === "failed") {
+    memory.status = "error";
+    memory.warning = String(payload.code || "Checkpoint failed");
+  }
 }
 
 function buildProjectContextMessage({
@@ -1055,8 +1022,8 @@ function sanitizePersistedChatHtml(html) {
   const raw = String(html || "");
   const clean = globalThis.DOMPurify
     ? globalThis.DOMPurify.sanitize(raw, {
-      ADD_TAGS: ["button"],
-       ADD_ATTR: ["class", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
+      ADD_TAGS: ["button", "img"],
+       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
     })
     : "";
   const template = document.createElement("template");
@@ -1077,7 +1044,11 @@ function sanitizePersistedChatHtml(html) {
     const text = String(node.querySelector(".chat-box-content")?.textContent || "").trim();
     if (/^The agent turn was stopped\.?$/i.test(text) || /^Stopped\.?$/i.test(text)) node.remove();
   });
-  template.content.querySelectorAll(".context-checkpoint-notice").forEach((node) => node.remove());
+  template.content.querySelectorAll(".context-checkpoint-notice").forEach((node) => {
+    const state = String(node.getAttribute("data-state") || "").toLowerCase();
+    if (state === "complete" || state === "error") return;
+    node.remove();
+  });
   redactThinkingDisclosures(template.content);
   return template.innerHTML;
 }
@@ -1098,6 +1069,7 @@ function normalizePersistedChatSession(value) {
     version: 3,
     checkpointId: String(storedMemory?.checkpointId || "") || null,
     checkpointRevision: Math.max(0, Number(storedMemory?.checkpointRevision) || 0),
+    checkpointTokens: Math.max(0, Number(storedMemory?.checkpointTokens) || 0),
     status: ["empty", "ready", "error"].includes(String(storedMemory?.status || ""))
       ? String(storedMemory?.status)
       : "empty",
@@ -1115,6 +1087,7 @@ function normalizePersistedChatSession(value) {
     contextFilesCache: [],
     memory,
     lastContextUsage: normalizeContextUsageSnapshot(value.lastContextUsage),
+    currentWorkflow: value.currentWorkflow && typeof value.currentWorkflow === "object" ? value.currentWorkflow : null,
     messagesHtml: sanitizePersistedChatHtml(value.messagesHtml),
     activeStreamContent: "",
     chatFamily: family,
@@ -1137,6 +1110,7 @@ function serializeChatSession(session) {
     title: session.title,
     memory: memoryRecord(session),
     lastContextUsage: session.lastContextUsage,
+    currentWorkflow: session.currentWorkflow || null,
     mode: session.chatMode || chatMode,
     safetyFamily: session.chatFamily || chatFamily,
     model: session.selectedModel || selectedModel,
@@ -1207,6 +1181,7 @@ function chatHistoryMeta(session) {
     family: session.chatFamily || chatFamily,
     memory: memoryRecord(session),
     lastContextUsage: session.lastContextUsage,
+    currentWorkflow: session.currentWorkflow || null,
     status: archivedChatSessions.includes(session)
       ? "archived"
       : closedChatSessions.includes(session)
@@ -1414,8 +1389,26 @@ function collapseExpandedUserPrompts(except = null) {
 function createChatExchange(container = messages) {
   const exchange = document.createElement("div");
   exchange.className = "chat-exchange";
+  const body = document.createElement("div");
+  body.className = "chat-exchange-body";
+  exchange.appendChild(body);
   container.appendChild(exchange);
   return exchange;
+}
+
+function chatExchangeBody(exchange) {
+  if (!exchange?.classList?.contains("chat-exchange")) return exchange;
+  let body = exchange.querySelector(":scope > .chat-exchange-body");
+  if (body) return body;
+  body = document.createElement("div");
+  body.className = "chat-exchange-body";
+  const footer = exchange.querySelector(":scope > .assistant-reply-footer");
+  const movable = [...exchange.children].filter(
+    (child) => child !== footer && !child.classList.contains("chat-exchange-body"),
+  );
+  exchange.insertBefore(body, footer || null);
+  movable.forEach((child) => body.appendChild(child));
+  return body;
 }
 
 function currentChatExchange(container = messages) {
@@ -1425,7 +1418,7 @@ function currentChatExchange(container = messages) {
 
 function appendChatTurn(turn, { startsExchange = false, container = messages } = {}) {
   const exchange = startsExchange ? createChatExchange(container) : currentChatExchange(container);
-  exchange.appendChild(turn);
+  chatExchangeBody(exchange).appendChild(turn);
 }
 
 // Older saved chats stored every turn directly under #messages. Group the real
@@ -1439,6 +1432,15 @@ function normalizeChatExchanges() {
   for (const child of children) {
     if (child.classList.contains("chat-exchange")) {
       exchange = child;
+      continue;
+    }
+
+    if (child.classList.contains("context-checkpoint-notice")) {
+      if (exchange) {
+        const body = chatExchangeBody(exchange);
+        const assistant = body.querySelector(":scope > .chat-turn.assistant:last-of-type");
+        (assistant || body).appendChild(child);
+      }
       continue;
     }
 
@@ -1457,6 +1459,8 @@ function normalizeChatExchanges() {
     }
     exchange.appendChild(child);
   }
+
+  messages?.querySelectorAll(".chat-exchange").forEach((exchange) => chatExchangeBody(exchange));
 }
 
 function isInternalRuntimeInputMessage(message = {}) {
@@ -1583,6 +1587,7 @@ function hydratePersistedChatTranscript(root = messages) {
   if (!root) return;
   redactThinkingDisclosures(root);
   hydrateSubagentRunCards(root);
+  hydrateContextCheckpointNotices(root);
   for (const row of root.querySelectorAll?.(".agent-command-event") || []) {
     stopCommandTimelineTicker(row);
     if (row.dataset.state === "running" && row.dataset.waiting === "true") {
@@ -1675,7 +1680,9 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
   }
   session.contextFilesCache = run.contextFilesCache || [];
   session.activeStreamContent = run.activeStreamContent || "";
-  session.chatMode = run.mode;
+  // The picker is the next-turn preference. Do not copy the in-flight
+  // run's mode back onto the session, or a mid-reply Agent/Ask change
+  // would snap back when the current turn finishes.
   session.chatFamily = run.family;
   session.selectedModel = run.model;
   const container = run.viewHost || (activeChatSessionId === session.id ? messages : null);
@@ -1916,7 +1923,6 @@ function showCodeEditorWorkspace() {
   assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = true;
-  if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
   window.api.webCloneHidePreview?.();
@@ -1933,7 +1939,6 @@ function showResourceWorkspace({ focus = false } = {}) {
   assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = false;
   if (securityWorkspace) securityWorkspace.hidden = true;
-  if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
   window.api.webCloneHidePreview?.();
@@ -1956,7 +1961,6 @@ function showSecurityWorkspaceContent(tool = "") {
   assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = false;
-  if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
   window.api.webCloneHidePreview?.();
@@ -2223,6 +2227,9 @@ async function saveGuidanceFile({ autoSave = false } = {}) {
   }
   if (!autoSave) await loadGuidanceSettings({ preserveSelection: true });
   else await refreshCustomSkillCatalog();
+  // Rules and skills are Tier 1 categories, so editing one changes the meter
+  // even though the session, model, and mode are unchanged.
+  scheduleTier1ContextPreview({ force: true });
   return true;
 }
 
@@ -2244,6 +2251,7 @@ async function deleteGuidanceEntry(relativePath, scope = "project") {
   }
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Guidance deleted";
   await loadGuidanceSettings();
+  scheduleTier1ContextPreview({ force: true });
   return true;
 }
 
@@ -2698,9 +2706,6 @@ function setAppSettingsSection(section) {
   }
   if (appSettingsSection === "certificates") {
     loadCertificateSettings();
-  }
-  if (appSettingsSection === "knowledge") {
-    loadKnowledgeLibrarySettings();
   }
 }
 
@@ -3199,133 +3204,6 @@ async function loadCertificateSettings() {
   renderCertificateSettings(result);
 }
 
-function knowledgeLibraryStatusEl() {
-  return $("knowledge-library-status");
-}
-
-function knowledgeLibraryErrorMessage(result, fallback = "Knowledge Library request failed.") {
-  return result?.error?.message || result?.error || result?.code || fallback;
-}
-
-function renderKnowledgeLibrarySettings(payload = {}) {
-  const releasesEl = $("knowledge-library-releases");
-  const modelEl = $("knowledge-library-model");
-  const healthEl = $("knowledge-library-health");
-  const reindexBtn = $("knowledge-library-reindex");
-  const releases = Array.isArray(payload.releases) ? payload.releases : [];
-  if (releasesEl) {
-    const rows = releases.map((release) => {
-      const id = escapeHtml(release.release_id || "");
-      const version = escapeHtml(release.version || "");
-      const procedureCount = escapeHtml(release.procedure_count ?? "");
-      const signed = release.signed === true ? "true" : "false";
-      const bundled = release.bundled === true;
-      const hash = escapeHtml(release.content_hash || "");
-      const remove = bundled
-        ? `<button type="button" class="secondary-button" disabled>Remove</button>`
-        : `<button type="button" class="secondary-button" data-knowledge-remove="${id}">Remove</button>`;
-      return `<tr><td>${id}</td><td>${version}</td><td>${procedureCount}</td><td>${signed}</td><td>${bundled ? "true" : "false"}</td><td>${hash}</td><td>${remove}</td></tr>`;
-    }).join("");
-    releasesEl.innerHTML = `<table class="assessment-module-table"><thead><tr><th>release_id</th><th>version</th><th>procedure_count</th><th>signed</th><th>bundled</th><th>content_hash</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=\"7\">No releases installed.</td></tr>"}</tbody></table>`;
-    releasesEl.querySelectorAll("[data-knowledge-remove]").forEach((button) => {
-      button.addEventListener("click", () => removeKnowledgeLibraryRelease(button.getAttribute("data-knowledge-remove")));
-    });
-  }
-  const health = payload.health || {};
-  if (modelEl) modelEl.textContent = health.model || payload.model?.name || payload.model || "Not loaded";
-  if (healthEl) {
-    const projection = health.projection || {};
-    healthEl.innerHTML = [
-      ["status", health.status || "not_built"],
-      ["chunkCount", health.chunkCount ?? 0],
-      ["vectorCount", health.vectorCount ?? 0],
-      ["recordCount", health.recordCount ?? 0],
-      ["knowledgeFingerprint", health.knowledgeFingerprint || ""],
-      ["scoringVersion", health.scoringVersion || ""],
-      ["projection.format", projection.format || ""],
-    ].map(([label, value]) => `<div><strong>${escapeHtml(label)}</strong> ${escapeHtml(value)}</div>`).join("");
-  }
-  if (reindexBtn) reindexBtn.disabled = !assessmentPath;
-}
-
-async function loadKnowledgeLibrarySettings() {
-  if (!window.api.knowledgeList) return;
-  const [list, status] = await Promise.all([
-    window.api.knowledgeList(),
-    window.api.knowledgeStatus?.({ workspace: assessmentPath }) || Promise.resolve({}),
-  ]);
-  if (list?.ok === false || list?.error) {
-    addErrorMessage(knowledgeLibraryErrorMessage(list));
-    return;
-  }
-  renderKnowledgeLibrarySettings({
-    releases: list?.releases || [],
-    model: status?.model,
-    health: status?.health,
-  });
-}
-
-async function installKnowledgeLibraryPackage() {
-  const statusEl = knowledgeLibraryStatusEl();
-  if (!window.api.openFile || !window.api.knowledgeInstall) return;
-  const filePath = await window.api.openFile();
-  if (!filePath) return;
-  const raw = await window.api.readFile?.(filePath);
-  if (raw?.error) {
-    if (statusEl) statusEl.textContent = knowledgeLibraryErrorMessage(raw);
-    addErrorMessage(knowledgeLibraryErrorMessage(raw));
-    return;
-  }
-  let pkg;
-  try { pkg = JSON.parse(raw?.content || ""); } catch {
-    addErrorMessage("Knowledge package must be JSON.");
-    return;
-  }
-  const preview = await window.api.knowledgePreview?.({ package: pkg });
-  if (preview?.ok === false || preview?.error) {
-    addErrorMessage(knowledgeLibraryErrorMessage(preview));
-    return;
-  }
-  let result = await window.api.knowledgeInstall({ package: pkg });
-  const unsigned = preview?.preview?.signed === false;
-  const confirmationRequired = result?.code === "MEMORY_KNOWLEDGE_CONFIRMATION_REQUIRED";
-  if ((unsigned || confirmationRequired) && result?.ok !== true) {
-    const confirmation = await AppDialog.prompt("This package is unsigned. Enter the content hash to confirm installation.", "", { title: "Unsigned package" });
-    if (confirmation == null || !String(confirmation).trim()) return;
-    result = await window.api.knowledgeInstall({ package: pkg, confirmation: String(confirmation).trim() });
-  }
-  if (result?.ok === false || result?.error) {
-    if (statusEl) statusEl.textContent = knowledgeLibraryErrorMessage(result);
-    addErrorMessage(knowledgeLibraryErrorMessage(result));
-    return;
-  }
-  if (statusEl) statusEl.textContent = "Package installed";
-  await loadKnowledgeLibrarySettings();
-}
-
-async function removeKnowledgeLibraryRelease(releaseId) {
-  if (!releaseId || !window.api.knowledgeRemove) return;
-  const result = await window.api.knowledgeRemove({ releaseId });
-  if (result?.ok === false || result?.error) {
-    addErrorMessage(knowledgeLibraryErrorMessage(result));
-    return;
-  }
-  await loadKnowledgeLibrarySettings();
-}
-
-async function reindexKnowledgeLibrary() {
-  const statusEl = knowledgeLibraryStatusEl();
-  if (!assessmentPath) return;
-  const result = await window.api.knowledgeReindex?.({ workspace: assessmentPath });
-  if (result?.ok === false || result?.error) {
-    if (statusEl) statusEl.textContent = knowledgeLibraryErrorMessage(result);
-    addErrorMessage(knowledgeLibraryErrorMessage(result));
-    return;
-  }
-  if (statusEl) statusEl.textContent = "Index rebuilt";
-  await loadKnowledgeLibrarySettings();
-}
-
 async function chooseCertificateDirectory() {
   const result = await window.api.chooseCertificateDirectory?.({ assessmentPath });
   if (!result || result.canceled) return;
@@ -3475,10 +3353,6 @@ async function saveKaliAccess(event, { quiet = false } = {}) {
   if (result?.ok === false || result?.error) return setKaliAccessStatus(mcpErrorMessage(result, "Kali access could not be saved."), "error");
   renderKaliAccess(result.value || kaliAccessFormValue());
   if (!quiet) setKaliAccessStatus(result.value?.enabled ? "Kali access saved. Add Kali-hosted servers through the normal MCP configuration." : "Local Kali access is disabled.", "success");
-}
-
-function mapIntelligencePromptKey() {
-  return `xekute:intelligence-prompt:${String(assessmentPath || "")}`;
 }
 
 let identitySettingsSnapshot = null;
@@ -3875,512 +3749,6 @@ async function importIdentityStateFromSettings() {
   }
 }
 
-function renderMapIntelligenceStatus(status) {
-  if (!status) return;
-  const counts = status.overview?.counts || {};
-  const estimate = status.estimate || {};
-  const countLabel = status.status === "ready" ? ` · ${Number(counts.evidence || 0)} evidence` : estimate.estimatedRecordCount ? ` · ~${estimate.estimatedRecordCount} records` : "";
-  if (mapIntelligenceStatus) mapIntelligenceStatus.textContent = `Intelligence: ${status.status || "unknown"}${countLabel}`;
-  const running = status.status === "running" || status.status === "queued";
-  const paused = status.status === "paused";
-  if (mapIntelligencePause) mapIntelligencePause.hidden = !running;
-  if (mapIntelligenceResume) mapIntelligenceResume.hidden = !paused;
-  if (mapIntelligenceRebuild) mapIntelligenceRebuild.hidden = !(status.status === "ready" || status.status === "corrupt");
-  const shouldPrompt = status.status === "not_built" && Number(estimate.sourceCount || 0) > 0 && !localStorage.getItem(mapIntelligencePromptKey());
-  if (mapIntelligencePrompt) mapIntelligencePrompt.hidden = !shouldPrompt;
-  if (mapIntelligenceStartAction) mapIntelligenceStartAction.hidden = status.status !== "not_built" || shouldPrompt;
-  if (shouldPrompt) {
-    localStorage.setItem(mapIntelligencePromptKey(), "shown");
-    if (mapIntelligencePromptDetail) mapIntelligencePromptDetail.textContent = `Found ${estimate.sourceCount} source${estimate.sourceCount === 1 ? "" : "s"} (~${estimate.estimatedRecordCount || 0} records). Start a bounded local index now, or defer it.`;
-  }
-}
-
-async function refreshMapIntelligenceStatus() {
-  if (!assessmentPath || !window.api.assessmentIntelligenceStatus) return null;
-  try {
-    const status = await window.api.assessmentIntelligenceStatus({ path: assessmentPath });
-    renderMapIntelligenceStatus(status);
-    return status;
-  } catch (error) {
-    if (mapIntelligenceStatus) mapIntelligenceStatus.textContent = "Intelligence: unavailable";
-    return null;
-  }
-}
-
-async function startMapIntelligenceIndex() {
-  if (!assessmentPath || !window.api.assessmentIntelligenceStart) return;
-  localStorage.setItem(mapIntelligencePromptKey(), "started");
-  renderMapIntelligenceStatus({ status: "running", estimate: {} });
-  await window.api.assessmentIntelligenceStart({ path: assessmentPath });
-  await refreshMapIntelligenceStatus();
-}
-
- function setMapWorkspaceState({ exists = false, busy = false, message = "" } = {}) {
-  if (mapEmpty) mapEmpty.hidden = exists;
-  if (mapContent) mapContent.hidden = !exists;
-  if (mapLoading) mapLoading.hidden = !busy;
-  if (mapBuildAction) {
-    mapBuildAction.disabled = busy || !assessmentPath;
-    mapBuildAction.querySelector("span:last-child").textContent = exists ? "Rebuild" : "Build";
-    mapBuildAction.title = exists ? "Rebuild from Traffic/Raw" : "Build from Traffic/Raw";
-  }
-  if (mapDeepCollectAction) mapDeepCollectAction.disabled = busy || !assessmentPath;
-  if (message && mapWorkspaceSubtitle) mapWorkspaceSubtitle.textContent = message;
-}
-
-function mapDateLabel(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-}
-
-function populateMapFilters(graph) {
-  const routes = graph?.nodes?.filter((node) => node.type === "Route") || [];
-  const replaceOptions = (select, values, label) => {
-    if (!select) return;
-    const selected = select.value;
-    select.innerHTML = "";
-    select.add(new Option(label, ""));
-    values.forEach((value) => select.add(new Option(value, value)));
-    select.value = values.includes(selected) ? selected : "";
-  };
-  const hosts = [...new Set(routes.map((node) => node.host).filter(Boolean))].sort();
-  selectedMapHosts = new Set([...selectedMapHosts].filter((host) => hosts.includes(host)));
-  renderMapHostFilter(hosts);
-  replaceOptions(mapMethodFilter, [...new Set(routes.map((node) => node.method))].sort(), "All methods");
-}
-
-function renderMapHostFilter(hosts = []) {
-  if (!mapHostFilterOptions) return;
-  mapHostFilterOptions.innerHTML = hosts.map((host) => `<label class="map-host-option"><input type="checkbox" value="${escapeHtml(host)}"${selectedMapHosts.has(host) ? " checked" : ""}> <span title="${escapeHtml(host)}">${escapeHtml(host)}</span></label>`).join("") || '<div class="map-host-filter-empty">No route hosts</div>';
-  if (mapHostFilterAll) mapHostFilterAll.checked = selectedMapHosts.size === 0;
-  if (mapHostFilterLabel) {
-    const selected = [...selectedMapHosts].sort();
-    mapHostFilterLabel.textContent = !selected.length ? "All hosts" : selected.length === 1 ? selected[0] : `${selected.length} hosts`;
-  }
-}
-
-function setMapHostFilterOpen(open) {
-  if (!mapHostFilterMenu || !mapHostFilterToggle) return;
-  mapHostFilterMenu.hidden = !open;
-  mapHostFilterToggle.setAttribute("aria-expanded", String(open));
-}
-
-function updateMapMetrics(graph) {
-  const stats = graph?.stats || {};
-  const values = {
-    "map-stat-hosts": stats.hosts,
-    "map-stat-routes": stats.routes,
-    "map-stat-observations": stats.observations,
-    "map-stat-variants": stats.variants,
-    "map-stat-risk": stats.highPriorityRoutes ?? stats.highRiskRoutes,
-  };
-  Object.entries(values).forEach(([id, value]) => { const element = $(id); if (element) element.textContent = Number(value) || 0; });
-  if (mapBuiltAt) {
-    const audit = graph?.verification;
-    const verificationLabel = audit?.verified ? `Verified ${audit.checkedNodes} nodes${audit.sourceComplete === false ? " · source truncated" : ""}${audit.referencesComplete === false ? " · reference limit reached" : ""}` : graph ? "Rebuild to verify" : "";
-    mapBuiltAt.textContent = graph?.builtAt ? `${verificationLabel} · Built ${mapDateLabel(graph.builtAt)}` : verificationLabel;
-    mapBuiltAt.title = [...(graph?.source?.warnings || []), graph?.builderVersion ? `Builder ${graph.builderVersion}` : ""].filter(Boolean).join("\n");
-  }
-}
-
-function filteredMapRoutes() {
-  const allRoutes = applicationMap?.nodes?.filter((node) => node.type === "Route") || [];
-  const query = String(mapSearch?.value || "").trim().toLowerCase();
-  const matchingAuxiliaryIds = new Set((applicationMap?.nodes || []).filter((node) => node.type !== "Route" && node.type !== "Host" && query && `${node.label} ${node.type} ${node.host || ""} ${node.communityLabel || ""} ${(node.riskTags || []).join(" ")}`.toLowerCase().includes(query)).map((node) => node.id));
-  const routesLinkedToQuery = new Set((applicationMap?.edges || []).filter((edge) => matchingAuxiliaryIds.has(edge.source) || matchingAuxiliaryIds.has(edge.target)).flatMap((edge) => [edge.source, edge.target]));
-  const hosts = selectedMapHosts;
-  const method = mapMethodFilter?.value || "";
-  const visibility = mapVisibilityFilter?.value || "relevant";
-  return allRoutes.filter((route) => {
-    if (hosts.size && !hosts.has(route.host)) return false;
-    if (method && route.method !== method) return false;
-    if (query && !routesLinkedToQuery.has(route.id) && !`${route.label} ${route.host} ${route.template} ${(route.riskTags || []).join(" ")}`.toLowerCase().includes(query)) return false;
-    if (visibility === "relevant" && route.visibility === "hidden") return false;
-    if (visibility === "application" && route.filterReason === "third_party_telemetry") return false;
-    return true;
-  }).slice(0, 600);
-}
-
-function mapPositionStorageKey(graph = applicationMap) {
-  const graphKey = graph?.project?.rootHash || graph?.project?.name || "default";
-  return `pointer:mapNodePositions:v2:${graphKey}`;
-}
-
-function activeMapPositionOverrides(mode = applicationMapMode) {
-  return mapNodePositionsByMode.get(mode) || mapNodePositionsByMode.get("route");
-}
-
-function loadMapNodePositions(graph) {
-  mapNodePositionsByMode.forEach((positions) => positions.clear());
-  if (!graph) return;
-  const nodeIds = new Set(graph.nodes?.map((node) => node.id) || []);
-  try {
-    const saved = JSON.parse(localStorage.getItem(mapPositionStorageKey(graph)) || "{}");
-    for (const mode of mapNodePositionsByMode.keys()) {
-      Object.entries(saved?.[mode] || {}).forEach(([id, point]) => {
-        if (nodeIds.has(id) && Number.isFinite(point?.x) && Number.isFinite(point?.y)) mapNodePositionsByMode.get(mode).set(id, { x: point.x, y: point.y });
-      });
-    }
-    const legacyKey = `pointer:mapWorkflowPositions:${graph.project?.rootHash || graph.project?.name || "default"}`;
-    const legacy = JSON.parse(localStorage.getItem(legacyKey) || "{}");
-    Object.entries(legacy).forEach(([id, point]) => {
-      if (nodeIds.has(id) && Number.isFinite(point?.x) && Number.isFinite(point?.y) && !mapNodePositionsByMode.get("workflow").has(id)) mapNodePositionsByMode.get("workflow").set(id, { x: point.x, y: point.y });
-    });
-  } catch { localStorage.removeItem(mapPositionStorageKey(graph)); }
-}
-
-function persistMapNodePositions() {
-  if (!applicationMap) return;
-  const saved = Object.fromEntries([...mapNodePositionsByMode].map(([mode, positions]) => [mode, Object.fromEntries([...positions].map(([id, point]) => [id, { x: Math.round(point.x * 10) / 10, y: Math.round(point.y * 10) / 10 }]))]));
-  try { localStorage.setItem(mapPositionStorageKey(), JSON.stringify(saved)); } catch { /* keep the current in-memory arrangement */ }
-}
-
-function layoutMapNodes(routes, visibleHostNodes = [], auxiliaryNodes = []) {
-  const positions = new Map();
-  const positionAuxiliary = () => {
-    auxiliaryNodes.forEach((node, index) => {
-      const relationship = (applicationMap?.edges || []).find((edge) => (edge.source === node.id && positions.has(edge.target)) || (edge.target === node.id && positions.has(edge.source)));
-      const anchorId = relationship ? (relationship.source === node.id ? relationship.target : relationship.source) : "";
-      const anchor = positions.get(anchorId) || { x: 700, y: 410 };
-      const angle = (index * 2.399963229728653) % (Math.PI * 2);
-      const radius = 34 + (index % 4) * 10;
-      positions.set(node.id, { x: anchor.x + Math.cos(angle) * radius, y: anchor.y + Math.sin(angle) * radius });
-    });
-  };
-  if (["workflow", "state"].includes(applicationMapMode)) {
-    const columns = Math.max(1, Math.ceil(Math.sqrt(routes.length * 1.7)));
-    const rows = Math.max(1, Math.ceil(routes.length / columns));
-    const width = Math.min(1220, Math.max(500, columns * 145));
-    const height = Math.min(700, Math.max(300, rows * 95));
-    routes.forEach((route, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const defaultPoint = { x: 700 - width / 2 + (column + .5) * (width / columns), y: 410 - height / 2 + (row + .5) * (height / rows) };
-      positions.set(route.id, defaultPoint);
-    });
-    positionAuxiliary();
-    for (const [id, point] of activeMapPositionOverrides()) if (positions.has(id)) positions.set(id, point);
-    return positions;
-  }
-
-  const hosts = [...new Set([...routes.map((route) => route.host), ...visibleHostNodes.map((node) => node.host)])];
-  const columns = Math.max(1, Math.ceil(Math.sqrt(hosts.length * 1.6)));
-  const rows = Math.max(1, Math.ceil(hosts.length / columns));
-  const cellWidth = Math.min(600, 1300 / columns);
-  const cellHeight = Math.min(520, 750 / rows);
-  hosts.forEach((host, hostIndex) => {
-    const column = hostIndex % columns;
-    const row = Math.floor(hostIndex / columns);
-    const center = { x: 700 + (column - (columns - 1) / 2) * cellWidth, y: 410 + (row - (rows - 1) / 2) * cellHeight };
-    const hostNode = visibleHostNodes.find((node) => node.host === host) || applicationMap.nodes.find((node) => node.type === "Host" && node.host === host);
-    if (hostNode) positions.set(hostNode.id, center);
-    const hostRoutes = routes.filter((route) => route.host === host);
-    hostRoutes.forEach((route, index) => {
-      const ring = Math.floor(index / 12);
-      const ringStart = ring * 12;
-      const ringCount = Math.min(12, hostRoutes.length - ringStart);
-      const angle = -Math.PI / 2 + ((index - ringStart) / Math.max(1, ringCount)) * Math.PI * 2;
-      const radius = Math.min(Math.max(82, Math.min(cellWidth, cellHeight) * .31) + ring * 58, Math.min(cellWidth, cellHeight) * .46);
-      positions.set(route.id, { x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius });
-    });
-  });
-  for (const [id, point] of activeMapPositionOverrides()) if (positions.has(id)) positions.set(id, point);
-  return positions;
-}
-
-function updateMapViewportTransform() {
-  mapViewport?.setAttribute("transform", `translate(${mapPanX} ${mapPanY}) scale(${mapZoom})`);
-}
-
-function mapClientPoint(clientX, clientY) {
-  if (!mapGraph || !mapViewport) return { x: 0, y: 0 };
-  const point = mapGraph.createSVGPoint();
-  point.x = clientX; point.y = clientY;
-  const matrix = mapViewport.getScreenCTM();
-  if (!matrix) return { x: 0, y: 0 };
-  const transformed = point.matrixTransform(matrix.inverse());
-  return { x: transformed.x, y: transformed.y };
-}
-
-function updateDraggedMapNode(nodeId, point, mode = applicationMapMode) {
-  if (!mapViewport || !nodeId) return;
-  currentMapPositions.set(nodeId, point);
-  activeMapPositionOverrides(mode).set(nodeId, point);
-  mapViewport.querySelector(`[data-map-node-id="${CSS.escape(nodeId)}"]`)?.setAttribute("transform", `translate(${point.x} ${point.y})`);
-  mapViewport.querySelectorAll(`[data-map-edge-source="${CSS.escape(nodeId)}"], [data-map-edge-target="${CSS.escape(nodeId)}"]`).forEach((edge) => {
-    const source = currentMapPositions.get(edge.dataset.mapEdgeSource);
-    const target = currentMapPositions.get(edge.dataset.mapEdgeTarget);
-    if (!source || !target) return;
-    edge.setAttribute("x1", source.x); edge.setAttribute("y1", source.y);
-    edge.setAttribute("x2", target.x); edge.setAttribute("y2", target.y);
-  });
-}
-
-function setMapDetailCollapsed(collapsed, { persist = true } = {}) {
-  const next = Boolean(collapsed);
-  mapMain?.classList.toggle("detail-collapsed", next);
-  mapDetailToggle?.setAttribute("aria-expanded", String(!next));
-  if (mapDetailToggle) mapDetailToggle.title = next ? "Expand node inspector" : "Collapse node inspector";
-  const icon = mapDetailToggle?.querySelector(".codicon");
-  icon?.classList.toggle("codicon-chevron-left", next);
-  icon?.classList.toggle("codicon-chevron-right", !next);
-  if (mapDetailBody) mapDetailBody.setAttribute("aria-hidden", String(next));
-  if (persist) localStorage.setItem(MAP_INSPECT_COLLAPSED_KEY, String(next));
-}
-
-function renderMapDetails(node) {
-  if (!mapDetailContent || !mapDetailEmpty) return;
-  mapDetailEmpty.hidden = Boolean(node);
-  mapDetailContent.hidden = !node;
-  if (!node) { mapDetailContent.innerHTML = ""; return; }
-  const connections = (applicationMap?.edges || []).filter((edge) => edge.source === node.id || edge.target === node.id).slice(0, 30);
-  const nodeById = new Map((applicationMap?.nodes || []).map((item) => [item.id, item]));
-  const connectionMarkup = connections.length ? connections.map((edge) => {
-    const outgoing = edge.source === node.id;
-    const peer = nodeById.get(outgoing ? edge.target : edge.source);
-    const evidence = (edge.evidenceIds || []).slice(0, 3).map((id, index) => `<button type="button" class="map-evidence" data-map-evidence="${escapeHtml(String(id))}">Inspect evidence${index ? ` ${index + 1}` : ""}</button>`).join("");
-    const origin = edge.observationType || "legacy";
-    const support = Number(edge.supportCount) || Number(edge.observedCount) || 0;
-    const extractor = edge.provenanceSamples?.[0]?.extractor || "legacy";
-    return `<div class="map-connection"><strong>${outgoing ? "→" : "←"} ${escapeHtml(edge.type)}</strong><span>${escapeHtml(peer?.label || peer?.host || "Unknown node")} · ${Math.round((Number(edge.confidence) || 0) * 100)}% · ${escapeHtml(origin)} · ${support} support${support === 1 ? "" : "s"} · ${escapeHtml(extractor)}</span>${evidence ? `<div class="map-evidence-list">${evidence}</div>` : ""}</div>`;
-  }).join("") : '<div class="map-tags"><span>No connections</span></div>';
-  if (node.type === "Host") {
-    mapDetailContent.innerHTML = `<div class="map-detail-title"><span>Host</span><h2>${escapeHtml(node.label)}</h2><p>${node.observed ? "Observed traffic host" : "Discovered application host"}</p></div><section class="map-detail-section"><div class="map-detail-grid"><div><span>Routes</span><strong>${Number(node.routeCount) || 0}</strong></div><div><span>Observations</span><strong>${Number(node.observedCount) || 0}</strong></div><div><span>Highest priority</span><strong>${Number(node.priorityScore ?? node.riskScore) || 0}/100</strong></div><div><span>Source</span><strong>${node.observed ? "Observed" : "Derived"}</strong></div></div></section><section class="map-detail-section"><h3>Connections</h3>${connectionMarkup}</section>`;
-    return;
-  }
-  const tags = (items, empty = "None observed") => items?.length ? `<div class="map-tags">${items.map((item) => `<span>${escapeHtml(String(item))}</span>`).join("")}</div>` : `<div class="map-tags"><span>${empty}</span></div>`;
-  const evidenceButtons = (items = []) => items.slice(0, 12).map((id, index) => `<button type="button" class="map-evidence" data-map-evidence="${escapeHtml(String(id))}">Inspect evidence${index ? ` ${index + 1}` : ""}</button>`).join("");
-  if (["ApplicationState", "Action"].includes(node.type)) {
-    const relatedAnomalies = (applicationMap?.stateModel?.anomalies || []).filter((item) => [...(item.stateIds || []), ...(item.actionIds || [])].includes(node.id));
-    const anomalyMarkup = relatedAnomalies.length ? relatedAnomalies.map((item) => `<article class="map-hypothesis"><strong>${escapeHtml(item.title || item.kind)}</strong><span>${escapeHtml(item.basis || "")}</span><em>candidate · ${Math.round((Number(item.confidence) || 0) * 100)}% confidence</em>${item.candidateTest ? `<p>${escapeHtml(item.candidateTest)}</p>` : ""}</article>`).join("") : '<div class="map-tags"><span>No candidate anomalies</span></div>';
-    const evidence = evidenceButtons(node.evidenceRefs || []);
-    if (node.type === "ApplicationState") {
-      mapDetailContent.innerHTML = `<div class="map-detail-title"><span>Application state</span><h2>${escapeHtml(node.label)}</h2><p>${escapeHtml(node.aiSummary || "Deterministic state projection from captured traffic.")}</p></div><section class="map-detail-section"><div class="map-detail-grid"><div><span>Kind</span><strong>${escapeHtml(node.stateKind || "application")}</strong></div><div><span>Lifecycle</span><strong>${escapeHtml(node.lifecycle || "unknown")}</strong></div><div><span>Identity</span><strong>${escapeHtml(node.identityLabel || "Unresolved")}</strong></div><div><span>Role</span><strong>${escapeHtml(node.role || "unknown")}</strong></div><div><span>Confidence</span><strong>${Math.round((Number(node.confidence) || 0) * 100)}%</strong></div><div><span>Evidence</span><strong>${node.evidenceRefs?.length || 0}</strong></div></div></section><section class="map-detail-section"><h3>Candidate tests</h3>${tags(node.candidateTests, "No candidate tests")}</section><section class="map-detail-section"><div class="map-section-heading"><h3>State anomalies</h3><span class="map-section-count">${relatedAnomalies.length}</span></div>${anomalyMarkup}</section>${evidence ? `<section class="map-detail-section"><h3>Evidence</h3><div class="map-evidence-list">${evidence}</div></section>` : ""}<section class="map-detail-section"><h3>State relationships</h3>${connectionMarkup}</section>`;
-      return;
-    }
-    mapDetailContent.innerHTML = `<div class="map-detail-title"><span>Application action</span><h2>${escapeHtml(node.label)}</h2><p>${escapeHtml(node.aiSummary || "Deterministic action projection from captured traffic.")}</p></div><section class="map-detail-section"><div class="map-detail-grid"><div><span>Kind</span><strong>${escapeHtml(node.actionKind || "action")}</strong></div><div><span>Method</span><strong>${escapeHtml(node.method || "HTTP")}</strong></div><div><span>Resource</span><strong>${escapeHtml(node.resource || "application")}</strong></div><div><span>Mutating</span><strong>${node.mutating ? "yes" : "no"}</strong></div><div><span>Observed</span><strong>${Number(node.observedCount) || 0}</strong></div><div><span>Success / rejected</span><strong>${Number(node.successfulCount) || 0} / ${Number(node.rejectedCount) || 0}</strong></div><div><span>Preconditions</span><strong>${node.preconditionStateIds?.length || 0}</strong></div><div><span>Resulting states</span><strong>${node.resultingStateIds?.length || 0}</strong></div></div></section><section class="map-detail-section"><h3>Candidate tests</h3>${tags(node.candidateTests, "No candidate tests")}</section><section class="map-detail-section"><div class="map-section-heading"><h3>Action anomalies</h3><span class="map-section-count">${relatedAnomalies.length}</span></div>${anomalyMarkup}</section>${evidence ? `<section class="map-detail-section"><h3>Evidence</h3><div class="map-evidence-list">${evidence}</div></section>` : ""}<section class="map-detail-section"><h3>Action relationships</h3>${connectionMarkup}</section>`;
-    return;
-  }
-  if (node.type !== "Route") {
-    const safeRows = [
-      ["Type", node.type], ["Role", node.role || node.actorRole], ["Host", node.host],
-      ["Observed", node.observedCount ?? node.occurrenceCount], ["Routes", node.routeCount],
-      ["Size", node.byteLength ? `${Number(node.byteLength).toLocaleString()} bytes` : ""],
-      ["Endpoints", node.endpointCount], ["Imports", node.importCount], ["Status", node.statusCode],
-      ["Location", node.location], ["Category", node.category], ["Priority", `${Number(node.priorityScore ?? node.riskScore) || 0}/100 · ${node.priorityTier || "legacy"}`], ["Community", node.communityLabel],
-    ].filter(([, value]) => value !== undefined && value !== null && value !== "");
-    const signalTags = Object.entries(node.signals || {}).filter(([, count]) => Number(count) > 0).map(([name, count]) => `${name}: ${count}`);
-    const priorityFactors = (node.priorityFactors || []).map((factor) => `${factor.label} +${Number(factor.points) || 0}`);
-    mapDetailContent.innerHTML = `<div class="map-detail-title"><span>${escapeHtml(node.type)}</span><h2>${escapeHtml(node.label || node.type)}</h2><p>Deterministic graph projection · internal source identifiers hidden</p></div><section class="map-detail-section"><div class="map-detail-grid">${safeRows.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("")}</div></section>${signalTags.length ? `<section class="map-detail-section"><h3>Signals</h3>${tags(signalTags)}</section>` : ""}<section class="map-detail-section"><h3>Priority factors</h3>${tags(priorityFactors, "No scored evidence factors")}</section><section class="map-detail-section"><h3>Connections</h3>${connectionMarkup}</section>`;
-    return;
-  }
-  const parameterLabels = (node.parameters || []).map((item) => `${item.location}: ${item.name}`);
-  const relatedHypotheses = (applicationMap?.hypotheses || []).filter((item) => (item.routes || []).includes(node.id));
-  const priorityFactorLabels = (node.priorityFactors || []).map((factor) => `${factor.label} +${Number(factor.points) || 0}`);
-  const hypothesisMarkup = relatedHypotheses.length
-    ? relatedHypotheses.map((item) => `<div class="map-hypothesis"><strong>${escapeHtml(item.hypothesis || "candidate hypothesis")}</strong><span>${escapeHtml(item.basis || "")}</span><em>${escapeHtml(item.status || "untested")} · ${Math.round((Number(item.confidence) || 0) * 100)}% confidence</em></div>`).join("")
-    : '<div class="map-tags"><span>No candidate hypotheses</span></div>';
-  const variantItems = Array.isArray(node.variants) ? [...node.variants].sort((a, b) => Number(b.occurrenceCount) - Number(a.occurrenceCount)) : [];
-  const variants = variantItems.map((variant, index) => {
-    const evidenceIds = Array.isArray(variant.evidenceIds) ? variant.evidenceIds : (Array.isArray(variant.evidenceRefs) ? variant.evidenceRefs : []);
-    const evidence = evidenceIds.slice(0, 8).map((id, index) => `<button type="button" class="map-evidence" data-map-evidence="${escapeHtml(String(id))}">Inspect${index ? ` ${index + 1}` : ""}</button>`).join("");
-    const auth = variant.authenticationState || variant.authState || variant.authType || "unknown";
-    const status = variant.statusCode == null ? "—" : String(variant.statusCode);
-    const requestShape = String(variant.requestShapeHash || "unknown").slice(0, 12);
-    const responseSchema = String(variant.responseSchemaHash || "unknown").slice(0, 12);
-    return `<article class="map-variant" data-variant-index="${index}"><div class="map-variant-header"><strong>Variant ${index + 1}</strong><b>${escapeHtml(auth)}</b><em>${Number(variant.occurrenceCount) || 0} observation${Number(variant.occurrenceCount) === 1 ? "" : "s"}</em></div><div class="map-variant-meta"><span><label>Status</label><strong>HTTP ${escapeHtml(status)}</strong></span><span><label>Request shape</label><strong title="${escapeHtml(requestShape)}">${escapeHtml(requestShape)}</strong></span><span><label>Response schema</label><strong title="${escapeHtml(responseSchema)}">${escapeHtml(responseSchema)}</strong></span></div>${evidence ? `<div class="map-variant-evidence"><label>Evidence</label><div class="map-evidence-list">${evidence}</div></div>` : ""}</article>`;
-  }).join("");
-  mapDetailContent.innerHTML = `
-    <div class="map-detail-title"><span>Route</span><h2>${escapeHtml(node.label)}</h2><p>${escapeHtml(node.host)} · ${escapeHtml(node.routeFingerprint?.slice(0, 12) || "")}</p><div class="map-ai-summary">${escapeHtml(node.aiSummary || "No AI summary available for this route.")}</div></div>
-    <div class="map-detail-score"><strong>${Number(node.priorityScore ?? node.riskScore) || 0}</strong><div><i style="width:${Math.max(0, Math.min(100, Number(node.priorityScore ?? node.riskScore) || 0))}%"></i></div><span>priority · ${escapeHtml(node.priorityTier || "legacy")}</span></div>
-    <section class="map-detail-section"><div class="map-detail-grid"><div><span>Observed</span><strong>${Number(node.observedCount) || 0}×</strong></div><div><span>Variants</span><strong>${node.variants?.length || 0}</strong></div><div><span>Origin</span><strong>${escapeHtml(node.observationType || "legacy")}</strong></div><div><span>Method confidence</span><strong>${Math.round((Number(node.methodConfidence) || 0) * 100)}%</strong></div><div><span>Status codes</span><strong>${escapeHtml((node.statusCodes || []).join(", ") || "—")}</strong></div><div><span>Auth</span><strong>${escapeHtml((node.authTypes || []).join(", ") || "none")}</strong></div><div><span>First seen</span><strong>${escapeHtml(mapDateLabel(node.firstSeen) || "—")}</strong></div><div><span>Last seen</span><strong>${escapeHtml(mapDateLabel(node.lastSeen) || "—")}</strong></div></div></section>
-    <section class="map-detail-section"><h3>Entry-point evidence</h3>${tags((node.entryPointReasons || []).map((reason) => `${reason.type} · ${Math.round((Number(reason.confidence) || 0) * 100)}%`))}</section>
-    <section class="map-detail-section"><h3>Investigation signals</h3>${tags(node.riskTags)}</section>
-    <section class="map-detail-section"><h3>Priority factors</h3>${tags(priorityFactorLabels, "No scored evidence factors")}</section>
-    <section class="map-detail-section"><h3>Parameters</h3>${tags(parameterLabels)}</section>
-    <section class="map-detail-section"><h3>Sensitive response fields</h3>${tags(node.sensitiveFields)}</section>
-    <section class="map-detail-section"><div class="map-section-heading"><h3>Candidate hypotheses</h3><span class="map-section-count">${relatedHypotheses.length}</span></div>${hypothesisMarkup}</section>
-    <section class="map-detail-section"><h3>Connections</h3>${connectionMarkup}</section>
-    <section class="map-detail-section map-variants-section"><div class="map-section-heading"><h3>Behavior variants</h3><span class="map-section-count">${variantItems.length}</span></div>${variants || '<div class="map-variants-empty">No behavior variants were recorded for this route.</div>'}</section>`;
-}
-
-function renderApplicationMap() {
-  if (!applicationMap || !mapViewport) return;
-  const routes = filteredMapRoutes();
-  const routeIds = new Set(routes.map((route) => route.id));
-  const query = String(mapSearch?.value || "").trim().toLowerCase();
-  const stateNodeTypes = new Set(["ApplicationState", "Action", "Identity", "BusinessObject", "Workflow"]);
-  const stateEdgeTypes = new Set(["IMPLEMENTS_ACTION", "HAS_STATE", "REQUIRES_STATE", "PRODUCES_STATE", "PRESERVES_STATE", "TRANSITIONS_TO", "READS_ENTITY", "MUTATES_ENTITY", "ACTED_ON_ENTITY", "CONTAINS_ACTION", "STARTS_IN", "ENDS_IN"]);
-  const mapNodeById = new Map(applicationMap.nodes.map((node) => [node.id, node]));
-  let nodes;
-  let positions;
-  let edgeTypes;
-  if (applicationMapMode === "state") {
-    const allowedActionIds = new Set(applicationMap.nodes.filter((node) => node.type === "Action" && routeIds.has(node.routeId)).map((node) => node.id));
-    const visibleIds = new Set(allowedActionIds);
-    for (let pass = 0; pass < 3; pass += 1) {
-      for (const edge of applicationMap.edges || []) {
-        if (!stateEdgeTypes.has(edge.type)) continue;
-        const sourceNode = mapNodeById.get(edge.source);
-        const targetNode = mapNodeById.get(edge.target);
-        if (sourceNode?.type === "Action" && !allowedActionIds.has(sourceNode.id)) continue;
-        if (targetNode?.type === "Action" && !allowedActionIds.has(targetNode.id)) continue;
-        if (visibleIds.has(edge.source)) visibleIds.add(edge.target);
-        if (visibleIds.has(edge.target)) visibleIds.add(edge.source);
-      }
-    }
-    let candidates = applicationMap.nodes.filter((node) => stateNodeTypes.has(node.type) && visibleIds.has(node.id));
-    if (query) {
-      const matchingIds = new Set(candidates.filter((node) => `${node.label} ${node.type} ${node.host || ""} ${node.stateKind || ""} ${node.lifecycle || ""} ${node.actionKind || ""} ${node.resource || ""}`.toLowerCase().includes(query)).map((node) => node.id));
-      const relatedIds = new Set(matchingIds);
-      for (const edge of applicationMap.edges || []) {
-        if (!stateEdgeTypes.has(edge.type)) continue;
-        if (matchingIds.has(edge.source)) relatedIds.add(edge.target);
-        if (matchingIds.has(edge.target)) relatedIds.add(edge.source);
-      }
-      candidates = candidates.filter((node) => relatedIds.has(node.id));
-    }
-    nodes = candidates.slice(0, 700);
-    positions = layoutMapNodes(nodes, [], []);
-    edgeTypes = stateEdgeTypes;
-  } else {
-    const hostNames = new Set(routes.map((route) => route.host));
-    const allHosts = applicationMap.nodes.filter((node) => node.type === "Host");
-    const visibleHostIds = new Set(allHosts.filter((node) => hostNames.has(node.host)).map((node) => node.id));
-    if (applicationMapMode !== "workflow") {
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const edge of applicationMap.edges || []) {
-          if (!["SUBDOMAIN_OF", "REFERENCES_HOST"].includes(edge.type)) continue;
-          if (visibleHostIds.has(edge.source) && !visibleHostIds.has(edge.target)) { visibleHostIds.add(edge.target); changed = true; }
-          if (visibleHostIds.has(edge.target) && !visibleHostIds.has(edge.source)) { visibleHostIds.add(edge.source); changed = true; }
-        }
-      }
-    }
-    const hostNodes = applicationMapMode === "workflow" ? [] : allHosts.filter((node) => visibleHostIds.has(node.id));
-    const auxiliaryIds = new Set((applicationMap.edges || []).filter((edge) => routeIds.has(edge.source) || routeIds.has(edge.target)).flatMap((edge) => [edge.source, edge.target]));
-    const auxiliaryNodes = applicationMap.nodes.filter((node) => node.type !== "Route" && node.type !== "Host" && !stateNodeTypes.has(node.type) && (auxiliaryIds.has(node.id) || hostNames.has(node.host) || (query && `${node.label} ${node.type} ${node.communityLabel || ""}`.toLowerCase().includes(query)))).slice(0, 500);
-    nodes = [...hostNodes, ...routes, ...auxiliaryNodes];
-    positions = layoutMapNodes(routes, hostNodes, auxiliaryNodes);
-    edgeTypes = applicationMapMode === "workflow"
-      ? new Set(["FOLLOWED_BY", "REDIRECTS_TO", "ACCESSED_AS", "RETURNS_VARIANT"])
-      : new Set(["EXPOSES", "LINKS_TO", "REDIRECTS_TO", "REFERRED_TO", "REFERENCES", "SHARES_OBJECT", "SUBDOMAIN_OF", "REFERENCES_HOST", "SERVES_SCRIPT", "DECLARES_ENDPOINT", "IMPORTS_SCRIPT", "IMPORTS_SCRIPT_RESOURCE", "REFERENCES_SOURCE_MAP", "ACCESSED_AS", "ACCEPTS_PARAMETER", "RETURNS_VARIANT", "PRODUCES_OBJECT", "CONSUMES_OBJECT", "TARGETS_OBJECT"]);
-  }
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  currentMapPositions = positions;
-  const edges = (applicationMap.edges || []).filter((edge) => edgeTypes.has(edge.type) && nodeIds.has(edge.source) && nodeIds.has(edge.target));
-  const selectedVisible = selectedMapNodeId && nodeIds.has(selectedMapNodeId);
-  if (!selectedVisible) selectedMapNodeId = "";
-  const selectedNode = nodes.find((node) => node.id === selectedMapNodeId);
-  const adjacent = new Set();
-  // Use every graph relationship for highlighting, even when the active view
-  // renders only a subset of edge types.
-  if (selectedNode) (applicationMap.edges || []).forEach((edge) => {
-    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
-    if (edge.source === selectedNode.id) adjacent.add(edge.target);
-    if (edge.target === selectedNode.id) adjacent.add(edge.source);
-  });
-  const edgeMarkup = edges.map((edge) => {
-    const source = positions.get(edge.source); const target = positions.get(edge.target);
-    if (!source || !target) return "";
-    const dimmed = selectedNode && edge.source !== selectedNode.id && edge.target !== selectedNode.id;
-    const relationshipClass = edge.type === "FOLLOWED_BY" ? "workflow" : edge.type === "SUBDOMAIN_OF" || edge.type === "REFERENCES_HOST" ? "subdomain" : edge.semantic === false ? "inferred" : edge.type === "EXPOSES" ? "exposes" : "semantic";
-    return `<line class="map-edge ${relationshipClass} ${dimmed ? "dimmed" : ""}" data-map-edge-source="${edge.source}" data-map-edge-target="${edge.target}" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"><title>${escapeHtml(edge.type)} · ${Number(edge.observedCount) || 0} observation(s) · ${Math.round((Number(edge.confidence) || 0) * 100)}% confidence</title></line>`;
-  }).join("");
-  const nodeMarkup = nodes.map((node) => {
-    const point = positions.get(node.id); if (!point) return "";
-    const risk = Number(node.priorityScore ?? node.riskScore) || 0;
-    const radius = node.type === "Host" ? 16 : applicationMapMode === "risk" ? 7 + risk * .09 : 8 + Math.min(6, Math.log2((Number(node.observedCount) || 1) + 1) * 1.5);
-    const classes = ["map-node", "draggable", node.type.toLowerCase(), `origin-${node.observationType || "legacy"}`, risk >= 70 ? "high-risk" : risk >= 40 ? "medium-risk" : "", node.visibility === "hidden" ? "hidden-traffic" : "", node.id === selectedMapNodeId ? "selected" : "", selectedNode && node.id !== selectedNode.id && !adjacent.has(node.id) ? "dimmed" : ""].filter(Boolean).join(" ");
-    const label = String(node.label || "");
-    const shortLabel = label.length > 36 ? `${label.slice(0, 35)}…` : label;
-    const badge = node.type === "Route" && risk >= 70 ? `<text class="map-node-badge" x="0" y=".5">!</text>` : "";
-    return `<g class="${classes}" transform="translate(${point.x} ${point.y})" data-map-node-id="${node.id}" tabindex="0" role="button"><circle r="${radius}"></circle>${badge}<text x="${radius + 6}" y="3">${escapeHtml(shortLabel)}</text><title>${escapeHtml(label)} · ${Number(node.observedCount) || 0} observation(s)</title></g>`;
-  }).join("");
-  mapViewport.innerHTML = `<defs><marker id="map-arrow" markerWidth="7" markerHeight="7" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#547e98"></path></marker></defs>${edgeMarkup}${nodeMarkup}`;
-  updateMapViewportTransform();
-  if (mapNoResults) mapNoResults.hidden = nodes.length > 0;
-  if (mapWorkspaceSubtitle) {
-    const total = applicationMap.nodes.filter((node) => node.type === "Route").length;
-    const verification = applicationMap.verification?.verified
-      ? `connectivity verified · ${applicationMap.verification.components} component${applicationMap.verification.components === 1 ? "" : "s"}${applicationMap.verification.sourceComplete === false ? " · source truncated" : ""}${applicationMap.verification.referencesComplete === false ? " · reference limit reached" : ""}`
-      : "legacy graph · rebuild to verify";
-    mapWorkspaceSubtitle.textContent = routes.length === total ? `${total} deduplicated route${total === 1 ? "" : "s"} · ${verification}` : `Showing ${routes.length} of ${total} routes · ${verification}`;
-  }
-  if (mapWorkspaceSubtitle) {
-    if (applicationMapMode === "state") {
-      const stats = applicationMap.stats || {};
-      mapWorkspaceSubtitle.textContent = `${stats.states || 0} states · ${stats.actions || 0} actions · ${stats.stateWorkflows || 0} workflows · ${stats.stateAnomalies || 0} candidate anomalies · deterministic projection`;
-    } else {
-      const totalRoutes = applicationMap.nodes.filter((node) => node.type === "Route").length;
-      const richSummary = `${applicationMap.stats?.javascriptArtifacts || 0} scripts · ${applicationMap.stats?.identities || 0} identities · ${applicationMap.communities?.length || 0} communities`;
-      const filterSummary = routes.length === totalRoutes ? `${totalRoutes} deduplicated route${totalRoutes === 1 ? "" : "s"}` : `Showing ${routes.length} of ${totalRoutes} routes`;
-      mapWorkspaceSubtitle.textContent = `${filterSummary} · ${richSummary} · ${applicationMap.verification?.verified ? "connectivity verified" : "rebuild to verify"}`;
-    }
-  }
-  renderMapDetails(selectedNode || null);
-}
-
-async function loadApplicationMap({ build = false } = {}) {
-  const sequence = ++mapLoadSequence;
-  setMapWorkspaceState({ exists: Boolean(applicationMap), busy: true, message: build ? "Normalizing traffic, classifying variants, and building graph edges…" : "Loading application behavior graph…" });
-  if (!assessmentPath) {
-    applicationMap = null;
-    setMapWorkspaceState({ exists: false, busy: false, message: "Open or create an assessment before building its application Map." });
-    renderMapIntelligenceStatus({ status: "not_built", estimate: { sourceCount: 0, estimatedRecordCount: 0 } });
-    return;
-  }
-  await refreshMapIntelligenceStatus();
-  let result;
-  try {
-    result = build ? await window.api.assessmentBuildMap({ path: assessmentPath }) : await window.api.assessmentMap({ path: assessmentPath });
-  } catch (error) { result = { error: error?.message || "The application Map could not be loaded." }; }
-  if (sequence !== mapLoadSequence) return;
-  if (result?.error) {
-    applicationMap = null;
-    setMapWorkspaceState({ exists: false, busy: false, message: result.error });
-    addErrorMessage(result.error);
-    return;
-  }
-  applicationMap = result?.graph || null;
-  selectedMapNodeId = "";
-  loadMapNodePositions(applicationMap);
-  setMapWorkspaceState({ exists: Boolean(result?.exists && applicationMap), busy: false, message: result?.exists ? "Application behavior graph ready." : "No graph exists yet. Build it from Traffic/Raw." });
-  if (applicationMap) {
-    populateMapFilters(applicationMap);
-    updateMapMetrics(applicationMap);
-    renderApplicationMap();
-  } else {
-    updateMapMetrics(null);
-    if (mapBuiltAt) mapBuiltAt.textContent = "";
-  }
-}
-
-async function showMapWorkspace({ build = false } = {}) {
-  if (terminalMaximized) setTerminalMaximized(false);
-  currentWorkspaceMode = "map";
-  // The graph is a special editor tab. Keep the editor chrome visible and
-  // replace only the normal document body, just like Interceptor and
-  // Settings. Hiding the tab bar here made the graph look like a full-screen
-  // workspace and made it difficult to switch back to another document.
-  if (editorTabBar) editorTabBar.hidden = false;
-  if (editorBody) editorBody.hidden = true;
-  updateEditorPathBar();
-  if (assessmentModuleView) assessmentModuleView.hidden = true;
-  assessmentModuleActive = false;
-  resourceViewer.hidden = true;
-  securityWorkspace.hidden = true;
-  mapWorkspace.hidden = false;
-  appSettingsWorkspace.hidden = true;
-  webcloneWorkspace.hidden = true;
-  window.api.webCloneHidePreview?.();
-  editorPane?.setAttribute("aria-label", "Application behavior map");
-  syncWorkspaceActivity();
-  await loadApplicationMap({ build });
-}
-
 function webcloneTargetFromScope() {
   try {
     const raw = resourcePreviewText || "";
@@ -4540,21 +3908,12 @@ async function showWebCloneWorkspace() {
   if (terminalMaximized) setTerminalMaximized(false);
   currentWorkspaceMode = "webclone";
   setCodeEditorVisible(false);
-  resourceViewer.hidden = true; securityWorkspace.hidden = true; mapWorkspace.hidden = true; appSettingsWorkspace.hidden = true; webcloneWorkspace.hidden = false;
+  resourceViewer.hidden = true; securityWorkspace.hidden = true; appSettingsWorkspace.hidden = true; webcloneWorkspace.hidden = false;
   editorPane?.setAttribute("aria-label", "WebClone workspace");
   toggleWebClonePreview(false);
   setWebCloneFilesCollapsed(false);
   syncWorkspaceActivity();
   await loadWebCloneManifest();
-}
-
-async function openMapEvidence(evidenceId) {
-  if (!evidenceId) return;
-  showSecurityWorkspace("repeater");
-  await loadSecurityHistory();
-  const record = securityHistoryRecords.find((entry) => String(entry.requestId) === String(evidenceId));
-  if (record) await sendHistoryRecordsToRepeater([record]);
-  else setSecurityStatus(`Evidence ${evidenceId} is outside the latest 500 history records`, "error");
 }
 
 function modeLabel(mode = chatMode) {
@@ -5104,7 +4463,6 @@ async function createAssessmentFolder() {
     setAssessmentUiState("error", { title: "Creation Failed", message: result.error });
     return;
   }
-  applicationMap = null;
   assessmentPath = result.path || result.root;
   selectedCustomFolder = "";
   selectedCustomEntries.clear();
@@ -5116,7 +4474,6 @@ async function createAssessmentFolder() {
 
 function resetProjectWorkspaceState() {
   assessmentPath = "";
-  applicationMap = null;
   selectedCustomFolder = "";
   selectedCustomEntries.clear();
   assessmentVerification = null;
@@ -5221,7 +4578,6 @@ async function openAssessmentFolder() {
     return;
   }
   assessmentPath = result.path;
-  applicationMap = null;
   selectedCustomFolder = "";
   selectedCustomEntries.clear();
   localStorage.setItem(BUG_BOUNTY_PATH_KEY, assessmentPath);
@@ -5699,14 +5055,8 @@ async function showScopeResource(filePath, relativePath) {
 }
 
 const ASSESSMENT_MODULE_META = {
-  "runs/runs.json": ["Run Manager", "Every assessment run has a profile, scope/configuration snapshot, outcome, and stop reason.", "codicon-history"],
-  "enumeration/assets.json": ["Asset Inventory", "Reconciled hosts, subdomains, services, ownership, scope state, provenance, and freshness.", "codicon-globe"],
   "traffic/raw.jsonl": ["Raw Traffic", "Captured HTTP exchanges with request and response evidence, provenance, and capture integrity.", "codicon-arrow-swap"],
   "traffic/filtered.jsonl": ["Filtered Traffic", "Curated HTTP exchanges linked to parameters, notes, and evidence.", "codicon-filter"],
-  "report/report.md": ["Assessment Report", "Evidence-linked reporting with executive summary, remediation, retest state, and limitations.", "codicon-file-text"],
-  ".xekute/logs/agent-runs.jsonl": ["Agent Runs", "Transparent run lifecycle records generated by the autonomous agent loop.", "codicon-history"],
-  ".xekute/logs/agent-actions.jsonl": ["Agent Actions", "Every proposed and completed tool action with scope result and outcome.", "codicon-list-tree"],
-  ".xekute/logs/tool-output.jsonl": ["Tool Output", "Normalized tool-output provenance, hashes, truncation state, and saved artifact paths.", "codicon-terminal"],
 };
 
 function moduleValue(value) {
@@ -7614,24 +6964,18 @@ globalThis.XekuteSecurity = {
 
 function modeButtonClass(mode = chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
-  if (profile?.key === "hypothesis") return "mode-hypothesis";
-  if (profile?.key === "plan") return "mode-plan";
   if (profile?.key === "agent" || profile?.key === "executor" || profile?.key === "execution" || profile?.key === "exploit") return "mode-agent";
   return "mode-ask";
 }
 
 function modeIconClass(mode = chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
-  if (profile?.key === "hypothesis") return "codicon-bug";
-  if (profile?.key === "plan") return "codicon-checklist";
   if (profile?.key === "agent" || profile?.key === "executor") return "codicon-copilot";
   return "codicon-comment-discussion";
 }
 
 function modePlaceholder(mode = chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
-  if (profile?.key === "hypothesis") return "Form hypotheses or request any action";
-  if (profile?.key === "plan") return "Build or revise a plan document";
   if (profile?.key === "ask") return "Ask, analyze, observe, or explain";
   if (profile?.key === "agent") return "Describe the investigation or workspace action";
   return "Ask, investigate, run, or search";
@@ -7648,7 +6992,7 @@ function modeTools(mode = chatMode) {
 
 function syncChatModeUi() {
   if (chatModeButton) {
-    chatModeButton.classList.remove("mode-ask", "mode-plan", "mode-hypothesis", "mode-agent", "mode-exploit");
+    chatModeButton.classList.remove("mode-ask", "mode-agent", "mode-exploit");
     chatModeButton.classList.add(modeButtonClass());
   }
   if (chatModeButtonLabel) {
@@ -7656,7 +7000,7 @@ function syncChatModeUi() {
   }
   if (chatModeButton) chatModeButton.title = `${modeLabel()} mode`;
   if (chatModeIcon) {
-    chatModeIcon.classList.remove("codicon-copilot", "codicon-checklist", "codicon-bug", "codicon-comment-discussion", "codicon-play", "codicon-warning", "codicon-shield", "codicon-search", "codicon-eye", "codicon-verified", "codicon-file-text");
+    chatModeIcon.classList.remove("codicon-copilot", "codicon-comment-discussion", "codicon-play", "codicon-warning", "codicon-shield", "codicon-search", "codicon-eye", "codicon-verified", "codicon-file-text");
     chatModeIcon.classList.add(modeIconClass());
   }
   chatModeMenu?.querySelectorAll("[data-chat-mode]").forEach((button) => {
@@ -7665,7 +7009,10 @@ function syncChatModeUi() {
     button.setAttribute("aria-checked", String(active));
   });
   syncChatInputPlaceholder();
-  setAgentStatus(isRunningChatActive() ? `${modeLabel()} working` : `${modeLabel()} ready`);
+  const liveRun = activeSessionRun();
+  setAgentStatus(isRunningChatActive()
+    ? `${modeLabel(liveRun?.mode || chatMode)} working`
+    : `${modeLabel()} ready`);
   updateContextUsage();
   if (chatModeMenu && !chatModeMenu.hidden) {
     requestAnimationFrame(() => positionChatModeMenu());
@@ -7673,7 +7020,7 @@ function syncChatModeUi() {
 }
 
 function openChatModeMenu() {
-  if (!chatModeMenu || !chatModeButton || isRunningChatActive()) return;
+  if (!chatModeMenu || !chatModeButton) return;
   closeModelMenu();
   closeAuthorityMenu();
   chatModeMenu.hidden = false;
@@ -7688,7 +7035,7 @@ function closeChatModeMenu() {
 }
 
 function toggleChatModeMenu() {
-  if (!chatModeMenu || !chatModeButton || isRunningChatActive()) return;
+  if (!chatModeMenu || !chatModeButton) return;
   if (chatModeMenu.hidden) openChatModeMenu();
   else closeChatModeMenu();
 }
@@ -7712,7 +7059,6 @@ function positionChatModeMenu() {
 }
 
 function setChatMode(mode) {
-  if (isRunningChatActive()) return;
   const canonical = canonicalChatMode(mode);
   if (!CHAT_ROLES.has(canonical) && !CHAT_PROFILE_KEYS.has(canonical)) return;
   chatMode = canonical;
@@ -8221,7 +7567,9 @@ function loadModelSettings() {
     const normalized = {};
     for (const [name, settings] of Object.entries(parsed)) {
       if (!settings || typeof settings !== "object") continue;
-      const rawContext = typeof settings.context === "string" ? settings.context : AUTO_CONTEXT;
+      const rawContext = typeof settings.context === "string"
+        ? settings.context
+        : (ContextBudget?.positiveInteger(settings.context) ? String(settings.context) : AUTO_CONTEXT);
       const rawContextTokens = ContextBudget?.positiveInteger(settings.contextLimitTokens || ContextBudget.legacyContextLabelToTokens(rawContext));
       const explicitManualContext =
         settings.contextLocked === true
@@ -8255,8 +7603,6 @@ function loadModelSettings() {
 }
 
 let modelSettings = loadModelSettings();
-let contextUsageSeq = 0;
-let contextUsageTimer = null;
 // Model settings and context counters are initialized before the initial mode
 // sync because the context indicator reads both of them.
 syncChatModeUi();
@@ -8393,6 +7739,7 @@ async function refreshModelContextCapacity() {
   try {
     const runtime = await window.api.runtimeModel({ model: selectedModel });
     if (seq !== contextCapacitySeq) return;
+    if (runtime?.ok && runtime.contextLength) ollamaRuntimeContext[selectedModel] = runtime.contextLength;
     const plan = resolveModelContextPlan(selectedModel, {}, runtime?.ok ? runtime : null);
     resolvedContextCapacity = { tokens: plan.effectiveLimitTokens, source: plan.source, approximate: plan.approximate, plan };
     updateContextUsage();
@@ -8435,6 +7782,10 @@ function formatTokenCount(n) {
     return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}K`;
   }
   return String(n);
+}
+
+function formatContextWindowLabel(tokens) {
+  return ContextBudget?.formatContextWindowLabel(tokens) || formatTokenCount(tokens);
 }
 
 function contextPreviewRoute(requestText = "") {
@@ -8521,151 +7872,140 @@ function normalizeContextUsageSections(sections = [], { legacyToolTokens = 0 } =
   return CONTEXT_USAGE_SECTIONS.map((section) => ({ ...section, tokens: totals.get(section.key) || 0 }));
 }
 
-function getContextBreakdown(requestText = chatInput.value.trim()) {
-  const activeFile = getActiveFileContext();
-  const workingHistory = workingHistoryMessages();
-  const latestUserText = [...workingHistory].reverse().find((message) => message?.role === "user")?.content || "";
-  const routedText = requestText || latestUserText;
-  const route = contextPreviewRoute(routedText);
-  // The context meter mirrors the same nine authoritative Tier 1 sections
-  // used by the controller and checkpoint coordinator.
-  const previewTools = (() => {
-    const modeList = modeTools();
-    if (String(chatMode || "").toLowerCase() !== "agent" && !/:agent$/i.test(String(chatMode || ""))) {
-      return ToolMap.compactTools(modeList);
-    }
-    const hot = new Set(ToolMap.hotToolNamesForProfile(chatMode || "agent"));
-    return ToolMap.compactTools(modeList.filter((tool) => hot.has(tool?.function?.name)));
-  })();
-  const routedTools = previewTools;
-  const nativeTools = routedTools.filter((tool) => !String(tool?.function?.name || "").startsWith("mcp__"));
-  const mcpTools = routedTools.filter((tool) => String(tool?.function?.name || "").startsWith("mcp__"));
-  const compiledPrompt = globalThis.XekutePromptCompiler?.compile({
-    family: chatFamily,
-    mode: chatMode,
-    depth: route.promptDepth,
-  }) || ToolParser.SYSTEM_PROMPT || "";
-  const toolMenu = globalThis.XekuteInitialPrompts?.noToolsSurface?.()
-    || globalThis.XekuteInitialPrompts?.toolCatalog?.([], { packs: [] })
-    || "";
-  const guidanceUsage = splitGuidanceContextForUsage(guidanceContext);
-  const baseSystemPrompt = [compiledPrompt, guidanceUsage.system].filter(Boolean).join("\n\n").trim();
-  const systemPrompt = [compiledPrompt, guidanceUsage.system].filter(Boolean).join("\n\n").trim();
-  const checkpointTokens = Math.max(0, Number(memoryRecord(activeChatSession())?.checkpointTokens) || 0);
-  const draft = requestText;
-  const streamTokens = activeStreamContent ? estimateTokens(activeStreamContent) + 4 : 0;
-  const sections = [
-    {
-      key: "system_prompt",
-      label: "System Prompt",
-      color: "#a7a7ab",
-      tokens: baseSystemPrompt ? estimateMessagesTokens([{ role: "system", content: baseSystemPrompt }]) : 0,
-    },
-    {
-      key: "tool_definitions",
-      label: "Tool Definitions",
-      color: "#77a8d8",
-      tokens: (nativeTools.length ? estimateTokens(JSON.stringify(nativeTools)) : 0)
-        + (toolMenu ? estimateMessagesTokens([{ role: "system", content: toolMenu }]) : 0),
-    },
-    {
-      key: "rules",
-      label: "Rules",
-      color: "#67b7a5",
-      tokens: guidanceUsage.rules ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.rules }]) : 0,
-    },
-    {
-      key: "skills",
-      label: "Skills",
-      color: "#d58dbc",
-      tokens: guidanceUsage.skills ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.skills }]) : 0,
-    },
-    {
-      key: "subagents",
-      label: "Subagents",
-      color: "#b58de8",
-      tokens: guidanceUsage.subagents ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.subagents }]) : 0,
-    },
-    {
-      key: "mcp",
-      label: "MCP",
-      color: "#e0a15d",
-      tokens: mcpTools.length ? estimateTokens(JSON.stringify(mcpTools)) : 0,
-    },
-    {
-      key: "summarized_conversation",
-      label: "Summarized Conversation",
-      color: "#8ca6e8",
-      tokens: checkpointTokens,
-    },
-    {
-      key: "active_conversation",
-      label: "Active Conversation",
-      color: "#5d9ee8",
-      // The current prompt is protected in Block C, but its tokens are
-      // intentionally accounted for under Active Conversation in the meter.
-      tokens: estimateMessagesTokens(workingHistory)
-        + (draft ? estimateTokens(draft) + 4 : 0)
-        + streamTokens,
-    },
-    {
-      key: "current_workflow",
-      label: "Current Workflow",
-      color: "#67b7a5",
-      tokens: (() => {
-        const workflow = activeChatSession()?.currentWorkflow || activeChatSession()?.workflow || null;
-        return workflow ? estimateMessagesTokens([{ role: "user", content: JSON.stringify(workflow) }]) : 0;
-      })(),
-    },
-  ];
-  const summaryTokens = checkpointTokens;
-  const liveChatTokens = estimateMessagesTokens(workingHistory);
-  const toolTokens = sections.find((section) => section.key === "tool_definitions")?.tokens || 0;
-  const draftTokens = (draft ? estimateTokens(draft) + 4 : 0) + streamTokens;
-  const visibleComposerTokens = draftTokens;
-  const estimatedTotal = sections.reduce((sum, section) => sum + section.tokens, 0);
+function emptyContextUsageSections() {
+  return CONTEXT_USAGE_SECTIONS.map((section) => ({ ...section, tokens: 0 }));
+}
 
+function getContextBreakdown() {
+  const storedUsage = normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage);
+  const storedIsTier1 = Boolean(storedUsage && storedUsage.source === "estimate");
+  const sections = storedIsTier1
+    ? normalizeContextUsageSections(storedUsage.sections).map((section) => ({ ...section }))
+    : emptyContextUsageSections();
+  const estimatedTotal = sections.reduce((sum, section) => sum + section.tokens, 0);
   return {
     sections,
-    summaryTokens,
-    liveChatTokens,
-    draftTokens,
-    streamTokens,
-    visibleComposerTokens,
-    toolTokens,
+    summaryTokens: sections.find((section) => section.key === "summarized_conversation")?.tokens || 0,
+    liveChatTokens: sections.find((section) => section.key === "active_conversation")?.tokens || 0,
+    draftTokens: 0,
+    streamTokens: 0,
+    visibleComposerTokens: 0,
+    toolTokens: sections.find((section) => section.key === "tool_definitions")?.tokens || 0,
     estimatedTotal,
-    route,
-    tools: routedTools,
-    messages: [
-      ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
-      ...(toolMenu ? [{ role: "system", content: toolMenu }] : []),
-      ...(guidanceUsage.rules ? [{ role: "system", content: guidanceUsage.rules }] : []),
-      ...(guidanceUsage.skills ? [{ role: "system", content: guidanceUsage.skills }] : []),
-      ...(guidanceUsage.subagents ? [{ role: "system", content: guidanceUsage.subagents }] : []),
-      ...workingHistory,
-      ...(draft ? [{ role: "user", content: draft }] : []),
-      ...(activeStreamContent ? [{ role: "assistant", content: activeStreamContent }] : []),
-    ],
+    route: contextPreviewRoute(""),
+    tools: [],
+    messages: [],
+    authoritative: storedIsTier1,
   };
+}
+
+const CONTEXT_SUMMARIZING_NOTICE = "Chat context being summarized...";
+const CONTEXT_SUMMARIZED_NOTICE = "Summarized Conversation Updated";
+
+function pendingContextCheckpointNotice(container = messages) {
+  if (contextCheckpointNotice?.isConnected && contextCheckpointNotice.dataset.state === "pending") return contextCheckpointNotice;
+  return container?.querySelector?.(".context-checkpoint-notice[data-state='pending']") || null;
+}
+
+// Pin the notice inside the live assistant turn. Appending it to the exchange
+// body puts it after the whole turn, so later commands and reply segments make
+// it look like the summary keeps sliding to the bottom of the chat.
+function checkpointNoticeHost(container = messages) {
+  const root = container || messages;
+  if (!root) return null;
+  const exchange = root.classList?.contains("chat-exchange")
+    ? root
+    : root.querySelector?.(":scope > .chat-exchange:last-child");
+  const body = exchange ? chatExchangeBody(exchange) : root;
+  return body?.querySelector?.(":scope > .chat-turn.assistant:last-of-type") || body || root;
+}
+
+function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SUMMARIZING_NOTICE, state = "pending" } = {}) {
+  const host = container || messages;
+  if (!host) return null;
+  let notice = pendingContextCheckpointNotice(host);
+  if (!notice) {
+    notice = document.createElement("div");
+    notice.className = "context-checkpoint-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    const icon = document.createElement("img");
+    icon.className = "context-checkpoint-icon";
+    icon.src = "assets/icons/compress_icon.svg";
+    icon.alt = "";
+    icon.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.className = "context-checkpoint-text";
+    notice.append(icon, label);
+    const anchor = checkpointNoticeHost(host);
+    if (anchor) anchor.appendChild(notice);
+    else host.appendChild(notice);
+  }
+  setContextCheckpointNoticeText(notice, text);
+  notice.dataset.state = state;
+  contextCheckpointNotice = notice;
+  return notice;
+}
+
+function setContextCheckpointNoticeText(notice, text) {
+  if (!notice) return;
+  const label = notice.querySelector(":scope > .context-checkpoint-text");
+  if (label) label.textContent = text;
+  else notice.textContent = text;
+}
+
+function hydrateContextCheckpointNotices(root = messages) {
+  for (const notice of root.querySelectorAll?.(".context-checkpoint-notice") || []) {
+    if (notice.querySelector(":scope > .context-checkpoint-icon")) continue;
+    const text = String(notice.textContent || "").trim();
+    notice.replaceChildren();
+    const icon = document.createElement("img");
+    icon.className = "context-checkpoint-icon";
+    icon.src = "assets/icons/compress_icon.svg";
+    icon.alt = "";
+    icon.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.className = "context-checkpoint-text";
+    label.textContent = text;
+    notice.append(icon, label);
+  }
+}
+
+function finishContextCheckpointNotice(container = messages, outcome = "completed") {
+  const notice = pendingContextCheckpointNotice(container || messages);
+  if (!notice) return null;
+  const failed = String(outcome || "").toLowerCase() === "failed";
+  setContextCheckpointNoticeText(notice, failed ? "Context checkpoint needs attention" : CONTEXT_SUMMARIZED_NOTICE);
+  notice.dataset.state = failed ? "error" : "complete";
+  if (contextCheckpointNotice === notice) contextCheckpointNotice = null;
+  return notice;
+}
+
+function applyContextCheckpointUi(run, payload = {}) {
+  const session = run?.session;
+  const status = String(payload.status || "").toLowerCase();
+  const active = status === "started" || status === "running";
+  if (run) run.contextCheckpointPending = active;
+  if (session) contextCheckpointingSessionId = active ? session.id : (contextCheckpointingSessionId === session.id ? "" : contextCheckpointingSessionId);
+  const container = chatRunContainer(run);
+  if (active) ensureContextCheckpointNotice(container);
+  else finishContextCheckpointNotice(container, status);
+  const visible = Boolean(session && activeChatSessionId === session.id && !run?.viewHost);
+  setContextCheckpointUi(active && (visible || contextCheckpointingSessionId === activeChatSessionId));
+  if (visible) {
+    setAgentStatus(active ? CONTEXT_SUMMARIZING_NOTICE : status === "failed" ? "Context checkpoint needs attention" : `${modeLabel(run?.mode)} working`);
+    if (!active) updateContextUsage();
+    scrollMessages();
+  }
+  if (run) syncChatRunSession(run);
 }
 
 function setContextCheckpointUi(checkpointing) {
   contextCheckpointing = Boolean(checkpointing);
-  if (!contextCheckpointing) contextCheckpointingSessionId = "";
+  if (!contextCheckpointing) contextCheckpointingSessionId = contextCheckpointingSessionId && activeChatRuns.get(contextCheckpointingSessionId)?.contextCheckpointPending
+    ? contextCheckpointingSessionId
+    : "";
   const affectsActiveChat = contextCheckpointing && (!contextCheckpointingSessionId || contextCheckpointingSessionId === activeChatSessionId);
-  if (affectsActiveChat) {
-    if (!contextCheckpointNotice || !contextCheckpointNotice.isConnected) {
-      contextCheckpointNotice = document.createElement("div");
-      contextCheckpointNotice.className = "context-checkpoint-notice";
-      contextCheckpointNotice.setAttribute("role", "status");
-      contextCheckpointNotice.setAttribute("aria-live", "polite");
-      contextCheckpointNotice.textContent = "Context checkpointing…";
-      messages?.appendChild(contextCheckpointNotice);
-    }
-  } else {
-    contextCheckpointNotice?.remove();
-    contextCheckpointNotice = null;
-  }
   if (chatInput) {
     chatInput.disabled = affectsActiveChat;
     chatInput.readOnly = affectsActiveChat;
@@ -8746,6 +8086,12 @@ function storeLastContextUsage(value, {
   usage.contextWindowSource = usage.contextWindowSource === "fallback" && plan.source !== "fallback" ? plan.source : usage.contextWindowSource;
   usage.approximate = usage.approximate || plan.approximate;
   session.lastContextUsage = usage;
+  const summarizedTokens = usage.sections?.find((section) => section.key === "summarized_conversation")?.tokens;
+  if (Number(summarizedTokens) > 0) {
+    const memory = memoryRecord(session);
+    memory.checkpointTokens = Number(summarizedTokens);
+    if (memory.status === "empty") memory.status = "ready";
+  }
   if (session.id === activeChatSessionId) syncActiveChatSession();
   else schedulePersistChatSessions();
   return usage;
@@ -8776,34 +8122,13 @@ async function refreshStoredContextCapacity() {
 function getContextUsage(usedOverride = null) {
   const settings = selectedModel ? getModelSettings(selectedModel) : { context: AUTO_CONTEXT };
   const plan = resolvedWorkingContextPlan();
-  const draft = chatInput.value.trim();
   const storedCandidate = normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage);
-  const stored = storedCandidate && (!storedCandidate.model || !selectedModel || storedCandidate.model === selectedModel) && (!storedCandidate.provider || storedCandidate.provider === plan.provider) ? storedCandidate : null;
-  const storedToolNames = new Set(stored?.toolNames || []);
-  const legacyToolDefinitions = storedToolNames.size
-    ? modeTools().filter((tool) => storedToolNames.has(tool?.function?.name))
-    : [];
-  const legacyToolTokens = legacyToolDefinitions.length ? estimateTokens(JSON.stringify(legacyToolDefinitions)) : 0;
-  const storedSections = stored
-    ? normalizeContextUsageSections(stored.sections, { legacyToolTokens })
-    : [];
-  const draftDeltaTokens = draft ? estimateTokens(draft) + 4 : 0;
-  const streamDeltaTokens = stored && ["ollama", "openrouter"].includes(stored.source) && activeStreamContent
-    ? estimateTokens(activeStreamContent) + 4
-    : 0;
-  const liveDeltaTokens = draftDeltaTokens + streamDeltaTokens;
-  if (storedSections.length && liveDeltaTokens > 0) {
-    const activeSection = storedSections.find((section) => section.key === "active_conversation");
-    if (activeSection) activeSection.tokens += liveDeltaTokens;
-  }
-  const storedTotal = stored ? stored.promptTokens + liveDeltaTokens : null;
-  const breakdown = stored
-    ? { sections: storedSections, estimatedTotal: storedTotal, tools: [], messages: [], authoritative: true }
-    : getContextBreakdown(draft);
+  const stored = storedCandidate && storedCandidate.source === "estimate" ? storedCandidate : null;
+  const breakdown = getContextBreakdown();
   const total = plan.effectiveLimitTokens || resolvedContextCapacity.tokens || AUTO_CONTEXT_ESTIMATE;
   const capacityApproximate = Boolean(plan.approximate);
   const promptBudget = plan.promptBudgetTokens || total;
-  const used = usedOverride == null ? (storedTotal ?? breakdown.estimatedTotal) : usedOverride;
+  const used = breakdown.estimatedTotal;
   const pct = total > 0 ? Math.min(used / total, 1) : 0;
   const compactionPct = promptBudget > 0 ? Math.min(used / promptBudget, 1) : pct;
   return {
@@ -8814,8 +8139,8 @@ function getContextUsage(usedOverride = null) {
     pct,
     compactionPct,
     contextLabel: settings.context === AUTO_CONTEXT
-      ? `Auto · ${capacityApproximate ? "~" : ""}${formatTokenCount(total)} working budget`
-      : `${formatTokenCount(total)} working budget`,
+      ? `Auto · ${capacityApproximate ? "~" : ""}${formatContextWindowLabel(total)} working budget`
+      : `${formatContextWindowLabel(total)} working budget`,
     modelMaxTokens: plan.modelMaxTokens || stored?.modelMaxTokens || null,
     promptBudgetTokens: plan.promptBudgetTokens || stored?.promptBudgetTokens || null,
     responseReserveTokens: plan.responseReserveTokens || stored?.responseReserveTokens || null,
@@ -8828,62 +8153,58 @@ function getContextUsage(usedOverride = null) {
     compileLatencyMs: stored?.compileLatencyMs ?? null,
     knowledgeLease: stored?.knowledgeLease || null,
     breakdown,
-    source: ["ollama", "openrouter"].includes(stored?.source) && liveDeltaTokens === 0 ? "actual" : "estimate",
+    source: "estimate",
     capacityApproximate,
   };
-}
-
-function getContextUsageMessages(breakdown = getContextBreakdown()) {
-  return (breakdown.messages || []).map((message) => ({ ...message }));
 }
 
 function renderContextUsage({ total, used, free, pct, source, breakdown = getContextBreakdown(), capacityApproximate = true, provider = "ollama", model = "", modelMaxTokens = null, promptBudgetTokens = null, responseReserveTokens = null, contextWindowSource = "fallback", compressionRatio = null, sourcesRepresented = 0, freshness = "Current", compileLatencyMs = null }) {
   if (!contextRingFill) return;
   const displaySections = normalizeContextUsageSections(breakdown.sections);
-  const filled = pct * CONTEXT_RING_C;
-  const estimatedTotal = Math.max(displaySections.reduce((sum, section) => sum + section.tokens, 0), 1);
-  const scale = used > 0 ? used / estimatedTotal : 1;
+  const sectionTotal = displaySections.reduce((sum, section) => sum + section.tokens, 0);
+  const displayUsed = sectionTotal > 0 ? sectionTotal : Math.max(0, Number(used) || 0);
+  const displayPct = total > 0 ? Math.min(displayUsed / total, 1) : 0;
+  const filled = displayPct * CONTEXT_RING_C;
+  const displayFree = Math.max(total - displayUsed, 0);
 
   contextRingFill.style.strokeDasharray = `${filled} ${CONTEXT_RING_C}`;
-  contextUsageBtn.classList.toggle("warn", pct >= 0.75 && pct < 0.9);
-  contextUsageBtn.classList.toggle("full", pct >= 0.9);
+  contextUsageBtn.classList.toggle("warn", displayPct >= 0.75 && displayPct < 0.9);
+  contextUsageBtn.classList.toggle("full", displayPct >= 0.9);
 
   if (contextUsageFill) {
-    contextUsageFill.style.width = `${pct * 100}%`;
-    contextUsageFill.classList.toggle("warn", pct >= 0.75 && pct < 0.9);
-    contextUsageFill.classList.toggle("full", pct >= 0.9);
+    contextUsageFill.style.width = `${displayPct * 100}%`;
+    contextUsageFill.classList.toggle("warn", displayPct >= 0.75 && displayPct < 0.9);
+    contextUsageFill.classList.toggle("full", displayPct >= 0.9);
   }
-  const actual = source === "actual";
   const displayCapacity = Number(total) > 0 ? Number(total) : (Number(modelMaxTokens) || 0);
-  if (contextUsageHeadingValue) contextUsageHeadingValue.textContent = `${formatTokenCount(Math.round(used))} / ${formatTokenCount(Math.round(displayCapacity))}`;
-  if (contextUsageUsed) contextUsageUsed.textContent = `${Math.round(pct * 100)}%`;
+  if (contextUsageHeadingValue) contextUsageHeadingValue.textContent = `${formatTokenCount(Math.round(displayUsed))} / ${formatContextWindowLabel(Math.round(displayCapacity))}`;
+  if (contextUsageUsed) contextUsageUsed.textContent = `${Math.round(displayPct * 100)}%`;
   if (contextUsagePct) {
-    contextUsagePct.textContent = `${actual ? "Last model turn" : "Next prompt estimate"} · ${formatTokenCount(free)} free`;
+    contextUsagePct.textContent = `Next prompt estimate · ${formatTokenCount(displayFree)} free`;
   }
   if (contextUsageSource) {
-    contextUsageSource.textContent = actual ? `Measured · ${provider === "openrouter" ? "OpenRouter" : "Ollama"}` : "Estimate";
+    contextUsageSource.textContent = breakdown?.authoritative ? "Tier 1 estimate" : "Estimate";
   }
   if (contextUsageSegments) {
     const segments = displaySections
+      .filter((section) => section.tokens > 0)
       .map((section) => {
-        const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
-        const widthPct = Math.max((scaledTokens / Math.max(total, 1)) * 100, 1);
+        const widthPct = Math.max((section.tokens / Math.max(total, 1)) * 100, 1);
         const label = CONTEXT_USAGE_ROW_LABELS[section.key] || section.label;
-        return `<span class="context-usage-segment" style="width:${widthPct}%;background:${section.color}" title="${escapeHtml(label)}: ${escapeHtml(formatTokenCount(scaledTokens))}"></span>`;
+        return `<span class="context-usage-segment" style="width:${widthPct}%;background:${section.color}" title="${escapeHtml(label)}: ${escapeHtml(formatTokenCount(section.tokens))}"></span>`;
       });
     contextUsageSegments.innerHTML = segments.join("");
   }
   if (contextUsageBreakdown) {
     const rows = displaySections
       .map((section) => {
-        const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
         return `
           <div class="context-usage-row">
             <div class="context-usage-row-label">
               <span class="context-usage-swatch" style="background:${section.color}"></span>
               <span>${escapeHtml(CONTEXT_USAGE_ROW_LABELS[section.key] || section.label)}</span>
             </div>
-            <div class="context-usage-row-value">${escapeHtml(formatTokenCount(scaledTokens))}</div>
+            <div class="context-usage-row-value">${escapeHtml(formatTokenCount(section.tokens))}</div>
           </div>
         `;
       });
@@ -8895,30 +8216,68 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
   }
 }
 
-function updateContextUsage() {
-  const fallbackUsage = getContextUsage();
-  renderContextUsage(fallbackUsage);
-  if (fallbackUsage.breakdown?.authoritative || fallbackUsage.source === "actual" || !window.api?.countTokens || !selectedModel) return;
+// The nine meter rows are Tier 1 accounting, so an idle chat has to ask Tier 1
+// for them instead of estimating locally. This keeps every category live from
+// the moment a session is opened, rather than only after the first send.
+function tier1PreviewSignature() {
+  const session = activeChatSession();
+  if (!session || !rootPath || !selectedModel) return "";
+  const plan = resolvedWorkingContextPlan();
+  return [
+    rootPath,
+    session.memorySessionId || session.id,
+    selectedModel,
+    canonicalChatMode(session.chatMode || chatMode),
+    session.chatFamily || chatFamily,
+    authoritySettingsData?.superMode || "",
+    plan.effectiveLimitTokens || 0,
+  ].join("|");
+}
 
-  if (contextUsageTimer) clearTimeout(contextUsageTimer);
-  const seq = ++contextUsageSeq;
-  contextUsageTimer = setTimeout(async () => {
-    try {
-      const result = await window.api.countTokens({
-        model: selectedModel,
-        messages: getContextUsageMessages(fallbackUsage.breakdown),
-        tools: fallbackUsage.breakdown.tools || [],
-      });
-      if (seq !== contextUsageSeq || !result?.ok || !Number.isFinite(result.count)) return;
-      const preciseUsage = getContextUsage(result.count);
-      renderContextUsage({
-        ...preciseUsage,
-        source: "estimate",
-      });
-    } catch {
-      /* keep fallback estimate */
-    }
-  }, 250);
+function scheduleTier1ContextPreview({ force = false } = {}) {
+  if (typeof window.api?.contextTier1Usage !== "function") return;
+  const signature = tier1PreviewSignature();
+  if (!signature) return;
+  if (!force && signature === tier1PreviewSignatureValue) return;
+  tier1PreviewSignatureValue = signature;
+  clearTimeout(tier1PreviewTimer);
+  tier1PreviewTimer = setTimeout(() => { void refreshTier1ContextPreview(signature); }, 150);
+}
+
+async function refreshTier1ContextPreview(signature) {
+  const session = activeChatSession();
+  if (!session || tier1PreviewInFlight) return;
+  // A live run publishes its own Tier 1 snapshots; never overwrite them with a
+  // preview taken between two model rounds.
+  if (isChatSessionRunning(session.id)) return;
+  tier1PreviewInFlight = true;
+  try {
+    const plan = resolvedWorkingContextPlan();
+    const response = await window.api.contextTier1Usage({
+      workspace: rootPath || "",
+      model: selectedModel,
+      mode: canonicalChatMode(session.chatMode || chatMode),
+      modeFamily: session.chatFamily || chatFamily,
+      authorityProfile: authoritySettingsData?.superMode || "",
+      contextPlan: plan,
+      numCtx: plan.provider === "ollama" ? plan.effectiveLimitTokens : null,
+      contextBudget: plan.effectiveLimitTokens,
+      sessionId: session.memorySessionId || "",
+    });
+    const usage = response?.usage || response?.value?.usage || null;
+    if (!usage) return;
+    // The selection can change while the assembly is in flight; a stale answer
+    // must not replace the rows for a different session, mode, or model.
+    if (signature !== tier1PreviewSignature() || isChatSessionRunning(session.id)) return;
+    storeLastContextUsage(usage, { session, model: selectedModel, contextPlan: plan });
+    if (session.id === activeChatSessionId) renderContextUsage(getContextUsage());
+  } catch { /* the meter keeps its last Tier 1 snapshot */ }
+  finally { tier1PreviewInFlight = false; }
+}
+
+function updateContextUsage() {
+  renderContextUsage(getContextUsage());
+  scheduleTier1ContextPreview();
 }
 
 function positionContextPopover() {
@@ -9014,8 +8373,9 @@ function setExplorerTreeDepth(item, depth = 0) {
 }
 
 let creatingItem = false;
+let renamingItem = false;
 async function createNewItemInput(isFolder) {
-  if (!rootPath || creatingItem) return;
+  if (!rootPath || creatingItem || renamingItem) return;
   creatingItem = true;
 
   let targetDir = rootPath;
@@ -9375,23 +8735,6 @@ function openInterceptorTab(tool = "") {
   switchToInterceptorTab();
 }
 
-async function openApplicationGraphTab({ build = false } = {}) {
-  showCodeEditorWorkspace();
-  if (!openTabs.has(APPLICATION_GRAPH_TAB_PATH)) {
-    openTabs.set(APPLICATION_GRAPH_TAB_PATH, {
-      path: APPLICATION_GRAPH_TAB_PATH,
-      diskPath: APPLICATION_GRAPH_TAB_PATH,
-      name: "Application Graph",
-      content: null,
-      savedContent: "",
-      dirty: false,
-      error: null,
-      special: "application-graph",
-    });
-  }
-  await switchToApplicationGraphTab({ build });
-}
-
 function switchToSettingsTab() {
   if (terminalMaximized) setTerminalMaximized(false);
   commitActiveTab();
@@ -9409,15 +8752,6 @@ function switchToInterceptorTab() {
   editorLoadedPath = null;
   renderTabs();
   renderEditor({ focusEditor: false });
-}
-
-async function switchToApplicationGraphTab({ build = false } = {}) {
-  if (terminalMaximized) setTerminalMaximized(false);
-  commitActiveTab();
-  activeTabPath = APPLICATION_GRAPH_TAB_PATH;
-  editorLoadedPath = null;
-  renderTabs();
-  await showMapWorkspace({ build });
 }
 
 function openSettingsWorkspace() {
@@ -9668,15 +9002,26 @@ securityToolMenu?.addEventListener("click", (event) => {
   showSecurityWorkspace(option.dataset.securityTool);
 });
 securityRunButton?.addEventListener("click", runSecurityWorkbench);
-securityProxyBrowser?.addEventListener("click", (event) => { event.stopPropagation(); chooseProxyBrowserIdentity(); });
-securityProxyBrowserMenu?.addEventListener("click", (event) => {
-  const action = event.target.closest("[data-proxy-identity]");
-  if (!action) return;
-  const identityId = action.dataset.proxyIdentity || "";
-  closeProxyBrowserMenu();
-  launchProxyBrowser(identityId);
+document.addEventListener("click", (event) => {
+  const identityAction = event.target.closest("#security-proxy-browser-menu [data-proxy-identity]");
+  if (identityAction) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeProxyBrowserMenu();
+    launchProxyBrowser(identityAction.dataset.proxyIdentity || "");
+    return;
+  }
+  if (event.target.closest("#security-proxy-browser")) {
+    event.stopPropagation();
+    chooseProxyBrowserIdentity();
+  }
 });
-securityGraphButton?.addEventListener("click", buildTrafficGraphFromToolbar);
+document.addEventListener("contextmenu", (event) => {
+  if (!event.target.closest("#security-proxy-browser")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  chooseProxyBrowserIdentity({ menuOnly: true });
+});
 securityHistoryToggle?.addEventListener("click", () => setSecurityHistoryVisible(securityHistoryPanel?.hidden));
 securityHistoryRefresh?.addEventListener("click", loadSecurityHistory);
 securityHistorySortHeaders.forEach((header) => header.querySelector("button")?.addEventListener("click", () => setSecurityHistorySort(header.dataset.historySort)));
@@ -9757,46 +9102,9 @@ securityPayloadEditor?.addEventListener("input", () => {
 terminalShellTab?.addEventListener("click", () => TerminalManager.focusActive());
 document.addEventListener("click", (event) => {
   if (!securityToolMenu?.hidden && !securityToolSwitcher?.contains(event.target)) closeSecurityToolMenu();
-  if (!securityProxyBrowserMenu?.hidden && !securityProxyBrowserWrap?.contains(event.target)) closeProxyBrowserMenu();
-});
-setMapDetailCollapsed(localStorage.getItem(MAP_INSPECT_COLLAPSED_KEY) === "true", { persist: false });
-mapDetailToggle?.addEventListener("click", () => setMapDetailCollapsed(!mapMain?.classList.contains("detail-collapsed")));
-mapBuildAction?.addEventListener("click", () => {
-  loadApplicationMap({ build: true });
-});
-mapDeepCollectAction?.addEventListener("click", deepCollectApplicationGraph);
-mapIntelligenceStart?.addEventListener("click", () => startMapIntelligenceIndex());
-mapIntelligenceStartAction?.addEventListener("click", () => startMapIntelligenceIndex());
-mapIntelligenceDefer?.addEventListener("click", async () => {
-  localStorage.setItem(mapIntelligencePromptKey(), "deferred");
-  if (mapIntelligencePrompt) mapIntelligencePrompt.hidden = true;
-  await refreshMapIntelligenceStatus();
-});
-mapIntelligencePause?.addEventListener("click", async () => {
-  if (assessmentPath && window.api.assessmentIntelligencePause) await window.api.assessmentIntelligencePause({ path: assessmentPath });
-  await refreshMapIntelligenceStatus();
-});
-mapIntelligenceResume?.addEventListener("click", async () => {
-  if (assessmentPath && window.api.assessmentIntelligenceResume) await window.api.assessmentIntelligenceResume({ path: assessmentPath });
-  await refreshMapIntelligenceStatus();
-});
-mapIntelligenceRebuild?.addEventListener("click", async () => {
-  if (assessmentPath && window.api.assessmentIntelligenceRebuild) await window.api.assessmentIntelligenceRebuild({ path: assessmentPath });
-  await refreshMapIntelligenceStatus();
-});
-window.api.onAssessmentIntelligence?.((event) => {
-  if (!assessmentPath || event?.workspace !== assessmentPath) return;
-  if (event.type === "progress") {
-    const progress = event.progress || {};
-    if (mapIntelligenceStatus) mapIntelligenceStatus.textContent = `Intelligence: indexing · ${progress.source || "preparing"} · ${Number(progress.records || 0)} records`;
-  } else {
-    refreshMapIntelligenceStatus();
-  }
-});
-window.api.onAssessmentGraphStatus?.((event) => {
-  if (!assessmentPath || event?.workspace !== assessmentPath || currentWorkspaceMode !== "map") return;
-  if (event.status === "building") setMapWorkspaceState({ exists: Boolean(applicationMap), busy: true, message: "Compiling deterministic graph passes in the background…" });
-  else if (event.status === "error") setMapWorkspaceState({ exists: Boolean(applicationMap), busy: false, message: event.result?.error || "Graph compilation failed." });
+  const proxyWrap = document.getElementById("security-proxy-browser-wrap") || securityProxyBrowserWrap;
+  const proxyMenu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
+  if (proxyMenu && !proxyMenu.hidden && !proxyWrap?.contains(event.target) && !proxyMenu.contains(event.target)) closeProxyBrowserMenu();
 });
 window.api.onIdentityStatus?.((snapshot) => {
   if (appSettingsSection !== "project") return;
@@ -9814,158 +9122,6 @@ window.api.onIdentityPersistence?.((event) => {
   } else if (event?.recovered) {
     setIdentitySettingsStatus("Identity state persistence recovered.", "success");
   }
-});
-document.querySelectorAll("[data-map-mode]").forEach((button) => button.addEventListener("click", () => {
-  applicationMapMode = button.dataset.mapMode || "route";
-  document.querySelectorAll("[data-map-mode]").forEach((candidate) => {
-    const active = candidate.dataset.mapMode === applicationMapMode;
-    candidate.classList.toggle("active", active);
-    candidate.setAttribute("aria-pressed", String(active));
-  });
-  if (mapSearch) mapSearch.placeholder = applicationMapMode === "state" ? "Find state, action, identity, or entity" : "Find route or host";
-  selectedMapNodeId = "";
-  renderApplicationMap();
-}));
-mapSearch?.addEventListener("input", renderApplicationMap);
-[mapMethodFilter, mapVisibilityFilter].forEach((control) => control?.addEventListener("change", renderApplicationMap));
-mapHostFilterToggle?.addEventListener("click", () => setMapHostFilterOpen(mapHostFilterMenu?.hidden));
-mapHostFilterAll?.addEventListener("change", () => {
-  if (!mapHostFilterAll.checked) return;
-  selectedMapHosts.clear();
-  renderMapHostFilter([...new Set((applicationMap?.nodes || []).filter((node) => node.type === "Route").map((node) => node.host).filter(Boolean))].sort());
-  renderApplicationMap();
-});
-mapHostFilterOptions?.addEventListener("change", (event) => {
-  const input = event.target.closest?.('input[type="checkbox"]');
-  if (!input) return;
-  if (input.checked) selectedMapHosts.add(input.value);
-  else selectedMapHosts.delete(input.value);
-  renderMapHostFilter([...new Set((applicationMap?.nodes || []).filter((node) => node.type === "Route").map((node) => node.host).filter(Boolean))].sort());
-  renderApplicationMap();
-});
-document.addEventListener("pointerdown", (event) => {
-  if (mapHostFilter && !mapHostFilter.contains(event.target)) setMapHostFilterOpen(false);
-});
-$("map-zoom-in")?.addEventListener("click", () => { mapZoom = Math.min(4, mapZoom * 1.2); updateMapViewportTransform(); });
-$("map-zoom-out")?.addEventListener("click", () => { mapZoom = Math.max(.12, mapZoom / 1.2); updateMapViewportTransform(); });
-$("map-fit")?.addEventListener("click", () => { mapZoom = 1; mapPanX = 0; mapPanY = 0; updateMapViewportTransform(); });
-function selectMapNode(nodeId) {
-  if (!nodeId) return;
-  selectedMapNodeId = nodeId;
-  setMapDetailCollapsed(false);
-  renderApplicationMap();
-}
-mapGraph?.addEventListener("click", (event) => {
-  const node = event.target.closest?.("[data-map-node-id]");
-  if (mapNodeClickSuppressed) { mapNodeClickSuppressed = false; return; }
-  if (mapPointerState?.moved) return;
-  if (!node) {
-    selectedMapNodeId = "";
-    renderApplicationMap();
-    return;
-  }
-  selectMapNode(node.dataset.mapNodeId || "");
-});
-mapGraph?.addEventListener("keydown", (event) => {
-  if (!["Enter", " "].includes(event.key)) return;
-  const node = event.target.closest?.("[data-map-node-id]");
-  if (!node) return;
-  event.preventDefault(); selectMapNode(node.dataset.mapNodeId || "");
-});
-mapGraph?.addEventListener("wheel", (event) => {
-  event.preventDefault();
-  mapZoom = Math.max(.12, Math.min(4, mapZoom * (event.deltaY < 0 ? 1.1 : .9)));
-  updateMapViewportTransform();
-}, { passive: false });
-mapGraph?.addEventListener("pointerdown", (event) => {
-  const node = event.target.closest?.("[data-map-node-id]");
-  if (node && event.button === 0 && event.isPrimary !== false) {
-    const nodeId = node.dataset.mapNodeId || "";
-    const origin = currentMapPositions.get(nodeId);
-    if (!origin) return;
-    const mode = applicationMapMode;
-    const overrides = activeMapPositionOverrides(mode);
-    mapNodeDragState = {
-      id: event.pointerId,
-      nodeId,
-      mode,
-      start: mapClientPoint(event.clientX, event.clientY),
-      origin: { ...origin },
-      previousOverride: overrides.has(nodeId) ? { ...overrides.get(nodeId) } : null,
-      moved: false,
-      armed: false,
-      holdTimer: null,
-    };
-    mapNodeClickSuppressed = false;
-    mapNodeDragState.holdTimer = setTimeout(() => {
-      if (!mapNodeDragState || mapNodeDragState.id !== event.pointerId) return;
-      mapNodeDragState.armed = true;
-      try { mapGraph.setPointerCapture(event.pointerId); } catch { /* pointer may have been released */ }
-      mapGraph.classList.add("dragging-node", "is-holding");
-    }, 1000);
-    return;
-  }
-  mapPointerState = { id: event.pointerId, x: event.clientX, y: event.clientY, panX: mapPanX, panY: mapPanY, moved: false };
-  mapGraph.setPointerCapture(event.pointerId); mapGraph.classList.add("panning", "is-holding");
-});
-mapGraph?.addEventListener("pointermove", (event) => {
-  if (mapNodeDragState?.id === event.pointerId) {
-    if (!mapNodeDragState.armed) return;
-    const current = mapClientPoint(event.clientX, event.clientY);
-    const dx = current.x - mapNodeDragState.start.x;
-    const dy = current.y - mapNodeDragState.start.y;
-    if (!mapNodeDragState.moved && Math.hypot(dx, dy) <= 4) return;
-    mapNodeDragState.moved = true;
-    mapNodeClickSuppressed = true;
-    const limit = 1_000_000;
-    updateDraggedMapNode(mapNodeDragState.nodeId, {
-      x: Math.max(-limit, Math.min(limit, mapNodeDragState.origin.x + dx)),
-      y: Math.max(-limit, Math.min(limit, mapNodeDragState.origin.y + dy)),
-    }, mapNodeDragState.mode);
-    return;
-  }
-  if (!mapPointerState || mapPointerState.id !== event.pointerId) return;
-  const rect = mapGraph.getBoundingClientRect();
-  const dx = (event.clientX - mapPointerState.x) * 1400 / Math.max(1, rect.width);
-  const dy = (event.clientY - mapPointerState.y) * 820 / Math.max(1, rect.height);
-  if (Math.abs(dx) + Math.abs(dy) > 2) mapPointerState.moved = true;
-  mapPanX = mapPointerState.panX + dx; mapPanY = mapPointerState.panY + dy; updateMapViewportTransform();
-});
-const endMapPointer = (event, canceled = false) => {
-  if (mapNodeDragState?.id === event.pointerId) {
-    const drag = mapNodeDragState;
-    mapNodeDragState = null;
-    if (drag.holdTimer) clearTimeout(drag.holdTimer);
-    mapGraph?.classList.remove("dragging-node", "is-holding");
-    try { mapGraph?.releasePointerCapture(event.pointerId); } catch { /* pointer capture may already be released */ }
-    if (canceled) {
-      const overrides = activeMapPositionOverrides(drag.mode);
-      if (drag.previousOverride) overrides.set(drag.nodeId, drag.previousOverride);
-      else overrides.delete(drag.nodeId);
-      renderApplicationMap();
-    } else if (drag.moved) {
-      persistMapNodePositions();
-    } else {
-      // Handle short clicks (and a held-but-never-moved node) directly on
-      // pointer release. Pointer capture can otherwise prevent the browser's
-      // synthetic click from reaching the freshly-rendered node.
-      mapNodeClickSuppressed = true;
-      selectMapNode(drag.nodeId);
-      setTimeout(() => { mapNodeClickSuppressed = false; }, 250);
-    }
-    if (drag.moved) setTimeout(() => { mapNodeClickSuppressed = false; }, 250);
-    return;
-  }
-  if (!mapPointerState || mapPointerState.id !== event.pointerId) return;
-  mapGraph?.classList.remove("panning", "is-holding");
-  try { mapGraph?.releasePointerCapture(event.pointerId); } catch { /* pointer capture may already be released */ }
-  setTimeout(() => { mapPointerState = null; }, 0);
-};
-mapGraph?.addEventListener("pointerup", endMapPointer);
-mapGraph?.addEventListener("pointercancel", (event) => endMapPointer(event, true));
-mapDetailContent?.addEventListener("click", (event) => {
-  const evidence = event.target.closest?.("[data-map-evidence]");
-  if (evidence) openMapEvidence(evidence.dataset.mapEvidence);
 });
 bugBountyTree?.addEventListener("click", async (event) => {
   const toggle = event.target.closest(".bounty-phase-toggle");
@@ -9985,7 +9141,6 @@ bugBountyTree?.addEventListener("click", async (event) => {
   item.setAttribute("aria-selected", "true");
   const selectedKey = item.dataset.bountyItem || item.dataset.bountyFolder;
   localStorage.setItem(BUG_BOUNTY_SELECTED_KEY, selectedKey);
-  if (item.dataset.bountyFolder === "Map") { await openApplicationGraphTab(); return; }
   if (item.dataset.bountyFolder === "WebClone") { await showWebCloneWorkspace(); return; }
   if (item.dataset.bountyFolder) return;
   await openAssessmentItem(item);
@@ -10084,8 +9239,6 @@ generalUpdatesToggle?.addEventListener("change", () => {
 });
 certificateBrowse?.addEventListener("click", chooseCertificateDirectory);
 certificateReset?.addEventListener("click", resetCertificateDirectory);
-$("knowledge-library-install")?.addEventListener("click", installKnowledgeLibraryPackage);
-$("knowledge-library-reindex")?.addEventListener("click", reindexKnowledgeLibrary);
 identityRefresh?.addEventListener("click", loadIdentitySettings);
 identityCreate?.addEventListener("click", createIdentityFromSettings);
 identityList?.addEventListener("click", (event) => {
@@ -10787,7 +9940,7 @@ function renderAdvancedSearchChips() {
 }
 
 function formattedSearchSources(counts = {}) {
-  const labels = { correlation: "Authorization", traffic: "Traffic", javascript: "JavaScript", evidence: "Evidence", tool: "Tools", map: "Map", asset: "Assets", code: "Code", workspace: "Files" };
+  const labels = { correlation: "Authorization", traffic: "Traffic", javascript: "JavaScript", evidence: "Evidence", tool: "Tools", asset: "Assets", code: "Code", workspace: "Files" };
   return Object.entries(counts).filter(([, count]) => Number(count) > 0).sort((a, b) => Number(b[1]) - Number(a[1]))
     .slice(0, 5).map(([source, count]) => `${labels[source] || source} ${Number(count).toLocaleString()}`).join(" · ");
 }
@@ -10942,7 +10095,7 @@ function syncQuickSelection() {
 
 function workspaceSearchResultItem(row, query) {
   const name = basenameOf(row.path);
-  const sourceIcons = { correlation: "codicon-shield", traffic: "codicon-globe", finding: "codicon-warning", evidence: "codicon-archive", map: "codicon-type-hierarchy", asset: "codicon-server", tool: "codicon-tools" };
+  const sourceIcons = { correlation: "codicon-shield", traffic: "codicon-globe", finding: "codicon-warning", evidence: "codicon-archive", asset: "codicon-server", tool: "codicon-tools" };
   const line = Number(row.line) || parseSnippetLine(row.snippet);
   const column = Number(row.column) || 1;
   const matchDetail = row.lineText || firstSnippetLine(row.snippet);
@@ -11445,21 +10598,8 @@ function remapExpandedTreePathsUnder(sourceAbsolute, destinationAbsolute) {
   }
 }
 
-async function renameWorkspaceContextTarget(target) {
-  if (!rootPath || !target?.relativePath || typeof window.api?.movePath !== "function") return;
-  const nextName = await AppDialog.prompt(
-    `Rename ${target.isDir ? "folder" : "file"}`,
-    target.name || basenameOf(target.relativePath),
-    { title: target.isDir ? "Rename folder" : "Rename file" },
-  );
-  if (nextName === null || nextName === undefined) return;
-  const normalizedName = String(nextName).trim();
-  const validationError = workspaceRenameValidationError(normalizedName);
-  if (validationError) {
-    await AppDialog.alert(validationError, { title: "Invalid name" });
-    return;
-  }
-  if (normalizedName === target.name) return;
+async function applyWorkspaceRename(target, normalizedName) {
+  if (!rootPath || !target?.relativePath || typeof window.api?.movePath !== "function") return false;
 
   const destination = workspaceRenameDestination(target.relativePath, normalizedName);
   const sourceAbsolute = normPath(target.path);
@@ -11469,10 +10609,7 @@ async function renameWorkspaceContextTarget(target) {
     source: target.relativePath,
     destination,
   });
-  if (result?.error) {
-    await AppDialog.alert(`Could not rename ${target.name}: ${result.error}`, { title: "Rename failed" });
-    return;
-  }
+  if (result?.error) return false;
 
   remapOpenTabsUnderWorkspacePath(sourceAbsolute, destinationAbsolute);
   remapExpandedTreePathsUnder(sourceAbsolute, destinationAbsolute);
@@ -11486,6 +10623,77 @@ async function renameWorkspaceContextTarget(target) {
   }
   syncActiveChatSession();
   await refreshWorkspaceUi({ preserveSelectionPath: destinationAbsolute });
+  return true;
+}
+
+function startInlineWorkspaceRename(target) {
+  if (!target?.item || !target?.relativePath || creatingItem || renamingItem) return;
+  const item = target.item;
+  const nameEl = item.querySelector(".tree-name");
+  if (!nameEl || item.querySelector(".tree-input")) return;
+
+  renamingItem = true;
+  const originalName = nameEl.textContent || target.name || basenameOf(target.relativePath);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "tree-input";
+  input.value = originalName;
+  item.classList.add("tree-input-row");
+  nameEl.replaceWith(input);
+  input.focus();
+  if (!target.isDir) {
+    const dot = originalName.lastIndexOf(".");
+    if (dot > 0) input.setSelectionRange(0, dot);
+    else input.select();
+  } else {
+    input.select();
+  }
+
+  let finished = false;
+  const restoreName = () => {
+    if (input.isConnected) {
+      const restored = document.createElement("span");
+      restored.className = "tree-name";
+      restored.textContent = originalName;
+      input.replaceWith(restored);
+    }
+    item.classList.remove("tree-input-row");
+    renamingItem = false;
+  };
+
+  async function commit() {
+    if (finished) return;
+    finished = true;
+    const normalizedName = input.value.trim();
+    const validationError = workspaceRenameValidationError(normalizedName);
+    if (validationError || normalizedName === originalName) {
+      restoreName();
+      return;
+    }
+
+    const renamed = await applyWorkspaceRename(target, normalizedName);
+    if (!renamed) restoreName();
+    else renamingItem = false;
+  }
+
+  input.addEventListener("keydown", async (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      await commit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finished = true;
+      restoreName();
+    }
+  });
+
+  input.addEventListener("blur", async () => {
+    await commit();
+  });
+}
+
+async function renameWorkspaceContextTarget(target) {
+  startInlineWorkspaceRename(target);
 }
 
 function setWorkspaceClipboard(operation) {
@@ -11547,6 +10755,8 @@ async function startWorkspaceFileAnalysis(target) {
   clearChatSessionState(session);
   session.chatMode = returnMode;
   session.kind = "file-analysis";
+  // Ask is private to this automatic first turn via modeOverride. The picker
+  // stays on returnMode unless the operator changes it during the run.
   chatSessions.push(session);
   applyActiveChatSession(session);
   renderChatSessionSelect();
@@ -11570,18 +10780,6 @@ async function startWorkspaceFileAnalysis(target) {
   try {
     await analysisRun;
   } finally {
-    // Ask mode is private to the automatic first turn. Whether it completes,
-    // fails, or is interrupted, the visible session returns to the mode the
-    // operator had selected before choosing Analyze.
-    session.chatMode = returnMode;
-    if (activeChatSessionId === session.id) {
-      chatMode = returnMode;
-      localStorage.setItem(CHAT_MODE_KEY, returnMode);
-      syncChatModeUi();
-      syncActiveChatSession();
-    } else {
-      schedulePersistChatSessions();
-    }
     renderChatSessionSelect();
   }
 }
@@ -12124,10 +11322,6 @@ function isInterceptorTab(tab) {
   return tab?.path === INTERCEPTOR_TAB_PATH || tab?.special === "interceptor";
 }
 
-function isApplicationGraphTab(tab) {
-  return tab?.path === APPLICATION_GRAPH_TAB_PATH || tab?.special === "application-graph";
-}
-
 function nestedSettingValue(object, settingPath) {
   return String(settingPath || "").split(".").reduce((value, key) => value?.[key], object);
 }
@@ -12296,6 +11490,10 @@ async function toggleInterceptorCapture() {
   const turningOn = !isInterceptionActive(nextSettings);
   nextSettings.interception.enabled = turningOn;
   nextSettings.interception.interceptRequests = turningOn;
+  if (turningOn) {
+    if (!nextSettings.listener || typeof nextSettings.listener !== "object") nextSettings.listener = {};
+    nextSettings.listener.enabled = true;
+  }
   const result = await saveAssessmentSettings(nextSettings);
   if (result?.error) {
     setSecurityStatus(result.error, "error");
@@ -12337,21 +11535,48 @@ async function configureProxyListener() {
 }
 
 function syncProxyBrowserUi(status = {}) {
-  if (!securityProxyBrowser) return;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (!button) return;
   const running = Boolean(status.running);
-  securityProxyBrowser.classList.toggle("active", running);
-  securityProxyBrowser.setAttribute("aria-pressed", String(running));
-  securityProxyBrowser.title = running
+  button.classList.toggle("active", running);
+  button.setAttribute("aria-pressed", String(running));
+  button.title = running
     ? `${status.browser === "edge" ? "Edge" : "Chrome"} is open through ${status.proxyHost || "127.0.0.1"}:${status.proxyPort || "proxy"}${status.agentShareAvailable ? "; matching agent browser actions can share it" : ""}`
-    : "Open browser through XEKUTE proxy";
+    : "Open browser through XEKUTE proxy. Right-click to choose an identity.";
 }
 
 function closeProxyBrowserMenu() {
-  if (securityProxyBrowserMenu) securityProxyBrowserMenu.hidden = true;
-  securityProxyBrowser?.setAttribute("aria-expanded", "false");
+  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (menu) {
+    menu.hidden = true;
+    menu.style.position = "";
+    menu.style.top = "";
+    menu.style.right = "";
+    menu.style.left = "";
+    menu.style.zIndex = "";
+    if (proxyBrowserMenuHome && menu.parentElement !== proxyBrowserMenuHome) proxyBrowserMenuHome.appendChild(menu);
+  }
+  button?.setAttribute("aria-expanded", "false");
 }
 
-async function chooseProxyBrowserIdentity() {
+function positionProxyBrowserMenu() {
+  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (!menu || !button) return;
+  if (!proxyBrowserMenuHome) proxyBrowserMenuHome = menu.parentElement;
+  document.body.appendChild(menu);
+  const rect = button.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+  menu.style.right = `${Math.round(Math.max(8, window.innerWidth - rect.right))}px`;
+  menu.style.left = "auto";
+  menu.style.zIndex = "12000";
+}
+
+async function chooseProxyBrowserIdentity(options = {}) {
+  const menuOnly = Boolean(options.menuOnly);
+  if (!menuOnly) return launchProxyBrowser("");
   if (!assessmentPath) return launchProxyBrowser("");
   let identities = [];
   try {
@@ -12359,13 +11584,17 @@ async function chooseProxyBrowserIdentity() {
     identities = identityRecordList(snapshot);
   } catch { identities = []; }
   if (!identities.length) return launchProxyBrowser("");
-  if (!securityProxyBrowserMenu) return launchProxyBrowser("");
-  securityProxyBrowserMenu.innerHTML = `
+  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (!menu || !button) return launchProxyBrowser("");
+  menu.innerHTML = `
     <button type="button" role="menuitem" data-proxy-identity=""><span class="codicon codicon-globe"></span><strong>Anonymous browser</strong><small>Separate unlabeled capture profile</small></button>
     ${identities.map((identity) => `<button type="button" role="menuitem" data-proxy-identity="${escapeHtml(identity.identityId)}"><span class="codicon codicon-account"></span><strong>${escapeHtml(identity.name || identity.identityId)}</strong><small>${escapeHtml(identity.role || "user")} · ${escapeHtml(identity.authStatus || "manual browser session")}</small></button>`).join("")}`;
-  securityProxyBrowserMenu.hidden = false;
-  securityProxyBrowser.setAttribute("aria-expanded", "true");
-  securityProxyBrowserMenu.querySelector("button")?.focus();
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  positionProxyBrowserMenu();
+  setSecurityStatus("Choose Anonymous or an identity for the proxied browser.");
+  menu.querySelector("button")?.focus();
 }
 
 async function launchProxyBrowser(identityId = "") {
@@ -12373,9 +11602,10 @@ async function launchProxyBrowser(identityId = "") {
     setSecurityStatus("Create or open a project first", "error");
     return;
   }
-  if (!window.api.proxyBrowserLaunch || securityProxyBrowser?.disabled) return;
-  const icon = securityProxyBrowser?.querySelector(".codicon");
-  if (securityProxyBrowser) securityProxyBrowser.disabled = true;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (!window.api.proxyBrowserLaunch || button?.disabled) return;
+  const icon = button?.querySelector(".codicon");
+  if (button) button.disabled = true;
   if (icon) icon.className = "codicon codicon-loading codicon-modifier-spin";
   setSecurityStatus("Preparing XEKUTE proxy and browser…");
   try {
@@ -12397,35 +11627,7 @@ async function launchProxyBrowser(identityId = "") {
     syncProxyBrowserUi({ running: false });
   } finally {
     if (icon) icon.className = "codicon codicon-globe";
-    if (securityProxyBrowser) securityProxyBrowser.disabled = false;
-  }
-}
-
-async function buildTrafficGraphFromToolbar() {
-  if (!assessmentPath || securityGraphButton?.disabled) {
-    if (!assessmentPath) setSecurityStatus("Create or open a project first", "error");
-    return;
-  }
-  securityGraphButton.disabled = true;
-  try { await openApplicationGraphTab({ build: true }); }
-  finally { securityGraphButton.disabled = false; }
-}
-
-async function deepCollectApplicationGraph() {
-  if (!assessmentPath || !window.api.assessmentDeepCollectGraph || mapDeepCollectAction?.disabled) return;
-  setMapWorkspaceState({ exists: Boolean(applicationMap), busy: true, message: "Actively collecting referenced in-scope JavaScript…" });
-  try {
-    const result = await window.api.assessmentDeepCollectGraph({ path: assessmentPath });
-    if (result?.ok === false || result?.error) {
-      const message = result.error?.message || result.error || "Deep JavaScript collection failed.";
-      setMapWorkspaceState({ exists: Boolean(applicationMap), busy: false, message });
-      addErrorMessage(message);
-      return;
-    }
-    await loadApplicationMap();
-    if (mapWorkspaceSubtitle) mapWorkspaceSubtitle.textContent = `Deep collection complete · ${Number(result.downloaded) || 0} downloaded · ${Number(result.unchanged) || 0} deduplicated · ${Number(result.failed) || 0} unavailable`;
-  } catch (error) {
-    setMapWorkspaceState({ exists: Boolean(applicationMap), busy: false, message: error?.message || "Deep JavaScript collection failed." });
+    if (button) button.disabled = false;
   }
 }
 
@@ -12630,10 +11832,6 @@ function switchToTab(filePath, { focusEditor = true } = {}) {
     switchToInterceptorTab();
     return;
   }
-  if (isApplicationGraphTab(openTabs.get(filePath))) {
-    void switchToApplicationGraphTab();
-    return;
-  }
   showCodeEditorWorkspace();
   commitActiveTab();
   activeTabPath = filePath;
@@ -12679,7 +11877,7 @@ function focusExplorerSidebar() {
 }
 
 function getEditorTabAbsolutePath(tab) {
-  if (!tab || isSettingsTab(tab) || isInterceptorTab(tab) || isApplicationGraphTab(tab)) return null;
+  if (!tab || isSettingsTab(tab) || isInterceptorTab(tab)) return null;
   const rawPath = tab.diskPath || tab.path || "";
   if (!rawPath || String(rawPath).startsWith("xekute:")) return null;
   if (rootPath) {
@@ -12869,7 +12067,7 @@ function renderTabs() {
     el.className = "editor-tab"
       + (path === activeTabPath ? " active" : "")
       + (tab.pinned ? " editor-tab-pinned" : "");
-    const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab) || isApplicationGraphTab(tab);
+    const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab);
     if (specialWorkspaceTab) el.classList.add("special-workspace-tab");
     el.title = specialWorkspaceTab
       ? tab.name
@@ -12928,9 +12126,7 @@ function renderTabs() {
       ? "codicon-settings-gear"
       : isInterceptorTab(tab)
         ? "codicon-debug-disconnect"
-        : isApplicationGraphTab(tab)
-          ? "codicon-type-hierarchy"
-          : "";
+        : "";
     if (specialIcon) {
       icon.className = `tab-icon codicon ${specialIcon}`;
     } else {
@@ -13004,7 +12200,7 @@ function renderTabs() {
 function updateEditorPathBar() {
   if (!editorPathBar || !editorPathLabel) return;
   const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
-  if (!activeTab || isSettingsTab(activeTab) || isInterceptorTab(activeTab) || isApplicationGraphTab(activeTab)) {
+  if (!activeTab || isSettingsTab(activeTab) || isInterceptorTab(activeTab)) {
     editorPathBar.hidden = true;
     editorPathLabel.textContent = "";
     editorPathLabel.removeAttribute("title");
@@ -13043,7 +12239,6 @@ async function renderEditor({ focusEditor = true } = {}) {
     updateEditorPathBar();
     if (resourceViewer) resourceViewer.hidden = true;
     if (securityWorkspace) securityWorkspace.hidden = true;
-    if (mapWorkspace) mapWorkspace.hidden = true;
     if (webcloneWorkspace) webcloneWorkspace.hidden = true;
     if (assessmentModuleView) { assessmentModuleView.hidden = true; assessmentModuleActive = false; }
     window.api.webCloneHidePreview?.();
@@ -13062,17 +12257,6 @@ async function renderEditor({ focusEditor = true } = {}) {
     if (markdownPreview) markdownPreview.hidden = true;
     if (settingsEditorToolbar) settingsEditorToolbar.hidden = true;
     showSecurityWorkspaceContent(activeTab.securityTool || "");
-    return;
-  }
-
-  if (isApplicationGraphTab(activeTab)) {
-    if (editorEmpty) editorEmpty.setAttribute("hidden", "");
-    if (editorView) editorView.setAttribute("hidden", "");
-    if (monacoContainer) monacoContainer.hidden = true;
-    if (settingsUIView) settingsUIView.hidden = true;
-    if (markdownPreview) markdownPreview.hidden = true;
-    if (settingsEditorToolbar) settingsEditorToolbar.hidden = true;
-    await showMapWorkspace();
     return;
   }
 
@@ -13331,6 +12515,7 @@ function resizeChatInput() {
   chatInput.style.overflowY = atCap ? "auto" : "hidden";
   chatInput.classList.toggle("at-scroll-cap", atCap);
 }
+globalThis.resizeChatInput = resizeChatInput;
 
 function resetChatInput() {
   if (!chatInput) return;
@@ -13439,6 +12624,15 @@ async function openModelEditMenu(modelName, rowEl) {
   } else {
     renderReasoningOptions(null);
     renderContextOptions(settings.context, null);
+    if (window.api?.runtimeModel) {
+      void window.api.runtimeModel({ model: modelName }).then((result) => {
+        if (editingModel !== modelName || !result?.ok) return;
+        if (result.contextLength) ollamaRuntimeContext[modelName] = result.contextLength;
+        renderContextOptions(getModelSettings(modelName).context, {
+          contextWindowTokens: result.contextLength,
+        });
+      }).catch(() => {});
+    }
   }
   updateModelRuntimeNote(modelName);
 
@@ -13552,10 +12746,9 @@ function renderReasoningOptions(openRouterMetadata = null) {
 }
 
 function formatOpenRouterContextLabel(tokens) {
-  const value = ContextBudget?.positiveInteger(tokens);
-  if (!value) return AUTO_CONTEXT;
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
-  return `${Math.ceil(value / 1000)}K`;
+  return ContextBudget?.positiveInteger(tokens)
+    ? (ContextBudget.formatPickerContextLabel(tokens) || formatContextWindowLabel(tokens))
+    : AUTO_CONTEXT;
 }
 
 function nearestContextChoice(choices, tokens) {
@@ -13565,64 +12758,72 @@ function nearestContextChoice(choices, tokens) {
   return choices.reduce((best, value) => Math.abs(value - selected) < Math.abs(best - selected) ? value : best);
 }
 
-function renderContextOptions(selected, openRouterMetadata = null) {
-  contextOptions.innerHTML = "";
-  const metadata = isOpenRouterProvider()
-    ? ContextBudget.normalizeModelMetadata(openRouterMetadata || openRouterModelMeta[editingModel] || {}, editingModel)
-    : null;
-  const settings = editingModel ? getModelSettings(editingModel) : { context: AUTO_CONTEXT, contextMode: "auto" };
-
+function pickerContextMaximum(metadataHint = null) {
   if (isOpenRouterProvider()) {
-    const choices = ContextBudget.contextOptions(Math.max(
-      Number(metadata?.contextWindowTokens) || 0,
-      ...(Array.isArray(metadata?.endpointContextLengths) ? metadata.endpointContextLengths : []),
-    ) || null);
-    if (!choices.length) {
-      const note = document.createElement("span");
-      note.className = "model-edit-note";
-      note.textContent = "Fetching model context…";
-      contextOptions.appendChild(note);
-      return;
-    }
-    const selectedTokens = settings.contextMode === "custom"
-      ? settings.contextLimitTokens
-      : (ContextBudget.positiveInteger(selected) || null);
-    const matched = nearestContextChoice(choices, selectedTokens) || choices[0];
-    for (const tokens of choices) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "context-option" + (tokens === matched ? " selected" : "");
-      btn.innerHTML = `<span>${formatOpenRouterContextLabel(tokens)}</span><span class="codicon codicon-check"></span>`;
-      btn.title = `Use a ${formatOpenRouterContextLabel(tokens)} token context window`;
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (!editingModel) return;
-        setModelSetting(editingModel, "context", tokens);
-        renderContextOptions(tokens, metadata);
-        updateModelRuntimeNote(editingModel);
-      });
-      contextOptions.appendChild(btn);
-    }
+    const metadata = ContextBudget.normalizeModelMetadata(
+      metadataHint || openRouterModelMeta[editingModel] || {},
+      editingModel,
+    );
+    return Math.max(
+      Number(metadata.contextWindowTokens) || 0,
+      ...(Array.isArray(metadata.endpointContextLengths) ? metadata.endpointContextLengths : []),
+    ) || null;
+  }
+  return ContextBudget.positiveInteger(metadataHint?.contextWindowTokens)
+    || ContextBudget.positiveInteger(ollamaRuntimeContext[editingModel])
+    || (resolvedContextCapacity?.plan?.model === editingModel
+      ? ContextBudget.positiveInteger(resolvedContextCapacity.plan.modelMaxTokens)
+      : null)
+    || 1_048_576;
+}
+
+function renderContextOptions(selected, metadataHint = null) {
+  contextOptions.innerHTML = "";
+  const settings = editingModel ? getModelSettings(editingModel) : { context: AUTO_CONTEXT, contextMode: "auto" };
+  const maximum = pickerContextMaximum(metadataHint);
+  if (isOpenRouterProvider() && !maximum) {
+    const note = document.createElement("span");
+    note.className = "model-edit-note";
+    note.textContent = "Fetching model context…";
+    contextOptions.appendChild(note);
     return;
   }
+  const choices = ContextBudget.pickerContextOptions(maximum);
+  const autoSelected = settings.contextMode !== "custom";
+  const selectedTokens = autoSelected
+    ? null
+    : (settings.contextLimitTokens || ContextBudget.positiveInteger(selected) || contextLabelToTokens(selected) || null);
+  const matched = nearestContextChoice(choices, selectedTokens);
+  const matchedExactly = matched && selectedTokens
+    && Math.abs(matched - selectedTokens) / Math.max(matched, selectedTokens) < 0.04;
 
-  const options = CONTEXT_OPTIONS;
-  const currentTokens = settings.contextMode === "custom"
-    ? (settings.contextLimitTokens || contextLabelToTokens(settings.context))
-    : null;
-  const selectedLabel = currentTokens
-    ? (options.find((opt) => contextLabelToTokens(opt) === currentTokens) || options.find((opt) => contextLabelToTokens(opt) === nearestContextChoice(options.map(contextLabelToTokens).filter(Boolean), currentTokens)))
-    : AUTO_CONTEXT;
-  for (const opt of options) {
+  const autoBtn = document.createElement("button");
+  autoBtn.type = "button";
+  autoBtn.className = "context-option" + (autoSelected ? " selected" : "");
+  autoBtn.innerHTML = `<span>${AUTO_CONTEXT}</span><span class="codicon codicon-check"></span>`;
+  autoBtn.title = "Use the model's full advertised context window";
+  autoBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!editingModel) return;
+    setModelSetting(editingModel, "context", AUTO_CONTEXT);
+    renderContextOptions(AUTO_CONTEXT, metadataHint);
+    updateModelRuntimeNote(editingModel);
+  });
+  contextOptions.appendChild(autoBtn);
+
+  for (const tokens of choices) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "context-option" + (opt === selectedLabel ? " selected" : "");
-    btn.innerHTML = `<span>${opt}</span><span class="codicon codicon-check"></span>`;
+    btn.className = "context-option" + (!autoSelected && matchedExactly && tokens === matched ? " selected" : "");
+    const pickerLabel = formatOpenRouterContextLabel(tokens);
+    const windowLabel = formatContextWindowLabel(tokens);
+    btn.innerHTML = `<span>${pickerLabel}</span><span class="codicon codicon-check"></span>`;
+    btn.title = `Use a ${windowLabel} token context window`;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!editingModel) return;
-      setModelSetting(editingModel, "context", opt);
-      renderContextOptions(opt, metadata);
+      setModelSetting(editingModel, "context", tokens);
+      renderContextOptions(tokens, metadataHint);
       updateModelRuntimeNote(editingModel);
     });
     contextOptions.appendChild(btn);
@@ -13635,17 +12836,17 @@ async function updateModelRuntimeNote(modelName) {
     const metadata = await fetchOpenRouterModelMetadata(modelName);
     const plan = resolveModelContextPlan(modelName, metadata);
     const maximum = metadata.contextWindowTokens
-      ? `${formatTokenCount(metadata.contextWindowTokens)} maximum`
+      ? `${formatContextWindowLabel(metadata.contextWindowTokens)} maximum`
       : "maximum unavailable";
     const endpointNote = metadata.endpointContextLengths?.length
       ? ` ${metadata.endpointContextLengths.length} provider endpoint${metadata.endpointContextLengths.length === 1 ? "" : "s"} reported.`
       : "";
     const output = metadata.maxCompletionTokens
-      ? ` · ${formatTokenCount(metadata.maxCompletionTokens)} output max`
+      ? ` · ${formatContextWindowLabel(metadata.maxCompletionTokens)} output max`
       : "";
     const budget = plan.mode === "custom"
-      ? `App budget ${formatTokenCount(plan.effectiveLimitTokens)}.`
-      : `Auto app budget ${formatTokenCount(plan.effectiveLimitTokens)}.`;
+      ? `App budget ${formatContextWindowLabel(plan.effectiveLimitTokens)}.`
+      : `Auto app budget ${formatContextWindowLabel(plan.effectiveLimitTokens)}.`;
     const openRouterNote = `OpenRouter ${maximum}${output}.${endpointNote} ${budget} ${plan.approximate ? "Capacity is approximate until model metadata is available." : ""}`;
     setModelRuntimeNote(openRouterNote.trim(), plan.approximate);
     return;
@@ -14239,24 +13440,17 @@ function toolIconClass(tool = {}) {
 
 const FILE_MUTATION_TOOL_NAMES = new Set([
   "apply_patch",
-  "update_project_artifacts",
-  "manage_state",
   "manage_identity",
-  "attack_graph",
   "create_guidance",
 ]);
 
 const FILE_READ_TOOL_NAMES = new Set([
   "read_file",
   "search_workspace",
-  "inspect_environment",
-  "ingest_traffic",
   "replay_request",
-  "run_test_case",
   "browser_action",
-  "compare_responses",
-  "verify_finding",
   "delegate_agent",
+  "web_research",
 ]);
 
 function toolActionName(tool = {}) {
@@ -14316,7 +13510,7 @@ function toolRunningMessage(tool = {}) {
   if (/replay|traffic|ingest/.test(action)) return "Replaying traffic\u2026";
   if (/compare|responses/.test(action)) return "Comparing responses\u2026";
   if (/delegate|subagent/.test(action)) return "Delegating sub-agent\u2026";
-  if (/update_project_artifacts|manage_state|manage_identity/.test(action)) return "Managing workflow\u2026";
+  if (/manage_identity/.test(action)) return "Managing identity\u2026";
   return "Working\u2026";
 }
 
@@ -15113,16 +14307,6 @@ function isTaskListTool(tool) {
   return toolActionName(tool) === "update_task_list";
 }
 
-// Canonical project_info, H-####, C-####, and E-#### maintenance is the
-// durable Tier 2/artifact lane. It is operational state, not chat content.
-function isTier2MemoryTool(tool = {}) {
-  return toolActionName(tool) === "update_project_artifacts";
-}
-
-function isTier2MemoryActivity(text = "") {
-  return /\bupdate_project_artifacts\b/i.test(String(text || ""));
-}
-
 function clearComposerTaskList() {
   activeComposerTaskList = null;
   if (composerTaskListEl) {
@@ -15177,6 +14361,20 @@ document.addEventListener("pointerdown", (event) => {
 
 function composerQuestionSessionId(sessionId = activeChatSessionId) {
   return String(sessionId || activeChatSessionId || "");
+}
+
+const COMPOSER_FREE_WRITE_ID = "free_write";
+
+function questionOptionsWithFreeWrite(question = {}) {
+  const options = Array.isArray(question.options) ? [...question.options] : [];
+  if (options.some((option) => option?.freeWrite || option?.id === COMPOSER_FREE_WRITE_ID)) return options;
+  options.push({
+    id: COMPOSER_FREE_WRITE_ID,
+    label: "Or describe something else",
+    recommended: false,
+    freeWrite: true,
+  });
+  return options;
 }
 
 function syncComposerQuestionsForActiveSession() {
@@ -15306,7 +14504,7 @@ function showComposerQuestionsPanel({
   block.setAttribute("aria-label", "Operator clarification questions");
 
   const questionBlocks = visibleQuestions.map((question, index) => {
-    const options = Array.isArray(question.options) ? question.options : [];
+    const options = questionOptionsWithFreeWrite(question);
     const hasRecommended = options.some((option) => option.recommended);
     const optionsHtml = options.map((option, optionIndex) => {
       const selectedByDefault = !isToolQuestionnaire && (option.recommended || (!hasRecommended && optionIndex === 0));
@@ -15315,8 +14513,7 @@ function showComposerQuestionsPanel({
         return `
           <div class="agent-questions-option is-free-write">
             <input class="agent-questions-custom-radio" type="radio" name="agent-question-${escapeHtml(question.id)}" value="${escapeHtml(option.id)}" data-free-write="1"${selectedByDefault ? " checked" : ""}>
-            <span class="agent-questions-custom-icon codicon codicon-edit" aria-hidden="true"></span>
-            <input type="text" class="agent-questions-freetext" data-question-id="${escapeHtml(question.id)}" placeholder="Type something..." aria-label="Custom answer">
+            <input type="text" class="agent-questions-freetext" data-question-id="${escapeHtml(question.id)}" placeholder="Or describe something else" aria-label="Or describe something else">
           </div>
         `;
       }
@@ -15398,23 +14595,39 @@ function showComposerQuestionsPanel({
   block.querySelectorAll("input[type='radio']").forEach((input) => {
     input.addEventListener("change", () => {
       syncFreeWrite();
-      if (isToolQuestionnaire && input.checked) queueMicrotask(() => submitButton?.click());
+      if (isToolQuestionnaire && input.checked && input.dataset.freeWrite !== "1") {
+        queueMicrotask(() => submitButton?.click());
+      }
     });
   });
   block.querySelectorAll(".agent-questions-option.is-free-write").forEach((option) => {
     const radio = option.querySelector("input[type='radio']");
     const textInput = option.querySelector(".agent-questions-freetext");
     if (!radio || !textInput) return;
+    const field = option.closest(".agent-questions-field");
     const selectCustomAnswer = () => {
       radio.checked = true;
+      field?.querySelectorAll("input[type='checkbox']").forEach((checkbox) => { checkbox.checked = false; });
       syncFreeWrite();
     };
     textInput.addEventListener("focus", selectCustomAnswer);
     textInput.addEventListener("input", selectCustomAnswer);
+    textInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      if (String(textInput.value || "").trim()) submitButton?.click();
+    });
     option.addEventListener("click", (event) => {
       if (event.target === textInput) return;
       selectCustomAnswer();
       textInput.focus();
+    });
+    field?.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        if (!checkbox.checked) return;
+        radio.checked = false;
+        syncFreeWrite();
+      });
     });
   });
   syncFreeWrite();
@@ -15427,15 +14640,20 @@ function showComposerQuestionsPanel({
     const answers = [];
     block.querySelectorAll(".agent-questions-field").forEach((field) => {
       const questionId = field.dataset.questionId || "";
-      const selectedInputs = [...field.querySelectorAll("input[type='radio']:checked, input[type='checkbox']:checked")];
+      if (!questionId) return;
+      const freeWriteSelected = field.querySelector("input[data-free-write='1']:checked");
+      const freeText = String(field.querySelector(".agent-questions-freetext")?.value || "").trim();
+      if (freeWriteSelected) {
+        answers.push({ questionId, selectedOptionId: COMPOSER_FREE_WRITE_ID, freeText });
+        return;
+      }
+      const selectedInputs = [...field.querySelectorAll("input[type='radio']:checked, input[type='checkbox']:checked")]
+        .filter((input) => input.dataset.freeWrite !== "1");
       const selected = selectedInputs[0];
-      if (!questionId || !selected) return;
-      const freeText = selected.dataset.freeWrite === "1"
-        ? String(field.querySelector(".agent-questions-freetext")?.value || "").trim()
-        : "";
+      if (!selected) return;
       answers.push(field.dataset.questionMultiple === "true"
         ? { questionId, selectedOptionIds: selectedInputs.map((input) => input.value), freeText: "" }
-        : { questionId, selectedOptionId: selected.value, freeText });
+        : { questionId, selectedOptionId: selected.value, freeText: "" });
     });
     return answers;
   };
@@ -15464,6 +14682,11 @@ function showComposerQuestionsPanel({
 
   submitButton.addEventListener("click", () => {
     const activeField = questionFields[activeQuestionIndex];
+    const freeWriteSelected = activeField?.querySelector("input[data-free-write='1']:checked");
+    if (freeWriteSelected && !String(activeField.querySelector(".agent-questions-freetext")?.value || "").trim()) {
+      activeField.querySelector(".agent-questions-freetext")?.focus();
+      return;
+    }
     if (!activeField?.querySelector("input[type='radio']:checked, input[type='checkbox']:checked")) {
       activeField?.querySelector("input[type='radio'], input[type='checkbox']")?.focus();
       return;
@@ -16039,7 +15262,6 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
 }
 
 const SYSTEM_SKILL_SLASH_COMMANDS = Object.freeze([
-  Object.freeze({ name: "/pentest", title: "Adaptive penetration testing", description: "Run adaptive, scope-aware penetration testing", overview: "Internal evidence-led reconnaissance, testing, verification, and replanning guidance.", prompt: "", group: "system-skill" }),
   Object.freeze({ name: "/report", title: "VAPT report generation", description: "Generate an evidence-linked VAPT report", overview: "Build the current structured report from canonical verified evidence and checklist coverage.", prompt: "", group: "system-skill" }),
   Object.freeze({ name: "/create-rule", title: "Create a project rule", description: "Create a project or global rule", overview: "Create validated Xekute rule guidance through the protected guidance writer.", prompt: "", group: "system-skill" }),
   Object.freeze({ name: "/create-skill", title: "Create user guidance skill", description: "Create user-authored guidance", overview: "Create a validated project or global custom guidance skill.", prompt: "", group: "system-skill" }),
@@ -16397,37 +15619,6 @@ async function runSpecialSlashCommand(rawCommand) {
   return false;
 }
 
-function cancelPentestContinuation(sessionId = "") {
-  const key = String(sessionId || "");
-  const timer = pentestContinuationTimers.get(key);
-  if (timer) clearTimeout(timer);
-  pentestContinuationTimers.delete(key);
-}
-
-function schedulePentestContinuation(sessionId = "", prompt = "") {
-  const key = String(sessionId || "");
-  const message = String(prompt || "").trim().slice(0, 12_000);
-  if (!key || !message) return;
-  cancelPentestContinuation(key);
-  const resume = () => {
-    pentestContinuationTimers.delete(key);
-    if (!chatSessions.some((session) => session.id === key)) return;
-    if (contextCheckpointing) {
-      pentestContinuationTimers.set(key, setTimeout(resume, 100));
-      return;
-    }
-    if (isChatSessionRunning(key)) return;
-    Promise.resolve(sendMessageWithAgentRuntime({
-      internal: true,
-      internalSkillId: "pentest",
-      sessionId: key,
-      text: message,
-      skipContextFiles: true,
-    })).catch(() => {});
-  };
-  pentestContinuationTimers.set(key, setTimeout(resume, 75));
-}
-
 async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", options = {} } = {}) {
   const runSession = [...chatSessions, ...closedChatSessions, ...archivedChatSessions]
     .find((session) => session.id === String(targetSessionId || ""));
@@ -16436,10 +15627,11 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
   if (!runModel) return { ok: false, code: "BACKGROUND_MODEL_NOT_SELECTED" };
   const runMode = options?.modeOverride
     ? canonicalChatMode(options.modeOverride)
-    : (runSession.chatMode || chatMode);
+    : canonicalChatMode(runSession.turnMode || runSession.chatMode || chatMode);
   const runFamily = runSession.chatFamily || chatFamily;
   const runSettings = getModelSettings(runModel);
   const runContextPlan = resolvedWorkingContextPlan(runModel);
+  ensureChatMemorySessionId(runSession);
   const runtimeSessionId = runSession.memorySessionId || runSession.id;
   const providedContextFiles = Array.isArray(options?.contextFiles)
     ? options.contextFiles.filter((file) => file && typeof file.path === "string" && typeof file.content === "string")
@@ -16475,12 +15667,7 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
       internalSkillId: String(options?.internalSkillId || ""),
       continuation: options?.continuation || null,
       backgroundRuntime: true,
-      tier2MemoryMaintenance: Boolean(options?.tier2MemoryMaintenance),
-      pentestFinalizeBlockId: String(options?.pentestFinalizeBlockId || ""),
     });
-    if (result?.pentestLoop?.continue === true && !result?.aborted) {
-      schedulePentestContinuation(runSession.id, result.pentestLoop.prompt);
-    }
     return result;
   } catch (error) {
     return { ok: false, error: error?.message || "Background runtime failed.", code: error?.code || "BACKGROUND_RUNTIME_FAILED" };
@@ -16490,30 +15677,12 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
   }
 }
 
-function tier2MemoryMaintenanceSucceeded(result = {}) {
-  return Boolean(
-    result?.ok
-    && !result?.aborted
-    && result?.runState?.status === "completed"
-    && result?.artifactSync?.ok !== false
-  );
-}
-
-async function executeQueuedHiddenAgentRuntime(payload = {}) {
-  const first = await executeHiddenAgentRuntime(payload);
-  if (!payload?.options?.tier2MemoryMaintenance || tier2MemoryMaintenanceSucceeded(first)) return first;
-  // The controller already retries a missing finalizer once. This second
-  // complete background attempt covers transient provider, staging, and
-  // commit failures without ever reopening the visible response.
-  return executeHiddenAgentRuntime(payload);
-}
-
 function sendHiddenAgentRuntime(payload = {}) {
   const key = String(payload.targetSessionId || "");
   const prior = hiddenAgentRuntimeQueues.get(key) || Promise.resolve();
   const task = prior
     .catch(() => {})
-    .then(() => executeQueuedHiddenAgentRuntime(payload));
+    .then(() => executeHiddenAgentRuntime(payload));
   hiddenAgentRuntimeQueues.set(key, task);
   task.finally(() => {
     if (hiddenAgentRuntimeQueues.get(key) === task) hiddenAgentRuntimeQueues.delete(key);
@@ -16521,32 +15690,9 @@ function sendHiddenAgentRuntime(payload = {}) {
   return task;
 }
 
-function scheduleTier2MemoryMaintenance({ targetSessionId = "", mode = "agent", workspace = "", pentestFinalizeBlockId = "" } = {}) {
-  const maintenanceMode = canonicalChatMode(mode);
-  const projectRoot = String(workspace || "");
-  if (!targetSessionId || !projectRoot || !TIER2_MEMORY_MODES.has(maintenanceMode)) {
-    return Promise.resolve({ ok: true, skipped: true });
-  }
-  return sendHiddenAgentRuntime({
-    targetSessionId,
-    text: pentestFinalizeBlockId
-      ? `${TIER2_MEMORY_MAINTENANCE_PROMPT} This transaction finalizes a structured Pentest cycle: preserve its phase, WSTG procedure provenance, completed and remaining coverage, blockers, and evidence distinctions without treating checkpoint claims as proof.`
-      : TIER2_MEMORY_MAINTENANCE_PROMPT,
-    options: {
-      modeOverride: maintenanceMode,
-      workspace: projectRoot,
-      activeFile: null,
-      contextFiles: [],
-      tier2MemoryMaintenance: true,
-      pentestFinalizeBlockId: String(pentestFinalizeBlockId || ""),
-    },
-  });
-}
-
 async function sendMessageWithAgentRuntime(options = {}) {
   const internal = Boolean(options?.internal);
   const targetSessionId = String(options?.sessionId || activeChatSessionId || "");
-  if (!internal) cancelPentestContinuation(targetSessionId);
   const hasExplicitText = Object.prototype.hasOwnProperty.call(options || {}, "text");
   let text = hasExplicitText
     ? String(options.text || "").trim()
@@ -16586,12 +15732,14 @@ async function sendMessageWithAgentRuntime(options = {}) {
   const runModel = runSession.selectedModel || selectedModel;
   const runMode = options?.modeOverride
     ? canonicalChatMode(options.modeOverride)
-    : (runSession.chatMode || chatMode);
+    : canonicalChatMode(runSession.chatMode || chatMode);
+  runSession.turnMode = runMode;
   const runFamily = runSession.chatFamily || chatFamily;
   if (!runModel) {
     if (!internal) addErrorMessage("Select a model before sending a message.");
     return;
   }
+  ensureChatMemorySessionId(runSession);
   const runSettings = getModelSettings(runModel);
   const runContextPlan = resolvedWorkingContextPlan(runModel);
   const providedContextFiles = Array.isArray(options?.contextFiles)
@@ -16622,7 +15770,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
     : null;
   if (!reusedUserMessage) runHistory.push(userMessage);
   const promptMessage = reusedUserMessage || userMessage;
-  runSession.lastContextUsage = null;
   if (!internal) maybeNameActiveChat(text);
   const run = {
     sessionId: runSession.id,
@@ -16700,15 +15847,11 @@ async function sendMessageWithAgentRuntime(options = {}) {
     if (payload.source === "parent_continuation") return;
 
     if (payload.type === "context_checkpoint") {
-      // Checkpointing is automatic and main-process owned.  It is surfaced as
-      // a transient status only; no renderer action can force rotation.
-      if (runIsVisible()) {
-        const active = ["started", "running"].includes(String(payload.status || "").toLowerCase());
-        run.contextCheckpointPending = active;
-        contextCheckpointingSessionId = runSession.id;
-        setContextCheckpointUi(active);
-        setRunAgentStatus(active ? "Context checkpointing…" : payload.status === "failed" ? "Context checkpoint needs attention" : `${modeLabel(runMode)} working`);
-      }
+      // Checkpointing is automatic and main-process owned. The in-chat
+      // placeholder stays after completion so the operator can see that
+      // summarized conversation was refreshed.
+      applyCheckpointToSession(runSession, payload);
+      applyContextCheckpointUi(run, payload);
       return;
     }
 
@@ -16753,7 +15896,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
 
     if (payload.type === "activity") {
       if (isSilentToolRoutingActivity(payload.text)) return;
-      if (isTier2MemoryActivity(payload.text)) return;
       const kind = payload.kind || "info";
       if (payload.text && kind !== "meta" && kind !== "success") assistant.setStatus(payload.text);
       assistant.noteTaskActivity(payload.text, kind);
@@ -16780,7 +15922,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
       syncAssistantDraftToHistory(run, assistant);
       if (runIsVisible()) activeStreamContent = run.activeStreamContent;
       lastAgentText = assistant.rawContent;
-      updateRunContextUsage();
       return;
     }
 
@@ -16792,6 +15933,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
 
     if (payload.type === "context_usage" && payload.usage) {
       storeLastContextUsage(payload.usage, { session: runSession, model: runModel, contextPlan: runContextPlan });
+      updateRunContextUsage();
       return;
     }
 
@@ -16831,7 +15973,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_call") {
-      const tools = (Array.isArray(payload.tools) ? payload.tools : []).filter((tool) => !isTier2MemoryTool(tool));
+      const tools = Array.isArray(payload.tools) ? payload.tools : [];
       if (!tools.length) return;
       assistant.finalizeThinking();
       for (const tool of tools) {
@@ -16859,7 +16001,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_start" && payload.tool) {
-      if (isTier2MemoryTool(payload.tool)) return;
       const toolHistoryWrite = queueChatHistoryEvent({
         type: "tool_usage",
         toolName: payload.tool.toolName || payload.tool.action || payload.tool.name || "tool",
@@ -16883,7 +16024,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_result" && payload.tool && payload.result) {
-      if (isTier2MemoryTool(payload.tool)) return;
       if (isTaskListTool(payload.tool)) {
         assistant.setStatus(payload.result?.error ? "Task list update failed" : "Task list updated");
         return;
@@ -17055,22 +16195,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
       chatInput.readOnly = false;
       chatInput.removeAttribute("aria-disabled");
       chatInput.focus();
-    }
-    const shouldMaintainTier2 = Boolean(
-      agentRunResult?.ok
-      && !agentRunResult?.aborted
-      && !run.stopRequested
-      && ["completed", "inconclusive"].includes(String(agentRunResult?.runState?.status || ""))
-      && assistant?.displayContent?.().trim()
-      && TIER2_MEMORY_MODES.has(runMode)
-    );
-    if (shouldMaintainTier2) {
-      void scheduleTier2MemoryMaintenance({
-        targetSessionId: runSession.id,
-        mode: runMode,
-        workspace: run.workspace,
-        pentestFinalizeBlockId: String(agentRunResult?.pentestFinalization?.blockId || ""),
-      }).catch(() => {});
     }
     queueMicrotask(drainPendingBackgroundWaitEvents);
     scheduleSubagentResultDrain();
@@ -17426,8 +16550,13 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
     const uiResult = toolUiResult(payload.result);
     if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
     else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+  } else if (type === "context_checkpoint") {
+    applyCheckpointToSession(run.session, payload);
+    applyContextCheckpointUi(run, payload);
+    if (runIsChildVisible(childSessionId)) updateContextUsage();
   } else if (type === "context_usage" && payload.usage) {
-    run.session.lastContextUsage = payload.usage;
+    storeLastContextUsage(payload.usage, { session: run.session, model: run.model || selectedModel, contextPlan: run.contextPlan });
+    if (runIsChildVisible(childSessionId)) updateContextUsage();
   }
   syncChatRunSession(run);
   if (runIsChildVisible(childSessionId)) scrollMessages();
@@ -17584,8 +16713,13 @@ async function renderParentContinuationEvent(payload = {}) {
     if (payload.text && !isSilentToolRoutingActivity(payload.text)) assistant.noteTaskActivity(payload.text, payload.kind || "info");
   } else if (type === "output_continuation") {
     assistant.setStatus("Continuing the response…");
+  } else if (type === "context_checkpoint") {
+    applyCheckpointToSession(run.session, payload);
+    applyContextCheckpointUi(run, payload);
+    if (visible) updateContextUsage();
   } else if (type === "context_usage" && payload.usage) {
     storeLastContextUsage(payload.usage, { session: run.session, model: run.model, contextPlan: run.contextPlan });
+    if (visible) updateContextUsage();
   } else if (type === "run_state") {
     const phase = String(payload.state?.phase || "working").replace(/-/g, " ");
     assistant.updateTaskStage(phase);
@@ -18154,7 +17288,6 @@ function onChatInputChange() {
   reconcileSelectedSlashCommandAfterEdit();
   resizeChatInput();
   updateSendBtn();
-  updateContextUsage();
   renderSlashSuggestions();
 }
 
@@ -18362,12 +17495,14 @@ function makeDraggable(handle, onMove, { onStart, onEnd } = {}) {
   });
 }
 
-makeDraggable(sidebarResize, (e) => {
-  const min = 200, max = 360;
-  const left = sidebar.getBoundingClientRect().left;
-  sidebar.style.width = Math.min(max, Math.max(min, e.clientX - left)) + "px";
-  sidebarResize.setAttribute("aria-valuenow", String(Math.round(sidebar.offsetWidth)));
-});
+if (!globalThis.__XEKUTE_REACT_LAYOUT__) {
+  makeDraggable(sidebarResize, (e) => {
+    const min = 200, max = 360;
+    const left = sidebar.getBoundingClientRect().left;
+    sidebar.style.width = Math.min(max, Math.max(min, e.clientX - left)) + "px";
+    sidebarResize.setAttribute("aria-valuenow", String(Math.round(sidebar.offsetWidth)));
+  });
+}
 
 const CHAT_MIN_VIEWPORT_RATIO = 0.2;
 
@@ -18394,13 +17529,15 @@ function syncChatResizeLimit({ clamp = false } = {}) {
 
 syncChatResizeLimit({ clamp: true });
 
-makeDraggable(chatResize, (e) => {
-  const min = chatViewportMinWidth(), max = chatViewportMaxWidth();
-  const w = window.innerWidth - e.clientX;
-  chatPane.style.width = Math.min(max, Math.max(min, w)) + "px";
-  chatResize.setAttribute("aria-valuenow", String(Math.round(chatPane.offsetWidth)));
-  resizeChatInput();
-});
+if (!globalThis.__XEKUTE_REACT_LAYOUT__) {
+  makeDraggable(chatResize, (e) => {
+    const min = chatViewportMinWidth(), max = chatViewportMaxWidth();
+    const w = window.innerWidth - e.clientX;
+    chatPane.style.width = Math.min(max, Math.max(min, w)) + "px";
+    chatResize.setAttribute("aria-valuenow", String(Math.round(chatPane.offsetWidth)));
+    resizeChatInput();
+  });
+}
 
 makeDraggable(securityWorkbenchResize, (e) => {
   if (!securityHistoryPanel || securityHistoryPanel.hidden) return;
@@ -18675,22 +17812,24 @@ function installSeparatorKeyboard(handle, { orientation, minimum, maximum, read,
   });
 }
 
-installSeparatorKeyboard(sidebarResize, {
-  orientation: "vertical", minimum: 200, maximum: () => 360,
-  read: () => sidebar.offsetWidth,
-  write: (value) => { sidebar.style.width = `${value}px`; },
-  reset: () => { sidebar.style.width = "244px"; },
-});
-installSeparatorKeyboard(chatResize, {
-  orientation: "vertical", minimum: chatViewportMinWidth, maximum: chatViewportMaxWidth,
-  read: () => chatPane.offsetWidth,
-  write: (value) => { chatPane.style.width = `${value}px`; resizeChatInput(); },
-  reset: () => {
-    const width = Math.min(chatViewportMaxWidth(), Math.max(chatViewportMinWidth(), 513));
-    chatPane.style.width = `${width}px`;
-    resizeChatInput();
-  },
-});
+if (!globalThis.__XEKUTE_REACT_LAYOUT__) {
+  installSeparatorKeyboard(sidebarResize, {
+    orientation: "vertical", minimum: 200, maximum: () => 360,
+    read: () => sidebar.offsetWidth,
+    write: (value) => { sidebar.style.width = `${value}px`; },
+    reset: () => { sidebar.style.width = "244px"; },
+  });
+  installSeparatorKeyboard(chatResize, {
+    orientation: "vertical", minimum: chatViewportMinWidth, maximum: chatViewportMaxWidth,
+    read: () => chatPane.offsetWidth,
+    write: (value) => { chatPane.style.width = `${value}px`; resizeChatInput(); },
+    reset: () => {
+      const width = Math.min(chatViewportMaxWidth(), Math.max(chatViewportMinWidth(), 513));
+      chatPane.style.width = `${width}px`;
+      resizeChatInput();
+    },
+  });
+}
 installSeparatorKeyboard(securityWorkbenchResize, {
   orientation: "horizontal", minimum: WORKBENCH_MIN_H,
   maximum: () => Math.max(WORKBENCH_MIN_H, (securityHistoryPanel?.parentElement?.clientHeight || 0) - WORKBENCH_TOOL_MIN_H - 4),

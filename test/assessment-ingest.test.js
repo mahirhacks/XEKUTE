@@ -33,15 +33,14 @@ test("typed assessment ingestion preserves schemas, drops unknown fields, and de
   assert.equal(result.ok, true);
   assert.equal(result.accepted, 2);
   assert.equal(result.total, 1);
-  const document = JSON.parse(fs.readFileSync(path.join(root, "enumeration", "endpoints.json"), "utf8"));
-  assert.equal(document.endpoints.length, 1);
-  assert.equal(document.endpoints[0].method, "GET");
-  assert.equal(document.endpoints[0].host, "example.test");
-  assert.equal(document.endpoints[0].path, "/api/users");
-  assert.equal(document.endpoints[0].discoveredBy, "katana:test");
-  assert.equal(Object.hasOwn(document.endpoints[0], "unexpected"), false);
-  assert.equal(document.statistics.total, 1);
-  assert.equal(fs.existsSync(path.join(root, "enumeration", "endpoints.json.bak")), true);
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].method, "GET");
+  assert.equal(result.records[0].host, "example.test");
+  assert.equal(result.records[0].path, "/api/users");
+  assert.equal(result.records[0].discoveredBy, "katana:test");
+  assert.equal(Object.hasOwn(result.records[0], "unexpected"), false);
+  assert.equal(fs.existsSync(path.join(root, "enumeration", "endpoints.json")), false);
+  assert.equal(fs.existsSync(path.join(root, "enumeration", "endpoints.json.bak")), false);
 
   fs.rmSync(parent, { recursive: true, force: true });
 });
@@ -64,14 +63,16 @@ test("list_datasets exposes canonical names, schemas, and provision state before
   assert.ok(Array.isArray(before.datasets) && before.datasets.length > 0);
   const passiveBefore = before.datasets.find((d) => d.resource === "passive-recon");
   assert.ok(passiveBefore, "passive sink is listed up front");
-  assert.equal(passiveBefore.exists, true, "repair provisions the passive sink so it is always writable");
+  assert.equal(passiveBefore.exists, false, "repair no longer provisions recon files on disk");
+  assert.equal(passiveBefore.writable, true);
   assert.deepEqual(passiveBefore.keyFields, ["type", "value"]);
 
-  // Ingesting more records keeps it provisioned (and dedup is preserved).
+  // Ingesting records stays in memory and does not create workspace files.
   ingest({ workspace: root, resource: "passive-recon", source: "manual:test", records: [{ type: "domain", value: "example.test" }] });
   const after = listDatasets(root);
   const passive = after.datasets.find((d) => d.resource === "passive-recon");
   assert.equal(passive.exists, true);
+  assert.equal(fs.existsSync(path.join(root, "recon", "passive-recon.json")), false);
 
   fs.rmSync(parent, { recursive: true, force: true });
 });

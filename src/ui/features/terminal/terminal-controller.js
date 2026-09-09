@@ -432,6 +432,13 @@ const TerminalManager = (() => {
     term.writeln("\r\n\x1b[33m^C  Stopping AI command…\x1b[0m");
     try {
       const result = await window.api.terminalKill(id);
+      if (result?.alreadyStopped) {
+        session.interrupting = false;
+        session.exited = true;
+        term.writeln("\x1b[90mThis command is no longer running.\x1b[0m");
+        renderTabsList();
+        return;
+      }
       if (result?.ok === false || result?.error) {
         session.interrupting = false;
         term.writeln(`\x1b[31mCould not stop command: ${result.error?.message || result.error || "unknown error"}\x1b[0m`);
@@ -545,6 +552,10 @@ const TerminalManager = (() => {
       return;
     }
     const result = await window.api.terminalKill(target);
+    if (result?.alreadyStopped) {
+      removeSession(target);
+      return;
+    }
     if (result?.ok === false || result?.error) {
       session.term.writeln(`\r\n\x1b[31mCould not stop command: ${result.error?.message || result.error || "unknown error"}\x1b[0m`);
       session.interrupting = false;

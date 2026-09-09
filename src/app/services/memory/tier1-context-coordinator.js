@@ -8,6 +8,7 @@ const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = r
 const SUMMARY_MAX = 32_768;
 const SUMMARY_RATIO = 0.05;
 const CHECKPOINT_RATIO = 0.80;
+const ACTIVE_MAX = 2_000;
 const METER_ROWS = Object.freeze([
   "System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP",
   "Summarized Conversation", "Active Conversation", "Current Workflow",
@@ -68,6 +69,7 @@ function createTier1ContextCoordinator({
   model = null,
   now = () => new Date(),
   crypto = nodeCrypto,
+  onChange = null,
 } = {}) {
   const schemas = schemaRegistry || getDefaultMemorySchemaRegistry();
   const sessions = new Map();
@@ -75,8 +77,48 @@ function createTier1ContextCoordinator({
   function sessionKey(projectId, sessionId) { return `${String(projectId)}|${String(sessionId)}`; }
   function stateFor(projectId, sessionId) {
     const key = sessionKey(projectId, sessionId);
-    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null });
+    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false });
     return sessions.get(key);
+  }
+  function hydrateActive(projectId, sessionId, state) {
+    if (!state || state.activeHydrated) return state;
+    state.activeHydrated = true;
+    if (!sensitiveStore?.readActive) return state;
+    try {
+      const loaded = sensitiveStore.readActive(projectId, sessionId);
+      if (loaded?.ok && loaded.exists && Array.isArray(loaded.value?.active)) {
+        state.active = loaded.value.active.filter(Boolean).map(clone);
+      }
+    } catch { /* keep the in-memory ledger empty rather than injecting unsafe data */ }
+    return state;
+  }
+  function persistActive(projectId, sessionId) {
+    if (!sensitiveStore?.writeActive) return;
+    const state = stateFor(projectId, sessionId);
+    try { sensitiveStore.writeActive(projectId, sessionId, state.active); } catch { /* in-memory ledger remains authoritative */ }
+  }
+  function capActive(messages) {
+    const source = (Array.isArray(messages) ? messages : []).filter(Boolean).map(clone);
+    return source.length > ACTIVE_MAX ? source.slice(-ACTIVE_MAX) : source;
+  }
+  function emitChange(projectId, sessionId, changed, assembly) {
+    if (typeof onChange !== "function" || !assembly || assembly.ok === false) return;
+    try { onChange({ projectId, sessionId, changed, assembly, rows: assembly.rows }); } catch { /* display updates must not fail the ledger */ }
+  }
+  function hydrateSession(projectId, sessionId) {
+    return hydrateActive(projectId, sessionId, hydrateSummary(projectId, sessionId, stateFor(projectId, sessionId)));
+  }
+  function syncMeter(projectId, sessionId, changed) {
+    persistActive(projectId, sessionId);
+    const state = stateFor(projectId, sessionId);
+    if (!state.blockA) return null;
+    return assemble({
+      project_id: projectId,
+      session_id: sessionId,
+      effective_context_limit: state.lastAssembly?.effective_context_limit || 1,
+      changed: Array.isArray(changed) ? changed : ["Active Conversation"],
+      ...state.blockA,
+    });
   }
   function hydrateSummary(projectId, sessionId, state) {
     if (!state || state.summary !== null || !sensitiveStore?.readCheckpoint) return state;
@@ -214,9 +256,18 @@ function createTier1ContextCoordinator({
     const sessionId = String(input.session_id || input.sessionId || "");
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 assembly requires opaque project and session IDs.");
     const limit = Math.max(1, Number(input.effective_context_limit || input.effectiveContextLimit || 1));
-    const state = hydrateSummary(projectId, sessionId, stateFor(projectId, sessionId));
+    const state = hydrateSession(projectId, sessionId);
+    // A preview reports what Tier 1 currently holds for the display meter. It
+    // must never advance the ledger, its durable copy, or the cached Block A
+    // used by later OnChange recalculation.
+    const preview = input.preview === true;
     const summary = input.summary === undefined ? state.summary : input.summary;
-    const active = input.active_conversation === undefined ? state.active : (Array.isArray(input.active_conversation) ? input.active_conversation : []);
+    if (input.active_conversation !== undefined && !preview) {
+      state.active = capActive(Array.isArray(input.active_conversation) ? input.active_conversation : []);
+    }
+    const active = preview && input.active_conversation !== undefined
+      ? capActive(Array.isArray(input.active_conversation) ? input.active_conversation : [])
+      : state.active;
     // Current Workflow is checkpoint-owned continuity. It starts empty and is
     // only exposed after a conversation checkpoint has produced it.
     const workflow = summary && state.workflow ? state.workflow : null;
@@ -245,10 +296,21 @@ function createTier1ContextCoordinator({
       should_checkpoint: upperBound >= Math.floor(limit * CHECKPOINT_RATIO),
       prefix_hash: hashText(crypto, stable({ A: a.map(({ label, value }) => ({ label, value })), B: b.map(({ label, value }) => ({ label, value })) })),
     };
+    if (preview) return result;
     if (input.current_user_prompt !== undefined || input.currentUserPrompt !== undefined) {
       state.currentPrompt = String(input.current_user_prompt ?? input.currentUserPrompt ?? "");
     }
+    state.blockA = {
+      system_prompt: input.system_prompt || input.systemPrompt || "",
+      tool_definitions: clone(input.tool_definitions || input.toolDefinitions || []),
+      rules: clone(input.rules || []),
+      active_skills: clone(input.active_skills || input.activeSkills || []),
+      active_subagent_instructions: clone(input.active_subagent_instructions || input.activeSubagentInstructions || []),
+      mcp_definitions: clone(input.mcp_definitions || input.mcpDefinitions || []),
+    };
     state.lastAssembly = result;
+    persistActive(projectId, sessionId);
+    emitChange(projectId, sessionId, Array.isArray(input.changed) ? input.changed : METER_ROWS.slice(), result);
     return result;
   }
 
@@ -259,6 +321,9 @@ function createTier1ContextCoordinator({
   }
 
   function reduceConversation(messages = [], toolEvents = []) {
+    // Deterministic checkpoint stage: extract and normalize tool output, then
+    // extract workflow results. Semantic checkpointing later adds grounded
+    // continuation facts, decisions, and significant events.
     const source = Array.isArray(messages) ? messages : [];
     const events = Array.isArray(toolEvents) ? toolEvents : [];
     const normalized = [];
@@ -612,7 +677,7 @@ function createTier1ContextCoordinator({
     const projectId = String(input.project_id || input.projectId || "");
     const sessionId = String(input.session_id || input.sessionId || "");
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_CHECKPOINT_INPUT_INVALID", "A V3 checkpoint requires opaque project_id and session_id.");
-    const state = hydrateSummary(projectId, sessionId, stateFor(projectId, sessionId));
+    const state = hydrateSession(projectId, sessionId);
     const active = Array.isArray(input.active_conversation) ? input.active_conversation : state.active;
     // Active Conversation is the complete raw ledger. Legacy callers may
     // still supply a separately protected prompt; include it only when that
@@ -696,27 +761,36 @@ function createTier1ContextCoordinator({
     state.currentPrompt = "";
     // The workflow visible in Tier 1 changes only at this checkpoint boundary.
     state.workflow = checkpointValue.workflow_continuity?.state === "completed" ? null : clone(checkpointValue.workflow_continuity);
+    syncMeter(projectId, sessionId, ["Summarized Conversation", "Active Conversation", "Current Workflow"]);
     return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic" };
   }
 
   function appendConversation(projectId, sessionId, messages) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 conversation state requires opaque project and session IDs.");
-    const state = stateFor(projectId, sessionId);
+    const state = hydrateSession(projectId, sessionId);
     const list = Array.isArray(messages) ? messages : [messages];
-    state.active.push(...list.filter(Boolean).map(clone));
+    state.active = capActive([...state.active, ...list.filter(Boolean).map(clone)]);
+    syncMeter(projectId, sessionId, ["Active Conversation"]);
     return { ok: true, active: clone(state.active), count: state.active.length };
   }
   function setActiveConversation(projectId, sessionId, messages) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 conversation state requires opaque project and session IDs.");
-    const state = stateFor(projectId, sessionId);
-    state.active = (Array.isArray(messages) ? messages : []).filter(Boolean).map(clone);
+    const state = hydrateSession(projectId, sessionId);
+    state.active = capActive(messages);
+    syncMeter(projectId, sessionId, ["Active Conversation"]);
     return { ok: true, active: clone(state.active), count: state.active.length };
   }
   function setWorkflow(projectId, sessionId, workflow) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 workflow state requires opaque project and session IDs.");
-    const state = stateFor(projectId, sessionId); state.workflow = normalizeWorkflow(workflow, projectId, sessionId, state.workflow); return clone(state.workflow);
+    const state = hydrateSession(projectId, sessionId);
+    state.workflow = normalizeWorkflow(workflow, projectId, sessionId, state.workflow);
+    syncMeter(projectId, sessionId, ["Current Workflow"]);
+    return clone(state.workflow);
   }
-  function state(projectId, sessionId) { const value = hydrateSummary(projectId, sessionId, stateFor(projectId, sessionId)); return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) }; }
+  function state(projectId, sessionId) {
+    const value = hydrateSession(projectId, sessionId);
+    return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) };
+  }
   function clear(projectId, sessionId) { sessions.delete(sessionKey(projectId, sessionId)); return { ok: true }; }
   function clearProject(projectId) {
     const prefix = `${String(projectId)}|`;
@@ -725,7 +799,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, state, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, state, clear, clearProject });
 }
 
-module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, summaryBudget, approximateTokens, METER_ROWS });
+module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, METER_ROWS });

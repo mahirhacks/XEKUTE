@@ -53,7 +53,7 @@ function buildTaskBrief({ profile, contextRoute = {}, editContext = {}, availabl
   if (!profile || contextRoute.kind === "conversation") return null;
   const tools = availableTools.map((tool) => tool?.function?.name).filter(Boolean);
   const steps = [];
-  if (contextRoute.includeWorkspaceDiscovery || tools.some((name) => ["read_file", "search_workspace", "inspect_environment"].includes(name))) {
+  if (contextRoute.includeWorkspaceDiscovery || tools.some((name) => ["read_file", "search_workspace"].includes(name))) {
     steps.push({
       id: "inspect",
       label: "Inspect relevant context",
@@ -78,7 +78,7 @@ function buildTaskBrief({ profile, contextRoute = {}, editContext = {}, availabl
   }
   if (!steps.length) return null;
   return {
-    title: profile.key === "plan" ? "Here is the plan" : "Here is how I will handle this",
+    title: "Here is how I will handle this",
     summary: "I will keep the work scoped, focused, and explicit about results.",
     steps,
     transparency: [
@@ -139,6 +139,12 @@ function tier1UsageSections(assembly) {
     color: section.color,
     tokens: Math.max(0, Number(rows[section.label]) || 0),
   }));
+}
+
+function usageSectionTokens(usage, key) {
+  const sections = Array.isArray(usage?.sections) ? usage.sections : [];
+  const match = sections.find((section) => section?.key === key);
+  return Math.max(0, Number(match?.tokens) || 0);
 }
 
 function partitionProviderTools(tools = []) {
@@ -459,8 +465,6 @@ async function runAgentTurn({
   // 1 session from each run when transcript/checkpoint storage is enabled.
   memorySessionId = "",
   workingReferences = [],
-  requireArtifactFinalization = false,
-  isFirstAgentTurn = false,
   artifacts = null,
   projectId = "",
   precedingBlockId = "",
@@ -481,6 +485,9 @@ async function runAgentTurn({
   checkpointRun = () => Promise.resolve(),
   nested = false,
   maxAgentRounds = MAX_AGENT_ROUNDS,
+  // A preview assembles Tier 1 for the context meter and returns before any
+  // model call, tool execution, or ledger mutation.
+  previewOnly = false,
 } = {}) {
   const profile = normalizeProfile(modeFamily, mode);
   const runId = String(suppliedRunId || "agent-" + Date.now().toString(36) + "-" + crypto.randomBytes(3).toString("hex"));
@@ -535,27 +542,6 @@ async function runAgentTurn({
       }
     }
   }
-  const shouldOfferTaskList = !nested && profile.key === "agent" && isReasonablyLargeAgentRequest(userMessage);
-  if (!shouldOfferTaskList) {
-    availableTools = availableTools.filter((tool) => String(tool?.function?.name || "") !== "update_task_list");
-  }
-  if (nested) {
-    availableTools = availableTools.filter((tool) => String(tool?.function?.name || "") !== "update_project_artifacts");
-  }
-  if (requireArtifactFinalization && profile.key === "agent" && isFirstAgentTurn && !RequestIntentRules.isActiveProbeRequest(userMessage)) {
-    const firstTurnBlocked = new Set(["replay_request", "run_test_case", "web_research", "attack_graph", "exec_command", "delegate_agent"]);
-    const firstTurnBrowserActions = ["list_pages", "close_page"];
-    availableTools = availableTools.flatMap((tool) => {
-      const name = String(tool?.function?.name || "");
-      if (firstTurnBlocked.has(name)) return [];
-      if (name !== "browser_action") return [tool];
-      const clone = JSON.parse(JSON.stringify(tool));
-      const parameters = clone.function?.parameters || (clone.function.parameters = { type: "object", properties: {} });
-      parameters.properties = parameters.properties || {};
-      parameters.properties.action = { type: "string", enum: firstTurnBrowserActions };
-      return [clone];
-    });
-  }
   let allowedNames = new Set(availableTools.map((tool) => tool?.function?.name).filter(Boolean));
   const initialToolPartitions = partitionProviderTools(availableTools);
   let tier1Assembly = null;
@@ -569,8 +555,16 @@ async function runAgentTurn({
     : [];
   if (useTier1) {
     const persisted = tier1Context.state?.(tier1ProjectId, resolvedTier1SessionId) || {};
+    const persistedActive = Array.isArray(persisted.active)
+      ? persisted.active.map((message) => ({ ...message }))
+      : [];
     const boundary = Number(persisted.summary?.transcript_boundary);
-    if (Number.isSafeInteger(boundary) && boundary > 0) {
+    if (persistedActive.length) {
+      // The encrypted T1 active ledger is the source of truth after restart.
+      // Chat history is only used to reconstruct the window when that ledger
+      // has not been persisted yet.
+      tier1ConversationSeed = persistedActive;
+    } else if (Number.isSafeInteger(boundary) && boundary > 0) {
       tier1ConversationSeed = boundary >= tier1ConversationSeed.length ? [] : tier1ConversationSeed.slice(boundary);
     }
     const last = tier1ConversationSeed.at(-1);
@@ -620,9 +614,10 @@ async function runAgentTurn({
       tier1Assembly = tier1Context.assemble({
         ...tier1Input,
         active_conversation: tier1ConversationSeed,
+        ...(previewOnly ? { preview: true } : {}),
       });
       if (!tier1Assembly || tier1Assembly.ok === false) tier1AssemblyFailure = tier1Assembly || { code: "MEMORY_TIER1_ASSEMBLY_FAILED", error: "Tier 1 context assembly failed." };
-      if (tier1Assembly && tier1Assembly.ok !== false) {
+      if (tier1Assembly && tier1Assembly.ok !== false && !previewOnly) {
         tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1ConversationSeed);
       }
     } catch (error) {
@@ -670,15 +665,6 @@ async function runAgentTurn({
   let outputContinuationCount = 0;
   let lastUsage = null;
   let thinkingSignaled = false;
-  const artifactFinalizationRequired = Boolean(
-    requireArtifactFinalization
-      && workspace
-      && !nested
-      && ["agent", "hypothesis", "plan"].includes(profile.key)
-      && allowedNames.has("update_project_artifacts"),
-  );
-  let artifactFinalization = null;
-  let finalizerRetryUsed = false;
   const successfulToolRefs = new Set();
   const appendedMessages = () => [
     ...archivedTurnMessages,
@@ -721,32 +707,78 @@ async function runAgentTurn({
     }
     return next;
   };
+  const currentTier1Usage = ({ completionTokens = null } = {}) => {
+    if (!useTier1 || !tier1Assembly) return null;
+    const sections = tier1UsageSections(tier1Assembly);
+    const sectionTotal = sections.reduce((sum, section) => sum + section.tokens, 0);
+    const promptTokens = Math.max(0, Number(tier1Assembly.total_tokens) || sectionTotal);
+    const provider = contextPlan?.provider || "ollama";
+    return {
+      source: "estimate",
+      provider,
+      model,
+      promptTokens,
+      estimatedTokens: promptTokens,
+      localPromptTokens: promptTokens,
+      approximate: true,
+      sections,
+      toolNames: [...allowedNames],
+      effectiveLimitTokens: effectiveContextLimit,
+      contextWindow: effectiveContextLimit,
+      modelMaxTokens: Number(contextPlan?.modelMaxTokens) || null,
+      promptBudgetTokens: promptBudget,
+      responseReserveTokens: Number(contextPlan?.responseReserveTokens) || null,
+      contextWindowSource: contextPlan?.source || "fallback",
+      completionTokens: Number.isFinite(Number(completionTokens)) ? Math.max(0, Number(completionTokens)) : null,
+      tokenCalculation: {
+        method: "tier1-approximate",
+        localPromptTokens: promptTokens,
+        sectionLocalTotal: sectionTotal,
+        sectionReconciledTotal: sectionTotal,
+      },
+      tier1: {
+        effectiveContextLimit: tier1Assembly.effective_context_limit,
+        threshold: tier1Assembly.checkpoint_threshold,
+        totalTokens: tier1Assembly.total_tokens,
+        conservativePromptUpperBound: tier1Assembly.conservative_prompt_upper_bound,
+        shouldCheckpoint: tier1Assembly.should_checkpoint,
+        estimated: tier1Assembly.estimated,
+        rows: tier1Assembly.rows,
+        prefixHash: tier1Assembly.prefix_hash,
+      },
+      route: {
+        kind: contextRoute.kind,
+        promptDepth: contextRoute.kind === "conversation" ? "compact" : "operational",
+      },
+    };
+  };
+  const publishTier1Meter = ({ completionTokens = null } = {}) => {
+    if (!useTier1) return null;
+    const refreshed = refreshTier1Prompt({ resetHistory: false });
+    if (!refreshed) return null;
+    const usage = currentTier1Usage({ completionTokens });
+    if (usage) sendEvent({ type: "context_usage", usage });
+    return usage;
+  };
   const appendTier1Messages = (messages) => {
     if (!useTier1) return;
     const list = (Array.isArray(messages) ? messages : [messages]).filter(Boolean).map((message) => ({ ...message }));
     if (!list.length) return;
     tier1Active.push(...list);
     try { tier1Context.appendConversation(tier1ProjectId, resolvedTier1SessionId, list); } catch { /* in-memory ledger remains authoritative for this turn */ }
+    publishTier1Meter();
   };
   const tier1PressureFor = (assembled) => {
     const base = tier1Context.pressure({ assembled, effective_context_limit: effectiveContextLimit });
-    const provider = contextPlan?.provider || "ollama";
-    const fitted = fitMessagesToContext({
-      baseMessages: prompt.base,
-      history: workingHistory,
-      tools: availableTools,
-      promptBudget: effectiveContextLimit,
-    });
-    const totalTokens = Tier1TokenAccounting.calibratedPromptTokens(fitted.usedTokens, { provider, model });
     const protectedLocalTokens = (Array.isArray(assembled?.blocks?.A?.components) ? assembled.blocks.A.components : [])
       .reduce((sum, component) => sum + Math.max(0, Number(component?.tokens) || 0), 0);
-    const protectedTokens = Tier1TokenAccounting.calibratedPromptTokens(protectedLocalTokens, { provider, model });
+    const totalTokens = Math.max(0, Number(assembled?.total_tokens) || Number(base.totalTokens) || 0);
     return {
       ...base,
       totalTokens,
-      localTokens: fitted.usedTokens,
+      localTokens: totalTokens,
       shouldCheckpoint: totalTokens >= base.threshold,
-      protectedOverflow: base.protectedOverflow || protectedTokens > effectiveContextLimit,
+      protectedOverflow: base.protectedOverflow || protectedLocalTokens > effectiveContextLimit,
     };
   };
   const measureTier1Pressure = () => {
@@ -793,7 +825,19 @@ async function runAgentTurn({
         currentWorkflow = checkpoint.currentWorkflow || null;
         const refreshed = refreshTier1Prompt();
         if (!refreshed) return { ok: false, code: "MEMORY_TIER1_REASSEMBLY_FAILED", error: "Tier 1 context could not be reassembled after checkpoint." };
-        sendEvent({ type: "context_checkpoint", status: "completed", reason, checkpointRevision: checkpoint.checkpoint?.checkpoint_id || "", activeConversationTokens: 0 });
+        const usage = currentTier1Usage();
+        sendEvent({
+          type: "context_checkpoint",
+          status: "completed",
+          reason,
+          checkpointId: checkpoint.checkpoint?.checkpoint_id || "",
+          checkpointRevision: checkpoint.checkpoint?.checkpoint_id || "",
+          activeConversationTokens: usageSectionTokens(usage, "active_conversation"),
+          summarizedConversationTokens: usageSectionTokens(usage, "summarized_conversation"),
+          currentWorkflowTokens: usageSectionTokens(usage, "current_workflow"),
+          currentWorkflow: currentWorkflow || null,
+        });
+        if (usage) sendEvent({ type: "context_usage", usage });
       } else {
         sendEvent({ type: "context_checkpoint", status: "failed", reason, code: checkpoint?.code || "MEMORY_CHECKPOINT_FAILED" });
       }
@@ -802,39 +846,21 @@ async function runAgentTurn({
     return tier1CheckpointInFlight;
   };
 
-  const currentTier1Usage = () => {
-    if (!useTier1 || !tier1Assembly) return null;
-    const fitted = fitMessagesToContext({
-      baseMessages: prompt.base,
-      history: workingHistory,
-      tools: availableTools,
-      promptBudget,
-    });
-    const provider = contextPlan?.provider || "ollama";
-    const promptTokens = Tier1TokenAccounting.calibratedPromptTokens(fitted.usedTokens, { provider, model });
-    return Tier1TokenAccounting.reconcileUsage({
-      source: "estimate",
-      provider,
-      model,
-      promptTokens,
-      estimatedTokens: promptTokens,
-      localPromptTokens: fitted.usedTokens,
-      sections: tier1UsageSections(tier1Assembly),
-      toolNames: [...allowedNames],
-      effectiveLimitTokens: effectiveContextLimit,
-      contextWindow: effectiveContextLimit,
-      modelMaxTokens: Number(contextPlan?.modelMaxTokens) || null,
-      promptBudgetTokens: promptBudget,
-      responseReserveTokens: Number(contextPlan?.responseReserveTokens) || null,
-      contextWindowSource: contextPlan?.source || "fallback",
-      route: {
-        kind: contextRoute.kind,
-        promptDepth: contextRoute.kind === "conversation" ? "compact" : "operational",
-      },
-    }, promptTokens, { source: "estimate" });
-  };
+  if (previewOnly) {
+    // The meter shows what Tier 1 holds right now. It is deliberately not a
+    // prediction of the next prompt: routing depends on the message the user
+    // has not sent yet, so no draft text is measured here.
+    return {
+      ok: true,
+      preview: true,
+      contextUsage: currentTier1Usage(),
+      contextRoute,
+      runState,
+    };
+  }
 
   sendEvent({ type: "run_state", runId, state: { ...runState } });
+  if (useTier1) publishTier1Meter();
   if (availableTools.length) {
     sendEvent({
       type: "activity",
@@ -861,7 +887,7 @@ async function runAgentTurn({
     if (signal?.aborted) {
       AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
       sendEvent({ type: "run_state", runId, state: { ...runState } });
-      return { ok: false, finalText, appendedMessages: appendedMessages(), runState, contextRoute, aborted: true, evidenceIds: [], ...(artifactFinalization ? { artifactFinalization } : {}) };
+      return { ok: false, finalText, appendedMessages: appendedMessages(), runState, contextRoute, aborted: true, evidenceIds: [] };
     }
     if (useTier1) {
       const refreshed = refreshTier1Prompt({ resetHistory: false });
@@ -897,8 +923,10 @@ async function runAgentTurn({
       promptBudget,
     });
     const provider = contextPlan?.provider || "ollama";
-    const preflightPromptTokens = Tier1TokenAccounting.calibratedPromptTokens(fitted.usedTokens, { provider, model });
-    if (!fitted.ok || preflightPromptTokens > promptBudget) {
+    const preflightPromptTokens = useTier1
+      ? Math.max(0, Number(currentTier1Usage()?.promptTokens) || fitted.usedTokens)
+      : Tier1TokenAccounting.calibratedPromptTokens(fitted.usedTokens, { provider, model });
+    if (!fitted.ok || (!useTier1 && preflightPromptTokens > promptBudget)) {
       AgentRuntime.finalize(runState, { status: "inconclusive", reason: "Context budget exceeded." });
       return {
         ok: false,
@@ -910,14 +938,14 @@ async function runAgentTurn({
       };
     }
     const messages = [...fitted.messages];
-    const contextUsage = Tier1TokenAccounting.reconcileUsage({
+    const contextUsage = currentTier1Usage() || Tier1TokenAccounting.reconcileUsage({
       source: "estimate",
       provider,
       model,
       promptTokens: preflightPromptTokens,
       estimatedTokens: preflightPromptTokens,
       localPromptTokens: fitted.usedTokens,
-      sections: tier1Assembly ? tier1UsageSections(tier1Assembly) : [],
+      sections: [],
       toolNames: [...allowedNames],
       effectiveLimitTokens: effectiveContextLimit,
       contextWindow: effectiveContextLimit,
@@ -925,18 +953,6 @@ async function runAgentTurn({
       promptBudgetTokens: promptBudget,
       responseReserveTokens: Number(contextPlan?.responseReserveTokens) || null,
       contextWindowSource: contextPlan?.source || "fallback",
-      ...(tier1Assembly ? {
-        tier1: {
-          effectiveContextLimit: tier1Assembly.effective_context_limit,
-          threshold: tier1Assembly.checkpoint_threshold,
-          totalTokens: tier1Assembly.total_tokens,
-          conservativePromptUpperBound: tier1Assembly.conservative_prompt_upper_bound,
-          shouldCheckpoint: tier1Assembly.should_checkpoint,
-          estimated: tier1Assembly.estimated,
-          rows: tier1Assembly.rows,
-          prefixHash: tier1Assembly.prefix_hash,
-        },
-      } : {}),
       route: {
         kind: contextRoute.kind,
         promptDepth: contextRoute.kind === "conversation" ? "compact" : "operational",
@@ -966,33 +982,40 @@ async function runAgentTurn({
     const promptTokens = Tier1TokenAccounting.positiveMeasuredTokens(result?.usage?.promptTokens);
     const completionTokens = Number(result?.usage?.completionTokens);
     const measuredProvider = String(result?.provider || result?.usage?.source || contextUsage.provider || provider).replace(/-partial$/, "");
-    const calibration = promptTokens
-      ? Tier1TokenAccounting.rememberCalibration({
-        provider: measuredProvider,
-        model,
-        estimatedTokens: fitted.usedTokens,
-        measuredTokens: promptTokens,
-      })
-      : null;
-    const measuredUsage = Tier1TokenAccounting.reconcileUsage({
-      ...contextUsage,
-      ...(result?.usage && typeof result.usage === "object" ? result.usage : {}),
-      provider: measuredProvider === "openrouter" ? "openrouter" : "ollama",
-      source: promptTokens ? measuredProvider : "estimate",
-      promptTokens: promptTokens || preflightPromptTokens,
-      completionTokens: Number.isFinite(completionTokens) ? completionTokens : null,
-      tokenCalculation: {
-        ...(contextUsage.tokenCalculation || {}),
-        calibrationFactor: calibration?.factor
-          || Tier1TokenAccounting.calibrationFor(measuredProvider, model).factor,
-        calibrationSamples: calibration?.samples
-          || Tier1TokenAccounting.calibrationFor(measuredProvider, model).samples,
-      },
-    }, promptTokens || preflightPromptTokens, {
-      source: promptTokens ? measuredProvider : "estimate",
-      measuredAt: promptTokens ? new Date().toISOString() : null,
-    });
-    sendEvent({ type: "context_usage", usage: measuredUsage });
+    let publishedUsage = contextUsage;
+    if (useTier1) {
+      publishedUsage = currentTier1Usage({
+        completionTokens: Number.isFinite(completionTokens) ? completionTokens : null,
+      }) || contextUsage;
+    } else {
+      const calibration = promptTokens
+        ? Tier1TokenAccounting.rememberCalibration({
+          provider: measuredProvider,
+          model,
+          estimatedTokens: fitted.usedTokens,
+          measuredTokens: promptTokens,
+        })
+        : null;
+      publishedUsage = Tier1TokenAccounting.reconcileUsage({
+        ...contextUsage,
+        ...(result?.usage && typeof result.usage === "object" ? result.usage : {}),
+        provider: measuredProvider === "openrouter" ? "openrouter" : "ollama",
+        source: promptTokens ? measuredProvider : "estimate",
+        promptTokens: promptTokens || preflightPromptTokens,
+        completionTokens: Number.isFinite(completionTokens) ? completionTokens : null,
+        tokenCalculation: {
+          ...(contextUsage.tokenCalculation || {}),
+          calibrationFactor: calibration?.factor
+            || Tier1TokenAccounting.calibrationFor(measuredProvider, model).factor,
+          calibrationSamples: calibration?.samples
+            || Tier1TokenAccounting.calibrationFor(measuredProvider, model).samples,
+        },
+      }, promptTokens || preflightPromptTokens, {
+        source: promptTokens ? measuredProvider : "estimate",
+        measuredAt: promptTokens ? new Date().toISOString() : null,
+      });
+    }
+    sendEvent({ type: "context_usage", usage: publishedUsage });
 
     if (result?.error) {
       AgentRuntime.finalize(runState, {
@@ -1007,9 +1030,8 @@ async function runAgentTurn({
         appendedMessages: appendedMessages(),
         runState,
         contextRoute,
-        contextUsage: measuredUsage,
+        contextUsage: publishedUsage,
         aborted: Boolean(result.aborted),
-        ...(artifactFinalization ? { artifactFinalization } : {}),
       };
     }
 
@@ -1023,10 +1045,9 @@ async function runAgentTurn({
         appendedMessages: appendedMessages(),
         runState,
         contextRoute,
-        contextUsage: measuredUsage,
+        contextUsage: publishedUsage,
         aborted: true,
         evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
-        ...(artifactFinalization ? { artifactFinalization } : {}),
       };
     }
 
@@ -1072,41 +1093,6 @@ async function runAgentTurn({
         continue;
       }
 
-      if (artifactFinalizationRequired && !artifactFinalization) {
-        finalText = cleanAssistantText(`${outputSegments.join("")}${rawOutput}`);
-        if (!finalizerRetryUsed) {
-          finalizerRetryUsed = true;
-          workingHistory.push({
-            role: "user",
-            content: [
-              "Before this project-bound reply can finish, call update_project_artifacts exactly once as the final tool phase.",
-              "Stage all material mode-owned changes, or provide a specific no_op_reason.",
-              "Do not call any other tool after it. After a successful stage, return the useful answer to the user.",
-            ].join(" "),
-            __xekuteArtifactFinalizerReminder: true,
-          });
-          sendEvent({ type: "artifact_finalization", status: "required", runId });
-          continue;
-        }
-        const reason = "The reply completed without a successful project-artifact finalizer.";
-        AgentRuntime.finalize(runState, { status: "artifact_sync_failed", reason });
-        sendEvent({ type: "artifact_finalization", status: "failed", runId, code: "ARTIFACT_FINALIZER_MISSING" });
-        sendEvent({ type: "run_state", runId, state: { ...runState } });
-        return {
-          ok: true,
-          finalText,
-          appendedMessages: appendedMessages(),
-          executedTools,
-          runState,
-          contextRoute,
-          contextUsage: measuredUsage,
-          evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
-          failureRecords,
-          lastUsage,
-          artifactSync: { ok: false, code: "ARTIFACT_FINALIZER_MISSING", error: reason, committed: false },
-        };
-      }
-
       finalText = cleanAssistantText(`${outputSegments.join("")}${rawOutput}`);
       if (finalText) {
         const assistantMessage = { role: "assistant", content: finalText };
@@ -1128,15 +1114,15 @@ async function runAgentTurn({
       if (useTier1 && tier1Active.at(-1)?.role === "assistant") {
         tier1Active[tier1Active.length - 1].content = finalText;
         try { tier1Context.setActiveConversation(tier1ProjectId, resolvedTier1SessionId, tier1Active); } catch { /* local ledger remains authoritative */ }
+        publishTier1Meter();
       }
       const tier1Checkpoint = useTier1 ? await checkpointTier1IfNeeded({ reason: "block_complete" }) : null;
-      const completedContextUsage = currentTier1Usage() || measuredUsage;
+      const completedContextUsage = currentTier1Usage() || publishedUsage;
       if (useTier1 && completedContextUsage) sendEvent({ type: "context_usage", usage: completedContextUsage });
       AgentRuntime.finalize(runState, {
         status: "completed",
         reason: claimCheck.warnings.join(" "),
       });
-      if (shouldOfferTaskList) sendEvent({ type: "task_list", runId, source: "agent", completed: true, clear: true, tasks: [] });
       sendEvent({ type: "run_state", runId, state: { ...runState } });
       return {
         ok: true,
@@ -1150,7 +1136,6 @@ async function runAgentTurn({
         failureRecords,
         lastUsage,
         ...(tier1Checkpoint ? { tier1Checkpoint } : {}),
-        ...(artifactFinalization ? { artifactFinalization } : {}),
       };
     }
 
@@ -1233,27 +1218,6 @@ async function runAgentTurn({
           errorCode: "REPEATED_FAILED_CALL",
           retryable: false,
         };
-      } else if (toolName === "update_project_artifacts" && normalizedCalls.length !== 1) {
-        toolResult = {
-          ok: false,
-          error: "update_project_artifacts must be the sole call in the final tool phase.",
-          errorCode: "ARTIFACT_FINALIZER_NOT_SOLE_CALL",
-          retryable: true,
-        };
-      } else if (artifactFinalization && toolName !== "update_project_artifacts") {
-        toolResult = {
-          ok: false,
-          error: "The project-artifact finalizer has sealed this reply; no later tool calls are allowed.",
-          errorCode: "ARTIFACT_FINALIZER_SEALED",
-          retryable: false,
-        };
-      } else if (artifactFinalization && toolName === "update_project_artifacts") {
-        toolResult = {
-          ok: false,
-          error: "This reply already staged its sole project-artifact transaction.",
-          errorCode: "ARTIFACT_FINALIZER_DUPLICATE",
-          retryable: false,
-        };
       } else {
         seenThisRound.add(signature);
         executedTools = true;
@@ -1265,13 +1229,7 @@ async function runAgentTurn({
             signal,
             sessionId,
             mode: profile.key,
-            ...(toolName === "update_project_artifacts" ? { artifactProvenance: { successfulToolRefs: [...successfulToolRefs] } } : {}),
           }));
-          const stagedResult = toolResult?.staging_id ? toolResult : toolResult?.value?.staging_id ? toolResult.value : null;
-          if (toolName === "update_project_artifacts" && toolResult?.ok && stagedResult) {
-            artifactFinalization = stagedResult;
-            sendEvent({ type: "artifact_finalization", status: "staged", runId, stagingId: stagedResult.staging_id, changedPaths: stagedResult.changed_paths || [] });
-          }
         } catch (error) {
           toolResult = {
             ok: false,
@@ -1283,38 +1241,11 @@ async function runAgentTurn({
       }
       const workflowUpdate = toolResult?.current_workflow || toolResult?.currentWorkflow || toolResult?.value?.current_workflow || toolResult?.value?.currentWorkflow || toolResult?.workflow;
       if (workflowUpdate && typeof workflowUpdate === "object" && !Array.isArray(workflowUpdate)) currentWorkflow = { ...workflowUpdate };
-      let taskListEvent = null;
-      if (toolName === "update_task_list" && toolResult?.ok && Array.isArray(toolResult?.value?.tasks)) {
-        if (toolResult?.ok) taskListEvent = {
-          type: "task_list",
-          runId,
-          source: "agent",
-          persistent: false,
-          completed: Boolean(toolResult.value.completed),
-          explanation: toolResult.value.explanation || "",
-          tasks: toolResult.value.tasks,
-        };
-      }
       actionResults.push(toolResult);
-      if (taskListEvent) sendEvent(taskListEvent);
       noteLongHorizonAction(longHorizonLedger, tool, toolResult);
       await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, lastTool: toolName, lastToolOk: Boolean(toolResult?.ok && !toolResult?.error), evidenceIds: AgentRuntime.evidenceIdsFromResults([toolResult]), ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
-      if (toolName === "query_knowledge" && Array.isArray(toolResult?.activeTools)) {
-        const known = new Set(availableTools.map((entry) => entry?.function?.name).filter(Boolean));
-        for (const dynamicTool of toolResult.activeTools) {
-          const name = dynamicTool?.function?.name;
-          if (!name || known.has(name)) continue;
-          availableTools.push(dynamicTool);
-          known.add(name);
-        }
-        allowedNames = new Set(availableTools.map((entry) => entry?.function?.name).filter(Boolean));
-        const nextToolPartitions = partitionProviderTools(availableTools);
-        tier1Input.tool_definitions = nextToolPartitions.native;
-        tier1Input.mcp_definitions = nextToolPartitions.mcp;
-        sendEvent({ type: "knowledge_tools", tools: toolResult.activeTools, sessionId });
-      }
       const actionEvidenceIds = AgentRuntime.evidenceIdsFromResults([toolResult]);
-      if (toolName !== "update_project_artifacts" && toolResult?.ok && !toolResult?.error) {
+      if (toolResult?.ok && !toolResult?.error) {
         if (tool.callId) successfulToolRefs.add(String(tool.callId));
         if (actionId) successfulToolRefs.add(String(actionId));
         for (const ref of actionEvidenceIds) successfulToolRefs.add(String(ref));
@@ -1378,7 +1309,7 @@ async function runAgentTurn({
         const toolResultPressure = measureTier1Pressure();
         if (!toolResultPressure.ok) {
           AgentRuntime.finalize(runState, { status: "inconclusive", reason: toolResultPressure.error });
-          return { ok: false, error: toolResultPressure.error, code: toolResultPressure.code, finalText, runState, contextRoute, appendedMessages: appendedMessages(), failureRecords, ...(artifactFinalization ? { artifactFinalization } : {}) };
+          return { ok: false, error: toolResultPressure.error, code: toolResultPressure.code, finalText, runState, contextRoute, appendedMessages: appendedMessages(), failureRecords };
         }
         const liveUsage = currentTier1Usage();
         if (liveUsage) sendEvent({ type: "context_usage", usage: liveUsage });
@@ -1397,7 +1328,6 @@ async function runAgentTurn({
           aborted: true,
           evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
           failureRecords,
-          ...(artifactFinalization ? { artifactFinalization } : {}),
         };
       }
     }
@@ -1405,7 +1335,7 @@ async function runAgentTurn({
       const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results" });
       if (checkpoint?.ok === false) {
         AgentRuntime.finalize(runState, { status: "inconclusive", reason: "Tier 1 checkpoint failed." });
-        return { ok: false, error: "The active conversation could not be checkpointed safely.", code: checkpoint.code || "MEMORY_CHECKPOINT_FAILED", finalText, appendedMessages: appendedMessages(), runState, contextRoute, failureRecords, ...(artifactFinalization ? { artifactFinalization } : {}) };
+        return { ok: false, error: "The active conversation could not be checkpointed safely.", code: checkpoint.code || "MEMORY_CHECKPOINT_FAILED", finalText, appendedMessages: appendedMessages(), runState, contextRoute, failureRecords };
       }
     }
   }
@@ -1441,7 +1371,6 @@ async function runAgentTurn({
     evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
     failureRecords,
     ...(tier1Checkpoint ? { tier1Checkpoint } : {}),
-    ...(artifactFinalization ? { artifactFinalization } : {}),
   };
 }
 
@@ -1460,5 +1389,6 @@ module.exports = {
   advanceTowardPhase,
   awaitWithTimeout,
   runAgentTurn,
+  previewTier1Usage: (input = {}) => runAgentTurn({ ...input, userMessage: "", previewOnly: true }),
   toolCallSignature,
 };

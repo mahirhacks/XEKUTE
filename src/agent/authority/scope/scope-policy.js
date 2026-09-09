@@ -8,17 +8,11 @@ const WORKSPACE_TOOLS = new Set([
   "read_file",
   "search_workspace",
   "apply_patch",
-  "inspect_environment",
-  "update_project_artifacts",
-  "manage_state",
-  "attack_graph",
   "exec_command",
 ]);
 
 const NETWORK_TOOLS = new Set([
-  "ingest_traffic",
   "replay_request",
-  "run_test_case",
   "browser_action",
 ]);
 

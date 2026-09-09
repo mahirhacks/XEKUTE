@@ -1,6 +1,5 @@
 /* Prompt orchestration and untrusted context packaging. */
 
-const CHAT_MODES = new Set(["agent", "plan", "ask", "hypothesis"]);
 const DEFAULT_CONTEXT_TOKENS = 8192;
 const { normalizeProfile, profileKey } = require("../modes/mode-registry");
 const PromptCompiler = require("./prompt-compiler");
@@ -93,8 +92,7 @@ function inferEditTarget(userMessage, activeFile, dirMap = "") {
 }
 
 function normalizeMode(mode) {
-  const value = String(mode || "agent").toLowerCase();
-  return CHAT_MODES.has(value) ? value : normalizeProfile(value).legacyMode;
+  return profileKey(mode);
 }
 
 function contextLimits(numCtx) {

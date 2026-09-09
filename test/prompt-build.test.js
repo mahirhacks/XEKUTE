@@ -18,9 +18,14 @@ test("direct prompt modules compile deterministically without generated hashes",
 
 test("prompt assembly keeps mode and specialist context selectable", () => {
   const ask = PromptCompiler.compile({ mode: "ask" });
-  const plan = PromptCompiler.compile({ mode: "plan" });
+  const agent = PromptCompiler.compile({ mode: "agent" });
+  const leftoverPlan = PromptCompiler.compile({ mode: "plan" });
+  const leftoverHypothesis = PromptCompiler.compile({ mode: "hypothesis" });
   assert.match(ask, /PROFILE — Ask/);
-  assert.match(plan, /PROFILE — Plan/);
-  assert.notEqual(ask, plan);
+  assert.match(agent, /PROFILE — Agent/);
+  assert.equal(leftoverPlan, ask);
+  assert.equal(leftoverHypothesis, ask);
+  assert.notEqual(ask, agent);
+  assert.doesNotMatch(ask, /PROFILE — Plan|PROFILE — Hypothesis/);
   assert.ok(PromptCompiler.checksum(PromptCompiler.defaults()).length >= 8);
 });

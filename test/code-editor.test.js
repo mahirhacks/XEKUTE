@@ -22,15 +22,16 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
   assert.match(renderer, /const TerminalManager = globalThis\.XekuteTerminalManager/);
   assert.match(renderer, /path: SETTINGS_TAB_PATH[\s\S]*?special: "settings"/);
   assert.match(renderer, /path: INTERCEPTOR_TAB_PATH[\s\S]*?special: "interceptor"/);
-  assert.match(renderer, /path: APPLICATION_GRAPH_TAB_PATH[\s\S]*?special: "application-graph"/);
+  assert.doesNotMatch(renderer, /APPLICATION_GRAPH_TAB_PATH|special: "application-graph"/);
   assert.match(renderer, /function showSecurityWorkspace\(tool = ""\) \{\s*openInterceptorTab\(tool\);/);
-  assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\) \|\| isApplicationGraphTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
-  assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\) \|\| isApplicationGraphTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
+  assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
+  assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
   assert.match(renderer, /if \(specialWorkspaceTab\) el\.classList\.add\("special-workspace-tab"\)/);
-  assert.match(renderer, /isSettingsTab\(tab\)[\s\S]*?codicon-settings-gear[\s\S]*?isInterceptorTab\(tab\)[\s\S]*?codicon-debug-disconnect[\s\S]*?isApplicationGraphTab\(tab\)[\s\S]*?codicon-type-hierarchy/);
+  assert.match(renderer, /isSettingsTab\(tab\)[\s\S]*?codicon-settings-gear[\s\S]*?isInterceptorTab\(tab\)[\s\S]*?codicon-debug-disconnect/);
+  assert.doesNotMatch(renderer, /isApplicationGraphTab/);
   assert.match(renderer, /if \(editorBody\) editorBody\.hidden = true;\s*updateEditorPathBar\(\);/);
   assert.match(renderer, /if \(isInterceptorTab\(activeTab\)\) \{[\s\S]*?showSecurityWorkspaceContent\(activeTab\.securityTool \|\| ""\);/);
-  assert.match(renderer, /if \(isApplicationGraphTab\(activeTab\)\) \{[\s\S]*?await showMapWorkspace\(\);/);
+  assert.doesNotMatch(renderer, /showMapWorkspace/);
   const editorPathBarSource = renderer.match(/function updateEditorPathBar\(\)[\s\S]*?\n\}/)?.[0] || "";
   assert.match(editorPathBarSource, /const relativePath = relativePathFromRoot\(filePath\)/);
   assert.match(editorPathBarSource, /const projectPath = relativePath === null \? \(activeTab\.name \|\| ""\) : relativePath/);
@@ -114,6 +115,9 @@ test("workspace context menu renames files and folders without discarding open e
   assert.match(styles, /\.workspace-context-menu \{[^}]*background:var\(--revamp-surface,var\(--bg-0\)\)/);
   assert.match(renderer, /setHidden\("rename", !target \|\| multiple\)/);
   assert.match(renderer, /async function renameWorkspaceContextTarget\(target\)/);
+  assert.match(renderer, /function startInlineWorkspaceRename\(target\)/);
+  assert.match(renderer, /async function applyWorkspaceRename\(target, normalizedName\)/);
+  assert.doesNotMatch(renderer.match(/function startInlineWorkspaceRename[\s\S]*?async function renameWorkspaceContextTarget/)?.[0] || "", /AppDialog\.prompt/);
   assert.match(renderer, /window\.api\.movePath\(\{[\s\S]*?source: target\.relativePath,[\s\S]*?destination/);
   assert.match(renderer, /function remapOpenTabsUnderWorkspacePath\(sourceAbsolute, destinationAbsolute\)/);
   assert.match(renderer, /tab\.path = nextPath;[\s\S]*?tab\.diskPath = nextPath/);
@@ -155,7 +159,10 @@ test("workspace context menu analyzes every single file in a visible Agent sessi
   assert.match(renderer, /chatSessions\.push\(session\)[\s\S]*?applyActiveChatSession\(session\)/);
   assert.match(renderer, /sendMessageWithAgentRuntime\(\{[\s\S]*?sessionId: session\.id,[\s\S]*?text: prompt,[\s\S]*?modeOverride: "ask",[\s\S]*?skipContextFiles: true,[\s\S]*?activeFile: null/);
   assert.doesNotMatch(renderer.match(/async function startWorkspaceFileAnalysis[\s\S]*?async function runWorkspaceContextAction/)?.[0] || "", /chatInput\.value = prompt/);
-  assert.match(renderer, /finally \{[\s\S]*?session\.chatMode = returnMode[\s\S]*?chatMode = returnMode[\s\S]*?syncChatModeUi\(\)/);
+  assert.doesNotMatch(
+    renderer.match(/async function startWorkspaceFileAnalysis[\s\S]*?async function runWorkspaceContextAction/)?.[0] || "",
+    /finally \{[\s\S]*?chatMode = returnMode/,
+  );
   assert.doesNotMatch(renderer.match(/async function startWorkspaceFileAnalysis[\s\S]*?async function runWorkspaceContextAction/)?.[0] || "", /window\.api\.readFile/);
   assert.match(renderer, /const runMode = options\?\.modeOverride[\s\S]*?canonicalChatMode\(options\.modeOverride\)/);
   assert.match(renderer, /const hasExplicitText = Object\.prototype\.hasOwnProperty\.call\(options \|\| \{\}, "text"\)/);

@@ -15,27 +15,27 @@ const { createWebArtifactStore } = require("../src/domain/assessment/web-artifac
 test("internal Markdown skills support safe explicit invocation and remain subordinate to the canonical system prompt", () => {
   const registry = createSpecialSkillRegistry({ root: path.resolve(__dirname, "../src/agent/special-skills") });
   assert.deepEqual(registry.list(), []);
-  assert.deepEqual(registry.listInternal().map((entry) => entry.id), ["create-rule", "create-skill", "create-subagent", "pentest", "report"]);
-  assert.equal(internalSkillIdForIntent("Please run a penetration test against the configured target"), "pentest");
+  assert.deepEqual(registry.listInternal().map((entry) => entry.id), ["create-rule", "create-skill", "create-subagent", "report"]);
+  assert.equal(internalSkillIdForIntent("Please run a penetration test against the configured target"), "");
   assert.equal(internalSkillIdForIntent("Explain what penetration testing means"), "");
-  assert.equal(internalSkillIdForIntent("/pentest example.com"), "pentest");
-  const explicitlyResolved = selectInternalSkill(registry, "/pentest example.com", { mode: "ask" });
+  assert.equal(internalSkillIdForIntent("/pentest example.com"), "");
+  assert.equal(internalSkillIdForIntent("/report example.com"), "report");
+  const explicitlyResolved = selectInternalSkill(registry, "/report example.com", { mode: "ask" });
   assert.equal(explicitlyResolved.ok, true);
   assert.equal(explicitlyResolved.selectedBy, "explicit");
   assert.equal(explicitlyResolved.userContext, "example.com");
   assert.match(explicitlyResolved.prompt, /USER-PROVIDED CONTEXT[\s\S]*example\.com/);
-  const resolved = selectInternalSkill(registry, "Please run a penetration test against the configured target", { mode: "ask" });
+  const resolved = selectInternalSkill(registry, "Please generate a VAPT report", { mode: "ask" });
   assert.equal(resolved.ok, true);
   assert.equal(resolved.manifest.visibility, "internal");
   assert.equal(resolved.manifest.instructionRole, "skill-context");
   assert.match(resolved.prompt, /Preserve this mode/);
   assert.match(resolved.prompt, /never defines or replaces a system prompt/i);
-  assert.match(resolved.prompt, /Tier 2 is the canonical durable project state[\s\S]*update_project_artifacts/);
-  assert.match(resolved.prompt, /Tier 3[\s\S]*WSTG/);
+  assert.doesNotMatch(resolved.prompt, /Tier 2 is the canonical durable project state|query_knowledge|update_project_artifacts/);
   assert.deepEqual(createSpecialSkillToolDefinitions(resolved), []);
-  assert.equal(resolved.resources.length, 1);
+  assert.equal(resolved.resources.length, 2);
   assert.equal(resolved.resources[0].path, "SKILL.md");
-  for (const removed of ["map", "webclone"]) assert.equal(registry.resolve(removed).ok, false);
+  for (const removed of ["map", "webclone", "pentest"]) assert.equal(registry.resolve(removed).ok, false);
   const systemPrompt = buildSystemContext({ mode: "ask", modeFamily: "xekute", depth: "operational" });
   const skillContext = buildSkillContext({ mode: "ask", modeFamily: "xekute", specialSkillPrompt: resolved.prompt });
   assert.match(systemPrompt, /XEKUTE VAPT SYSTEM PROMPT/);
@@ -56,38 +56,12 @@ test("internal skill packages reject their own system prompt declarations", () =
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("pentest is one Markdown skill with a shared-memory loop coordinator", () => {
+test("the pentest skill and loop coordinator are removed", () => {
   const skillRoot = path.resolve(__dirname, "../src/agent/special-skills/pentest");
-  assert.deepEqual(fs.readdirSync(skillRoot).sort(), ["SKILL.md", "loop-controller.js"]);
-  const loaded = loadPackage(skillRoot);
-  assert.equal(loaded.resources.length, 1);
-  assert.deepEqual(loaded.manifest.resources, []);
-  assert.equal(loaded.manifest.requiredTools.includes("manage_pentest"), false);
-  assert.ok(loaded.manifest.requiredTools.includes("query_assessment"));
-  assert.ok(loaded.manifest.requiredTools.includes("query_knowledge"));
-  assert.ok(loaded.manifest.requiredTools.includes("expand_evidence"));
-  assert.ok(loaded.manifest.requiredTools.includes("web_research"));
-  assert.ok(loaded.manifest.requiredTools.includes("browser_action"));
-  assert.ok(loaded.manifest.requiredTools.includes("update_project_artifacts"));
-  assert.ok(loaded.manifest.requiredTools.includes("pentest_checkpoint"));
-  assert.match(loaded.resources[0].content, /There is no Pentest-private investigation store/);
-  assert.match(loaded.resources[0].content, /update_project_artifacts/);
-  assert.match(loaded.resources[0].content, /There is no iteration limit/);
-  assert.match(loaded.resources[0].content, /Deep passive reconnaissance/);
-  assert.match(loaded.resources[0].content, /Deep active reconnaissance/);
-  assert.match(loaded.resources[0].content, /Vulnerability assessment level 1/);
-  assert.match(loaded.resources[0].content, /Vulnerability assessment level 2/);
-  assert.match(loaded.resources[0].content, /JavaScript[\s\S]*runtime-rendered SPA/);
-  assert.match(loaded.resources[0].content, /query Tier 3[\s\S]*WSTG/i);
-  assert.match(loaded.resources[0].content, /H-####/);
-  assert.match(loaded.resources[0].content, /C-####/);
-  assert.match(loaded.resources[0].content, /E-####/);
-  assert.match(loaded.resources[0].content, /project_info\//);
-  assert.match(loaded.resources[0].content, /checklist\.md/);
-  assert.doesNotMatch(loaded.resources[0].content, /Never require the user to switch modes/);
-  assert.doesNotMatch(loaded.resources[0].content, /Investigation lifecycle|Retrieval Engine|Agent Session summarization|Artifact Registry/);
-  assert.equal(fs.existsSync(path.join(skillRoot, "orchestrator.js")), false);
-  assert.equal(fs.existsSync(path.join(skillRoot, "state-store.js")), false);
+  assert.equal(fs.existsSync(skillRoot), false);
+  const registry = createSpecialSkillRegistry({ root: path.resolve(__dirname, "../src/agent/special-skills") });
+  assert.equal(registry.resolve("pentest").ok, false);
+  assert.equal(internalSkillIdForIntent("run a pentest against the target"), "");
 });
 
 test("web artifact store accepts bounded web assets and deduplicates content", () => {

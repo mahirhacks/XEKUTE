@@ -6,18 +6,19 @@ const { createV3SessionStore } = require("../src/app/storage/memory/v3-session-s
 
 const read = (relativePath) => fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
 
-test("only reasonably large Agent tasks receive the temporary checklist surface", () => {
+test("Agent tasks keep the two-mode catalog without a temporary checklist tool", () => {
   const controller = read("src/agent/controller/agent-controller.js");
   const modes = read("src/agent/modes/mode-registry.js");
   assert.match(controller, /function isReasonablyLargeAgentRequest\(/);
-  assert.match(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
-  assert.match(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
-  assert.match(controller, /sendEvent\(\{ type: "task_list"/);
+  assert.doesNotMatch(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
+  assert.doesNotMatch(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
+  assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_list"/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
   assert.match(modes, /const AGENT_TOOLS = Object\.freeze\(\[/);
-  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge"\]\)/);
-  assert.match(modes, /const MODE_TOOL_GROUPS = Object\.freeze\(\{ ask: SAFE_READ_TOOLS, agent: AGENT_TOOLS, hypothesis: Object\.freeze\(\[\.\.\.SAFE_READ_TOOLS, "update_project_artifacts"\]\), plan: Object\.freeze\(\[\.\.\.SAFE_READ_TOOLS, "update_project_artifacts"\]\) \}\)/);
-  assert.match(modes, /"update_project_artifacts"/);
+  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "read_file", "search_workspace"\]\)/);
+  assert.match(modes, /const MODE_TOOL_GROUPS = Object\.freeze\(\{ ask: SAFE_READ_TOOLS, agent: AGENT_TOOLS \}\)/);
+  assert.doesNotMatch(modes, /"update_project_artifacts"/);
+  assert.doesNotMatch(modes, /"query_knowledge"/);
   assert.doesNotMatch(modes, /ALL_MODE_TOOLS/);
   assert.doesNotMatch(modes, /"manage_plan"/);
 });
@@ -147,7 +148,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.doesNotMatch(renderer, /chatStickyUser|syncStickyUserTurn|cloneNode\(true\)/);
   assert.match(renderer, /function normalizeChatExchanges\(/);
   assert.match(renderer, /appendChatTurn\(turn, \{ startsExchange: true \}\)/);
-  assert.match(chatStyles, /#messages \.chat-exchange \{[\s\S]*position: relative[\s\S]*flex: 0 0 auto[\s\S]*gap: 18px/);
+  assert.match(chatStyles, /#messages \.chat-exchange-body \{[\s\S]*gap: 18px/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*position: sticky[\s\S]*top: 8px/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \.chat-box[\s\S]*background: #252526 !important/);
   assert.match(chatStyles, /#chat-pane::before[\s\S]*height: var\(--chat-sticky-mask-solid-height\)[\s\S]*background: #171717/);
@@ -270,6 +271,10 @@ test("question-tool cards use the refreshed UI and stay scoped to their owning c
   assert.match(chatStyles, /data-questions-action="submit"\][\s\S]*?background: #2f8cf4/);
   assert.match(chatStyles, /\.composer-questions\s*\{[\s\S]*?margin-bottom: 8px/);
   assert.match(chatStyles, /#input-bar\.has-composer-questions \.composer\s*\{[\s\S]*?border-color: #3b3b3b/);
+  assert.match(renderer, /function questionOptionsWithFreeWrite\(/);
+  assert.match(renderer, /placeholder="Or describe something else"/);
+  assert.match(renderer, /input\.dataset\.freeWrite !== "1"/);
+  assert.doesNotMatch(renderer, /placeholder="Type something\.\.\."/);
 });
 
 test("mouse-picked slash commands use a yellow chip while typed commands remain plain", () => {
@@ -319,39 +324,27 @@ test("background terminal continuations remain internal to the agent runtime", (
   assert.match(renderer, /userMessage: internal && options\?\.continuation \? "" : text/);
   assert.match(renderer, /internalRuntimeInput: internal/);
   assert.match(renderer, /internalSkillId: internal \? String\(options\?\.internalSkillId \|\| ""\) : ""/);
-  assert.match(main, /const internalSkillId = payload\.internalRuntimeInput && payload\.internalSkillId === "pentest" \? "pentest" : ""/);
+  assert.match(main, /const internalSkillId = payload\.internalRuntimeInput \? String\(payload\.internalSkillId \|\| ""\)\.trim\(\)\.toLowerCase\(\) : ""/);
   assert.match(main, /const skillIntent = payload\.internalRuntimeInput[\s\S]*?\? \(internalSkillId \? `\/\$\{internalSkillId\}` : ""\)/);
 });
 
-test("Tier 2 memory maintenance runs on a hidden background surface", () => {
+test("hidden background runtime remains isolated from the visible chat surface", () => {
   const renderer = read("src/ui/bootstrap.js");
   const main = read("src/app/electron/main.js");
   const prompt = read("src/prompts/instructions/system-prompt.js");
 
-  assert.match(renderer, /function isTier2MemoryTool\([\s\S]*?update_project_artifacts/);
-  assert.match(renderer, /payload\.type === "tool_call"[\s\S]*?filter\(\(tool\) => !isTier2MemoryTool\(tool\)\)/);
-  assert.match(renderer, /payload\.type === "tool_start"[\s\S]*?if \(isTier2MemoryTool\(payload\.tool\)\) return/);
-  assert.match(renderer, /payload\.type === "tool_result"[\s\S]*?if \(isTier2MemoryTool\(payload\.tool\)\) return/);
+  assert.doesNotMatch(renderer, /scheduleTier2MemoryMaintenance|isTier2MemoryTool|tier2MemoryMaintenance|TIER2_MEMORY/);
+  assert.doesNotMatch(main, /tier2MemoryMaintenance|requireArtifactFinalization|update_project_artifacts|query_knowledge/);
+  assert.doesNotMatch(prompt, /update_project_artifacts|Tier 2 maintenance/);
   assert.match(renderer, /function executeHiddenAgentRuntime\([\s\S]*?backgroundRuntime: true/);
-  assert.match(renderer, /tier2MemoryMaintenance: Boolean\(options\?\.tier2MemoryMaintenance\)/);
   assert.match(renderer, /function sendHiddenAgentRuntime\([\s\S]*?hiddenAgentRuntimeQueues\.set\(key, task\)/);
-  assert.match(renderer, /function scheduleTier2MemoryMaintenance\([\s\S]*?TIER2_MEMORY_MAINTENANCE_PROMPT[\s\S]*?tier2MemoryMaintenance: true/);
-  assert.match(renderer, /shouldMaintainTier2[\s\S]*?scheduleTier2MemoryMaintenance\(\{/);
-  assert.match(renderer, /pentestFinalizeBlockId: String\(agentRunResult\?\.pentestFinalization\?\.blockId \|\| ""\)/);
-  assert.match(renderer, /executeQueuedHiddenAgentRuntime[\s\S]*?tier2MemoryMaintenanceSucceeded[\s\S]*?return executeHiddenAgentRuntime\(payload\)/);
+  assert.doesNotMatch(renderer, /schedulePentestContinuation|pentestLoop|internalSkillId:\s*"pentest"/);
   assert.match(renderer, /payload\?\.source === "background_runtime"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
   assert.match(renderer, /payload\?\.source === "parent_continuation"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
   assert.match(renderer, /handleHiddenBackgroundRuntimeEvent[\s\S]*?ackParentContinuation/);
-  assert.match(main, /const runKey = tier2MemoryMaintenance[\s\S]*?`\$\{foregroundRunKey\}::tier2`[\s\S]*?`\$\{foregroundRunKey\}::background`[\s\S]*?: foregroundRunKey/);
-  assert.match(main, /const runtimeTools = tier2MemoryMaintenance[\s\S]*?name === "update_project_artifacts"[\s\S]*?name !== "update_project_artifacts"/);
-  assert.match(main, /requireArtifactFinalization: artifactWorkspace && backgroundRuntime/);
-  assert.match(main, /v3SessionStore\?\.record && !tier2MemoryMaintenance/);
-  assert.match(main, /tier2MemoryMaintenance && pentestFinalizeBlockId[\s\S]*?maintenanceSucceeded[\s\S]*?pentestLoopController\.finalizeBlock/);
-  assert.match(main, /pentestFinalization = \{[\s\S]*?pending: true[\s\S]*?blockId:/);
-  assert.match(main, /pendingPentestCheckpoint[\s\S]*?checkpointOf\([\s\S]*?runtime-recorded orchestration data; not evidence/);
+  assert.doesNotMatch(main, /pentestLoopController|createPentestLoopController|pentest_checkpoint/);
   assert.match(main, /source: "background_runtime"/);
   assert.doesNotMatch(main, /result\.finalText = `\$\{String\(result\.finalText/);
-  assert.match(prompt, /update_project_artifacts is available only in the isolated post-response Tier 2 maintenance turn/);
 });
 
 test("assistant messages render a relative-time label beside the copy button", () => {
@@ -547,4 +540,45 @@ test("saved command transcripts reopen through the browser-safe tool normalizer"
   assert.doesNotMatch(restoreHelper, /ToolMap\.parseArguments/);
   assert.match(restoreHelper, /catch \{ \/\* A damaged historical tool call must not block session opening/);
   assert.match(renderer, /\.map\(commandToolFromHistoryCall\)[\s\S]*?\.filter\(\(tool\) => isAgentTerminalTool\(tool\)\)/);
+});
+
+test("chat mode picker stays usable during a reply and only the next user turn uses the new mode", () => {
+  const renderer = read("src/ui/bootstrap.js");
+  const openMenu = renderer.slice(
+    renderer.indexOf("function openChatModeMenu"),
+    renderer.indexOf("function closeChatModeMenu"),
+  );
+  const toggleMenu = renderer.slice(
+    renderer.indexOf("function toggleChatModeMenu"),
+    renderer.indexOf("function positionChatModeMenu"),
+  );
+  const setMode = renderer.slice(
+    renderer.indexOf("function setChatMode"),
+    renderer.indexOf("function setChatFamily"),
+  );
+  const syncRun = renderer.slice(
+    renderer.indexOf("function syncChatRunSession"),
+    renderer.indexOf("function prepareActiveChatSessionForSwitch"),
+  );
+  const hiddenRuntime = renderer.slice(
+    renderer.indexOf("async function executeHiddenAgentRuntime"),
+    renderer.indexOf("function sendHiddenAgentRuntime"),
+  );
+  const sendStart = renderer.indexOf("async function sendMessageWithAgentRuntime");
+  const sendRuntime = renderer.slice(
+    sendStart,
+    renderer.indexOf("activeChatRuns.set(run.sessionId, run)", sendStart),
+  );
+
+  assert.doesNotMatch(openMenu, /isRunningChatActive\(\)/);
+  assert.doesNotMatch(toggleMenu, /isRunningChatActive\(\)/);
+  assert.doesNotMatch(setMode, /isRunningChatActive\(\)/);
+  assert.doesNotMatch(syncRun, /session\.chatMode = run\.mode/);
+  assert.match(sendRuntime, /runSession\.turnMode = runMode/);
+  assert.match(sendRuntime, /ensureChatMemorySessionId\(runSession\)/);
+  assert.match(hiddenRuntime, /runSession\.turnMode \|\| runSession\.chatMode \|\| chatMode/);
+  assert.match(hiddenRuntime, /ensureChatMemorySessionId\(runSession\)/);
+  assert.match(renderer, /modeLabel\(liveRun\?\.mode \|\| chatMode\)/);
+  assert.match(renderer, /from "\.\/features\/history\/chat-memory-session\.js"/);
+  assert.doesNotMatch(renderer.slice(renderer.indexOf("function createChatSession"), renderer.indexOf("function memoryRecord")), /ensureChatMemorySessionId/);
 });

@@ -23,7 +23,6 @@ function registerProjectIpc({
   effectiveProjectRuntimeSettings,
   effectiveOperatorRuntimeSettings,
   assessmentWorkspace,
-  assessmentMap,
   assessmentIntelligence,
   securityHttpWorkbench,
   proxyListener,
@@ -372,28 +371,6 @@ ipcMain.handle("assessment:deleteTrafficRecords", async (_event, { path: assessm
   return assessmentWorkspace.deleteTrafficRecords(assessmentPath, { requestIds });
 });
 
-ipcMain.handle("assessment:map", async (_event, { path: assessmentPath } = {}) => {
-  return assessmentMap.read(assessmentPath, { operatorInitiated: true });
-});
-
-ipcMain.handle("assessment:buildMap", async (_event, { path: assessmentPath } = {}) => {
-  return container.graphBuildService.build(assessmentPath, { operatorInitiated: true });
-});
-ipcMain.handle("assessment:deepCollectGraph", async (_event, { path: assessmentPath, seeds = [], force = false, maxFiles } = {}) => {
-  const collected = await container.javascriptCollector.collect({ workspace: assessmentPath, seeds, force, maxFiles });
-  if (collected?.ok === false) return collected;
-  const built = await container.graphBuildService.build(assessmentPath, { operatorInitiated: true });
-  return built?.error ? { ...collected, graph: built } : { ...collected, graph: { ok: true, path: built.path, htmlPath: built.htmlPath, unchanged: built.unchanged, stats: built.graph?.stats || {} } };
-});
-ipcMain.handle("assessment:mapOverview", async (_event, { path: assessmentPath } = {}) => assessmentMap.getOverview(assessmentPath));
-ipcMain.handle("assessment:mapNode", async (_event, { path: assessmentPath, id } = {}) => assessmentMap.getNode(assessmentPath, id));
-ipcMain.handle("assessment:mapNeighbors", async (_event, { path: assessmentPath, id, edgeTypes, minConfidence } = {}) => assessmentMap.getNeighbors(assessmentPath, id, { edgeTypes, minConfidence }));
-ipcMain.handle("assessment:mapPaths", async (_event, { path: assessmentPath, from, to, maxHops, minConfidence } = {}) => assessmentMap.findPaths(assessmentPath, from, to, { maxHops, minConfidence }));
-ipcMain.handle("assessment:mapRoutes", async (_event, { path: assessmentPath, pattern, tags } = {}) => assessmentMap.searchRoutes(assessmentPath, pattern, { tags }));
-ipcMain.handle("assessment:mapSharedObjects", async (_event, { path: assessmentPath, id } = {}) => assessmentMap.getSharedObjects(assessmentPath, id));
-ipcMain.handle("assessment:mapEvidence", async (_event, { path: assessmentPath, evidenceIds } = {}) => assessmentMap.getEvidence(assessmentPath, evidenceIds));
-ipcMain.handle("assessment:mapHypotheses", async (_event, { path: assessmentPath, status } = {}) => assessmentMap.getHypotheses(assessmentPath, { status }));
-ipcMain.handle("assessment:mapAnnotateFinding", async (_event, { path: assessmentPath, ...input } = {}) => assessmentMap.annotateFinding(assessmentPath, input));
 ipcMain.handle("assessment:intelligenceStatus", async (_event, { path: assessmentPath } = {}) => assessmentIntelligence.status(assessmentPath));
 ipcMain.handle("assessment:intelligenceStart", async (_event, { path: assessmentPath, runId, planId } = {}) => assessmentIntelligence.start(assessmentPath, { runId, planId }));
 ipcMain.handle("assessment:intelligencePause", async (_event, { path: assessmentPath } = {}) => assessmentIntelligence.pause(assessmentPath));
@@ -716,7 +693,12 @@ ipcMain.handle("proxy:configure", async (_event, { assessmentPath } = {}) => {
     settings: assessmentPath ? effectiveOperatorRuntimeSettings(assessmentPath) : null,
     targets: project?.profile?.scope?.inScopeTargets || null,
   });
-  if (!result?.running && assessmentPath) await container.proxyBrowser.close(assessmentPath);
+  if (!result?.running && assessmentPath) {
+    const settings = effectiveOperatorRuntimeSettings(assessmentPath);
+    // Intercept On used to persist with listener.enabled=false. Reconfigure
+    // then stopped the listener and closed the just-opened proxied browser.
+    if (!settings?.interception?.enabled) await container.proxyBrowser.close(assessmentPath);
+  }
   return result;
 });
 
@@ -789,13 +771,6 @@ ipcMain.handle("proxy:showCa", async () => {
 });
 
 ipcMain.handle("settings:certificatesGet", async () => certificateSettingsSnapshot());
-
-ipcMain.handle("knowledge:list", async () => container.knowledgeLibrary.list());
-ipcMain.handle("knowledge:status", async (_event, { workspace } = {}) => container.knowledgeLibrary.status(workspace || ""));
-ipcMain.handle("knowledge:preview", async (_event, { package: pkg } = {}) => container.knowledgeLibrary.previewInstall(pkg));
-ipcMain.handle("knowledge:install", async (_event, { package: pkg, confirmation, previewId } = {}) => container.knowledgeLibrary.install(pkg, { previewId, confirmation }));
-ipcMain.handle("knowledge:remove", async (_event, { releaseId } = {}) => container.knowledgeLibrary.remove(releaseId));
-ipcMain.handle("knowledge:reindex", async (_event, { workspace } = {}) => container.knowledgeLibrary.reindex(workspace || ""));
 
 ipcMain.handle("settings:certificatesChoose", async (_event, { assessmentPath = "" } = {}) => {
   const current = configuredCentralCaDirectory();
@@ -1106,10 +1081,7 @@ module.exports = Object.freeze({
     "assessment:trafficLog", "assessment:trafficHistory", "assessment:trafficRecords", "assessment:evidence",
     "assessment:appendEvidence", "assessment:createRun",
     "assessment:updateRun", "assessment:generateReport", "assessment:runHistory",
-    "assessment:deleteTrafficRecords", "assessment:map", "assessment:buildMap", "assessment:deepCollectGraph", "assessment:graphStatus",
-    "assessment:mapOverview", "assessment:mapNode", "assessment:mapNeighbors", "assessment:mapPaths",
-    "assessment:mapRoutes", "assessment:mapSharedObjects", "assessment:mapEvidence",
-    "assessment:mapHypotheses", "assessment:mapAnnotateFinding", "assessment:settings",
+    "assessment:deleteTrafficRecords", "assessment:settings",
     "assessment:intelligenceStatus", "assessment:intelligenceStart", "assessment:intelligencePause",
     "assessment:intelligenceResume", "assessment:intelligenceRebuild", "assessment:intelligenceQuery",
     "assessment:intelligenceExpand", "assessment:intelligence",
@@ -1123,7 +1095,6 @@ module.exports = Object.freeze({
     "webclone:readFile", "webclone:previewDocument", "webclone:previewBounds", "webclone:hidePreview",
     "settings:certificatesGet", "settings:certificatesChoose", "settings:certificatesReset",
     "settings:certificatesShow", "settings:llmGet", "settings:llmSet", "settings:llmTest",
-    "knowledge:list", "knowledge:status", "knowledge:preview", "knowledge:install", "knowledge:remove", "knowledge:reindex",
     "settings:ollamaGet", "settings:ollamaSet", "settings:ollamaTest",
     "settings:identitiesGet", "settings:identityCreate", "settings:identityUpdate",
     "settings:identityDelete", "settings:identityLoginStart", "settings:identityLoginSave",

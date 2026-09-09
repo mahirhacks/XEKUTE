@@ -3,7 +3,7 @@
 const { allow, gate } = require("./gate-utils.js");
 
 const DISABLED = null;
-const LONG_RUNNING_TOOLS = new Set(["exec_command", "delegate_agent", "run_test_case"]);
+const LONG_RUNNING_TOOLS = new Set(["exec_command", "delegate_agent"]);
 
 function observationValue(overrides, key, fallback) {
   if (!Object.prototype.hasOwnProperty.call(overrides, key)) return fallback;

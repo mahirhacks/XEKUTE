@@ -22,17 +22,14 @@ function catalog() {
   }));
 }
 
-async function captureTools({ isFirstAgentTurn, userMessage, mode = "agent" }) {
+async function captureTools({ userMessage, mode = "agent" }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-preflight-"));
   let captured;
-  let round = 0;
   try {
     await runAgentTurn({
       mode,
       workspace: root,
       userMessage,
-      requireArtifactFinalization: mode !== "ask",
-      isFirstAgentTurn,
       tools: catalog(),
       runModelRound: async ({ tools }) => {
         if (!captured) captured = tools.map((tool) => tool.function.name);
@@ -40,17 +37,9 @@ async function captureTools({ isFirstAgentTurn, userMessage, mode = "agent" }) {
           const browser = tools.find((tool) => tool.function.name === "browser_action");
           captured.browserEnum = browser?.function?.parameters?.properties?.action?.enum || null;
         }
-        round += 1;
-        if (mode !== "ask" && round === 1) return { fullText: "", toolCalls: [] };
-        if (mode !== "ask") {
-          return {
-            fullText: "",
-            toolCalls: [{ id: "finalizer", function: { name: "update_project_artifacts", arguments: { no_op_reason: "preflight test" } } }],
-          };
-        }
-        return { fullText: "ask reply", toolCalls: [] };
+        return { fullText: mode === "ask" ? "ask reply" : "done", toolCalls: [] };
       },
-      executeToolCall: async () => ({ ok: true, staging_id: "txn-preflight" }),
+      executeToolCall: async () => ({ ok: true }),
     });
     return captured;
   } finally {
@@ -64,30 +53,20 @@ test("isActiveProbeRequest matches scan/probe language and tool names", () => {
   assert.equal(RequestIntentRules.isActiveProbeRequest("Use exec_command if needed"), true);
 });
 
-test("first Agent turn strips probe tools unless the operator asked for an active probe", async () => {
-  const stripped = await captureTools({ isFirstAgentTurn: true, userMessage: "Summarize the engagement notes" });
-  for (const name of ["replay_request", "run_test_case", "web_research", "attack_graph", "exec_command", "delegate_agent"]) {
-    assert.equal(stripped.includes(name), false, name);
+test("Agent turns expose probe tools without a first-turn strip", async () => {
+  const tools = await captureTools({ userMessage: "Summarize the engagement notes" });
+  for (const name of ["replay_request", "web_research", "exec_command", "delegate_agent"]) {
+    assert.equal(tools.includes(name), true, name);
   }
-  assert.ok(stripped.includes("browser_action"));
-  assert.deepEqual(stripped.browserEnum, ["list_pages", "close_page"]);
-  const probe = await captureTools({ isFirstAgentTurn: true, userMessage: "Please scan the authorized target" });
-  for (const name of ["replay_request", "run_test_case", "web_research", "attack_graph", "exec_command", "delegate_agent"]) {
-    assert.equal(probe.includes(name), true, name);
-  }
+  assert.ok(tools.includes("browser_action"));
+  assert.ok(tools.browserEnum.includes("navigate"));
 });
 
-test("second Agent turn restores probe tools", async () => {
-  const restored = await captureTools({ isFirstAgentTurn: false, userMessage: "Summarize the engagement notes" });
-  for (const name of ["replay_request", "run_test_case", "web_research", "attack_graph", "exec_command", "delegate_agent"]) {
-    assert.equal(restored.includes(name), true, name);
-  }
-  assert.ok(restored.browserEnum.includes("navigate"));
-});
-
-test("Ask catalog excludes update_project_artifacts", () => {
-  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("update_project_artifacts"), false);
+test("Ask catalog is the local read surface", () => {
   assert.deepEqual([...ModeRegistry.MODE_TOOL_GROUPS.ask], [
-    "ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge",
+    "ask_questions", "read_file", "search_workspace",
   ]);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("exec_command"), false);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("query_knowledge"), false);
+  assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("update_project_artifacts"), false);
 });

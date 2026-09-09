@@ -100,21 +100,6 @@ function registerAskQuestions(toolRegistry, adapter) {
   });
 }
 
-function registerUpdateTaskList(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "update_task_list",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    description: adapter.description,
-    metadata: {
-      targetTypes: ["runtime", "task-list"],
-      mutating: false,
-      reversible: true,
-    },
-  });
-}
-
 function registerReadFile(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
@@ -157,59 +142,6 @@ function registerApplyPatch(toolRegistry, adapter) {
   });
 }
 
-function registerInspectEnvironment(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "inspect_environment",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["process", "environment", "workspace"],
-      mutating: false,
-      reversible: false,
-    },
-  });
-}
-
-function registerUpdateProjectArtifacts(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "update_project_artifacts",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    description: adapter.description,
-    metadata: { mutating: true, reversible: true, targetTypes: ["workspace", "project-artifacts"] },
-  });
-}
-
-function registerManageState(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "manage_state",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["workspace", "state"],
-      mutating: true,
-      reversible: true,
-    },
-  });
-}
-
-function registerIngestTraffic(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "ingest_traffic",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["traffic", "network"],
-      mutating: false,
-      reversible: false,
-    },
-  });
-}
-
 function registerManageIdentity(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
@@ -238,20 +170,6 @@ function registerReplayRequest(toolRegistry, adapter) {
   });
 }
 
-function registerRunTestCase(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "run_test_case",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["test", "verification"],
-      mutating: false,
-      reversible: false,
-    },
-  });
-}
-
 function registerBrowserAction(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
@@ -262,48 +180,6 @@ function registerBrowserAction(toolRegistry, adapter) {
       targetTypes: ["browser", "network"],
       mutating: false,
       reversible: false,
-    },
-  });
-}
-
-function registerCompareResponses(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "compare_responses",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["response", "network"],
-      mutating: false,
-      reversible: false,
-    },
-  });
-}
-
-function registerVerifyFinding(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "verify_finding",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["finding", "evidence"],
-      mutating: false,
-      reversible: false,
-    },
-  });
-}
-
-function registerAttackGraph(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({
-    name: "attack_graph",
-    adapter,
-    inputSchema: adapter.inputSchema,
-    metadata: {
-      targetTypes: ["graph", "workspace"],
-      mutating: true,
-      reversible: true,
     },
   });
 }
@@ -320,21 +196,6 @@ function registerDelegateAgent(toolRegistry, adapter) {
       reversible: false,
     },
   });
-}
-
-function registerQueryAssessment(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({ name: "query_assessment", adapter, inputSchema: adapter.inputSchema, metadata: { mutating: false, reversible: true, targetTypes: ["assessment", "evidence", "knowledge"] } });
-}
-
-function registerExpandEvidence(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({ name: "expand_evidence", adapter, inputSchema: adapter.inputSchema, metadata: { mutating: false, reversible: true, targetTypes: ["evidence", "artifact"] } });
-}
-
-function registerQueryKnowledge(toolRegistry, adapter) {
-  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
-  return toolRegistry.register({ name: "query_knowledge", adapter, inputSchema: adapter.inputSchema, metadata: { mutating: false, reversible: true, targetTypes: ["knowledge", "methodology"] } });
 }
 
 function registerWebResearch(toolRegistry, adapter) {
@@ -354,25 +215,13 @@ module.exports = {
   toOpenAITool,
   toOpenAITools,
   registerAskQuestions,
-  registerUpdateTaskList,
   registerExecCommand,
   registerReadFile,
   registerSearchWorkspace,
   registerApplyPatch,
-  registerInspectEnvironment,
-  registerUpdateProjectArtifacts,
-  registerManageState,
-  registerIngestTraffic,
   registerManageIdentity,
   registerReplayRequest,
-  registerRunTestCase,
   registerBrowserAction,
-  registerCompareResponses,
-  registerVerifyFinding,
-  registerAttackGraph,
   registerDelegateAgent,
-  registerQueryAssessment,
-  registerExpandEvidence,
-  registerQueryKnowledge,
   registerWebResearch,
 };

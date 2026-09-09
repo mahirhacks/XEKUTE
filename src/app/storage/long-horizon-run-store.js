@@ -1,42 +1,21 @@
 "use strict";
 
-const fs = require("node:fs");
 const path = require("node:path");
 const { redactStructuredValue } = require("../../shared/secret-redaction.js");
 
-function createLongHorizonRunStore({ fsImpl = fs, pathImpl = path, now = () => new Date() } = {}) {
+function createLongHorizonRunStore({ pathImpl = path, now = () => new Date() } = {}) {
   const queues = new Map();
-  function fileFor(workspace) { return pathImpl.join(pathImpl.resolve(workspace), ".xekute", "state", "long-horizon-runs.json"); }
+  const documents = new Map();
+  function keyFor(workspace) { return pathImpl.resolve(workspace); }
+  function fileFor(workspace) { return pathImpl.join(keyFor(workspace), ".xekute", "state", "long-horizon-runs.json"); }
   function backupFor(workspace) { return `${fileFor(workspace)}.bak`; }
   function read(workspace) {
-    for (const candidate of [fileFor(workspace), backupFor(workspace)]) {
-      try {
-        const value = JSON.parse(fsImpl.readFileSync(candidate, "utf8"));
-        if (value && typeof value === "object") return value;
-      } catch { /* Try the crash-recovery backup. */ }
-    }
-    return { schemaVersion: 1, runs: {} };
+    const key = keyFor(workspace);
+    if (!documents.has(key)) documents.set(key, { schemaVersion: 1, runs: {} });
+    return documents.get(key);
   }
   function write(workspace, document) {
-    const file = fileFor(workspace);
-    const backup = backupFor(workspace);
-    fsImpl.mkdirSync(pathImpl.dirname(file), { recursive: true, mode: 0o700 });
-    const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    const backupTemp = `${backup}.${process.pid}.${Date.now()}.tmp`;
-    fsImpl.writeFileSync(temp, `${JSON.stringify(redactStructuredValue(document), null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    if (fsImpl.existsSync(file)) {
-      try {
-        fsImpl.copyFileSync(file, backupTemp);
-        try { fsImpl.rmSync(backup, { force: true }); } catch {}
-        fsImpl.renameSync(backupTemp, backup);
-      } catch { try { fsImpl.rmSync(backupTemp, { force: true }); } catch {} }
-    }
-    try { fsImpl.renameSync(temp, file); } catch {
-      try { fsImpl.rmSync(file, { force: true }); } catch {}
-      fsImpl.renameSync(temp, file);
-    }
-    try { fsImpl.chmodSync(file, 0o600); } catch { /* Windows ACLs protect workspace state. */ }
-    try { if (fsImpl.existsSync(backup)) fsImpl.chmodSync(backup, 0o600); } catch {}
+    documents.set(keyFor(workspace), redactStructuredValue(document));
   }
   function update(workspace, mutate) {
     const key = pathImpl.resolve(workspace);

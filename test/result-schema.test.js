@@ -4,7 +4,6 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { validateToolAdapter, TOOL_ADAPTER_ERROR_CODES } = require("../src/contracts/tool/tool-adapter.js");
 const { projectToolResult, toolResultContentForModel } = require("../src/agent/runtime/result-projector.js");
-const { createVerifyFindingResult, validateVerifyFindingResult } = require("../src/contracts/tool/verify-finding-result.js");
 
 test("tool adapters expose executable schemas without lifecycle or approval fields", async () => {
   const adapter = { name: "read_file", inputSchema: { type: "object" }, async execute() { return { ok: true }; } };
@@ -31,10 +30,4 @@ test("top-level knowledge packets remain model-readable without duplicating leas
   assert.equal(payload.items[0].id, "passive_recon");
   assert.deepEqual(payload.activatedMcpTools, ["mcp__scout__host_search"]);
   assert.doesNotMatch(projected.payload, /must-not-copy/);
-});
-
-test("finding verification keeps its specialized result shape", () => {
-  const value = createVerifyFindingResult({ findingId: "f-1", verdict: "accept", reason: "reproduced", evidenceRefs: ["e-1"] });
-  assert.equal(validateVerifyFindingResult(value).ok, true);
-  assert.equal("status" in value, false);
 });

@@ -6,7 +6,11 @@
   "main": "src/app/electron/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electronmon --inspect=5858 . --dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:electron": "electronmon --inspect=5858 . --dev",
+    "dev:ui": "vite --config src/ui/vite.config.mjs",
+    "build:ui": "vite build --config src/ui/vite.config.mjs && node scripts/copy-ui-assets.mjs",
+    "prestart": "npm run build:ui",
     "test": "node --test --test-concurrency=2",
     "verify:production": "node scripts/verify-production.js",
     "package": "electron-forge package",
@@ -23,15 +27,24 @@
     "@electron-forge/plugin-fuses": "7.11.2",
     "@electron/fuses": "1.8.0",
     "@electron/rebuild": "4.2.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "electron": "43.4.0",
     "electron-builder": "^26.15.3",
-    "electronmon": "2.0.4"
+    "electronmon": "2.0.4",
+    "vite": "^8.2.2"
   },
   "electronmon": {
     "patterns": [
       "!test/**",
       "!graphify-out/**",
-      "!version_tracking/**"
+      "!version_tracking/**",
+      "!src/ui/react/**",
+      "!src/ui/dist/**",
+      "!src/ui/styles/**",
+      "!src/ui/index.html",
+      "!src/ui/vite.config.mjs",
+      "!public-ui/**",
+      "!node_modules/**"
     ]
   },
   "dependencies": {
@@ -49,6 +62,8 @@
     "monaco-editor": "0.56.0",
     "node-pty": "^1.1.0",
     "playwright-core": "1.62.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tldts": "^7.4.10"
   },
   "overrides": {

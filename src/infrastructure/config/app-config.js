@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("fs");
 const path = require("path");
 
 /**
@@ -21,14 +22,16 @@ function createAppConfig({ app, processEnv = process.env } = {}) {
     // user-data configuration so every service resolves the same locations.
     memoryV3SensitiveDirectory: () => path.join(userData(), "memory-v3", "sensitive"),
     memoryV3IdentityDirectory: () => path.join(userData(), "memory-v3", "identity"),
-    memoryV3CacheDirectory: () => path.join(userData(), "memory-v3", "cache"),
-    memoryV3KnowledgeDirectory: () => path.join(userData(), "memory-v3", "knowledge"),
     preferencesPath: () => path.join(userData(), "pointer-preferences.json"),
     projectProfilesDirectory: () => path.join(userData(), "project-profiles"),
     identityVaultDirectory: () => path.join(home(), ".xekute", "data"),
     defaultCentralCaDirectory: () => path.join(userData(), "certificates", "proxy-ca"),
     proxyBrowserProfilesDirectory: () => path.join(userData(), "proxy-browser"),
-    indexPath: () => path.join(__dirname, "..", "..", "..", "ui", "index.html"),
+    indexPath: () => {
+      const dist = path.join(__dirname, "..", "..", "..", "ui", "dist", "index.html");
+      if (fs.existsSync(dist)) return dist;
+      return path.join(__dirname, "..", "..", "..", "ui", "index.legacy.html");
+    },
   };
 }
 

@@ -73,11 +73,6 @@ const v3SchemaSource = read("src/contracts/memory/v3-schemas.js");
 const v3ContractsSource = read("src/contracts/memory/v3-contracts.js");
 const v3Tier1Source = read("src/app/services/memory/tier1-context-coordinator.js");
 const v3SessionSource = read("src/app/storage/memory/v3-session-store.js");
-const v3KagSource = read("src/app/services/memory/native-kag-service.js");
-const v3KnowledgeStoreSource = read("src/app/services/memory/knowledge-procedure-store.js");
-const v3EmbeddingSource = read("src/app/services/memory/local-embedding-service.js");
-const v3EmbeddingWorkerSource = read("src/app/services/memory/local-embedding-worker.js");
-const embeddingService = require(path.join(root, "src/app/services/memory/local-embedding-service.js"));
 
 assert.match(main, /sandbox:\s*true/);
 assert.match(main, /contextIsolation:\s*true/);
@@ -120,34 +115,22 @@ assert.match(read("src/ui/bootstrap.js"), /type === "updated"/);
 assert.doesNotMatch(forgeConfig, /src\/automation/);
 
 const canonicalNames = ToolPort.REGISTRY_TOOL_NAMES;
-assert.equal(new Set(canonicalNames).size, 22, "the canonical registry must contain exactly 22 unique tools");
+assert.equal(new Set(canonicalNames).size, 10, "the canonical registry must contain exactly 10 unique tools");
 assert.deepEqual(
   canonicalNames,
   [
     "ask_questions",
-    "update_task_list",
     "exec_command",
     "read_file",
     "search_workspace",
     "apply_patch",
-    "inspect_environment",
-    "update_project_artifacts",
-    "manage_state",
-    "ingest_traffic",
     "manage_identity",
     "replay_request",
-    "run_test_case",
     "browser_action",
-    "compare_responses",
-    "verify_finding",
-    "attack_graph",
     "delegate_agent",
-    "query_assessment",
-    "expand_evidence",
-    "query_knowledge",
     "web_research",
   ],
-  "the tool contract must preserve the canonical 22-tool inventory and order",
+  "the tool contract must preserve the canonical 10-tool inventory and order",
 );
 assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
 assert.deepEqual(
@@ -185,8 +168,6 @@ for (const required of [
   "src/agent/special-skills/loader.js",
   "src/agent/special-skills/runner.js",
   "src/agent/special-skills/schema.js",
-  "src/agent/special-skills/pentest/SKILL.md",
-  "src/agent/special-skills/pentest/loop-controller.js",
   "src/domain/assessment/web-artifact-store.js",
   "src/app/electron/lifecycle.js",
   "src/app/ipc/register.js",
@@ -219,19 +200,28 @@ for (const requiredLive of [
   "src/app/storage/memory/memory-storage-utils.js",
   "src/app/services/artifacts/project-artifact-service.js",
   "src/domain/artifacts/investigation-artifacts.js",
-  "src/agent/tools/workspace/update-project-artifacts.js",
-  "src/app/services/memory/native-kag-service.js",
-  "src/app/services/memory/local-embedding-service.js",
-  "src/app/services/memory/local-embedding-worker.js",
-  "src/app/services/memory/knowledge-procedure-store.js",
-  "src/app/services/knowledge/knowledge-library-service.js",
-  "src/domain/memory/knowledge/knowledge-release.js",
   "src/contracts/memory/v3-schemas.js",
   "src/contracts/memory/v3-contracts.js",
   "src/contracts/memory/schema-registry.js",
   "context_memory_revamp/artifact-driven-investigation-state.md",
 ]) assert.ok(exists(requiredLive), `${requiredLive} must exist in the live memory architecture`);
-assert.equal(exists("src/app/services/memory/knowledge-library-service.js"), false, "knowledge library must live under services/knowledge, not services/memory");
+assert.equal(exists("src/agent/tools/workspace/update-project-artifacts.js"), false, "Tier 2 artifact writer must not ship");
+assert.equal(exists("src/agent/tools/assessment/query-knowledge.js"), false, "Tier 3 query_knowledge tool must not ship");
+assert.equal(exists("src/agent/tools/process/update-task-list.js"), false, "update_task_list must not ship");
+assert.equal(exists("src/agent/tools/workspace/inspect-environment.js"), false, "inspect_environment must not ship");
+assert.equal(exists("src/agent/tools/workspace/manage-state.js"), false, "manage_state must not ship");
+assert.equal(exists("src/agent/tools/assessment/ingest-traffic.js"), false, "ingest_traffic must not ship");
+assert.equal(exists("src/agent/tools/assessment/run-test-case.js"), false, "run_test_case must not ship");
+assert.equal(exists("src/agent/tools/assessment/compare-responses.js"), false, "compare_responses must not ship");
+assert.equal(exists("src/agent/tools/assessment/verify-finding.js"), false, "verify_finding must not ship");
+assert.equal(exists("src/contracts/tool/verify-finding-result.js"), false, "verify_finding result contract must not ship");
+assert.equal(exists("src/agent/tools/assessment/query-assessment.js"), false, "query_assessment must not ship");
+assert.equal(exists("src/agent/tools/assessment/expand-evidence.js"), false, "expand_evidence must not ship");
+assert.equal(exists("src/app/services/assessment/test-case-runner.js"), false, "agent test-case runner must not ship");
+assert.equal(exists("src/app/services/knowledge/knowledge-library-service.js"), false, "Knowledge Library service must not ship");
+assert.equal(exists("src/app/services/memory/native-kag-service.js"), false, "native KAG must not ship");
+assert.equal(exists("src/app/services/memory/local-embedding-service.js"), false, "local embedding service must not ship");
+assert.equal(exists("src/app/services/memory/knowledge-procedure-store.js"), false, "knowledge procedure store must not ship");
 
 for (const schemaName of [
   "CurrentWorkflowV3", "WorkingReferenceV3", "ConversationCheckpointV3",
@@ -240,29 +230,11 @@ for (const schemaName of [
 
 assert.match(v3Tier1Source, /CHECKPOINT_RATIO|METER_ROWS|Active Conversation/);
 assert.match(v3SessionSource, /transcript\.enc\.json|writeTranscript/);
-assert.match(v3KagSource, /KagSelectionV3|procedure_id/);
-assert.match(v3KnowledgeStoreSource, /MEMORY_KNOWLEDGE_RELEASE_ID_INVALID/);
-assert.match(v3EmbeddingSource, /createWorkerEmbeddingService|node:worker_threads/);
-assert.match(v3EmbeddingWorkerSource, /createInProcessEmbeddingService|parentPort/);
-assert.match(compositionSource, /createLocalEmbeddingService\(\{ modelPath: memoryModelPath \}\)/);
-const modelAssetRoot = path.join(root, "resources", "memory-v3", "models", "bge-base-en-v1.5");
-const modelAssets = embeddingService.verifyModelAssets(modelAssetRoot);
-assert.equal(modelAssets.ok, true, `bundled BGE assets must verify: ${modelAssets.error || modelAssets.code || "invalid"}`);
-assert.equal(modelAssets.manifest.embedding_dimension, 768);
-assert.equal(modelAssets.manifest.max_input_tokens, 512);
-const bundledKnowledgeRoot = path.join(root, "resources", "memory-v3", "knowledge");
-assert.ok(fs.existsSync(bundledKnowledgeRoot), "bundled V3 knowledge directory must exist");
-const bundledKnowledgeFiles = fs.existsSync(bundledKnowledgeRoot)
-  ? fs.readdirSync(bundledKnowledgeRoot).filter((entry) => entry.endsWith(".json")).sort()
-  : [];
-assert.ok(bundledKnowledgeFiles.length > 0, "at least one bundled V3 knowledge release must ship");
-assert.match(v3KnowledgeStoreSource, /bundledDir|bundledRoot/);
-assert.match(compositionSource, /bundledDir:\s*memoryKnowledgePath/);
-assert.doesNotMatch(read("src/agent/tools/config/tool-metadata.js"), /query_memory|generic_memory_writer/i);
+assert.doesNotMatch(read("src/agent/tools/config/tool-metadata.js"), /query_memory|generic_memory_writer|query_knowledge|update_project_artifacts/i);
 assert.doesNotMatch(compositionSource, /createContextCompiler|contextCompiler|createProjectMemoryStore|memoryProjectMemoryRepository|memoryOperationalContextStore|memoryRetrievalService|createBlockMemoryUpdater|createDerivedMemoryProjection|createMemoryGraphView/);
 assert.doesNotMatch(compositionSource, /memory-v2|migration-store|legacy-memory|project-memory-v1-adapter/i);
 assert.match(compositionSource, /createTier1ContextCoordinator/);
-assert.match(compositionSource, /createNativeKagService/);
+assert.doesNotMatch(compositionSource, /createNativeKagService|createLocalEmbeddingService|createKnowledgeLibraryService|createQueryKnowledgeTool|createUpdateProjectArtifactsTool/);
 assert.doesNotMatch(compositionSource, /createMemoryV3Store|createAutomaticTier2UpdateService|createMemoryV3PersistenceWorker/);
 assert.doesNotMatch(main, /selectV3SameProviderFallbackModel|runV3SameProviderFallback/);
 
@@ -297,6 +269,32 @@ for (const removed of [
   "src/app/storage/memory/tier2-transaction-coordinator.js",
   "src/app/storage/memory/memory-v3-persistence-worker.js",
   "src/app/services/memory/automatic-tier2-update-service.js",
+  "src/app/services/memory/native-kag-service.js",
+  "src/app/services/memory/local-embedding-service.js",
+  "src/app/services/memory/local-embedding-worker.js",
+  "src/app/services/memory/knowledge-procedure-store.js",
+  "src/app/services/knowledge/knowledge-library-service.js",
+  "src/domain/memory/knowledge/knowledge-release.js",
+  "src/app/services/assessment/knowledge/knowledge-release-ingestor.js",
+  "src/agent/tools/workspace/update-project-artifacts.js",
+  "src/agent/tools/assessment/query-knowledge.js",
+  "src/agent/tools/process/update-task-list.js",
+  "src/agent/tools/workspace/inspect-environment.js",
+  "src/agent/tools/workspace/manage-state.js",
+  "src/agent/tools/assessment/ingest-traffic.js",
+  "src/agent/tools/assessment/run-test-case.js",
+  "src/agent/tools/assessment/compare-responses.js",
+  "src/agent/tools/assessment/verify-finding.js",
+  "src/contracts/tool/verify-finding-result.js",
+  "src/agent/tools/assessment/query-assessment.js",
+  "src/agent/tools/assessment/expand-evidence.js",
+  "src/app/services/assessment/test-case-runner.js",
+  "src/prompts/instructions/triage.js",
+  "src/prompts/skills/triage.js",
+  "src/prompts/skills/decision-support.js",
+  "src/prompts/skills/modes/plan-skill.js",
+  "src/prompts/skills/modes/hypothesis-skill.js",
+  "src/prompts/guardrails/README.md",
   "src/app/services/memory/memory-security-audit.js",
   "src/app/services/memory/memory-maintenance-service.js",
   "src/app/services/memory/memory-v3-ipc-service.js",
@@ -420,29 +418,34 @@ assert.deepEqual(
 );
 assert.deepEqual(
   specialSkillRegistry.listInternal().map((skill) => skill.id),
-  ["create-rule", "create-skill", "create-subagent", "pentest", "report"],
-  "the internal skill registry must contain exactly the five Markdown packages",
+  ["create-rule", "create-skill", "create-subagent", "report"],
+  "the internal skill registry must contain exactly the four Markdown packages",
 );
 assert.deepEqual(specialSkillRegistry.diagnostics(), [], "shipped special-skill packages must validate without diagnostics");
-const pentestSkill = specialSkillRegistry.listInternal().find((skill) => skill.id === "pentest");
-assert.equal(pentestSkill.visibility, "internal", "pentest must remain internal");
-assert.equal(pentestSkill.instructionRole, "skill-context", "pentest must use the shared system prompt");
-assert.equal(pentestSkill.resources.length, 0, "pentest must not declare supporting package resources");
-assert.equal(pentestSkill.requiredTools.includes("manage_pentest"), false, "pentest must not declare a private orchestration capability");
-assert.equal(pentestSkill.requiredTools.includes("pentest_checkpoint"), true, "pentest must close each cycle with pentest_checkpoint");
-assert.deepEqual(fs.readdirSync(path.join(sourceRoot, "agent", "special-skills", "pentest")).sort(), ["SKILL.md", "loop-controller.js"], "pentest may contain only its Markdown skill and loop coordinator");
+assert.ok(!exists("src/agent/special-skills/pentest"), "the pentest skill package must not remain");
+assert.ok(!exists("src/agent/special-skills/pentest/SKILL.md"), "the pentest skill file must not remain");
+assert.ok(!exists("src/agent/special-skills/pentest/loop-controller.js"), "the pentest loop controller must not remain");
 const electronMain = read("src/app/electron/main.js");
 assert.match(electronMain, /selectInternalSkill\(defaultRegistry/, "ordinary intent must select internal Markdown skills inside the main process");
-assert.equal(internalSkillIdForIntent("/pentest example.com"), "pentest", "system skills must support explicit picker invocation");
+assert.equal(internalSkillIdForIntent("/report example.com"), "report", "system skills must support explicit picker invocation");
+assert.equal(internalSkillIdForIntent("/pentest example.com"), "", "/pentest must no longer select an internal skill");
+assert.equal(internalSkillIdForIntent("Please run a penetration test against the configured target"), "", "ordinary pentest requests must stay in Agent or Ask rather than a hidden skill");
 assert.doesNotMatch(electronMain, /special-skills:list|special-skills:resolve/, "internal skills must not expose renderer IPC");
-assert.doesNotMatch(electronMain, /pentestOrchestrator|pentestStateStore|executeManagePentest|MANAGE_PENTEST_TOOL/, "the internal pentest skill must not own a parallel JavaScript runtime");
-assert.match(electronMain, /createPentestLoopController/, "pentest must coordinate repeated blocks through the loop controller");
-assert.match(electronMain, /createPentestCheckpointToolDefinition/, "pentest must expose its checkpoint only while the internal skill is active");
+assert.doesNotMatch(electronMain, /pentestOrchestrator|pentestStateStore|executeManagePentest|MANAGE_PENTEST_TOOL|createPentestLoopController|createPentestCheckpointToolDefinition|pentestLoopController|pentest_checkpoint/, "the pentest skill and loop coordinator must not remain");
 const rendererBootstrap = read("src/ui/bootstrap.js");
-assert.match(rendererBootstrap, /internalSkillId:\s*"pentest"/, "pentest continuation must remain an internal runtime input");
-assert.match(rendererBootstrap, /pentestFinalizeBlockId:\s*String\(agentRunResult\?\.pentestFinalization\?\.blockId/, "foreground Pentest completion must hand its checkpoint block to hidden Tier 2 maintenance");
-assert.match(rendererBootstrap, /executeHiddenAgentRuntime[\s\S]*?result\?\.pentestLoop\?\.continue/, "only the post-maintenance Pentest result may schedule a continuation");
-assert.match(electronMain, /tier2MemoryMaintenance && pentestFinalizeBlockId[\s\S]*?maintenanceSucceeded[\s\S]*?pentestLoopController\.finalizeBlock/, "Pentest continuation must be decided only after Tier 2 commits and canonical artifacts are re-inspected");
+assert.doesNotMatch(rendererBootstrap, /name:\s*"\/pentest"/, "/pentest must not remain a system slash command");
+assert.doesNotMatch(rendererBootstrap, /schedulePentestContinuation|cancelPentestContinuation|pentestContinuationTimers|pentestLoop/, "pentest continuation must not remain in the renderer");
+assert.ok(!exists("src/agent/tools/assessment/attack-graph.js"), "the attack_graph tool must not remain");
+assert.ok(!exists("src/domain/assessment/assessment-map.js"), "the assessment map store must not remain");
+assert.ok(!exists("src/domain/assessment/traffic-graph-store.js"), "the traffic graph store must not remain");
+assert.ok(!exists("src/app/services/assessment/traffic-graph"), "traffic-graph services must not remain");
+assert.ok(!exists("src/ui/features/map"), "the Map workspace feature must not remain");
+assert.doesNotMatch(rendererBootstrap, /openApplicationGraphTab|showMapWorkspace|APPLICATION_GRAPH_TAB_PATH|assessmentBuildMap/, "application graph renderer APIs must not remain");
+assert.doesNotMatch(html, /data-bounty-folder="Map"|id="map-workspace"|id="security-graph-button"/);
+assert.doesNotMatch(preload, /assessmentMap|assessmentBuildMap|assessmentDeepCollectGraph|onAssessmentGraphStatus/);
+assert.doesNotMatch(electronMain, /createAssessmentMap|assessmentMap/);
+assert.doesNotMatch(read("src/infrastructure/di/container.js"), /createAssessmentMap|createGraphBuildService|createJavascriptCollector|createAttackGraphTool|registerAttackGraph/);
+assert.doesNotMatch(electronMain, /tier2MemoryMaintenance/, "hidden Tier 2 maintenance must not remain in the main process");
 
 /*
  * Named-path contract (artifact-driven investigation state).
@@ -480,33 +483,33 @@ assertNoSourceReference(/\.xekute\/plans\b/, ".xekute/plans must not remain as a
 assertNoSourceReference(/\.pointer-assessment\.json|settings\.config|pen_context\.md|\.xekute[\\/]findings|vulnerability-scans|penetration-testing|scope[\\/](?:engagement|in-scope|out-of-scope|configurations)\.json/, "removed assessment paths must not remain live");
 const AssessmentWorkspace = require(path.join(root, "src/domain/assessment/assessment-workspace.js"));
 assert.deepEqual([...AssessmentWorkspace.REQUIRED_DIRECTORIES], [
-  "recon", "enumeration", "traffic", "runs", "report", "context/sources", "evidence", "custom", "custom_scripts", "tools", "Map", "WebClone",
-  ".xekute", ".xekute/project_info", ".xekute/evidence", ".xekute/logs", ".xekute/.internal", ".xekute/.internal/transactions",
+  "traffic",
+  ".xekute",
+  ".xekute/project_info",
 ], "assessment bootstrap directories must match the clean-slate workspace contract");
 assert.deepEqual(Object.values(AssessmentWorkspace.ASSESSMENT_ITEM_FILES).sort(), [
-  ".xekute/checklist.md", ".xekute/evidence/index.md", ".xekute/hypotheses.md", ".xekute/logs/agent-actions.jsonl", ".xekute/logs/agent-runs.jsonl", ".xekute/logs/tool-output.jsonl", ".xekute/project_info/index.md",
-  "enumeration/assets.json", "enumeration/endpoints.json", "enumeration/pages.json", "enumeration/subdomains.json", "recon/active-recon.json", "recon/passive-recon.json", "report/report.md", "runs/runs.json", "traffic/filtered.jsonl", "traffic/raw.jsonl",
+  ".xekute/project_info/index.md",
+  "traffic/filtered.jsonl",
+  "traffic/raw.jsonl",
 ].sort(), "assessment bootstrap files must match the clean-slate workspace contract");
-assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("update_project_artifacts"), false, "Ask must not receive the artifact writer");
+assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("update_project_artifacts"), false, "Ask must not receive a removed artifact writer");
 assert.notDeepEqual(ModeRegistry.MODE_TOOL_GROUPS.ask, ModeRegistry.MODE_TOOL_GROUPS.agent, "all modes must not have all tools");
 assert.doesNotMatch(read("src/ui/bootstrap.js"), /every selected mode receives the canonical catalog/);
-assert.doesNotMatch(read("src/agent/tools/workspace/update-project-artifacts.js"), /"project\.remove"/);
 
 const containerSource = read("src/infrastructure/di/container.js");
 assert.match(
   containerSource,
   /createAssessmentWorkspace\(\{[\s\S]*projectArtifacts/,
-  "T2: container createAssessmentWorkspace( must include projectArtifacts",
+  "container createAssessmentWorkspace( must include projectArtifacts",
 );
 
 const mainSource = read("src/app/electron/main.js");
 assert.doesNotMatch(mainSource, /revisions\?\.project_info/, "T9: main.js must not hash revisions?.project_info");
-assert.match(mainSource, /fingerprintArtifactRevisions\(artifactContext\.revisions\)/);
-assert.match(mainSource, /artifactSourceRefs\(/);
+assert.doesNotMatch(mainSource, /fingerprintArtifactRevisions|artifactSourceRefs\(/);
 assert.doesNotMatch(mainSource, /source_refs:[\s\S]{0,200}\.xekute\/project_info\.md/);
 assert.doesNotMatch(mainSource, /source_refs:[\s\S]{0,200}\.xekute\/investigation_checklist\.md/);
-assert.match(html, /data-app-settings-section="knowledge"/);
-assert.match(html, /Knowledge Library/);
+assert.doesNotMatch(html, /data-app-settings-section="knowledge"/);
+assert.doesNotMatch(html, /Knowledge Library/);
 assert.doesNotMatch(html, /Memory Health/);
 
 console.log("XEKUTE production architecture invariants verified.");

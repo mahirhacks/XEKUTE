@@ -19,8 +19,8 @@
   const COMMAND_RESPONSE_KEY_RE = /["'](?:command|cmd|shell|script|executable|timeout(?:_seconds|_ms)?)["']\s*:/i;
   const COMMAND_RESPONSE_TOOL_RE = /\b(?:curl|wget|powershell|pwsh|bash|sh|cmd(?:\.exe)?|nmap|httpx|gobuster|ffuf|nuclei|sqlmap|katana|subfinder|amass|nikto|testssl|wafw00f)\b/i;
   const ACTIVE_PROBE_REQUEST_RE = /\b(scan|probe|exploit|replay|fuzz|bruteforce|brute[-\s]?force|active\s+recon)\b/i;
-  const ACTIVE_PROBE_TOOL_RE = /\b(replay_request|run_test_case|browser_action|web_research|attack_graph|exec_command|delegate_agent)\b/i;
-  const STRUCTURED_ACTION_RE = /["'](?:tool|action|name)["']\s*:\s*["'](?:update_task_list|exec_command|read_file|search_workspace|apply_patch|inspect_environment|update_project_artifacts|manage_state|ingest_traffic|manage_identity|replay_request|run_test_case|browser_action|compare_responses|verify_finding|attack_graph|delegate_agent|query_assessment|expand_evidence)["']/i;
+  const ACTIVE_PROBE_TOOL_RE = /\b(replay_request|browser_action|web_research|exec_command|delegate_agent)\b/i;
+  const STRUCTURED_ACTION_RE = /["'](?:tool|action|name)["']\s*:\s*["'](?:exec_command|read_file|search_workspace|apply_patch|manage_identity|replay_request|browser_action|delegate_agent|web_research)["']/i;
   const FILE_COUNT_WORDS = Object.freeze({ one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 });
 
   function isEditRequest(text, { includeWorkspaceActions = false } = {}) {

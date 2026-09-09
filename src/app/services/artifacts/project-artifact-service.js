@@ -24,8 +24,6 @@ const MODE_CATALOGS = Object.freeze({
     "checklist.create", "checklist.revise", "checklist.reorder", "checklist.close", "checklist.phase", "checklist.annotate", "checklist.execution",
     "evidence.create", "evidence.update",
   ]),
-  hypothesis: new Set(["hypothesis.create", "hypothesis.refine", "hypothesis.support", "hypothesis.reject", "hypothesis.inconclusive", "hypothesis.close"]),
-  plan: new Set(["checklist.create", "checklist.revise", "checklist.reorder", "checklist.close", "checklist.phase", "checklist.annotate"]),
 });
 const RENAME_FIELDS = ["path", "filename", "rename", "new_id"];
 const ARRAY_FIELDS = new Set(["source_refs", "known_facts", "unknowns", "supporting_signals", "rejecting_signals", "stop_conditions", "evidence_refs", "hypothesis_refs", "checklist_refs", "dependencies", "expected_signals", "tool_refs", "hashes", "target_refs", "imported_evidence_refs"]);
@@ -40,6 +38,15 @@ function emptyDocuments() {
 
 function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = nodeCrypto, now = () => new Date() } = {}) {
   const locks = new Set();
+  const overlay = new Map();
+  const stagedTransactions = new Map();
+
+  function overlayKey(root) { return path.resolve(root).toLowerCase(); }
+  function overlayState(root) {
+    const key = overlayKey(root);
+    if (!overlay.has(key)) overlay.set(key, { hypotheses: null, checklist: null, evidence: null });
+    return overlay.get(key);
+  }
 
   function rootFor(workspace) {
     const root = path.resolve(String(workspace || ""));
@@ -88,25 +95,16 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     if (!fs.existsSync(artifactRoot) || !fs.statSync(artifactRoot).isDirectory()) {
       return failure("ARTIFACT_ASSESSMENT_REQUIRED", "Canonical project artifacts are created only for initialized assessment workspaces.");
     }
-    const entries = [
-      [Artifacts.PATHS.gitignore, Artifacts.gitignoreTemplate()],
-      ...Artifacts.PROJECT_DOCUMENTS.map((document) => [document.path, Artifacts.projectDocumentTemplate(document.id)]),
-      [Artifacts.PATHS.hypotheses, Artifacts.hypothesesTemplate()],
-      [Artifacts.PATHS.checklist, Artifacts.checklistTemplate()],
-    ];
     const created = [];
     try {
-      for (const relativePath of [Artifacts.PATHS.projectDirectory, Artifacts.PATHS.evidenceDirectory, Artifacts.PATHS.transactionDirectory]) {
-        fs.mkdirSync(target(root, relativePath), { recursive: true });
+      fs.mkdirSync(target(root, Artifacts.PATHS.projectDirectory), { recursive: true });
+      for (const document of Artifacts.PROJECT_DOCUMENTS) {
+        const file = target(root, document.path);
+        if (!fs.existsSync(file)) { writeNew(file, Artifacts.projectDocumentTemplate(document.id)); created.push(document.path); }
       }
-      for (const [relativePath, content] of entries) {
-        const file = target(root, relativePath);
-        if (!fs.existsSync(file)) { writeNew(file, content); created.push(relativePath); }
-      }
-      const recovery = recover(workspace);
       const validation = inspect(workspace);
       if (validation.ok) rebuildIndexes(workspace);
-      return { ok: validation.ok, root, created, recovery, validation, ...(validation.ok ? {} : { code: validation.code, error: validation.error }) };
+      return { ok: validation.ok, root, created, recovery: { ok: true, recovered: [], discarded: [], quarantined: [] }, validation, ...(validation.ok ? {} : { code: validation.code, error: validation.error }) };
     } catch (error) { return failure(error.code || "ARTIFACT_BOOTSTRAP_FAILED", error.message, { root, created }); }
   }
 
@@ -120,18 +118,30 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
       const texts = Object.fromEntries(required.map((relativePath) => [relativePath, readText(target(root, relativePath))]));
       const folder = Artifacts.parseProjectFolder(Object.fromEntries(Artifacts.PROJECT_DOCUMENTS.map((document) => [document.id, texts[document.path]])));
       if (!folder.ok) return { ...folder, validation: { path: folder.path || Artifacts.PROJECT_DOCUMENT_BY_ID?.[folder.document]?.path || Artifacts.PATHS.projectEngagement } };
-      const hypotheses = Artifacts.parseHypotheses(texts[Artifacts.PATHS.hypotheses]);
-      const checklist = Artifacts.parseChecklist(texts[Artifacts.PATHS.checklist]);
+      const runtime = overlayState(root);
+      const hypothesesText = runtime.hypotheses
+        ? Artifacts.renderHypotheses(runtime.hypotheses)
+        : (fs.existsSync(target(root, Artifacts.PATHS.hypotheses)) ? readText(target(root, Artifacts.PATHS.hypotheses)) : Artifacts.hypothesesTemplate());
+      const checklistText = runtime.checklist
+        ? Artifacts.renderChecklist(runtime.checklist, runtime.hypotheses || [])
+        : (fs.existsSync(target(root, Artifacts.PATHS.checklist)) ? readText(target(root, Artifacts.PATHS.checklist)) : Artifacts.checklistTemplate());
+      const hypotheses = runtime.hypotheses ? { ok: true, value: clone(runtime.hypotheses) } : Artifacts.parseHypotheses(hypothesesText);
+      const checklist = runtime.checklist ? { ok: true, value: clone(runtime.checklist) } : Artifacts.parseChecklist(checklistText);
       for (const parsed of [hypotheses, checklist]) if (!parsed.ok) return { ...parsed, validation: { path: parsed === hypotheses ? Artifacts.PATHS.hypotheses : Artifacts.PATHS.checklist } };
-      const evidence = [];
+      let evidence = [];
       const evidenceHashes = [];
-      for (const file of recordFiles(root, Artifacts.PATHS.evidenceDirectory, /^E-\d{4,}\.md$/i)) {
-        const content = readText(file);
-        const parsed = Artifacts.parseEvidence(content);
-        if (!parsed.ok) return { ...parsed, validation: { path: path.relative(root, file).replace(/\\/g, "/") } };
-        if (path.basename(file, ".md").toUpperCase() !== parsed.value.id.toUpperCase()) return failure("ARTIFACT_EVIDENCE_ID_MISMATCH", `Evidence filename does not match its record ID: ${path.basename(file)}.`);
-        evidence.push(parsed.value);
-        evidenceHashes.push({ id: parsed.value.id, hash: hash(content) });
+      if (runtime.evidence) {
+        evidence = clone(runtime.evidence);
+        for (const record of evidence) evidenceHashes.push({ id: record.id, hash: hash(Artifacts.renderEvidence(record)) });
+      } else {
+        for (const file of recordFiles(root, Artifacts.PATHS.evidenceDirectory, /^E-\d{4,}\.md$/i)) {
+          const content = readText(file);
+          const parsed = Artifacts.parseEvidence(content);
+          if (!parsed.ok) return { ...parsed, validation: { path: path.relative(root, file).replace(/\\/g, "/") } };
+          if (path.basename(file, ".md").toUpperCase() !== parsed.value.id.toUpperCase()) return failure("ARTIFACT_EVIDENCE_ID_MISMATCH", `Evidence filename does not match its record ID: ${path.basename(file)}.`);
+          evidence.push(parsed.value);
+          evidenceHashes.push({ id: parsed.value.id, hash: hash(content) });
+        }
       }
       const revisions = {
         "project_info.engagement": hash(texts[Artifacts.PATHS.projectEngagement]),
@@ -139,8 +149,8 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
         "project_info.identities": hash(texts[Artifacts.PATHS.projectIdentities]),
         "project_info.surface": hash(texts[Artifacts.PATHS.projectSurface]),
         "project_info.controls": hash(texts[Artifacts.PATHS.projectControls]),
-        hypotheses: hash(texts[Artifacts.PATHS.hypotheses]),
-        checklist: hash(texts[Artifacts.PATHS.checklist]),
+        hypotheses: hash(hypothesesText),
+        checklist: hash(checklistText),
         evidence: aggregateRevision(evidenceHashes),
       };
       return {
@@ -487,7 +497,6 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     if (!snapshot.ok) return snapshot;
     try {
       writeSynced(target(snapshot.root, Artifacts.PATHS.projectIndex), Artifacts.renderProjectIndex(snapshot.project.documents));
-      writeSynced(target(snapshot.root, Artifacts.PATHS.evidenceIndex), Artifacts.renderEvidenceIndex(snapshot.evidence));
       return { ok: true, root: snapshot.root };
     } catch (error) { return failure(error.code || "ARTIFACT_INDEX_REBUILD_FAILED", error.message); }
   }
@@ -513,23 +522,16 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     if (!applied.ok) return applied;
     const root = snapshot.root;
     const id = `txn-${Date.now().toString(36)}-${crypto.randomBytes(8).toString("hex")}`;
-    const directory = target(root, `${Artifacts.PATHS.transactionDirectory}/${id}`);
     try {
-      fs.mkdirSync(directory, { recursive: false });
       const writeSet = hasOperations ? buildWriteSet(root, applied.state) : new Map();
       for (const content of writeSet.values()) assertNoSecrets(content);
       const files = [];
       for (const [relativePath, content] of writeSet.entries()) {
-        const stagedName = `${String(files.length).padStart(4, "0")}.stage`;
-        const stagedPath = path.join(directory, stagedName);
-        writeSynced(stagedPath, content);
-        files.push({ relative_path: relativePath, staged_name: stagedName, before_hash: fs.existsSync(target(root, relativePath)) ? hash(readText(target(root, relativePath))) : "", after_hash: hash(content) });
+        files.push({ relative_path: relativePath, content, before_hash: fs.existsSync(target(root, relativePath)) ? hash(readText(target(root, relativePath))) : "", after_hash: hash(content) });
       }
-      const manifest = { schema_version: 1, id, state: "prepared", workspace_hash: hash(root.toLowerCase()), expected_revisions: snapshot.revisions, assigned_ids: applied.assigned, files, created_at: nowIso(now) };
-      writeSynced(path.join(directory, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-      syncDirectory(directory);
+      stagedTransactions.set(id, { root, files, assigned: applied.assigned, state: applied.state, hasOperations });
       return { ok: true, staged: true, staging_id: id, assigned_ids: applied.assigned, changed_paths: files.filter((file) => file.before_hash !== file.after_hash).map((file) => file.relative_path), resulting_hashes: Object.fromEntries(files.map((file) => [file.relative_path, file.after_hash])), validation: { secret_safe: true, mode_owned: true, revisions: snapshot.revisions } };
-    } catch (error) { try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* best effort */ } return failure(error.code || "ARTIFACT_STAGE_FAILED", error.message, { retryable: ["ARTIFACT_SECRET_FIELD", "ARTIFACT_SECRET_VALUE"].includes(error.code) }); }
+    } catch (error) { return failure(error.code || "ARTIFACT_STAGE_FAILED", error.message, { retryable: ["ARTIFACT_SECRET_FIELD", "ARTIFACT_SECRET_VALUE"].includes(error.code) }); }
   }
 
   function commit(workspace, stagingId) {
@@ -538,73 +540,41 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     const lockKey = root.toLowerCase();
     if (locks.has(lockKey)) return failure("ARTIFACT_COMMIT_BUSY", "Another artifact commit is active.", { retryable: true });
     locks.add(lockKey);
-    const directory = target(root, `${Artifacts.PATHS.transactionDirectory}/${stagingId}`);
     try {
-      const manifestPath = path.join(directory, "manifest.json");
-      const manifest = JSON.parse(readText(manifestPath));
-      if (manifest.state !== "prepared" && manifest.state !== "committing") return failure("ARTIFACT_TRANSACTION_STATE_INVALID", `Cannot commit transaction in state ${manifest.state}.`);
-      for (const file of manifest.files) {
+      const staged = stagedTransactions.get(stagingId);
+      if (!staged || overlayKey(staged.root) !== overlayKey(root)) return failure("ARTIFACT_TRANSACTION_STATE_INVALID", "Cannot commit an unknown artifact transaction.");
+      for (const file of staged.files) {
+        if (!Artifacts.isPersistedArtifactPath(file.relative_path)) continue;
         const destination = target(root, file.relative_path);
         const currentHash = fs.existsSync(destination) ? hash(readText(destination)) : "";
         if (currentHash !== file.before_hash && currentHash !== file.after_hash) return failure("ARTIFACT_COMMIT_CONFLICT", `Artifact changed after staging: ${file.relative_path}.`, { retryable: false });
       }
-      manifest.state = "committing";
-      writeSynced(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-      for (const file of manifest.files) {
+      for (const file of staged.files) {
+        if (!Artifacts.isPersistedArtifactPath(file.relative_path)) continue;
         const destination = target(root, file.relative_path);
         if (fs.existsSync(destination) && hash(readText(destination)) === file.after_hash) continue;
-        fs.mkdirSync(path.dirname(destination), { recursive: true });
-        const temporary = `${destination}.tmp-${process.pid}-${Date.now()}`;
-        fs.copyFileSync(path.join(directory, file.staged_name), temporary);
-        syncFile(temporary);
-        fs.renameSync(temporary, destination);
-        syncDirectory(path.dirname(destination));
+        writeSynced(destination, file.content);
       }
-      manifest.state = "committed";
-      manifest.committed_at = nowIso(now);
-      writeSynced(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-      fs.rmSync(directory, { recursive: true, force: true });
-      const material = Array.isArray(manifest.files) && manifest.files.length > 0;
-      if (material) rebuildIndexes(workspace);
-      return { ok: true, committed: true, staging_id: stagingId, assigned_ids: manifest.assigned_ids, changed_paths: manifest.files.filter((file) => file.before_hash !== file.after_hash).map((file) => file.relative_path) };
+      if (staged.hasOperations && staged.state) {
+        const runtime = overlayState(root);
+        runtime.hypotheses = clone(staged.state.hypotheses || []);
+        runtime.checklist = clone(staged.state.checklist || []);
+        runtime.evidence = clone(staged.state.evidence || []);
+        rebuildIndexes(workspace);
+      }
+      stagedTransactions.delete(stagingId);
+      return { ok: true, committed: true, staging_id: stagingId, assigned_ids: staged.assigned, changed_paths: staged.files.filter((file) => file.before_hash !== file.after_hash).map((file) => file.relative_path) };
     } catch (error) { return failure(error.code || "ARTIFACT_COMMIT_FAILED", error.message); }
     finally { locks.delete(lockKey); }
   }
 
   function discard(workspace, stagingId) {
-    try { fs.rmSync(target(rootFor(workspace), `${Artifacts.PATHS.transactionDirectory}/${stagingId}`), { recursive: true, force: true }); return { ok: true, discarded: true, staging_id: stagingId }; }
-    catch (error) { return failure(error.code || "ARTIFACT_DISCARD_FAILED", error.message); }
+    stagedTransactions.delete(stagingId);
+    return { ok: true, discarded: true, staging_id: stagingId };
   }
 
-  function recover(workspace) {
-    let root;
-    try { root = rootFor(workspace); } catch (error) { return failure(error.code, error.message); }
-    const directory = target(root, Artifacts.PATHS.transactionDirectory);
-    if (!fs.existsSync(directory)) return { ok: true, recovered: [], discarded: [], quarantined: [] };
-    const result = { ok: true, recovered: [], discarded: [], quarantined: [] };
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).filter((item) => item.isDirectory() && !item.name.startsWith("quarantine-"))) {
-      const manifestPath = path.join(directory, entry.name, "manifest.json");
-      try {
-        const manifest = JSON.parse(readText(manifestPath));
-        if (manifest.state === "prepared") { fs.rmSync(path.join(directory, entry.name), { recursive: true, force: true }); result.discarded.push(entry.name); continue; }
-        if (manifest.state === "committing") {
-          const committed = commit(workspace, entry.name);
-          if (committed.ok) result.recovered.push(entry.name); else {
-            const quarantineName = `quarantine-${entry.name}`;
-            try { fs.renameSync(path.join(directory, entry.name), path.join(directory, quarantineName)); } catch { /* Leave it in place if quarantine rename itself fails. */ }
-            result.ok = false;
-            result.quarantined.push({ id: entry.name, code: committed.code, error: committed.error });
-          }
-          continue;
-        }
-        fs.rmSync(path.join(directory, entry.name), { recursive: true, force: true }); result.discarded.push(entry.name);
-      } catch (error) {
-        try { fs.renameSync(path.join(directory, entry.name), path.join(directory, `quarantine-${entry.name}`)); } catch { /* best effort */ }
-        result.ok = false;
-        result.quarantined.push({ id: entry.name, code: "ARTIFACT_RECOVERY_INVALID", error: error.message });
-      }
-    }
-    return result;
+  function recover(_workspace) {
+    return { ok: true, recovered: [], discarded: [], quarantined: [] };
   }
 
   function resolveAgentPhase(snapshot, checkpointPhase) {
@@ -625,14 +595,7 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     const indexMarkdown = fs.existsSync(indexPath) ? readText(indexPath) : "";
     const currentPhase = resolveAgentPhase(snapshot, checkpointPhase);
     const payload = { revisions: snapshot.revisions, current_phase: currentPhase };
-    if (mode === "hypothesis") {
-      payload.evidence = snapshot.evidence.filter(relevant).slice(0, 20);
-      payload.hypotheses = snapshot.hypotheses.filter((item) => item.status !== "closed").slice(0, 30);
-    } else if (mode === "plan") {
-      payload.hypotheses = snapshot.hypotheses.filter((item) => item.status !== "closed").slice(0, 50);
-      payload.evidence = snapshot.evidence.filter(relevant).slice(0, 12);
-      payload.checklist = snapshot.checklist.filter((item) => item.status !== "skipped").slice(0, 80);
-    } else if (mode === "agent") {
+    if (mode === "agent") {
       payload.checklist = snapshot.checklist.filter((item) => Artifacts.CHECKLIST_NON_TERMINAL_STATUSES.includes(item.status) && item.phase === currentPhase).slice(0, 40);
       payload.evidence_index = snapshot.evidence.filter(relevant).map(({ id, title, status, severity, confidence, target_refs, hypothesis_refs, checklist_refs }) => ({ id, title, status, severity, confidence, target_refs, hypothesis_refs, checklist_refs })).slice(0, 50);
     } else {

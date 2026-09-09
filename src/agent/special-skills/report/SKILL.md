@@ -7,8 +7,8 @@ entrypoint: SKILL.md
 visibility: internal
 instruction_role: skill-context
 resources: ["vapt-report.md"]
-modes: ["agent", "ask", "plan", "hypothesis"]
-required_tools: ["query_assessment", "expand_evidence"]
+modes: ["agent", "ask"]
+required_tools: ["read_file", "search_workspace"]
 parameter_policy: context-only
 ---
 
@@ -22,4 +22,4 @@ Never invent scope, authorization, impact, test coverage, or evidence. Treat ver
 
 ## Outputs
 
-Write UTF-8 Markdown to `report/report.md` and `report/exports/security-report-<timestamp>.md` atomically. The report can be generated independently of `/pentest` and must remain useful for an empty or partially configured assessment.
+Write UTF-8 Markdown to `report/report.md` and `report/exports/security-report-<timestamp>.md` atomically. The report can be generated independently of other skills and must remain useful for an empty or partially configured assessment.

@@ -128,14 +128,6 @@ function createManageIdentityTool({ fs = null, path = null, identityVault = null
         identities.delete(`${String(root || "").toLowerCase()}::${id}`);
         return result;
       }
-    } else if (root) {
-      try {
-        realFs.mkdirSync(realPath.join(root, ".xekute", "identities"), { recursive: true });
-        realFs.writeFileSync(identityFile(root, id), JSON.stringify(identity, null, 2), { encoding: "utf8", mode: 0o600 });
-      } catch (error) {
-        identities.delete(`${String(root || "").toLowerCase()}::${id}`);
-        return structuredFailure(MANAGE_ERROR_CODES.WRITE_FAILED, error.message);
-      }
     }
     return { ok: true, value: { operation: "create", identity: safeIdentity(identity) } };
   }
@@ -179,17 +171,16 @@ function createManageIdentityTool({ fs = null, path = null, identityVault = null
       const listed = identityVault.list(root);
       if (listed.ok) return { ok: true, value: { operation: "list", ...listed.value, activeId: loadActive(root, sessionId) || listed.value.activeId || null } };
     }
+    const prefix = `${String(root || "").toLowerCase()}::`;
+    const seen = new Set();
     const values = [];
-    try {
-      const dir = realPath.join(root, ".xekute", "identities");
-      const entries = realFs.existsSync(dir) ? realFs.readdirSync(dir) : [];
-      for (const entry of entries) {
-        if (entry.endsWith(".json") && entry !== "active.json") {
-          const identity = loadIdentity(root, entry.replace(/\.json$/, ""));
-          if (identity) values.push(identity);
-        }
-      }
-    } catch { /* Return the identities already held in memory. */ }
+    for (const [key, identity] of identities) {
+      if (!key.startsWith(prefix)) continue;
+      const id = key.slice(prefix.length);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      values.push(identity);
+    }
     return { ok: true, value: { operation: "list", count: values.length, identities: values, activeId: loadActive(root, sessionId) || null } };
   }
 
@@ -207,8 +198,6 @@ function createManageIdentityTool({ fs = null, path = null, identityVault = null
     if (identityVault?.remove) {
       const removed = identityVault.remove(root, id);
       if (!removed.ok) return removed;
-    } else {
-      try { realFs.rmSync(identityFile(root, id), { force: true }); } catch (error) { return structuredFailure(MANAGE_ERROR_CODES.WRITE_FAILED, error.message); }
     }
     for (const key of [...identities.keys()]) if (key.endsWith(`::${id}`)) identities.delete(key);
     for (const [key, value] of activeBySession) if (value === id && key.startsWith(`${String(root || "").toLowerCase()}::`)) activeBySession.delete(key);

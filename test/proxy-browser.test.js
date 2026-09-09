@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { createProxyBrowserService, findInstalledProxyBrowser, proxyConnectHost } = require("../src/interceptor/proxy-browser.js");
+const { createProxyBrowserService, findInstalledProxyBrowser, proxyConnectHost, browserProcessEnv } = require("../src/interceptor/proxy-browser.js");
 
 test("installed browser selection prefers Chrome over Edge", () => {
   const selected = findInstalledProxyBrowser({
@@ -72,9 +72,14 @@ test("proxied browser uses a dedicated profile and routes Chrome through XEKUTE"
   assert.equal(calls[0].options.proxy.bypass, "<-loopback>");
   assert.equal(calls[0].options.ignoreHTTPSErrors, true);
   assert.equal(calls[0].options.chromiumSandbox, true);
+  assert.equal(calls[0].options.ignoreHTTPSErrors, true);
   assert.ok(calls[0].options.args.includes("--disable-quic"));
+  assert.ok(calls[0].options.args.includes("--ignore-certificate-errors"));
+  assert.ok(calls[0].options.args.includes("--disable-session-crashed-bubble"));
   assert.equal(calls[0].options.args.includes("--no-sandbox"), false);
   assert.equal(calls[0].options.args.includes("--disable-background-networking"), false);
+  assert.equal(calls[0].options.env.ELECTRON_RUN_AS_NODE, undefined);
+  assert.equal(context.page.currentUrl, "about:blank");
 
   const reopened = await service.launch({ workspace, proxy: { running: true, host: "127.0.0.1", port: 8080 }, caCertPath });
   assert.equal(reopened.alreadyOpen, true);
@@ -163,6 +168,48 @@ test("a live proxied browser exposes only its matching context to the agent runt
   assert.equal(service.getAgentPageTarget(workspace, "account-a"), "https://allowed.example/account");
   assert.equal(service.getAgentContext(workspace, "account-b"), null);
   assert.equal(service.getAgentContext(workspace, ""), null);
+  await service.close();
+});
+
+test("browser launch env drops Electron process variables", () => {
+  const env = browserProcessEnv({
+    PATH: "C:\\Windows",
+    ELECTRON_RUN_AS_NODE: "1",
+    ELECTRON_NO_ASAR: "1",
+    LOCALAPPDATA: "C:\\Local",
+  });
+  assert.equal(env.PATH, "C:\\Windows");
+  assert.equal(env.LOCALAPPDATA, "C:\\Local");
+  assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
+  assert.equal(env.ELECTRON_NO_ASAR, undefined);
+});
+
+test("proxied browser retries without the Chromium sandbox when the first launch fails", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-proxy-browser-sandbox-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "project");
+  const caCertPath = path.join(root, "ca.pem");
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(caCertPath, "test-ca");
+  const attempts = [];
+  const service = createProxyBrowserService({
+    fs,
+    path,
+    crypto,
+    profilesDirectory: path.join(root, "profiles"),
+    findBrowser: () => ({ name: "chrome", executablePath: "C:\\Chrome\\chrome.exe" }),
+    chromium: {
+      async launchPersistentContext(profile, options) {
+        attempts.push(options.chromiumSandbox);
+        if (attempts.length === 1) throw new Error("sandbox unavailable");
+        return fakeContext();
+      },
+    },
+  });
+
+  const launched = await service.launch({ workspace, proxy: { running: true, host: "127.0.0.1", port: 8080 }, caCertPath });
+  assert.equal(launched.ok, true);
+  assert.deepEqual(attempts, [true, false]);
   await service.close();
 });
 

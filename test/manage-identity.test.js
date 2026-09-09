@@ -100,13 +100,12 @@ test("manage_identity lists identities and reports the active one", async () => 
   assert.equal(result.value.activeId, "u2");
 });
 
-test("manage_identity persists identities to the workspace and reloads them", async () => {
+test("manage_identity keeps identities in memory without writing workspace files", async () => {
   const { root } = makeFixture();
   const tool = createManageIdentityTool();
   await run(tool, { operation: "create", identityId: "persist", name: "Persisted" }, root);
-  assert.equal(fs.existsSync(path.join(root, ".xekute", "identities", "persist.json")), true);
-  const fresh = createManageIdentityTool();
-  const result = await run(fresh, { operation: "load", identityId: "persist" }, root);
+  assert.equal(fs.existsSync(path.join(root, ".xekute", "identities", "persist.json")), false);
+  const result = await run(tool, { operation: "load", identityId: "persist" }, root);
   assert.equal(result.ok, true);
   assert.equal(result.value.identity.name, "Persisted");
 });

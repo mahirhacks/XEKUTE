@@ -9,7 +9,6 @@
  */
 
 const DEFAULT_COMMANDS = Object.freeze({
-  "/pentest": Object.freeze({ id: "pentest", title: "Adaptive penetration testing", description: "Run adaptive, scope-aware penetration testing." }),
   "/report": Object.freeze({ id: "report", title: "VAPT report generation", description: "Generate an evidence-linked VAPT report." }),
   "/create-rule": Object.freeze({ id: "create-rule", title: "Create a project rule", description: "Create a project or global rule." }),
   "/create-skill": Object.freeze({ id: "create-skill", title: "Create user guidance skill", description: "Create user-authored guidance." }),

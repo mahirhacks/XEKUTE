@@ -317,6 +317,7 @@
 .agent-questions-option.is-free-write {
   position: relative;
   cursor: text;
+  grid-template-columns: 1fr;
 }
 .agent-questions-custom-radio {
   position: absolute !important;
@@ -325,14 +326,8 @@
   opacity: 0;
   pointer-events: none;
 }
-.agent-questions-custom-icon {
-  width: 14px;
-  color: #929292;
-  font-size: 11px;
-  text-align: center;
-}
 .agent-questions-freetext {
-  grid-column: 2 / -1;
+  grid-column: 1 / -1;
   box-sizing: border-box;
   width: 100%;
   min-height: 20px;
@@ -648,8 +643,6 @@
 
 .chat-mode-option,
 .chat-mode-option.mode-agent,
-.chat-mode-option.mode-plan,
-.chat-mode-option.mode-hypothesis,
 .chat-mode-option.mode-ask,
 .chat-mode-option.mode-exploit {
   color: #bcbcbc;
@@ -668,7 +661,6 @@
 
 .chat-mode-button,
 .chat-mode-button.mode-agent,
-.chat-mode-button.mode-plan,
 .chat-mode-button.mode-ask {
   color: #bcbcbc;
   background: #252526;
@@ -861,7 +853,14 @@
   min-width: 0;
   max-width: 100%;
   flex-direction: column;
+  gap: 0;
+}
+
+#messages .chat-exchange-body {
+  display: flex;
+  flex-direction: column;
   gap: 18px;
+  min-width: 0;
 }
 
 /* Cursor keeps assistant prose on the content edge and lets run cards carry
@@ -1563,10 +1562,27 @@
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 8px;
   min-height: 24px;
-  padding: 1px 0;
-  color: #a5a5a5;
-  font: 400 11px/1.35 var(--font-ui);
+  margin: 10px 0 4px;
+  padding: 2px 0;
+  color: #c4c4c4;
+  font: 500 13px/1.45 var(--font-ui);
+}
+
+#messages .context-checkpoint-icon {
+  display: block;
+  width: 18px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+#messages .context-checkpoint-notice[data-state="complete"] {
+  color: #b9b9b9;
+}
+
+#messages .context-checkpoint-notice[data-state="error"] {
+  color: #c9a7a2;
 }
 
 /* Neutral action language: status cards stay quiet until the result matters. */
@@ -1785,21 +1801,7 @@
   content: none !important;
 }
 
-/* Ask is green, Plan is yellow, Hypothesis is pink. */
-.chat-mode-button.mode-hypothesis {
-  color: #f0a6c8 !important;
-  background: #3d2433 !important;
-  border: 0 !important;
-  border-color: transparent !important;
-  opacity: .7 !important;
-}
-.chat-mode-button.mode-hypothesis:hover {
-  color: #ffc4db !important;
-  background: #4a2b3d !important;
-  border: 0 !important;
-  border-color: transparent !important;
-  opacity: .7 !important;
-}
+/* Ask is green. */
 .chat-mode-button.mode-ask {
   color: #81d99c !important;
   background: #243d2c !important;
@@ -1810,20 +1812,6 @@
 .chat-mode-button.mode-ask:hover {
   color: #a5efb8 !important;
   background: #2d4b38 !important;
-  border: 0 !important;
-  border-color: transparent !important;
-  opacity: .7 !important;
-}
-.chat-mode-button.mode-plan {
-  color: #f2cd6b !important;
-  background: #40391f !important;
-  border: 0 !important;
-  border-color: transparent !important;
-  opacity: .7 !important;
-}
-.chat-mode-button.mode-plan:hover {
-  color: #ffe28b !important;
-  background: #4b4224 !important;
   border: 0 !important;
   border-color: transparent !important;
   opacity: .7 !important;

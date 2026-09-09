@@ -34,10 +34,14 @@
     return globalScope.monaco.Uri.parse(`xekute://workspace/${encodeURI(safePath)}`);
   }
 
+  function monacoBase() {
+    return globalScope.__XEKUTE_MONACO_BASE__ || "../../node_modules/monaco-editor/min";
+  }
+
   function configureWorkers() {
     globalScope.MonacoEnvironment = {
       getWorkerUrl() {
-        return new URL("../../node_modules/monaco-editor/min/vs/base/worker/workerMain.js", globalScope.location.href).href;
+        return new URL(`${monacoBase()}/vs/base/worker/workerMain.js`, globalScope.location.href).href;
       },
     };
   }
@@ -47,7 +51,7 @@
       // Loader did not run (blocked/omitted). Inject it from the page-relative
       // node_modules path so Monaco loads regardless of script-tag timing.
       const script = globalScope.document.createElement("script");
-      script.src = new URL("../../node_modules/monaco-editor/min/vs/loader.js", globalScope.location.href).href;
+      script.src = new URL(`${monacoBase()}/vs/loader.js`, globalScope.location.href).href;
       script.onload = () => {
         if (typeof globalScope.require === "function") {
           bootEditor(resolve, reject);
@@ -70,7 +74,7 @@
     configureWorkers();
     // The AMD `vs` path resolves against the document base (the page
     // directory), so from src/ui/ it is ../../node_modules.
-    globalScope.require.config({ paths: { vs: "../../node_modules/monaco-editor/min/vs" } });
+    globalScope.require.config({ paths: { vs: `${monacoBase()}/vs` } });
     globalScope.require(["vs/editor/editor.main"], () => {
       const container = document.getElementById("monaco-container");
       if (!container) {

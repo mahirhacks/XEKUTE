@@ -90,8 +90,6 @@ body,
 
 .command-center:hover,
 .command-center:focus-visible {
-  width: 50vw;
-  min-width: 50vw;
   border-color: transparent;
   border-radius: 999px;
   background: rgba(40, 40, 40, .55);
@@ -573,31 +571,6 @@ body,
   color: var(--revamp-text);
 }
 
-.chat-session-controls .security-proxy-browser-wrap {
-  height: var(--revamp-tab-height);
-  align-items: center;
-}
-
-.chat-session-controls .security-proxy-browser {
-  width: 25px;
-  height: var(--revamp-tab-height);
-  border: 0;
-  background: transparent;
-  color: var(--revamp-text);
-}
-
-.chat-session-controls .security-proxy-browser:hover,
-.chat-session-controls .security-proxy-browser:focus-visible,
-.chat-session-controls .security-proxy-browser.active {
-  border: 0;
-  background: var(--revamp-control);
-  color: #fff;
-}
-
-.chat-session-controls .security-proxy-browser-menu {
-  top: calc(100% + 4px);
-}
-
 #btn-chat-more,
 #btn-chat-collapse {
   display: none;
@@ -630,13 +603,13 @@ body,
 }
 
 .assistant-reply-copy .chat-action-icon {
-  width: 14px;
-  height: 16px;
+  width: 11px;
+  height: 12px;
 }
 
 .assistant-reply-copy {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
 }
 
 #input-bar {
@@ -1986,6 +1959,10 @@ body,
   margin-bottom: 14px;
 }
 
+.app-settings-content #app-settings-certificates-panel .certificate-setting-heading > div {
+  gap: 6px;
+}
+
 .app-settings-content #app-settings-certificates-panel .certificate-setting-heading strong {
   color: #dedede;
   font-size: 13px;
@@ -1995,7 +1972,11 @@ body,
 .app-settings-content #app-settings-certificates-panel .certificate-setting-heading small {
   color: #777;
   font-size: 11px;
-  line-height: 16px;
+  line-height: 1.45;
+}
+
+.app-settings-content #app-settings-certificates-panel .certificate-location-row {
+  margin-bottom: 12px;
 }
 
 .app-settings-content #app-settings-certificates-panel .certificate-location-row input {
@@ -2057,6 +2038,8 @@ body,
   padding: 0 14px 0 27px;
   border-bottom: 1px solid var(--revamp-divider);
   background: var(--revamp-panel);
+  position: relative;
+  z-index: 5;
 }
 
 .security-workspace-heading > .codicon {
@@ -2086,7 +2069,8 @@ body,
   font-size: 12px;
 }
 
-.security-history-toggle {
+.security-history-toggle,
+.security-proxy-browser {
   padding: 0 10px;
   background: rgba(40, 40, 40, .35);
 }

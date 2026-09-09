@@ -24,7 +24,7 @@ test("agent tool surface is enabled by default in controller turns", () => {
   assert.equal(AgentToolSurface.toolsEnabled(), true);
 });
 
-test("the temporary task-list tool is exposed only for reasonably large Agent requests", async () => {
+test("Agent catalog never includes the retired task-list tool", async () => {
   assert.equal(isReasonablyLargeAgentRequest("Fix the typo in README.md"), false);
   assert.equal(isReasonablyLargeAgentRequest("Implement the following:\n- inspect the updater\n- fix notification state\n- verify packaging"), false);
   assert.equal(isReasonablyLargeAgentRequest("Implement the following:\n- inspect the updater\n- fix notification state\n- update the tests\n- verify packaging"), true);
@@ -43,34 +43,23 @@ test("the temporary task-list tool is exposed only for reasonably large Agent re
   await run("Fix the typo in README.md");
   await run("Implement the following:\n- inspect the updater\n- fix notification state\n- update the tests\n- verify packaging");
   assert.equal(seen[0].includes("update_task_list"), false);
-  assert.equal(seen[1].includes("update_task_list"), true);
-  assert.equal(seen[0].includes("update_project_artifacts"), true);
-  assert.equal(seen[1].includes("update_project_artifacts"), true);
+  assert.equal(seen[1].includes("update_task_list"), false);
+  assert.equal(seen[0].includes("update_project_artifacts"), false);
+  assert.equal(seen[1].includes("update_project_artifacts"), false);
 });
 
-test("a large Agent task publishes checklist updates and removes the checklist on completion", async () => {
+test("Agent turns do not publish a task-list surface", async () => {
   const events = [];
-  let round = 0;
-  const tasks = [
-    { id: "inspect", title: "Inspect current behavior", status: "in_progress" },
-    { id: "change", title: "Implement the change", status: "pending" },
-    { id: "cover", title: "Add regression coverage", status: "pending" },
-    { id: "verify", title: "Verify the result", status: "pending" },
-  ];
   await runAgentTurn({
     workspace: path.resolve("."),
     mode: "agent",
     userMessage: "Implement the following:\n- inspect current behavior\n- make the required change\n- add regression coverage\n- verify the result",
     sendEvent: (event) => events.push(event),
-    runModelRound: async () => {
-      if (round++ === 0) return { fullText: "", toolCalls: [{ id: "tasks", type: "function", function: { name: "update_task_list", arguments: JSON.stringify({ tasks }) } }] };
-      return { fullText: "Done", toolCalls: [] };
-    },
-    executeToolCall: async () => ({ ok: true, value: { tasks, completed: false, currentIndex: 0, total: 4 } }),
+    runModelRound: async () => ({ fullText: "Done", toolCalls: [] }),
+    executeToolCall: async () => ({ ok: true }),
   });
   assert.equal(events.some((event) => event.type === "task_brief"), false);
-  assert.equal(events.some((event) => event.type === "task_list" && event.tasks?.length === 4), true);
-  assert.equal(events.some((event) => event.type === "task_list" && event.clear === true), true);
+  assert.equal(events.some((event) => event.type === "task_list"), false);
 });
 
 test("scope-only dispatch returns raw tool results to the model", async (t) => {
@@ -232,7 +221,7 @@ test("Tier 1 excludes tool attempts that never crossed the execution boundary", 
   assert.equal(JSON.stringify(active).includes("TOOL_UNAVAILABLE"), false);
 });
 
-test("Tier 1 provider measurements reconcile all nine section rows to the authoritative prompt total", async () => {
+test("Tier 1 usage snapshots keep local section tokens instead of OpenRouter prompt totals", async () => {
   const projectId = "proj_00000000-0000-4000-8000-000000004121";
   const sessionId = "session_00000000-0000-4000-8000-000000004122";
   const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
@@ -263,22 +252,162 @@ test("Tier 1 provider measurements reconcile all nine section rows to the author
   });
 
   assert.equal(result.ok, true);
-  const measured = events.find((event) => event.type === "context_usage" && event.usage?.source === "openrouter");
-  assert.ok(measured, "the provider-measured snapshot must be emitted");
-  assert.equal(measured.usage.promptTokens, 777);
-  assert.equal(measured.usage.sections.length, 9);
-  assert.equal(measured.usage.sections.reduce((sum, section) => sum + section.tokens, 0), 777);
-  assert.equal(measured.usage.tokenCalculation.method, "provider-reconciled");
-  assert.equal(measured.usage.tokenCalculation.calibrationSamples, 1);
+  assert.equal(result.contextUsage.source, "estimate");
+  assert.equal(result.contextUsage.tokenCalculation.method, "tier1-approximate");
+  assert.notEqual(result.contextUsage.promptTokens, 777);
+  assert.equal(result.contextUsage.sections.length, 9);
+  assert.equal(
+    result.contextUsage.sections.reduce((sum, section) => sum + section.tokens, 0),
+    result.contextUsage.promptTokens,
+  );
+  const active = result.contextUsage.sections.find((section) => section.key === "active_conversation");
+  assert.ok(active.tokens > 0, "Active Conversation must come from the T1 ledger");
+  const expectedActive = Number(result.contextUsage.tier1?.rows?.["Active Conversation"]) || 0;
+  assert.equal(active.tokens, expectedActive);
 
   const snapshots = events.filter((event) => event.type === "context_usage" && event.usage?.sections?.length === 9);
   assert.ok(snapshots.length >= 2);
   for (const snapshot of snapshots) {
+    assert.equal(snapshot.usage.source, "estimate");
+    assert.notEqual(snapshot.usage.promptTokens, 777);
+    assert.equal(snapshot.usage.tokenCalculation.method, "tier1-approximate");
     assert.equal(
       snapshot.usage.sections.reduce((sum, section) => sum + section.tokens, 0),
       snapshot.usage.promptTokens,
-      `section rows must match ${snapshot.usage.source} total`,
+      "section rows must match the T1 approximate total",
     );
+  }
+  assert.equal(events.some((event) => event.type === "context_usage" && event.usage?.source === "openrouter"), false);
+});
+
+test("a Tier 1 preview fills the meter before the first send without running the model", async () => {
+  const projectId = "proj_00000000-0000-4000-8000-000000004141";
+  const sessionId = "session_00000000-0000-4000-8000-000000004142";
+  const { previewTier1Usage } = require("../src/agent/controller/agent-controller.js");
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  const events = [];
+  const preview = await previewTier1Usage({
+    model: "provider/meter-model",
+    numCtx: 32_768,
+    contextBudget: 32_768,
+    contextPlan: { provider: "openrouter", effectiveLimitTokens: 32_768 },
+    tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    mode: "agent",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    chatHistory: [],
+    sendEvent(event) { events.push(event); },
+    async runModelRound() { throw new Error("a context preview must not call the model"); },
+    async executeToolCall() { throw new Error("a context preview must not execute tools"); },
+  });
+
+  assert.equal(preview.ok, true);
+  assert.equal(preview.preview, true);
+  assert.equal(preview.contextUsage.source, "estimate");
+  assert.equal(preview.contextUsage.tokenCalculation.method, "tier1-approximate");
+  assert.equal(preview.contextUsage.sections.length, 9);
+  const rows = Object.fromEntries(preview.contextUsage.sections.map((section) => [section.key, section.tokens]));
+  assert.ok(rows.system_prompt > 0, "Block A rows are available before the first send");
+  assert.ok(rows.tool_definitions > 0);
+  assert.equal(rows.active_conversation, 0, "an unsent chat has no active conversation");
+  assert.deepEqual(tier1.state(projectId, sessionId).active, [], "a preview does not seed the ledger");
+  assert.equal(events.length, 0, "a preview publishes no run events");
+});
+
+test("Tier 1 meter updates when the active ledger changes and survives a coordinator restart", async () => {
+  const crypto = require("node:crypto");
+  const { createTier1SensitiveStore } = require("../src/app/storage/memory/tier1-sensitive-store.js");
+  const { createTier1ContextCoordinator } = require("../src/app/services/memory/tier1-context-coordinator.js");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-t1-meter-restart-"));
+  const protector = {
+    available: () => true,
+    encrypt: (value) => Buffer.from(String(value), "utf8").toString("base64"),
+    decrypt: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+  };
+  const store = createTier1SensitiveStore({ fs, path, crypto, baseDir: root, protector });
+  const projectId = "proj_00000000-0000-4000-8000-000000004131";
+  const sessionId = "session_00000000-0000-4000-8000-000000004132";
+  const first = createTier1ContextCoordinator({ sensitiveStore: store });
+  const events = [];
+  let round = 0;
+  try {
+    const firstTurn = await runAgentTurn({
+      model: "provider/meter-model",
+      numCtx: 32_768,
+      contextBudget: 32_768,
+      contextPlan: { provider: "openrouter", effectiveLimitTokens: 32_768 },
+      tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+      mode: "agent",
+      modeFamily: "assist",
+      projectId,
+      memorySessionId: sessionId,
+      tier1Context: first,
+      userMessage: "run the check",
+      chatHistory: [],
+      sendEvent(event) { events.push(event); },
+      async runModelRound() {
+        round += 1;
+        if (round === 1) {
+          return {
+            ok: true,
+            provider: "openrouter",
+            fullText: "",
+            toolCalls: [{ id: "call-check", type: "function", function: { name: "exec_command", arguments: {} } }],
+            finishReason: "tool_calls",
+            usage: { promptTokens: 777, completionTokens: 2, source: "openrouter" },
+          };
+        }
+        return {
+          ok: true,
+          provider: "openrouter",
+          fullText: "done",
+          toolCalls: [],
+          finishReason: "stop",
+          usage: { promptTokens: 777, completionTokens: 4, source: "openrouter" },
+        };
+      },
+      async executeToolCall() {
+        return { ok: true, value: { summary: "check completed" } };
+      },
+    });
+    assert.equal(firstTurn.ok, true, JSON.stringify(firstTurn.error || ""));
+    const usageEvents = events.filter((event) => event.type === "context_usage" && event.usage?.source === "estimate");
+    assert.ok(usageEvents.length >= 3);
+    const activeTokens = usageEvents.map((event) => (
+      event.usage.sections.find((section) => section.key === "active_conversation")?.tokens || 0
+    ));
+    assert.ok(activeTokens.some((tokens, index) => index > 0 && tokens > activeTokens[0]), "Active Conversation tokens must rise when T1 appends");
+    assert.equal(usageEvents.every((event) => event.usage.promptTokens !== 777), true);
+
+    const restarted = createTier1ContextCoordinator({ sensitiveStore: store });
+    const secondTurn = await runAgentTurn({
+      model: "provider/meter-model",
+      numCtx: 32_768,
+      contextBudget: 32_768,
+      contextPlan: { provider: "openrouter", effectiveLimitTokens: 32_768 },
+      mode: "ask",
+      modeFamily: "assist",
+      projectId,
+      memorySessionId: sessionId,
+      tier1Context: restarted,
+      userMessage: "continue the review",
+      chatHistory: [],
+      sendEvent() {},
+      async runModelRound() {
+        return { ok: true, fullText: "Continuing.", toolCalls: [], finishReason: "stop" };
+      },
+    });
+    assert.equal(secondTurn.ok, true, JSON.stringify(secondTurn.error || ""));
+    const restored = restarted.state(projectId, sessionId).active;
+    assert.ok(restored.some((message) => message.role === "user" && message.content === "run the check"));
+    assert.ok(restored.some((message) => message.role === "tool" || String(message.content || "").includes("check completed")));
+    assert.ok(restored.some((message) => message.role === "user" && message.content === "continue the review"));
+    const secondActive = secondTurn.contextUsage.sections.find((section) => section.key === "active_conversation");
+    assert.ok(secondActive.tokens > activeTokens[0], "restarted T1 Active Conversation must include the persisted ledger");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -608,7 +737,7 @@ test("scope questions in an open project inject project settings and scope guida
   assert.match(prompt, /filesystem and network scope separately/i);
   assert.match(prompt, /UNTRUSTED CONTEXT DATA/);
   assert.ok(Array.isArray(roundPayload.tools) && roundPayload.tools.length > 0, "ask mode exposes the canonical tool set");
-  assert.ok(roundPayload.tools.some((tool) => tool.function?.name === "query_assessment"), "ask mode can analyze assessment evidence");
+  assert.ok(roundPayload.tools.some((tool) => tool.function?.name === "search_workspace"), "ask mode can inspect workspace evidence");
   assert.equal(roundPayload.tools.some((tool) => tool.function?.name === "exec_command"), false, "ask mode does not include exec_command");
   assert.equal(result.contextRoute.includeProjectContext, true);
 });
@@ -643,19 +772,18 @@ test("inherited confirmations can complete with a normal text answer when no too
 
 test("mode prompts stay distinct while the tool surface is registry-backed", () => {
   const agentPrompt = buildSystemContext({ mode: "agent", numCtx: 4096, userMessage: "Fix it" });
-  const planPrompt = buildSystemContext({ mode: "plan", numCtx: 4096, userMessage: "Plan it" });
+  const leftoverPlan = buildSystemContext({ mode: "plan", numCtx: 4096, userMessage: "Plan it" });
   const askPrompt = buildSystemContext({ mode: "ask", numCtx: 4096, userMessage: "Explain it" });
-  const hypothesisPrompt = buildSystemContext({ mode: "hypothesis", numCtx: 4096, userMessage: "Hypothesize" });
+  const leftoverHypothesis = buildSystemContext({ mode: "hypothesis", numCtx: 4096, userMessage: "Hypothesize" });
   assert.match(agentPrompt, /PROFILE — Agent/);
-  assert.match(planPrompt, /PROFILE — Plan/);
-  assert.match(hypothesisPrompt, /PROFILE — Hypothesis/);
+  assert.match(leftoverPlan, /PROFILE — Ask/);
+  assert.match(leftoverHypothesis, /PROFILE — Ask/);
   assert.match(askPrompt, /PROFILE — Ask/);
   assert.match(ModeSkills.render("agent"), /tools/i);
-  assert.match(planPrompt, /PROFILE — Plan/i);
-  assert.match(planPrompt, /read-only planning plus one final checklist artifact transaction/i);
+  assert.doesNotMatch(leftoverPlan, /PROFILE — Plan/);
+  assert.doesNotMatch(leftoverHypothesis, /PROFILE — Hypothesis/);
   assert.match(askPrompt, /read-only questions and analysis/i);
   assert.match(askPrompt, /inconclusive/i);
-  assert.match(hypothesisPrompt, /PROFILE — Hypothesis/i);
   assert.match(askPrompt, /Runtime scope checks are enforced/i);
 });
 
@@ -732,4 +860,47 @@ test("tool signatures canonicalize argument key order", () => {
     args: { options: { safe: true, language: "en" }, limit: 4, query: "xekute" },
   });
   assert.equal(first, second);
+});
+
+test("a Tier 1 checkpoint fills summarized conversation and current workflow usage", async () => {
+  const projectId = "proj_00000000-0000-4000-8000-000000004301";
+  const sessionId = "session_00000000-0000-4000-8000-000000004302";
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  const events = [];
+  const chatHistory = Array.from({ length: 80 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: `Turn ${index}: ${"finding ".repeat(80)}`,
+  }));
+  const result = await runAgentTurn({
+    model: "local:small",
+    numCtx: 4_096,
+    contextBudget: 4_096,
+    contextPlan: { provider: "ollama", effectiveLimitTokens: 4_096, promptBudgetTokens: 4_096 },
+    mode: "ask",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    userMessage: "Continue the investigation from the last finding.",
+    chatHistory,
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      return { ok: true, fullText: "Continuing from the checkpoint.", toolCalls: [], finishReason: "stop" };
+    },
+  });
+
+  assert.equal(result.ok, true, result.error || "");
+  const completed = events.filter((event) => event.type === "context_checkpoint" && event.status === "completed");
+  assert.ok(completed.length, "the controller must complete at least one conversation checkpoint");
+  const latestCheckpoint = completed.at(-1);
+  assert.ok(latestCheckpoint.summarizedConversationTokens > 0, "summarized conversation must receive checkpoint tokens");
+  assert.ok(latestCheckpoint.currentWorkflowTokens > 0, "current workflow must be populated by the checkpoint");
+  assert.equal(Boolean(latestCheckpoint.currentWorkflow), true);
+
+  const usageAfter = [...events].reverse().find((event) => event.type === "context_usage" && Array.isArray(event.usage?.sections));
+  assert.ok(usageAfter, "a context usage snapshot must follow the checkpoint");
+  const summarized = usageAfter.usage.sections.find((section) => section.key === "summarized_conversation");
+  const workflow = usageAfter.usage.sections.find((section) => section.key === "current_workflow");
+  assert.ok(summarized?.tokens > 0);
+  assert.ok(workflow?.tokens > 0);
 });

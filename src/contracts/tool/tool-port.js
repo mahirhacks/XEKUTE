@@ -19,28 +19,16 @@ const REGISTRY_TOOL_NAMES = TOOL_REGISTRY_NAMES;
 const MUTATING_TOOL_NAMES = new Set([
   "exec_command",
   "apply_patch",
-  "update_project_artifacts",
-  "manage_state",
   "manage_identity",
-  "attack_graph",
 ]);
 
 const READ_ONLY_TOOL_NAMES = new Set([
   "ask_questions",
-  "update_task_list",
   "read_file",
   "search_workspace",
-  "inspect_environment",
-  "ingest_traffic",
   "replay_request",
-  "run_test_case",
   "browser_action",
-  "compare_responses",
-  "verify_finding",
   "delegate_agent",
-  "query_assessment",
-  "expand_evidence",
-  "query_knowledge",
   "web_research",
 ]);
 
