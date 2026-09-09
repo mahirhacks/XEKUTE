@@ -1018,12 +1018,40 @@ function redactThinkingDisclosures(root) {
   });
 }
 
+function isPlaceholderToolCardLabel(label = "") {
+  return /^(Working|Queued)(?:\.{0,3}|\u2026)?$/i.test(String(label || "").trim());
+}
+
+function isTransientToolCardLabel(label = "") {
+  return /^(Completed|Done|Failed)\.?$/i.test(String(label || "").trim());
+}
+
+function toolCardLabelText(card) {
+  return String(card?.querySelector?.(".tool-card-file")?.textContent || card?.dataset?.runningLabel || "").trim();
+}
+
+function syncToolCardPlaceholderVisibility(card) {
+  if (!card) return card;
+  const placeholder = isPlaceholderToolCardLabel(toolCardLabelText(card)) && card.dataset.state !== "success";
+  card.hidden = placeholder;
+  return card;
+}
+
+function stripFailedToolCardStubs(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".tool-card[data-state='error']").forEach((node) => node.remove());
+  root.querySelectorAll(".tool-card").forEach((node) => {
+    const text = toolCardLabelText(node);
+    if (isTransientToolCardLabel(text) || isPlaceholderToolCardLabel(text)) node.remove();
+  });
+}
+
 function sanitizePersistedChatHtml(html) {
   const raw = String(html || "");
   const clean = globalThis.DOMPurify
     ? globalThis.DOMPurify.sanitize(raw, {
       ADD_TAGS: ["button", "img"],
-       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
+       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
     })
     : "";
   const template = document.createElement("template");
@@ -1035,11 +1063,14 @@ function sanitizePersistedChatHtml(html) {
   // Progress checklists were redundant with the durable tool and command rows.
   // Strip them from older snapshots as well as preventing new ones below.
   template.content.querySelectorAll(".agent-progress-feed").forEach((node) => node.remove());
-  template.content.querySelectorAll('.agent-status-line[data-final="true"] .agent-status-icon').forEach((node) => node.remove());
+  template.content.querySelectorAll(".harness-wait-line").forEach((node) => node.remove());
+  template.content.querySelectorAll(".agent-status-icon").forEach((node) => node.remove());
+  template.content.querySelectorAll(".agent-status-line:not([data-final='true'])").forEach((node) => node.remove());
   template.content.querySelectorAll(".agent-status-line").forEach((node) => {
     const text = String(node.querySelector(".agent-status-text")?.textContent || "").trim();
-    if (/^Stopped after /i.test(text)) node.remove();
+    if (/^Stopped after /i.test(text) || /^(Failed|Action failed)\.?$/i.test(text)) node.remove();
   });
+  stripFailedToolCardStubs(template.content);
   template.content.querySelectorAll(".chat-turn.error").forEach((node) => {
     const text = String(node.querySelector(".chat-box-content")?.textContent || "").trim();
     if (/^The agent turn was stopped\.?$/i.test(text) || /^Stopped\.?$/i.test(text)) node.remove();
@@ -1386,6 +1417,85 @@ function collapseExpandedUserPrompts(except = null) {
   });
 }
 
+function lastAssistantActivityNode(turn) {
+  if (!turn?.querySelectorAll) return null;
+  const nodes = [...turn.querySelectorAll(":scope > .assistant-reply, :scope > .tool-card, :scope > .agent-command-event, :scope > .subagent-run-card, :scope > .agent-status-line")];
+  return nodes.at(-1) || null;
+}
+
+function isAgentResponseChild(node) {
+  return Boolean(node?.classList)
+    && (node.classList.contains("agent-run-chunk")
+      || node.classList.contains("context-checkpoint-notice")
+      || node.classList.contains("assistant-reply-footer")
+      || (node.classList.contains("chat-turn") && node.classList.contains("assistant")));
+}
+
+function ensureAgentResponseHost(root) {
+  const exchange = root?.classList?.contains("chat-exchange")
+    ? root
+    : root?.closest?.(".chat-exchange");
+  const body = exchange ? chatExchangeBody(exchange) : root;
+  if (!body?.appendChild) return null;
+  let host = body.querySelector(":scope > .agent-response-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.className = "agent-response-host";
+    const user = [...body.children].find((child) => child.classList.contains("chat-turn") && child.classList.contains("user"));
+    if (user) user.after(host);
+    else body.appendChild(host);
+  }
+  [...body.children].forEach((child) => {
+    if (child !== host && isAgentResponseChild(child)) host.appendChild(child);
+  });
+  return host;
+}
+
+function wrapAssistantInRunChunk(turn) {
+  if (!turn) return null;
+  if (turn.classList.contains("agent-run-chunk")) return turn;
+  if (turn.parentElement?.classList.contains("agent-run-chunk")) return turn.parentElement;
+  if (!turn.classList.contains("assistant")) return null;
+  const host = turn.closest(".agent-response-host")
+    || ensureAgentResponseHost(turn.closest(".chat-exchange"))
+    || turn.parentElement;
+  if (!host) return null;
+  const chunk = document.createElement("div");
+  chunk.className = "agent-run-chunk";
+  if (turn.parentElement === host) host.insertBefore(chunk, turn);
+  else host.appendChild(chunk);
+  chunk.appendChild(turn);
+  return chunk;
+}
+
+function promoteCheckpointNotices(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".chat-turn.assistant .context-checkpoint-notice").forEach((notice) => {
+    const turn = notice.closest(".chat-turn.assistant");
+    if (!turn) return;
+    const chunk = wrapAssistantInRunChunk(turn);
+    const trailing = [];
+    let node = notice.nextSibling;
+    while (node) {
+      const next = node.nextSibling;
+      trailing.push(node);
+      node = next;
+    }
+    notice.remove();
+    (chunk || turn).after(notice);
+    if (!trailing.length) return;
+    const nextTurn = document.createElement("div");
+    nextTurn.className = "chat-turn assistant";
+    nextTurn.dataset.createdAt = turn.dataset.createdAt || "";
+    trailing.forEach((item) => nextTurn.appendChild(item));
+    const nextChunk = document.createElement("div");
+    nextChunk.className = "agent-run-chunk";
+    nextChunk.appendChild(nextTurn);
+    notice.after(nextChunk);
+  });
+  root.querySelectorAll(".chat-turn.assistant").forEach((turn) => wrapAssistantInRunChunk(turn));
+}
+
 function createChatExchange(container = messages) {
   const exchange = document.createElement("div");
   exchange.className = "chat-exchange";
@@ -1408,6 +1518,7 @@ function chatExchangeBody(exchange) {
   );
   exchange.insertBefore(body, footer || null);
   movable.forEach((child) => body.appendChild(child));
+  if (footer) body.appendChild(footer);
   return body;
 }
 
@@ -1418,6 +1529,11 @@ function currentChatExchange(container = messages) {
 
 function appendChatTurn(turn, { startsExchange = false, container = messages } = {}) {
   const exchange = startsExchange ? createChatExchange(container) : currentChatExchange(container);
+  if (turn?.classList?.contains("assistant")) {
+    ensureAgentResponseHost(exchange).appendChild(turn);
+    wrapAssistantInRunChunk(turn);
+    return;
+  }
   chatExchangeBody(exchange).appendChild(turn);
 }
 
@@ -1435,12 +1551,8 @@ function normalizeChatExchanges() {
       continue;
     }
 
-    if (child.classList.contains("context-checkpoint-notice")) {
-      if (exchange) {
-        const body = chatExchangeBody(exchange);
-        const assistant = body.querySelector(":scope > .chat-turn.assistant:last-of-type");
-        (assistant || body).appendChild(child);
-      }
+    if (child.classList.contains("context-checkpoint-notice") || child.classList.contains("agent-run-chunk") || child.classList.contains("agent-response-host")) {
+      if (exchange) chatExchangeBody(exchange).appendChild(child);
       continue;
     }
 
@@ -1460,7 +1572,18 @@ function normalizeChatExchanges() {
     exchange.appendChild(child);
   }
 
-  messages?.querySelectorAll(".chat-exchange").forEach((exchange) => chatExchangeBody(exchange));
+  messages?.querySelectorAll(".chat-exchange").forEach((exchange) => {
+    chatExchangeBody(exchange);
+    ensureAgentResponseHost(exchange);
+  });
+  promoteCheckpointNotices(messages);
+  stripFailedToolCardStubs(messages);
+  messages?.querySelectorAll(".harness-wait-line").forEach((node) => node.remove());
+  messages?.querySelectorAll(".chat-exchange").forEach((exchange) => {
+    const host = ensureAgentResponseHost(exchange);
+    const footer = host?.querySelector?.(".assistant-reply-footer");
+    if (footer) host.appendChild(footer);
+  });
 }
 
 function isInternalRuntimeInputMessage(message = {}) {
@@ -1505,6 +1628,7 @@ function renderCanonicalChatHistory(history = []) {
       for (const tool of commandTools) turn.appendChild(createCommandTimelineRow(tool, { state: "success" }));
       for (const subagent of subagents) createSubagentRunCard({ turn }, subagent);
       appendChatTurn(turn, { container });
+      wrapAssistantInRunChunk(turn);
     }
   };
   let previousUserContent = null;
@@ -1585,6 +1709,7 @@ function stashActiveChatRunView(session = activeChatSession()) {
 
 function hydratePersistedChatTranscript(root = messages) {
   if (!root) return;
+  stripFailedToolCardStubs(root);
   redactThinkingDisclosures(root);
   hydrateSubagentRunCards(root);
   hydrateContextCheckpointNotices(root);
@@ -7907,9 +8032,20 @@ function pendingContextCheckpointNotice(container = messages) {
   return container?.querySelector?.(".context-checkpoint-notice[data-state='pending']") || null;
 }
 
-// Pin the notice inside the live assistant turn. Appending it to the exchange
-// body puts it after the whole turn, so later commands and reply segments make
-// it look like the summary keeps sliding to the bottom of the chat.
+// The notice is a sibling of each agent-run-chunk, not a child of the growing
+// assistant turn. That keeps "Summarized Conversation Updated" at the moment
+// the checkpoint happened instead of sliding under later tokens and tools.
+function lastAgentRunChunk(root) {
+  if (!root?.querySelectorAll) return null;
+  const host = root.classList?.contains("agent-response-host")
+    ? root
+    : root.querySelector?.(":scope > .agent-response-host") || root;
+  const scoped = host.querySelectorAll(":scope > .agent-run-chunk");
+  if (scoped.length) return scoped[scoped.length - 1];
+  const nested = root.querySelectorAll(".agent-run-chunk");
+  return nested.length ? nested[nested.length - 1] : null;
+}
+
 function checkpointNoticeHost(container = messages) {
   const root = container || messages;
   if (!root) return null;
@@ -7917,10 +8053,10 @@ function checkpointNoticeHost(container = messages) {
     ? root
     : root.querySelector?.(":scope > .chat-exchange:last-child");
   const body = exchange ? chatExchangeBody(exchange) : root;
-  return body?.querySelector?.(":scope > .chat-turn.assistant:last-of-type") || body || root;
+  return lastAgentRunChunk(body) || body || root;
 }
 
-function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SUMMARIZING_NOTICE, state = "pending" } = {}) {
+function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SUMMARIZING_NOTICE, state = "pending", assistant = null } = {}) {
   const host = container || messages;
   if (!host) return null;
   let notice = pendingContextCheckpointNotice(host);
@@ -7937,9 +8073,14 @@ function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SU
     const label = document.createElement("span");
     label.className = "context-checkpoint-text";
     notice.append(icon, label);
-    const anchor = checkpointNoticeHost(host);
-    if (anchor) anchor.appendChild(notice);
-    else host.appendChild(notice);
+    if (assistant?.splitAtContextCheckpoint) {
+      assistant.splitAtContextCheckpoint(notice);
+    } else {
+      const turn = assistant?.turn || null;
+      const chunk = wrapAssistantInRunChunk(turn) || checkpointNoticeHost(host);
+      if (chunk?.after) chunk.after(notice);
+      else host.appendChild(notice);
+    }
   }
   setContextCheckpointNoticeText(notice, text);
   notice.dataset.state = state;
@@ -7988,7 +8129,7 @@ function applyContextCheckpointUi(run, payload = {}) {
   if (run) run.contextCheckpointPending = active;
   if (session) contextCheckpointingSessionId = active ? session.id : (contextCheckpointingSessionId === session.id ? "" : contextCheckpointingSessionId);
   const container = chatRunContainer(run);
-  if (active) ensureContextCheckpointNotice(container);
+  if (active) ensureContextCheckpointNotice(container, { assistant: run?.assistant });
   else finishContextCheckpointNotice(container, status);
   const visible = Boolean(session && activeChatSessionId === session.id && !run?.viewHost);
   setContextCheckpointUi(active && (visible || contextCheckpointingSessionId === activeChatSessionId));
@@ -13366,9 +13507,9 @@ function attachAssistantCopyButton(contentEl) {
 
   // A restored transcript can contain several assistant messages for one
   // user exchange, and an automatic continuation can resume an exchange that
-  // already had a footer. Rebuild the footer so it is always the final node,
-  // and never show it while any part of the assistant exchange is still live.
-  exchange.querySelector(".assistant-reply-footer")?.remove();
+  // already had a footer. Rebuild it at the end of the chunk body so copy/time
+  // stay inside the user prompt + assistant response group.
+  exchange.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
   const assistantStillRunning = [...exchange.querySelectorAll(".chat-turn.assistant")]
     .some((assistantTurn) => assistantTurn.getAttribute("aria-busy") === "true");
   if (assistantStillRunning) return;
@@ -13425,7 +13566,8 @@ function attachAssistantCopyButton(contentEl) {
   footer.className = "assistant-reply-footer";
   footer.appendChild(timeLabel);
   footer.appendChild(button);
-  exchange.appendChild(footer);
+  const host = ensureAgentResponseHost(exchange) || chatExchangeBody(exchange);
+  host.appendChild(footer);
 }
 
 function toolIconClass(tool = {}) {
@@ -13570,16 +13712,25 @@ function createToolCard(tool, { pending = false } = {}) {
   `;
   card.setAttribute("role", "status");
   card.setAttribute("aria-label", card.dataset.runningLabel);
-  return card;
+  return syncToolCardPlaceholderVisibility(card);
 }
 
 function setToolCardStatus(card, type, message) {
+  if (!card) return;
+  if (type === "error") {
+    card.remove();
+    return;
+  }
   const status = card.querySelector(".tool-card-status");
   if (!status) return;
   const fileEl = card.querySelector(".tool-card-file");
   const label = type === "running"
     ? card.dataset.runningLabel || "Working\u2026"
-    : type === "error" ? "Failed" : String(message || "Completed");
+    : String(message || "").trim();
+  if (type === "success" && isTransientToolCardLabel(label)) {
+    card.remove();
+    return;
+  }
   if (fileEl) fileEl.textContent = label;
   card.dataset.state = type;
   card.classList.toggle("pending", type === "running");
@@ -13589,12 +13740,14 @@ function setToolCardStatus(card, type, message) {
   card.classList.add("status-updated");
   status.className = `tool-card-status ${type}`;
   status.textContent = "";
+  syncToolCardPlaceholderVisibility(card);
 }
 
 // Completed tool cards collapse and fade out of the chat, matching the
 // transient activity-feed style of modern agent harnesses. Only terminal
-// command/proc/security cards are auto-faded; file edits and errors stay so
-// the user can still see what changed.
+// command/proc/security cards are auto-faded; file edits stay so the user
+// can still see what changed. Failed tool cards are removed instead of
+// leaving a "Failed" stub.
 const TOOL_CARD_FADE_MS = 900;
 const TOOL_CARD_KEEP_MUTATION = new Set(["create_guidance"]);
 function shouldAutoFadeToolCard(card) {
@@ -13616,7 +13769,20 @@ function fadeToolCard(card) {
   }, TOOL_CARD_FADE_MS);
 }
 
+function markAssistantToolUse(turn) {
+  if (!turn) return;
+  for (const run of activeChatRuns.values()) {
+    const assistant = run.assistant;
+    if (!assistant) continue;
+    if (assistant.turn === turn || assistant.rootTurn === turn || assistant.assistantTurns?.().includes(turn)) {
+      assistant.markToolUse();
+      return;
+    }
+  }
+}
+
 function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
+  markAssistantToolUse(turn);
   const fileKey = ToolMap.targetForTool(tool);
   const action = toolActionName(tool);
   const callId = String(tool.callId || "").trim();
@@ -14036,8 +14202,6 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
     card.dataset.waitKind = result.mode === "subagent_wait" ? "subagent" : "terminal";
     card.dataset.waitStartedAt = String(Number(result.startedAt) || Date.now());
     card.dataset.waitMs = String(waitMs);
-    const budgetLabel = waitMs > 0 ? formatWaitClock(waitMs) : "";
-    appendHarnessWaitLine(waitId, budgetLabel ? `waiting ${budgetLabel}` : "waiting");
     startWaitCardTicker(card);
     const status = card.querySelector(".tool-card-status");
     if (status) {
@@ -14214,7 +14378,7 @@ function conciseAgentStatus(text = "", kind = "working") {
   if (kind === "error" || /fail|error|blocked/.test(lower)) return "Action failed";
   if (kind === "success") return "Action complete";
   if (kind === "verify") return "Verifying\u2026";
-  if (kind === "planning") return "Forming hypothesis\u2026";
+  if (kind === "planning") return "Planning\u2026";
   if (/retry|trying again/.test(lower)) return "Trying again\u2026";
   if (/writing response|drafting|composing/.test(lower)) return "Writing response\u2026";
   if (/terminal|command/.test(lower)) return "Running command\u2026";
@@ -14223,7 +14387,7 @@ function conciseAgentStatus(text = "", kind = "working") {
   if (/read/.test(lower)) return "Reading files\u2026";
   if (/inspect|context|discover|inventory/.test(lower)) return "Inspecting workspace\u2026";
   if (/verify|verification|checking|test result/.test(lower)) return "Verifying\u2026";
-  if (/plan|preflight|ground/.test(lower)) return "Forming hypothesis\u2026";
+  if (/plan|preflight|ground/.test(lower)) return "Planning\u2026";
   if (/complete|finished|ready/.test(lower)) return "Action complete";
   if (/tool|using|execut|action|working|running|starting/.test(lower)) return "Working\u2026";
   return value ? `${value.slice(0, 68)}${value.length > 68 ? "\u2026" : ""}` : "Working\u2026";
@@ -14783,6 +14947,7 @@ function createSubagentRunCard(assistant, payload = {}) {
     (card) => (card.dataset.childInvocationId || card.dataset.childSessionId) === key,
   );
   if (existing) return existing;
+  markAssistantToolUse(assistant.turn);
 
   const card = document.createElement("div");
   card.className = "subagent-run-card";
@@ -14920,9 +15085,10 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
   contentEl.hidden = true;
   turn.appendChild(contentEl);
   appendChatTurn(turn, { container });
+  wrapAssistantInRunChunk(turn);
   // Starting another model/tool cycle extends the current AI chunk. Remove
   // its prior metadata until this continuation reaches its true final state.
-  turn.closest(".chat-exchange")?.querySelector(".assistant-reply-footer")?.remove();
+  turn.closest(".chat-exchange")?.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
   if (container === messages) {
     syncChatEmptyState();
     scrollMessages();
@@ -14930,8 +15096,10 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
 
   const assistant = {
     turn,
+    rootTurn: turn,
     sessionId: String(sessionId || activeChatSessionId || ""),
     startedAt: Date.now(),
+    usedTools: false,
     finalOutcome: null,
     statusEl: null,
     contentEl,
@@ -14947,6 +15115,12 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     lastActivityKey: "",
     taskBriefEl: null,
     taskBrief: null,
+    assistantTurns() {
+      const exchange = (this.rootTurn || this.turn)?.closest(".chat-exchange");
+      if (!exchange) return [this.turn, this.rootTurn].filter(Boolean);
+      const turns = [...exchange.querySelectorAll(".chat-turn.assistant")];
+      return turns.length ? turns : [this.turn].filter(Boolean);
+    },
     currentContentSegment() {
       return this.contentSegments[this.contentSegments.length - 1];
     },
@@ -14960,6 +15134,40 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       this.contentSegments.push(segment);
       this.contentEl = next;
       return segment;
+    },
+    splitAtContextCheckpoint(notice) {
+      if (!notice || !this.turn) return null;
+      this.sealCurrentContentSegment();
+      this.turn.querySelectorAll(".tool-card").forEach((card) => {
+        if (card.hidden || isPlaceholderToolCardLabel(toolCardLabelText(card))) card.remove();
+      });
+      const chunk = wrapAssistantInRunChunk(this.turn);
+      if (chunk) chunk.after(notice);
+      else this.turn.after(notice);
+
+      const nextTurn = document.createElement("div");
+      nextTurn.className = "chat-turn assistant";
+      nextTurn.setAttribute("aria-busy", this.turn.getAttribute("aria-busy") || "true");
+      nextTurn.dataset.createdAt = this.turn.dataset.createdAt || new Date().toISOString();
+      if (this.sessionId) nextTurn.dataset.sessionId = this.sessionId;
+      const nextContent = document.createElement("div");
+      nextContent.className = "assistant-reply";
+      if (nextTurn.getAttribute("aria-busy") === "true") nextContent.classList.add("streaming");
+      nextContent.hidden = true;
+      nextTurn.appendChild(nextContent);
+      const nextChunk = document.createElement("div");
+      nextChunk.className = "agent-run-chunk";
+      nextChunk.appendChild(nextTurn);
+      notice.after(nextChunk);
+
+      this.turn.setAttribute("aria-busy", "false");
+      this.turn = nextTurn;
+      this.contentEl = nextContent;
+      this.contentSegments.push({ el: nextContent, raw: "" });
+      const host = notice.closest(".agent-response-host") || notice.parentElement;
+      const footer = host?.querySelector?.(":scope > .assistant-reply-footer");
+      if (footer) host.appendChild(footer);
+      return notice;
     },
     renderContentSegment(segment, { streaming = false } = {}) {
       if (!segment?.el) return;
@@ -14991,9 +15199,18 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         segment.raw = next;
       }
       this.rawContent = next;
-      this.turn.dataset.rawAssistant = next;
+      (this.rootTurn || this.turn).dataset.rawAssistant = next;
+    },
+    markToolUse() {
+      this.usedTools = true;
+      (this.rootTurn || this.turn).dataset.usedTools = "true";
+    },
+    hadToolActivity() {
+      if (this.usedTools || this.assistantTurns().some((turn) => turn.dataset.usedTools === "true")) return true;
+      return this.assistantTurns().some((turn) => turn.querySelector(".tool-card, .agent-command-event, .subagent-run-card"));
     },
     ensureCommandEvent(tool) {
+      this.markToolUse();
       const key = commandTimelineKey(tool);
       const entries = this.commandEntries.get(key) || [];
       const existing = entries[entries.length - 1];
@@ -15033,47 +15250,51 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     ensureLiveState() {
       if (this.liveStateEl) return this.liveStateEl;
-      this.turn.classList.add("has-agent-run");
+      const host = this.rootTurn || this.turn;
+      host.classList.add("has-agent-run");
       const block = document.createElement("div");
       block.className = "agent-status-line";
       block.setAttribute("aria-live", "polite");
       block.setAttribute("role", "status");
-      block.innerHTML = `
-        <span class="agent-status-icon codicon codicon-loading codicon-modifier-spin" aria-hidden="true"></span>
-        <span class="agent-status-text">Working…</span>
-      `;
-      this.turn.insertBefore(block, this.contentEl);
+      block.innerHTML = `<span class="agent-status-text">Working…</span>`;
+      const firstReply = host.querySelector(":scope > .assistant-reply");
+      host.insertBefore(block, firstReply || host.firstChild);
       this.statusEl = block;
       this.liveStateEl = block;
       return block;
     },
+    dismissLiveState() {
+      this.liveStateEl?.remove();
+      this.liveStateEl = null;
+      this.statusEl = null;
+      this.lastActivityKey = "";
+    },
     setLiveState({ kind = "working", title = "Working", detail = "", meta = "LIVE" } = {}) {
-      const block = this.ensureLiveState();
       const label = conciseAgentStatus(detail || title, kind);
+      if (/^Writing response/i.test(label)) return;
+      const existing = this.liveStateEl;
+      if (existing?.isConnected && existing.dataset.final !== "true") {
+        if (kind === "working" || isPlaceholderToolCardLabel(label) || /^Working/i.test(label)) return;
+      }
+      const block = this.ensureLiveState();
       const stateKey = `${kind}|${label}`;
       if (block.dataset.stateKey === stateKey) return;
       block.dataset.stateKey = stateKey;
       block.dataset.state = kind;
       block.dataset.final = "false";
-      const active = !["success", "error", "question"].includes(kind);
-      const icon = block.querySelector(".agent-status-icon");
-      if (icon) {
-        icon.hidden = false;
-        icon.className = active
-          ? "agent-status-icon codicon codicon-loading codicon-modifier-spin"
-          : `agent-status-icon codicon ${agentStateIcon(kind)}`;
-      }
+      block.querySelector(".agent-status-icon")?.remove();
       const textEl = block.querySelector(".agent-status-text");
       if (textEl) textEl.textContent = label;
       block.classList.remove("status-updated");
       void block.offsetWidth;
       block.classList.add("status-updated");
       this.turn.setAttribute("aria-busy", "true");
+      (this.rootTurn || this.turn).setAttribute("aria-busy", "true");
       scrollMessages();
     },
     settlePendingActivities(outcome = "complete") {
       const failed = outcome === "error" || outcome === "stopped";
-      const pendingCards = this.turn.querySelectorAll(".tool-card.pending, .tool-card[data-state='queued'], .tool-card[data-state='running']");
+      const pendingCards = this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".tool-card.pending, .tool-card[data-state='queued'], .tool-card[data-state='running']")]);
       for (const card of pendingCards) {
         if (card.classList.contains("subagent-wait")) continue;
         const runningLabel = String(card.dataset.runningLabel || card.querySelector(".tool-card-file")?.textContent || "").trim();
@@ -15085,11 +15306,15 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
               ? "Created"
               : /^Editing/i.test(runningLabel)
                 ? "Edited"
-                : "Completed";
-        setToolCardStatus(card, failed ? "error" : "success", failed ? "Failed" : completedLabel);
+                : "";
+        if (failed || !completedLabel || isTransientToolCardLabel(completedLabel)) {
+          card.remove();
+          continue;
+        }
+        setToolCardStatus(card, "success", completedLabel);
       }
 
-      for (const row of this.turn.querySelectorAll(".agent-command-event[data-state='running']")) {
+      for (const row of this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".agent-command-event[data-state='running']")])) {
         // A durable terminal_wait command remains live after this agent turn
         // settles. Its row is finalized by the later terminal_complete event.
         if (row.dataset.waiting === "true") continue;
@@ -15099,24 +15324,24 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     finishLiveState(outcome = "complete") {
       this.finalOutcome = outcome;
       this.settlePendingActivities(outcome);
-      this.turn.setAttribute("aria-busy", "false");
-      if (outcome === "error" || outcome === "stopped") {
-        this.liveStateEl?.remove();
-        this.liveStateEl = null;
-        this.statusEl = null;
+      for (const turn of this.assistantTurns()) turn.setAttribute("aria-busy", "false");
+      const stopped = outcome === "stopped";
+      if (!stopped && !this.hadToolActivity()) {
+        this.dismissLiveState();
         return;
       }
       const block = this.ensureLiveState();
       const duration = formatAgentWorkDuration(this.startedAt);
-      const label = outcome === "inconclusive" ? `Finished in ${duration}` : `Worked for ${duration}`;
-      block.dataset.state = "complete";
+      const label = stopped
+        ? "Stopped"
+        : outcome === "inconclusive"
+          ? `Finished in ${duration}`
+          : `Worked for ${duration}`;
+      block.dataset.state = stopped ? "stopped" : "complete";
       block.dataset.final = "true";
       block.dataset.stateKey = `${outcome}|${label}`;
-      const icon = block.querySelector(".agent-status-icon");
-      if (icon) {
-        icon.hidden = true;
-        icon.className = "agent-status-icon codicon";
-      }
+      if (!stopped) (this.rootTurn || this.turn).dataset.usedTools = "true";
+      block.querySelector(".agent-status-icon")?.remove();
       const textEl = block.querySelector(".agent-status-text");
       if (textEl) textEl.textContent = label;
       block.classList.remove("status-updated");
@@ -15149,7 +15374,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       if (!brief || !Array.isArray(brief.steps) || !brief.steps.length) return;
       this.taskBrief = brief;
       this.turn.classList.add("has-agent-run");
-      this.setLiveState({ kind: "planning", detail: "Forming the next hypothesis" });
+      this.setLiveState({ kind: "planning", detail: "Planning" });
     },
     updateTaskStage(phase = "") {
       this.turn.dataset.taskPhase = String(phase || "");
@@ -15199,7 +15424,6 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const raw = String(segment.raw || "");
       const text = ToolParser.cleanReplyForDisplay(raw, { streaming: true }) || raw.trim();
       if (text) {
-        this.setLiveState({ kind: "working", detail: "Writing response" });
         segment.el.hidden = false;
         renderMarkdown(
           segment.el,
@@ -15215,18 +15439,18 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const segment = this.currentContentSegment();
       this.rawContent += value;
       if (segment) segment.raw += value;
-      this.turn.dataset.rawAssistant = this.rawContent;
+      (this.rootTurn || this.turn).dataset.rawAssistant = this.rawContent;
       this.syncDisplay({ animateToken: token });
     },
     finalizeContent() {
       this.finalizeThinking();
-      this.turn.dataset.rawAssistant = this.rawContent;
+      (this.rootTurn || this.turn).dataset.rawAssistant = this.rawContent;
       for (const segment of this.contentSegments) {
         this.renderContentSegment(segment, { streaming: false });
         segment.el.classList.remove("streaming");
       }
-      const subagentRows = [...this.turn.querySelectorAll(".subagent-run-card")];
-      if (subagentRows.length) this.turn.append(...subagentRows);
+      const subagentRows = this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".subagent-run-card")]);
+      if (subagentRows.length) (this.turn || this.rootTurn).append(...subagentRows);
       this.finishLiveState(this.finalOutcome || "complete");
       const copyAnchor = this.contentSegments.find((segment) => !segment.el.hidden)?.el || this.contentEl;
       attachAssistantCopyButton(copyAnchor);
@@ -15234,13 +15458,24 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     pruneIfEmpty() {
       const hasContent = this.contentSegments.some((segment) => !segment.el.hidden && segment.el.textContent.trim());
-      const statusActive = this.turn.getAttribute("aria-busy") === "true";
+      const statusActive = this.assistantTurns().some((turn) => turn.getAttribute("aria-busy") === "true");
       const hasStatus = Boolean(this.statusEl?.isConnected && !this.statusEl.hidden);
       const hasThinking = this.thinkingBlock && !this.thinkingBlock.hidden;
       const hasActivity = Boolean(this.activityLogEl?.childElementCount && this.activityLogEl.isConnected);
-      const hasTools = this.turn.querySelector(".tool-card, .agent-command-event");
+      const hasTools = this.assistantTurns().some((turn) => turn.querySelector(".tool-card, .agent-command-event"));
       if (!hasContent && !statusActive && !hasStatus && !hasThinking && !hasActivity && !hasTools) {
-        this.turn.remove();
+        for (const turn of this.assistantTurns()) {
+          const chunk = turn.closest(".agent-run-chunk");
+          if (chunk) chunk.remove();
+          else turn.remove();
+        }
+        return;
+      }
+      for (const turn of this.assistantTurns()) {
+        if (turn === this.rootTurn) continue;
+        const visible = [...turn.querySelectorAll(".assistant-reply")].some((el) => !el.hidden && el.textContent.trim());
+        const extras = turn.querySelector(".tool-card, .agent-command-event, .subagent-run-card, .agent-status-line");
+        if (!visible && !extras) (turn.closest(".agent-run-chunk") || turn).remove();
       }
     },
     showPrivateReasoning() {
@@ -15254,6 +15489,13 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const wasThinking = this.liveStateEl?.dataset.state === "thinking";
       this.reasoningActivityLine = null;
       this.lastActivityKey = "";
+      if (wasThinking && this.liveStateEl?.isConnected && this.liveStateEl.dataset.final !== "true") {
+        const textEl = this.liveStateEl.querySelector(".agent-status-text");
+        if (textEl) textEl.textContent = "Working…";
+        this.liveStateEl.dataset.state = "working";
+        this.liveStateEl.dataset.stateKey = "working|Working…";
+        this.liveStateEl.dataset.final = "false";
+      }
       return wasThinking;
     },
   };
@@ -16005,6 +16247,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
         type: "tool_usage",
         toolName: payload.tool.toolName || payload.tool.action || payload.tool.name || "tool",
       }, { session: runSession });
+      assistant.markToolUse();
       assistant.finalizeThinking();
       if (isTaskListTool(payload.tool)) {
         assistant.setStatus("Organizing the task list…");
@@ -16544,6 +16787,7 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
       if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
     }
   } else if (type === "tool_start" && payload.tool) {
+    assistant.markToolUse();
     if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
     else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
   } else if (type === "tool_result" && payload.tool && payload.result) {
@@ -16738,6 +16982,7 @@ async function renderParentContinuationEvent(payload = {}) {
       if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
     }
   } else if (type === "tool_start" && payload.tool) {
+    assistant.markToolUse();
     assistant.finalizeThinking();
     if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
     else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
@@ -16911,11 +17156,9 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
       const waitLabel = kind === "terminal" ? `Running command · ${elapsedLabel}` : `waiting ${elapsedLabel}`;
       updateWaitCardLabel(waitId, waitLabel);
       if (kind === "terminal") updateCommandTimelineLabel(payload, waitLabel);
-      appendHarnessWaitLine(waitId, waitLabel);
     } else {
       finalizeSubagentWaitingCard(waitId, status, elapsedLabel);
       if (kind === "terminal") finalizeCommandTimeline(payload, status, payload.exitCode);
-      appendHarnessWaitLine(waitId, `waited ${elapsedLabel}`);
     }
     const transcript = String(payload.stdout || "").trim();
     const stderr = String(payload.stderr || "").trim();
@@ -17018,27 +17261,6 @@ function updateWaitCardLabel(waitId, label) {
     if (fileEl) fileEl.textContent = label;
     card.setAttribute("aria-label", label);
   }
-}
-
-function appendHarnessWaitLine(waitId, text) {
-  if (!messages || !text) return;
-  let host = null;
-  if (waitId) {
-    for (const card of messages.querySelectorAll(".tool-card.subagent-wait[data-subagent-id], .tool-card.subagent-wait[data-wait-id], .tool-card[data-wait-id]")) {
-      const cardId = card.dataset.subagentId || card.dataset.waitId || "";
-      if (cardId === waitId) {
-        host = card.parentElement || card;
-        break;
-      }
-    }
-  }
-  const line = document.createElement("div");
-  line.className = "harness-wait-line";
-  line.dataset.waitId = waitId || "";
-  line.textContent = text;
-  if (host?.appendChild) host.appendChild(line);
-  else messages.appendChild(line);
-  scrollMessages();
 }
 
 function finalizeCommandTimeline(identity, status = "complete", exitCode = null) {
@@ -17377,6 +17599,7 @@ document.addEventListener("click", (e) => {
 });
 
 chatPane?.addEventListener("click", (e) => {
+  if (e.target.closest(".assistant-reply-footer, .assistant-reply-copy")) return;
   const promptBox = e.target.closest(".chat-turn.user .chat-box.user-prompt-expandable");
   if (promptBox) {
     const willExpand = !promptBox.classList.contains("is-expanded");

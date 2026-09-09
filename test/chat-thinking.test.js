@@ -28,16 +28,32 @@ test("thinking uses one private status line and never exposes model reasoning", 
 test("content and tool events replace thinking and completion settles to elapsed time", () => {
   assert.match(renderer, /if \(payload\.type === "content" \|\| payload\.type === "token"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
   assert.match(renderer, /if \(payload\.type === "tool_call"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
-  assert.match(renderer, /this\.setLiveState\(\{ kind: "working", detail: "Writing response" \}\)/);
+  assert.match(renderer, /dismissLiveState\(\)/);
+  assert.doesNotMatch(renderer, /detail: "Writing response"/);
+  assert.doesNotMatch(renderer, /if \(payload\.type === "content" \|\| payload\.type === "token"\)[\s\S]*?assistant\.dismissLiveState\(\)/);
+  assert.match(renderer, /if \(kind === "working" \|\| isPlaceholderToolCardLabel\(label\) \|\| \/\^Working\/i\.test\(label\)\) return/);
   assert.match(renderer, /completeReasoningActivity\(\)/);
   assert.match(renderer, /finishLiveState\(outcome = "complete"\)/);
+  assert.match(renderer, /hadToolActivity\(\)/);
+  assert.match(renderer, /if \(!stopped && !this\.hadToolActivity\(\)\) \{[\s\S]*?this\.dismissLiveState\(\)/);
+  assert.doesNotMatch(renderer, /if \(payload\.type === "tool_call"\)[\s\S]{0,220}?assistant\.markToolUse\(\)/);
   assert.match(renderer, /`Worked for \$\{duration\}`/);
   assert.match(renderer, /`Finished in \$\{duration\}`/);
-  assert.match(renderer, /if \(outcome === "error" \|\| outcome === "stopped"\) \{[\s\S]*?this\.liveStateEl\?\.remove\(\)/);
+  assert.match(renderer, /const stopped = outcome === "stopped"/);
+  assert.match(renderer, /const label = stopped[\s\S]*\? "Stopped"/);
+  assert.doesNotMatch(renderer, /if \(outcome === "error" \|\| outcome === "stopped"\) \{[\s\S]{0,220}?this\.liveStateEl\?\.remove\(\)/);
+  assert.match(renderer, /if \(kind === "planning"\) return "Planning/);
+  assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\] \{[\s\S]*font-size: 12px/);
+  assert.match(renderer, /isTransientToolCardLabel/);
+  assert.match(renderer, /isPlaceholderToolCardLabel/);
+  assert.match(chatStyles, /#messages \.agent-status-line\[data-final="true"\] \{[\s\S]*font-weight: 400/);
+  assert.match(chatStyles, /#messages \.agent-status-line\[data-final="true"\]\[data-state="stopped"\] \{[\s\S]*font-weight: 700/);
   assert.match(renderer, /this\.settlePendingActivities\(outcome\)/);
-  assert.match(renderer, /icon\.hidden = true/);
+  assert.match(renderer, /block\.querySelector\("\.agent-status-icon"\)\?\.remove\(\)/);
   assert.doesNotMatch(renderer, /codicon-debug-stop/);
-  assert.match(chatStyles, /\.agent-status-line\[data-final="true"\] \.agent-status-icon[\s\S]*?display: none/);
+  assert.match(chatStyles, /#messages \.agent-status-icon[\s\S]*?display: none/);
+  assert.match(renderer, /template\.content\.querySelectorAll\("\.agent-status-line:not\(\[data-final='true'\]\)"\)/);
+  assert.doesNotMatch(renderer, /else if \(!usedTools &&/);
   assert.doesNotMatch(renderer, /message\.textContent = "Reasoning complete"|completedThinkingLabel/);
 });
 
@@ -52,7 +68,7 @@ test("turn finalization settles orphaned file and command activity without a pro
 
 test("status renderer owns one node and updates it in place", () => {
   assert.match(renderer, /if \(this\.liveStateEl\) return this\.liveStateEl/);
-  assert.match(renderer, /this\.turn\.insertBefore\(block, this\.contentEl\)/);
+  assert.match(renderer, /host\.insertBefore\(block, firstReply \|\| host\.firstChild\)/);
   assert.match(renderer, /block\.dataset\.stateKey === stateKey/);
   assert.match(renderer, /block\.classList\.add\("status-updated"\)/);
   assert.doesNotMatch(renderer, /list\.className = "agent-activity-lines"/);
@@ -123,7 +139,10 @@ test("large Agent work uses a temporary collapsible composer checklist", () => {
 
 test("status styling is chrome-free, neutral, animated, and motion-safe", () => {
   assert.match(chatStyles, /#messages \.agent-status-line \{[\s\S]*?border: 0[\s\S]*?background: transparent/);
+  assert.match(chatStyles, /#messages \.agent-status-line \{[\s\S]{0,220}font: 400 14px/);
+  assert.match(chatStyles, /#messages \.context-checkpoint-notice \{[\s\S]{0,220}font: 500 14px/);
   assert.match(chatStyles, /#messages \.agent-status-line\[data-final="true"\]/);
+  assert.doesNotMatch(chatStyles, /#messages \.agent-status-line\[data-final="true"\] \{[\s\S]{0,120}font-size: 11\.5px/);
   assert.match(chatStyles, /@keyframes agent-status-update/);
   assert.match(chatStyles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?agent-status-line\.status-updated/);
 });

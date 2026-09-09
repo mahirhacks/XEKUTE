@@ -5,6 +5,7 @@ const path = require("node:path");
 
 const bootstrapSource = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
 const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
+const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
 
 function functionBody(name, nextName) {
   const pattern = new RegExp(`function ${name}\\([^]*?\\r?\\n}\\r?\\n\\r?\\nfunction ${nextName}\\(`);
@@ -23,20 +24,20 @@ function sourceBetween(startMarker, endMarker) {
 
 test("assistant exchange footer is rebuilt only after the entire AI chunk is idle", () => {
   const body = functionBody("attachAssistantCopyButton", "toolIconClass");
-  const removeAt = body.indexOf('querySelector(".assistant-reply-footer")?.remove()');
+  const removeAt = body.indexOf('querySelectorAll(".assistant-reply-footer")');
   const busyCheckAt = body.indexOf('getAttribute("aria-busy") === "true"');
-  const appendAt = body.lastIndexOf("exchange.appendChild(footer)");
+  const appendAt = body.lastIndexOf("host.appendChild(footer)");
 
   assert.ok(removeAt >= 0, "an old or misplaced footer must be removed first");
   assert.ok(busyCheckAt > removeAt, "the whole exchange must be checked after stale metadata is removed");
-  assert.ok(appendAt > busyCheckAt, "the footer must be appended only after the exchange is idle");
+  assert.ok(appendAt > busyCheckAt, "the footer must be appended inside the agent response host after the exchange is idle");
   assert.doesNotMatch(body, /querySelector\("\.assistant-reply-copy"\)\) return/);
 });
 
 test("starting an assistant continuation clears prior exchange metadata", () => {
   const body = sourceBetween("function createAssistantTurn(", "const SYSTEM_SKILL_SLASH_COMMANDS");
   const appendTurnAt = body.indexOf("appendChatTurn(turn, { container })");
-  const removeFooterAt = body.indexOf('querySelector(".assistant-reply-footer")?.remove()');
+  const removeFooterAt = body.indexOf('querySelectorAll(".assistant-reply-footer")');
 
   assert.ok(appendTurnAt >= 0);
   assert.ok(removeFooterAt > appendTurnAt, "continuation metadata must be cleared as soon as its turn joins the exchange");
@@ -67,7 +68,7 @@ test("restored exchanges attach metadata after text and tool-only assistant turn
   assert.ok(replaceAt > attachAt, "the finalized exchange should enter the visible transcript with its footer last");
 });
 
-test("assistant footer keeps copy visible and reveals time on exchange-body hover", () => {
+test("assistant footer keeps copy visible and always shows time on the latest exchange", () => {
   const footerStyles = baseStyles.match(/\.assistant-reply-footer \{[\s\S]*?\.chat-empty-state \{/);
   assert.ok(footerStyles, "Could not find assistant footer styles");
   const source = footerStyles[0];
@@ -75,10 +76,19 @@ test("assistant footer keeps copy visible and reveals time on exchange-body hove
   assert.match(source, /border: 1px solid transparent/);
   assert.match(source, /background: transparent/);
   assert.match(source, /\.assistant-reply-time \{[^]*?opacity: 0;[^]*?visibility: hidden/);
+  assert.match(source, /align-self: flex-end/);
   assert.match(
     source,
-    /\.chat-exchange-body:hover ~ \.assistant-reply-footer \.assistant-reply-time,[\s\S]*?opacity: 0\.5;[\s\S]*?visibility: visible/,
+    /\.chat-exchange:hover \.assistant-reply-time,[\s\S]*?opacity: 0\.5;[\s\S]*?visibility: visible/,
+  );
+  assert.match(
+    source,
+    /#messages > \.chat-exchange:last-child \.assistant-reply-time/,
   );
   assert.doesNotMatch(source, /\.assistant-reply-time:hover/);
   assert.match(source, /\.assistant-reply-copy \{[^]*?opacity: 0\.5;/);
+  assert.match(chatStyles, /#messages \.agent-response-host > \.assistant-reply-footer/);
+  assert.match(chatStyles, /#messages \.chat-exchange-body > \.assistant-reply-footer/);
+  assert.doesNotMatch(chatStyles, /#messages \.chat-exchange > \.assistant-reply-footer/);
+  assert.doesNotMatch(chatStyles, /\.chat-box:has\(> \.assistant-reply-footer\)/);
 });

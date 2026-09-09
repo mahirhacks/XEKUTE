@@ -150,6 +150,8 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /appendChatTurn\(turn, \{ startsExchange: true \}\)/);
   assert.match(chatStyles, /#messages \.chat-exchange-body \{[\s\S]*gap: 18px/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*position: sticky[\s\S]*top: 8px/);
+  assert.match(chatStyles, /#messages \.agent-response-host > \.assistant-reply-footer/);
+  assert.match(chatStyles, /#messages \.chat-exchange-body > \.assistant-reply-footer/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \.chat-box[\s\S]*background: #252526 !important/);
   assert.match(chatStyles, /#chat-pane::before[\s\S]*height: var\(--chat-sticky-mask-solid-height\)[\s\S]*background: #171717/);
   assert.match(chatStyles, /#chat-pane::after[\s\S]*top: calc\(35px \+ var\(--chat-sticky-mask-solid-height\)\)[\s\S]*height: 12px[\s\S]*linear-gradient/);
@@ -315,11 +317,16 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
 test("background terminal continuations remain internal to the agent runtime", () => {
   const renderer = read("src/ui/bootstrap.js");
   const main = read("src/app/electron/main.js");
+  const chatStyles = read("src/ui/styles/chat.css");
 
   assert.match(renderer, /function isInternalRuntimeInputMessage\(message = \{\}\)/);
   assert.match(renderer, /__xekuteInternalRuntimeInput/);
   assert.match(renderer, /\^Harness \(\?:checkpoint:\|waited\\b\)/);
   assert.match(renderer, /handleBackgroundWaitEvent\([\s\S]*?sendMessageWithAgentRuntime\(\{[\s\S]*?internal: true,[\s\S]*?text: message,[\s\S]*?skipContextFiles: true/);
+  assert.doesNotMatch(renderer, /function appendHarnessWaitLine\(/);
+  assert.doesNotMatch(renderer, /className = "harness-wait-line"/);
+  assert.doesNotMatch(chatStyles, /\.harness-wait-line/);
+  assert.match(renderer, /querySelectorAll\("\.harness-wait-line"\)\.forEach\(\(node\) => node\.remove\(\)\)/);
   assert.doesNotMatch(renderer, /chatInput\.value = message;[\s\S]{0,100}sendMessageWithAgentRuntime\(\)/);
   assert.match(renderer, /userMessage: internal && options\?\.continuation \? "" : text/);
   assert.match(renderer, /internalRuntimeInput: internal/);
@@ -491,7 +498,13 @@ test("agent turns retain tool and command rows without a redundant progress chec
   assert.match(renderer, /payload\.type === "output_continuation"/);
   assert.match(renderer, /Continuing the response/);
   assert.doesNotMatch(chatStyles, /\.agent-progress-(?:feed|entry|icon|text)/);
-  assert.match(chatStyles, /\.tool-card\[data-state="error"\] \.tool-card-icon \{ display: none !important; \}/);
+  assert.match(chatStyles, /\.tool-card\[data-state="error"\] \{ display: none !important; \}/);
+  assert.match(renderer, /function stripFailedToolCardStubs\(/);
+  assert.match(renderer, /function isTransientToolCardLabel\(/);
+  assert.match(renderer, /function isPlaceholderToolCardLabel\(/);
+  assert.match(renderer, /syncToolCardPlaceholderVisibility\(card\)/);
+  assert.match(renderer, /if \(type === "error"\) \{\s*card\.remove\(\);/);
+  assert.match(renderer, /if \(type === "success" && isTransientToolCardLabel\(label\)\)/);
   assert.match(prompt, /Before invoking a tool, provide one short user-facing progress update/);
   assert.match(prompt, /never reveal private chain-of-thought/);
 });
@@ -508,7 +521,7 @@ test("command execution renders as sequential collapsed chat events without ente
   assert.match(renderer, /sealCurrentContentSegment\(\);[\s\S]*?appendChild\(row\)[\s\S]*?createContentSegment\(\)/);
   assert.match(renderer, /assistant\.ensureCommandEvent\(payload\.tool\)/);
   assert.match(renderer, /assistant\.completeCommandEvent\(payload\.tool, uiResult\)/);
-  assert.match(renderer, /turn\.dataset\.rawAssistant = this\.rawContent/);
+  assert.match(renderer, /\(this\.rootTurn \|\| this\.turn\)\.dataset\.rawAssistant = this\.rawContent/);
   assert.match(renderer, /assistantTurn\.dataset\.rawAssistant/);
   assert.match(renderer, /TerminalManager\.attachAgentSession\(\{[\s\S]{0,220}payload\.id/);
   assert.match(chatStyles, /\.agent-command-event\s*\{/);

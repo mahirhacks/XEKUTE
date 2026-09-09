@@ -14,6 +14,7 @@ const {
   advanceTowardPhase,
   toolCallSignature,
 } = require("../src/agent/controller/agent-controller.js");
+const { createTier1ContextCoordinator, CHECKPOINT_RATIO } = require("../src/app/services/memory/tier1-context-coordinator.js");
 const { classifyEvidenceRequirement } = require("../src/agent/runtime/evidence-classifier.js");
 const ContextRouter = require("../src/prompts/skills/context-router");
 const ModeSkills = require("../src/prompts/skills/mode-skills");
@@ -867,6 +868,7 @@ test("a Tier 1 checkpoint fills summarized conversation and current workflow usa
   const sessionId = "session_00000000-0000-4000-8000-000000004302";
   const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
   const events = [];
+  let modelCalls = 0;
   const chatHistory = Array.from({ length: 80 }, (_, index) => ({
     role: index % 2 === 0 ? "user" : "assistant",
     content: `Turn ${index}: ${"finding ".repeat(80)}`,
@@ -885,6 +887,10 @@ test("a Tier 1 checkpoint fills summarized conversation and current workflow usa
     chatHistory,
     sendEvent(event) { events.push(event); },
     async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls > 2) {
+        throw new Error("wrap-up resume must not call runModelRound more than twice");
+      }
       return { ok: true, fullText: "Continuing from the checkpoint.", toolCalls: [], finishReason: "stop" };
     },
   });
@@ -903,4 +909,345 @@ test("a Tier 1 checkpoint fills summarized conversation and current workflow usa
   const workflow = usageAfter.usage.sections.find((section) => section.key === "current_workflow");
   assert.ok(summarized?.tokens > 0);
   assert.ok(workflow?.tokens > 0);
+});
+
+function memoryIds(n) {
+  return {
+    projectId: `proj_00000000-0000-4000-8000-00000000${n}`,
+    sessionId: `session_00000000-0000-4000-8000-00000000${n}`,
+  };
+}
+
+function activeConversationHasRole(assembled, role) {
+  const components = assembled?.blocks?.B?.components || [];
+  const active = components.find((entry) => entry.label === "Active Conversation");
+  return Array.isArray(active?.value) && active.value.some((message) => message?.role === role);
+}
+
+function delegateTier1(inner, extras = {}) {
+  return {
+    assemble: (...args) => inner.assemble(...args),
+    pressure: extras.pressure || ((...args) => inner.pressure(...args)),
+    appendConversation: (...args) => inner.appendConversation(...args),
+    checkpoint: extras.checkpoint || ((...args) => inner.checkpoint(...args)),
+    setActiveConversation: (...args) => inner.setActiveConversation?.(...args),
+    setWorkflow: (...args) => inner.setWorkflow?.(...args),
+    state: (...args) => inner.state?.(...args),
+  };
+}
+
+function createWrapUpCrossingCoordinator({
+  failCheckpoint = false,
+  stayOverAfterRotate = false,
+  onAfterCheckpoint = null,
+} = {}) {
+  const inner = createTier1ContextCoordinator();
+  let rotated = false;
+  return delegateTier1(inner, {
+    pressure(input) {
+      const base = inner.pressure(input);
+      const assembled = input.assembled;
+      const crossed = activeConversationHasRole(assembled, "assistant")
+        || activeConversationHasRole(assembled, "tool");
+      if (!rotated) {
+        return { ...base, threshold: crossed ? 0 : Number.MAX_SAFE_INTEGER };
+      }
+      return { ...base, threshold: stayOverAfterRotate ? 0 : Number.MAX_SAFE_INTEGER };
+    },
+    async checkpoint(...args) {
+      if (failCheckpoint) {
+        return { ok: false, code: "MEMORY_CHECKPOINT_FAILED", error: "forced checkpoint failure" };
+      }
+      const result = await inner.checkpoint(...args);
+      if (result?.ok && result?.checkpointed) rotated = true;
+      if (typeof onAfterCheckpoint === "function") onAfterCheckpoint(result);
+      return result;
+    },
+  });
+}
+
+function wrapUpTurnOptions({ ids, events, tier1, runModelRound, extra = {} }) {
+  return {
+    model: "local:small",
+    numCtx: 32_768,
+    contextBudget: 32_768,
+    contextPlan: { provider: "ollama", effectiveLimitTokens: 32_768, promptBudgetTokens: 32_768 },
+    mode: "ask",
+    modeFamily: "assist",
+    projectId: ids.projectId,
+    memorySessionId: ids.sessionId,
+    tier1Context: tier1,
+    userMessage: "Continue the investigation from the last finding.",
+    chatHistory: [],
+    sendEvent(event) { events.push(event); },
+    runModelRound,
+    async executeToolCall() {
+      return { ok: true, value: { summary: "check completed" } };
+    },
+    ...extra,
+    projectId: ids.projectId,
+    memorySessionId: ids.sessionId,
+    tier1Context: extra.tier1Context || tier1,
+  };
+}
+
+test("wrap-up block_complete rotates then resumes the same turn", async () => {
+  assert.equal(CHECKPOINT_RATIO, 0.90);
+  const ids = memoryIds(4401);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+      }
+      return { ok: true, fullText: "Continuing after the summarized conversation.", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(result.runState.status, "completed");
+  const started = events.filter((event) => event.type === "context_checkpoint" && event.status === "started");
+  const completed = events.filter((event) => event.type === "context_checkpoint" && event.status === "completed");
+  assert.ok(started.some((event) => event.reason === "block_complete"));
+  assert.ok(completed.some((event) => event.reason === "block_complete"));
+});
+
+test("a tool-free turn under 90% completes without a wrap-up checkpoint", async () => {
+  const ids = memoryIds(4402);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createTier1ContextCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      return { ok: true, fullText: "XSS is cross-site scripting.", toolCalls: [], finishReason: "stop" };
+    },
+    extra: { userMessage: "What is XSS?" },
+  }));
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(result.runState.status, "completed");
+  assert.equal(events.some((event) => event.type === "context_checkpoint"), false);
+});
+
+test("wrap-up resume latches after one continue when pressure stays at 90%", async () => {
+  const ids = memoryIds(4403);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator({ stayOverAfterRotate: true }),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls > 2) {
+        throw new Error("latch must not allow a third runModelRound");
+      }
+      return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(result.runState.status, "completed");
+});
+
+test("in-loop block_complete checkpoint failure is inconclusive", async () => {
+  const ids = memoryIds(4404);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator({ failCheckpoint: true }),
+    async runModelRound() {
+      modelCalls += 1;
+      return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "MEMORY_CHECKPOINT_FAILED");
+  assert.equal(result.runState.status, "inconclusive");
+  assert.notEqual(result.runState.status, "completed");
+  assert.equal(modelCalls, 1);
+  assert.ok(Array.isArray(result.failureRecords));
+  assert.equal(typeof result.executedTools, "boolean");
+  assert.ok(Array.isArray(result.evidenceIds));
+  assert.equal("lastUsage" in result, true);
+  assert.equal("contextUsage" in result, true);
+});
+
+test("abort after wrap-up checkpoint does not resume the model", async () => {
+  const ids = memoryIds(4405);
+  const events = [];
+  let modelCalls = 0;
+  const abort = new AbortController();
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator({
+      onAfterCheckpoint() { abort.abort(); },
+    }),
+    async runModelRound() {
+      modelCalls += 1;
+      return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+    },
+    extra: { signal: abort.signal },
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.aborted, true);
+  assert.equal(result.runState.status, "stopped");
+  assert.equal(modelCalls, 1);
+});
+
+test("tool-call batches are not checkpointed until the batch seals", async () => {
+  const ids = memoryIds(4406);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return {
+          ok: true,
+          fullText: "",
+          toolCalls: [{ id: "call-pair", type: "function", function: { name: "exec_command", arguments: {} } }],
+          finishReason: "tool_calls",
+        };
+      }
+      return { ok: true, fullText: "The check finished.", toolCalls: [], finishReason: "stop" };
+    },
+    extra: {
+      mode: "agent",
+      tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  const firstToolOpen = events.findIndex((event) => event.type === "tool_call" || event.type === "tool_start");
+  const lastToolResult = events.findLastIndex((event) => event.type === "tool_result");
+  assert.ok(firstToolOpen >= 0, "a tool_call or tool_start must be emitted");
+  assert.ok(lastToolResult >= 0, "tool_result must be emitted");
+  const between = events.slice(firstToolOpen, lastToolResult + 1);
+  assert.equal(between.some((event) => event.type === "context_checkpoint"), false);
+  const toolResultsCheckpoint = events.findIndex((event) => event.type === "context_checkpoint" && event.reason === "tool_results");
+  assert.ok(toolResultsCheckpoint > lastToolResult, "reason tool_results must fire only after the batch seals");
+  assert.equal(events.some((event) => event.type === "context_checkpoint" && event.reason === "tool_results" && events.indexOf(event) < lastToolResult), false);
+});
+
+test("before_model_call does not force a checkpoint when active conversation is empty", async () => {
+  const ids = memoryIds(4407);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator({ stayOverAfterRotate: true }),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls > 2) {
+        throw new Error("empty-active resume must not loop");
+      }
+      if (modelCalls === 1) {
+        return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+      }
+      return { ok: true, fullText: "Continuing after rotation.", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(events.some((event) => event.type === "context_checkpoint" && event.reason === "before_model_call"), false);
+});
+
+test("unlimited MAX_AGENT_ROUNDS still resumes wrap-up in the same for-loop", async () => {
+  assert.equal(MAX_AGENT_ROUNDS, 0);
+  const ids = memoryIds(4408);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+      }
+      return { ok: true, fullText: "Resumed in the same turn.", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(result.runState.status, "completed");
+});
+
+test("finite maxAgentRounds refunds the wrap-up round so resume is not post-loop", async () => {
+  const ids = memoryIds(4409);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+      }
+      return { ok: true, fullText: "Resumed after the wrap-up checkpoint.", toolCalls: [], finishReason: "stop" };
+    },
+    extra: { maxAgentRounds: 1 },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(result.runState.status, "completed");
+  assert.notEqual(result.runState.status, "inconclusive");
+});
+
+test("post-loop round-limit block_complete stays terminal", async () => {
+  const ids = memoryIds(4410);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createTier1ContextCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      return {
+        ok: true,
+        fullText: "",
+        toolCalls: [{ id: `call-limit-${modelCalls}`, type: "function", function: { name: "exec_command", arguments: { n: modelCalls } } }],
+        finishReason: "tool_calls",
+      };
+    },
+    extra: {
+      mode: "agent",
+      maxAgentRounds: 1,
+      tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    },
+  }));
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result.runState.status, "inconclusive");
+  assert.equal(result.ok, true);
+  const blockComplete = events.filter((event) => event.type === "context_checkpoint" && event.reason === "block_complete");
+  assert.equal(blockComplete.some((event) => event.status === "started" || event.status === "completed"), false);
 });

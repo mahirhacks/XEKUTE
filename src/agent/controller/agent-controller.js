@@ -678,6 +678,7 @@ async function runAgentTurn({
   const tier1Active = tier1Assembly ? tier1ConversationSeed.map((message) => ({ ...message })) : [];
   const tier1ToolEvents = [];
   let tier1CheckpointInFlight = null;
+  let wrapUpPressureResumed = false;
   const refreshTier1Prompt = ({ resetHistory = true } = {}) => {
     if (!useTier1) return tier1Assembly;
     const next = tier1Context.assemble({
@@ -1118,6 +1119,51 @@ async function runAgentTurn({
       }
       const tier1Checkpoint = useTier1 ? await checkpointTier1IfNeeded({ reason: "block_complete" }) : null;
       const completedContextUsage = currentTier1Usage() || publishedUsage;
+      if (useTier1) {
+        if (tier1Checkpoint?.ok === false) {
+          AgentRuntime.finalize(runState, { status: "inconclusive", reason: "Tier 1 checkpoint failed." });
+          sendEvent({ type: "run_state", runId, state: { ...runState } });
+          return {
+            ok: false,
+            error: "The active conversation could not be checkpointed safely.",
+            code: tier1Checkpoint.code || "MEMORY_CHECKPOINT_FAILED",
+            finalText,
+            appendedMessages: appendedMessages(),
+            executedTools,
+            runState,
+            contextRoute,
+            contextUsage: completedContextUsage,
+            evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+            failureRecords,
+            lastUsage,
+          };
+        }
+        if (signal?.aborted) {
+          AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
+          sendEvent({ type: "run_state", runId, state: { ...runState } });
+          return {
+            ok: false,
+            error: "The agent turn was stopped.",
+            finalText,
+            appendedMessages: appendedMessages(),
+            runState,
+            contextRoute,
+            contextUsage: completedContextUsage,
+            aborted: true,
+            evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+          };
+        }
+        if (tier1Checkpoint.checkpointed === true && !wrapUpPressureResumed) {
+          wrapUpPressureResumed = true;
+          // The wrap-up round paused at the pressure boundary; refund it so a
+          // finite maxAgentRounds cannot drop the resume into post-loop exit.
+          round -= 1;
+          continue;
+        }
+        if (tier1Checkpoint.ok === true && tier1Checkpoint.checkpointed === false) {
+          wrapUpPressureResumed = false;
+        }
+      }
       if (useTier1 && completedContextUsage) sendEvent({ type: "context_usage", usage: completedContextUsage });
       AgentRuntime.finalize(runState, {
         status: "completed",

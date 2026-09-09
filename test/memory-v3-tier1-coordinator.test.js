@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { createTier1ContextCoordinator, METER_ROWS } = require("../src/app/services/memory/tier1-context-coordinator.js");
+const { createTier1ContextCoordinator, CHECKPOINT_RATIO, METER_ROWS } = require("../src/app/services/memory/tier1-context-coordinator.js");
 
 const projectId = "proj_00000000-0000-4000-8000-000000004001";
 const sessionId = "session_00000000-0000-4000-8000-000000004002";
@@ -215,4 +215,59 @@ test("Tier 1 restores the active ledger across coordinator instances", () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("checkpoint pressure flips at 90% of the effective context limit", () => {
+  assert.equal(CHECKPOINT_RATIO, 0.90);
+  const limit = 10_000;
+  const threshold = Math.floor(limit * 0.90);
+  assert.equal(threshold, Math.floor(limit * CHECKPOINT_RATIO));
+
+  function coordinatorForTokens(tokens) {
+    return createTier1ContextCoordinator({ tokenCounter: () => tokens });
+  }
+
+  const below = coordinatorForTokens(threshold - 1).assemble({
+    project_id: projectId,
+    session_id: sessionId,
+    active_conversation: [{ role: "user", content: "below-threshold prompt" }],
+    effective_context_limit: limit,
+    preview: true,
+  });
+  assert.equal(below.checkpoint_threshold, threshold);
+  assert.equal(below.conservative_prompt_upper_bound, threshold - 1);
+  assert.equal(below.total_tokens, threshold - 1);
+  assert.equal(below.should_checkpoint, false);
+
+  const atLine = coordinatorForTokens(threshold).assemble({
+    project_id: projectId,
+    session_id: sessionId,
+    active_conversation: [{ role: "user", content: "at-threshold prompt" }],
+    effective_context_limit: limit,
+    preview: true,
+  });
+  assert.equal(atLine.checkpoint_threshold, threshold);
+  assert.equal(atLine.conservative_prompt_upper_bound, threshold);
+  assert.equal(atLine.total_tokens, threshold);
+  assert.equal(atLine.should_checkpoint, true);
+
+  const belowPressure = coordinatorForTokens(threshold - 1).pressure({
+    project_id: projectId,
+    session_id: sessionId,
+    active_conversation: [{ role: "user", content: "below-threshold prompt" }],
+    effective_context_limit: limit,
+    preview: true,
+  });
+  assert.equal(belowPressure.threshold, threshold);
+  assert.equal(belowPressure.shouldCheckpoint, false);
+
+  const atPressure = coordinatorForTokens(threshold).pressure({
+    project_id: projectId,
+    session_id: sessionId,
+    active_conversation: [{ role: "user", content: "at-threshold prompt" }],
+    effective_context_limit: limit,
+    preview: true,
+  });
+  assert.equal(atPressure.threshold, threshold);
+  assert.equal(atPressure.shouldCheckpoint, true);
 });

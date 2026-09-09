@@ -7,7 +7,7 @@ const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = r
 
 const SUMMARY_MAX = 32_768;
 const SUMMARY_RATIO = 0.05;
-const CHECKPOINT_RATIO = 0.80;
+const CHECKPOINT_RATIO = 0.90;
 const ACTIVE_MAX = 2_000;
 const METER_ROWS = Object.freeze([
   "System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP",
