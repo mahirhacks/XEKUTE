@@ -577,17 +577,16 @@ body,
 }
 
 #messages {
-  gap: 18px;
-  padding: 0 22px 20px;
+  gap: 0;
+  padding: 12px 16px 24px;
   background: var(--revamp-panel);
 }
 
 #messages .chat-turn.user .chat-box {
   border: 1px solid var(--revamp-divider) !important;
-  border-radius: 8px !important;
+  border-radius: 10px !important;
   background: var(--revamp-prompt) !important;
-  padding-top: 12px !important;
-  padding-bottom: 12px !important;
+  padding: 8px 12px !important;
 }
 
 #messages .tool-card .tool-card-file-icon,

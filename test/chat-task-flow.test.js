@@ -37,9 +37,9 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /payload\.type === "task_brief"/);
   assert.match(renderer, /completeTaskBrief\(/);
   assert.match(renderer, /FILE_READ_TOOL_NAMES/);
-  assert.match(renderer, /if \(phase === "error"\) return "Failed"/);
-  assert.match(renderer, /if \(isFileReadTool\(tool\)\) return "Read"/);
-  assert.match(renderer, /return "Edited"/);
+  assert.match(renderer, /if \(phase === "error"\) return \{ verb: "Failed"/);
+  assert.match(renderer, /running \? "Reading" : "Read"/);
+  assert.match(renderer, /running \? "Editing" : "Edited"/);
   assert.match(renderer, /data-guidance-delete-path/);
   assert.match(renderer, /deleteGuidanceEntry\(button\.dataset\.guidanceDeletePath/);
   assert.match(controller, /isReasonablyLargeAgentRequest/);
@@ -148,7 +148,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.doesNotMatch(renderer, /chatStickyUser|syncStickyUserTurn|cloneNode\(true\)/);
   assert.match(renderer, /function normalizeChatExchanges\(/);
   assert.match(renderer, /appendChatTurn\(turn, \{ startsExchange: true \}\)/);
-  assert.match(chatStyles, /#messages \.chat-exchange-body \{[\s\S]*gap: 18px/);
+  assert.match(chatStyles, /#messages \.chat-exchange-body \{[\s\S]*?gap: 0/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*position: sticky[\s\S]*top: 8px/);
   assert.match(chatStyles, /#messages \.agent-response-host > \.assistant-reply-footer/);
   assert.match(chatStyles, /#messages \.chat-exchange-body > \.assistant-reply-footer/);
@@ -467,6 +467,35 @@ test("encrypted V3 chat sessions preserve the exact sanitized display transcript
     { role: "user", content: "Run it" },
     { role: "assistant", content: "Done" },
   ]);
+
+  const uiTranscript = {
+    version: 1,
+    runs: [{
+      id: "run-000",
+      started_at: "2026-09-12T08:00:00.000Z",
+      ended_at: "2026-09-12T08:01:38.000Z",
+      worked_for_ms: 98000,
+      user: { created_at: "2026-09-12T08:00:00.000Z", message: "Run it" },
+      events: [
+        { type: "thinking", started_at: "2026-09-12T08:00:04.200Z", ended_at: "2026-09-12T08:00:16.200Z", duration_ms: 12000, text: "check the renderer" },
+        { type: "tool_group", items: [{ type: "tool", name: "read_file", target: "index.js", status: "ok" }] },
+        { type: "chat", verdict: true, created_at: "2026-09-12T08:01:38.000Z", text: "Done" },
+      ],
+    }],
+  };
+  const withTimeline = await store.record("G:/Xekute", {
+    type: "snapshot",
+    sessionId: begun.sessionId,
+    blockId: begun.blockId,
+    transcript: [{ role: "user", content: "Run it" }, { role: "assistant", content: "Done" }],
+    displayHtml,
+    uiTranscript,
+  });
+  assert.equal(withTimeline.ok, true);
+  const reloaded = store.load("G:/Xekute");
+  assert.equal(reloaded.sessions[0].transcript.runs[0].worked_for_ms, 98000);
+  assert.equal(reloaded.sessions[0].transcript.runs[0].events[0].duration_ms, 12000);
+  assert.equal(reloaded.sessions[0].transcript.runs[0].events[2].verdict, true);
 });
 
 test("every rendered agent event refreshes the durable display transcript", () => {
@@ -475,11 +504,17 @@ test("every rendered agent event refreshes the durable display transcript", () =
   const delegation = read("src/agent/runtime/delegation-provider.js");
 
   assert.match(renderer, /displayHtml: session\.messagesHtml \|\| ""/);
+  assert.match(renderer, /uiTranscript: normalizeUiTranscript\(session\.transcript\)/);
+  assert.match(renderer, /function renderStructuredChatTranscript/);
+  assert.match(renderer, /from "\.\/features\/chat\/chat-transcript\.js"/);
+  assert.match(renderer, /captureChatTranscript\(/);
   assert.match(renderer, /await handleAgentEvent\(payload\);\s*syncChatRunSession\(run\)/);
   assert.match(renderer, /function hydratePersistedChatTranscript/);
   assert.match(renderer, /syncChatRunSession\(run\);\s*if \(runIsChildVisible/);
   assert.match(renderer, /function persistCommandTimelineRowState/);
   assert.match(store, /display_html: messageContent\(source\.display_html \|\| source\.displayHtml \|\| ""\)/);
+  assert.match(store, /ui_transcript: normalizeUiTranscript/);
+  assert.match(store, /transcript: clone\(document\.ui_transcript\)/);
   assert.match(delegation, /childSessionBindings/);
   assert.match(delegation, /blockId: event\.blockId \|\| binding\.blockId \|\| ""/);
 });
@@ -493,7 +528,7 @@ test("agent turns retain tool and command rows without a redundant progress chec
   assert.doesNotMatch(renderer, /className = "agent-progress-feed"|setProgressUpdate|agentToolProgressText/);
   assert.match(renderer, /querySelectorAll\("\.agent-progress-feed"\).*node\.remove/);
   assert.match(renderer, /ensureToolCard\(assistant\.turn, assistant\.contentEl, payload\.tool, \{ pending: true \}\)/);
-  assert.match(renderer, /card\.dataset\.toolAction === "exec_command"/);
+  assert.match(renderer, /KEEPABLE_TOOL_ACTIONS\.has\(action\)/);
   assert.match(renderer, /if \(!streamedText\) assistant\.setRawContent\(finalText\)/);
   assert.match(renderer, /payload\.type === "output_continuation"/);
   assert.match(renderer, /Continuing the response/);
@@ -502,9 +537,11 @@ test("agent turns retain tool and command rows without a redundant progress chec
   assert.match(renderer, /function stripFailedToolCardStubs\(/);
   assert.match(renderer, /function isTransientToolCardLabel\(/);
   assert.match(renderer, /function isPlaceholderToolCardLabel\(/);
+  assert.match(renderer, /function isStubToolStatusLabel\(/);
   assert.match(renderer, /syncToolCardPlaceholderVisibility\(card\)/);
   assert.match(renderer, /if \(type === "error"\) \{\s*card\.remove\(\);/);
-  assert.match(renderer, /if \(type === "success" && isTransientToolCardLabel\(label\)\)/);
+  assert.match(renderer, /isStubToolStatusLabel\(label\) \|\| isBareToolVerbLabel\(label\) \|\| \(type === "success" && isTransientToolCardLabel\(label\)\)/);
+  assert.match(renderer, /KEEPABLE_TOOL_LABEL\.test\(value\)/);
   assert.match(prompt, /Before invoking a tool, provide one short user-facing progress update/);
   assert.match(prompt, /never reveal private chain-of-thought/);
 });
@@ -516,9 +553,9 @@ test("command execution renders as sequential collapsed chat events without ente
   assert.match(renderer, /function createCommandTimelineRow/);
   assert.match(renderer, /row\.className = "agent-command-event"/);
   assert.match(renderer, /row\.open = false/);
-  assert.match(renderer, /codicon-terminal agent-command-shell/);
+  assert.doesNotMatch(renderer, /createCommandTimelineRow[\s\S]*?codicon-terminal agent-command-shell/);
   assert.match(renderer, /if \(state === "success"\) return "Ran Command"/);
-  assert.match(renderer, /sealCurrentContentSegment\(\);[\s\S]*?appendChild\(row\)[\s\S]*?createContentSegment\(\)/);
+  assert.match(renderer, /sealCurrentContentSegment\(\);[\s\S]*?appendChild\(row\)[\s\S]*?ensurePostToolContentSegment\(/);
   assert.match(renderer, /assistant\.ensureCommandEvent\(payload\.tool\)/);
   assert.match(renderer, /assistant\.completeCommandEvent\(payload\.tool, uiResult\)/);
   assert.match(renderer, /\(this\.rootTurn \|\| this\.turn\)\.dataset\.rawAssistant = this\.rawContent/);

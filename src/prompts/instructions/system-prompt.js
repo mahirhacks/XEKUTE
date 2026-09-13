@@ -19,6 +19,7 @@
       "If tools are supplied, choose the smallest relevant set for the user's request.",
       "Whenever user input, a preference, or a decision is needed, use ask_questions instead of asking choices in plain assistant text.",
       "Use specialist guidance only when it is supplied for the current request.",
+      "After the user-facing message, you may put CONTINUE on its own last line if you still need to use tools. That line is hidden from the operator. If you omit it, the run is the final answer. Never write CONTINUE or \"final verdict\" in the visible answer.",
     ].join("\n"),
     COMPACT_MODE_OVERLAYS: {
       ask: "Current mode: Ask. Strictly read-only. Answer from available project context and evidence; if the user requests mutation or execution, tell them to switch to Agent mode.",

@@ -425,14 +425,15 @@ const TOOL_NAME_PATTERN = "ask_questions|exec_command|read_file|search_workspace
 
   function cleanReplyForDisplay(text, { streaming = false, stripCodeBlocks = false } = {}) {
     if (!text) return "";
-    const cleaned = stripFenceEdits(text, {
+    const withoutIntent = globalThis.XekuteContinueIntent?.strip(text, { streaming }) ?? text;
+    const cleaned = stripFenceEdits(withoutIntent, {
       streaming,
       stripCodeBlocks,
       // Boilerplate stripping during live streaming removes normal agent lines
       // ("I will…", "Then I…") and freezes the UI on the first few characters.
       stripBoilerplateText: !streaming,
     });
-    const raw = String(text || "").trim();
+    const raw = String(withoutIntent || "").trim();
     if (!cleaned && raw && !isOnlyToolSyntax(raw)) return raw;
     if (streaming && cleaned && raw && cleaned.length < Math.min(24, Math.floor(raw.length * 0.35))) {
       return raw;

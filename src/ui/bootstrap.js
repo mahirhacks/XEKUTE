@@ -8,6 +8,12 @@ import {
   sortHistorySessions,
 } from "./features/history/history-model.js";
 import { ensureChatMemorySessionId } from "./features/history/chat-memory-session.js";
+import {
+  captureChatTranscript,
+  hasStructuredTranscript,
+  normalizeUiTranscript,
+  thinkingElapsedMs,
+} from "./features/chat/chat-transcript.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
 const SetiIconTheme = globalThis.XekuteSetiIconTheme;
@@ -895,6 +901,7 @@ function createChatSession(title = "New Agent") {
     lastContextUsage: null,
     currentWorkflow: null,
     messagesHtml: "",
+    transcript: { version: 1, runs: [] },
     activeStreamContent: "",
     chatMode,
     chatFamily,
@@ -995,6 +1002,7 @@ function clearChatSessionState(session) {
   };
   session.lastContextUsage = null;
   session.messagesHtml = "";
+  session.transcript = { version: 1, runs: [] };
   session.activeStreamContent = "";
   session.draftText = "";
   session.draftSlashCommand = "";
@@ -1026,14 +1034,99 @@ function isTransientToolCardLabel(label = "") {
   return /^(Completed|Done|Failed)\.?$/i.test(String(label || "").trim());
 }
 
+function isStubToolStatusLabel(label = "") {
+  return /^(Working|Queued|Completed|Done)(?:\.{0,3}|\u2026)?$/i.test(String(label || "").trim());
+}
+
+const KEEPABLE_TOOL_LABEL = /^(Reading page|Read page|Searching web|Searched web|Creating folder|Created folder|Updating identity|Updated identity|Running Command|Ran Command|Reading|Read|Editing|Edited|Searching|Searched|Deleting|Deleted|Creating|Created|Moving|Moved|Browsing|Browsed|Replaying|Replayed|Delegating|Delegated)\b/i;
+
+const KEEPABLE_TOOL_ACTIONS = new Set([
+  "read_file",
+  "apply_patch",
+  "exec_command",
+  "search_workspace",
+  "web_research",
+  "browser_action",
+  "replay_request",
+  "manage_identity",
+  "delegate_agent",
+  "create_guidance",
+]);
+
+const RUNNING_TOOL_VERBS = [
+  ["Running Command", "Ran Command"],
+  ["Updating identity", "Updated identity"],
+  ["Creating folder", "Created folder"],
+  ["Searching web", "Searched web"],
+  ["Reading page", "Read page"],
+  ["Delegating", "Delegated"],
+  ["Replaying", "Replayed"],
+  ["Browsing", "Browsed"],
+  ["Searching", "Searched"],
+  ["Reading", "Read"],
+  ["Deleting", "Deleted"],
+  ["Editing", "Edited"],
+  ["Creating", "Created"],
+  ["Moving", "Moved"],
+];
+
+function completedToolLabelFromRunning(runningLabel = "") {
+  const value = String(runningLabel || "").trim();
+  for (const [from, to] of RUNNING_TOOL_VERBS) {
+    if (value === from || value.startsWith(`${from} `)) return `${to}${value.slice(from.length)}`;
+  }
+  return "";
+}
+
 function toolCardLabelText(card) {
   return String(card?.querySelector?.(".tool-card-file")?.textContent || card?.dataset?.runningLabel || "").trim();
 }
 
+function keepableToolCardLabel(label = "") {
+  const value = String(label || "").trim();
+  return KEEPABLE_TOOL_LABEL.test(value) && !isBareToolVerbLabel(value) && !isStubToolStatusLabel(value);
+}
+
+function isKeepableToolCard(card) {
+  if (!card) return false;
+  const text = decorateBareToolLabel(card, toolCardLabelText(card));
+  if (keepableToolCardLabel(text)
+    || keepableToolCardLabel(decorateBareToolLabel(card, card.dataset?.runningLabel))
+    || keepableToolCardLabel(decorateBareToolLabel(card, card.dataset?.completedLabel))) {
+    return true;
+  }
+  if (isTransientToolCardLabel(text) || isPlaceholderToolCardLabel(text) || isBareToolVerbLabel(text)) return false;
+  if (card.dataset?.fileActionKind || card.classList?.contains("file-action")) return true;
+  const action = String(card.dataset?.toolAction || "");
+  return KEEPABLE_TOOL_ACTIONS.has(action);
+}
+
 function syncToolCardPlaceholderVisibility(card) {
   if (!card) return card;
-  const placeholder = isPlaceholderToolCardLabel(toolCardLabelText(card)) && card.dataset.state !== "success";
-  card.hidden = placeholder;
+  const text = toolCardLabelText(card);
+  const resolved = decorateBareToolLabel(card, text);
+  if (keepableToolCardLabel(resolved)) {
+    if (resolved !== text) {
+      const fileEl = card.querySelector(".tool-card-file");
+      if (fileEl) renderToolStatusLabelFromText(fileEl, resolved);
+    }
+    card.hidden = false;
+    return card;
+  }
+  if (isStubToolStatusLabel(text) || isTransientToolCardLabel(text) || isBareToolVerbLabel(text) || !String(text || "").trim()) {
+    const recovered = [card.dataset?.completedLabel, card.dataset?.runningLabel]
+      .map((value) => decorateBareToolLabel(card, value))
+      .find((value) => keepableToolCardLabel(value));
+    if (recovered) {
+      const fileEl = card.querySelector(".tool-card-file");
+      if (fileEl) renderToolStatusLabelFromText(fileEl, recovered);
+      card.hidden = false;
+      return card;
+    }
+    card.hidden = true;
+    return card;
+  }
+  card.hidden = false;
   return card;
 }
 
@@ -1042,7 +1135,28 @@ function stripFailedToolCardStubs(root) {
   root.querySelectorAll(".tool-card[data-state='error']").forEach((node) => node.remove());
   root.querySelectorAll(".tool-card").forEach((node) => {
     const text = toolCardLabelText(node);
-    if (isTransientToolCardLabel(text) || isPlaceholderToolCardLabel(text)) node.remove();
+    if (keepableToolCardLabel(decorateBareToolLabel(node, text))) return;
+    const recovered = [node.dataset?.completedLabel, node.dataset?.runningLabel]
+      .map((value) => decorateBareToolLabel(node, value))
+      .find((value) => keepableToolCardLabel(value));
+    if (recovered) {
+      const fileEl = node.querySelector(".tool-card-file");
+      if (fileEl) renderToolStatusLabelFromText(fileEl, recovered);
+      node.hidden = false;
+      return;
+    }
+    if (isStubToolStatusLabel(text) || isTransientToolCardLabel(text) || isBareToolVerbLabel(text) || !String(text || "").trim()) {
+      node.remove();
+    }
+  });
+}
+
+function pruneEmptyWorkFolds(root) {
+  if (!root?.querySelectorAll) return;
+  flattenNestedChatLayout(root);
+  root.querySelectorAll(".agent-work-header").forEach((header) => {
+    const turn = header.closest(".chat-turn");
+    if (turn && !boxHasToolUsage(turn)) header.remove();
   });
 }
 
@@ -1051,7 +1165,7 @@ function sanitizePersistedChatHtml(html) {
   const clean = globalThis.DOMPurify
     ? globalThis.DOMPurify.sanitize(raw, {
       ADD_TAGS: ["button", "img"],
-       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
+       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "data-expanded", "data-file", "data-file-action-kind", "data-file-verb", "data-tool-action", "data-tool-key", "data-call-id", "data-running-label", "data-completed-label", "data-work-verdict", "data-sealed", "data-started-at", "data-ended-at", "data-duration-ms", "data-worked-for-ms", "data-command-text", "data-cwd", "data-exit-code", "data-stdout", "data-lane", "data-path", "data-verb", "data-activity-collapsed", "data-foldable", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
     })
     : "";
   const template = document.createElement("template");
@@ -1065,16 +1179,16 @@ function sanitizePersistedChatHtml(html) {
   template.content.querySelectorAll(".agent-progress-feed").forEach((node) => node.remove());
   template.content.querySelectorAll(".harness-wait-line").forEach((node) => node.remove());
   template.content.querySelectorAll(".agent-status-icon").forEach((node) => node.remove());
+  template.content.querySelectorAll(".context-checkpoint-icon").forEach((node) => node.remove());
   template.content.querySelectorAll(".agent-status-line:not([data-final='true'])").forEach((node) => node.remove());
   template.content.querySelectorAll(".agent-status-line").forEach((node) => {
     const text = String(node.querySelector(".agent-status-text")?.textContent || "").trim();
     if (/^Stopped after /i.test(text) || /^(Failed|Action failed)\.?$/i.test(text)) node.remove();
   });
+  flattenNestedChatLayout(template.content);
   stripFailedToolCardStubs(template.content);
-  template.content.querySelectorAll(".chat-turn.error").forEach((node) => {
-    const text = String(node.querySelector(".chat-box-content")?.textContent || "").trim();
-    if (/^The agent turn was stopped\.?$/i.test(text) || /^Stopped\.?$/i.test(text)) node.remove();
-  });
+  pruneEmptyWorkFolds(template.content);
+  template.content.querySelectorAll(".chat-turn.error").forEach((node) => node.remove());
   template.content.querySelectorAll(".context-checkpoint-notice").forEach((node) => {
     const state = String(node.getAttribute("data-state") || "").toLowerCase();
     if (state === "complete" || state === "error") return;
@@ -1120,6 +1234,7 @@ function normalizePersistedChatSession(value) {
     lastContextUsage: normalizeContextUsageSnapshot(value.lastContextUsage),
     currentWorkflow: value.currentWorkflow && typeof value.currentWorkflow === "object" ? value.currentWorkflow : null,
     messagesHtml: sanitizePersistedChatHtml(value.messagesHtml),
+    transcript: normalizeUiTranscript(value.transcript || value.ui_transcript || value.uiTranscript),
     activeStreamContent: "",
     chatFamily: family,
     chatMode: canonicalChatMode(value.mode || value.chatMode),
@@ -1129,8 +1244,8 @@ function normalizePersistedChatSession(value) {
     childInvocationId: String(value.childInvocationId || "").slice(0, 240),
     draftText: "",
     draftSlashCommand: "",
-    createdAt: value.createdAt || null,
-    updatedAt: value.updatedAt || value.createdAt || null,
+    createdAt: value.createdAt || value.created_at || null,
+    updatedAt: value.updatedAt || value.updated_at || value.createdAt || value.created_at || null,
     status: ["complete", "stopped", "interrupted"].includes(value.status) ? value.status : "complete",
   };
 }
@@ -1152,6 +1267,7 @@ function serializeChatSession(session) {
     updatedAt: session.updatedAt || null,
     status: isChatSessionRunning(session.id) ? "interrupted" : "complete",
     messagesHtml: session.messagesHtml || "",
+    transcript: normalizeUiTranscript(session.transcript),
   };
 }
 
@@ -1263,6 +1379,7 @@ function persistChatHistorySnapshot(scope = activeChatPersistenceScope, session 
     session: chatHistoryMeta(session),
     transcript: activeChatHistoryTranscript(session),
     displayHtml: session.messagesHtml || "",
+    uiTranscript: normalizeUiTranscript(session.transcript),
     blockId: session.memoryBlockId,
     outcome: isChatSessionRunning(session.id) ? "pending" : undefined,
   }, { session });
@@ -1312,6 +1429,7 @@ function finishChatHistoryBlock({ session = activeChatSession(), assistant = nul
     outcome,
     transcript: activeChatHistoryTranscript(session),
     displayHtml: session.messagesHtml || "",
+    uiTranscript: normalizeUiTranscript(session.transcript),
   };
   const persisted = queueChatHistoryEvent(event, { session });
   return persisted;
@@ -1361,6 +1479,7 @@ function flushChatSessionsBeforeClose() {
         session: chatHistoryMeta(session),
         transcript: activeChatHistoryTranscript(session),
         displayHtml: session.messagesHtml || "",
+        uiTranscript: normalizeUiTranscript(session.transcript),
         outcome: isChatSessionRunning(session.id) ? "stopped" : undefined,
       });
     } catch (error) {
@@ -1417,10 +1536,16 @@ function collapseExpandedUserPrompts(except = null) {
   });
 }
 
+function assistantWorkHost(turn) {
+  return turn;
+}
+
 function lastAssistantActivityNode(turn) {
   if (!turn?.querySelectorAll) return null;
-  const nodes = [...turn.querySelectorAll(":scope > .assistant-reply, :scope > .tool-card, :scope > .agent-command-event, :scope > .subagent-run-card, :scope > .agent-status-line")];
-  return nodes.at(-1) || null;
+  const host = assistantWorkHost(turn);
+  const nodes = [...host.querySelectorAll(":scope > .assistant-reply, :scope > .tool-card, :scope > .agent-file-row, :scope > .agent-file-stack, :scope > .agent-command-event, :scope > .subagent-run-card, :scope > .agent-thinking-fold, :scope > .agent-explored-fold")];
+  const status = turn.querySelector(":scope > .agent-work-header, :scope > .agent-work-fold > .agent-status-line, :scope > .agent-status-line");
+  return nodes.at(-1) || status || null;
 }
 
 function isAgentResponseChild(node) {
@@ -1440,10 +1565,12 @@ function ensureAgentResponseHost(root) {
   let host = body.querySelector(":scope > .agent-response-host");
   if (!host) {
     host = document.createElement("div");
-    host.className = "agent-response-host";
+    host.className = "agent-response-host agent-stream";
     const user = [...body.children].find((child) => child.classList.contains("chat-turn") && child.classList.contains("user"));
     if (user) user.after(host);
     else body.appendChild(host);
+  } else {
+    host.classList.add("agent-stream");
   }
   [...body.children].forEach((child) => {
     if (child !== host && isAgentResponseChild(child)) host.appendChild(child);
@@ -1451,17 +1578,696 @@ function ensureAgentResponseHost(root) {
   return host;
 }
 
+function isActivityNode(node) {
+  return Boolean(node?.classList)
+    && (node.classList.contains("agent-thinking-fold")
+      || node.classList.contains("agent-file-stack")
+      || node.classList.contains("agent-file-row")
+      || node.classList.contains("agent-command-event")
+      || node.classList.contains("subagent-run-card")
+      || node.classList.contains("tool-card")
+      || node.classList.contains("agent-explored-fold"));
+}
+
+function markActivityNode(node) {
+  if (node?.dataset) node.dataset.lane = "activity";
+  return node;
+}
+
+function boxHasToolUsage(root) {
+  return Boolean(root?.querySelector?.(".tool-card:not([hidden]), .agent-file-row, .agent-file-stack, .agent-command-event, .subagent-run-card, .agent-thinking-fold"));
+}
+
+function isToolWorkNode(node) {
+  return Boolean(node?.classList)
+    && (node.classList.contains("tool-card")
+      || node.classList.contains("agent-file-row")
+      || node.classList.contains("agent-file-stack")
+      || node.classList.contains("agent-command-event")
+      || node.classList.contains("subagent-run-card")
+      || node.classList.contains("agent-explored-fold"));
+}
+
+function isWorkFoldChild(node) {
+  return isActivityNode(node);
+}
+
+function lastVisibleAssistantReply(host) {
+  return [...(host?.children || [])].findLast((child) => (
+    child.classList.contains("assistant-reply") && !isEmptyAssistantReply(child)
+  )) || null;
+}
+
+// Last sibling after `reply` that carries tool work or visible model text.
+// Status lines, timers, and empty placeholders never count: streamed text must
+// keep flowing into the same block across them.
+function workFollowingReply(reply) {
+  let found = null;
+  for (let node = reply?.nextElementSibling; node; node = node.nextElementSibling) {
+    if (node.classList.contains("assistant-reply-footer")) break;
+    if (isActivityNode(node) || node.classList.contains("agent-work-fold") || (node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node))) {
+      found = node;
+    }
+  }
+  return found;
+}
+
+function lastWorkHeader(host) {
+  return [...(host?.children || [])].findLast((child) => (
+    child.classList.contains("agent-work-header")
+    || child.classList.contains("agent-work-fold")
+  )) || null;
+}
+
+function lastReusableWorkFold(host) {
+  return lastWorkHeader(host);
+}
+
+function lastWorkFold(host) {
+  return lastWorkHeader(host);
+}
+
+function isVerdictAssistantReply(node) {
+  return Boolean(node?.classList?.contains("assistant-reply") && node.dataset?.workVerdict === "true");
+}
+
+function adoptLeadingWorkIntoFold(fold, host) {
+  flattenNestedChatLayout(host || fold);
+  return lastWorkHeader(host);
+}
+
+function adoptTrailingWorkIntoFold(fold, host) {
+  flattenNestedChatLayout(host || fold);
+  return lastWorkHeader(host);
+}
+
+function adoptWorkAroundFold(fold, host) {
+  flattenNestedChatLayout(host || fold?.parentElement);
+  return lastWorkHeader(host || fold?.parentElement);
+}
+
+function trailingStopReplies(turn) {
+  if (!turn || turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return [];
+  const children = [...turn.children];
+  const lastWorkIndex = children.findLastIndex((node) => isActivityNode(node));
+  const candidates = lastWorkIndex >= 0 ? children.slice(lastWorkIndex + 1) : [];
+  return candidates.filter((node) => (
+    node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node)
+  ));
+}
+
+function isFinishedWorkHeader(header) {
+  const toggle = header?.classList?.contains("agent-status-line")
+    ? header
+    : header?.querySelector?.(":scope > .agent-status-line");
+  if (toggle?.dataset.final === "true" || header?.dataset?.final === "true") return true;
+  const text = String(
+    toggle?.querySelector?.(".agent-status-text")?.textContent
+    || header?.querySelector?.(".agent-status-text")?.textContent
+    || "",
+  ).trim();
+  return /^(Worked for|Finished in|Stopped)\b/i.test(text);
+}
+
+function isFinishedWorkFold(fold) {
+  return isFinishedWorkHeader(fold);
+}
+
+function setActivityCollapsed(host, collapsed) {
+  if (!host) return;
+  const next = Boolean(collapsed);
+  host.dataset.activityCollapsed = String(next);
+  const header = host.querySelector(":scope > .agent-work-header");
+  if (header) syncWorkHeaderAffordance(header);
+}
+
+function toggleActivityCollapsed(host) {
+  if (!host) return;
+  setActivityCollapsed(host, host.dataset.activityCollapsed !== "true");
+}
+
+function collapseFinishedWorkFolds(root) {
+  if (!root?.querySelectorAll) return;
+  const turns = root.classList?.contains("chat-turn")
+    ? [root]
+    : [...root.querySelectorAll(".chat-turn.assistant")];
+  for (const turn of turns) {
+    if (turn.getAttribute("aria-busy") === "true") continue;
+    const header = lastWorkHeader(turn);
+    if (header && isFinishedWorkHeader(header)) setActivityCollapsed(turn, true);
+  }
+}
+
+function consecutiveAssistantRepliesAfter(startNode) {
+  const replies = [];
+  let node = startNode;
+  while (node) {
+    const next = node.nextSibling;
+    if (isEmptyAssistantReply(node)) {
+      node = next;
+      continue;
+    }
+    if (node.classList?.contains("assistant-reply")) {
+      replies.push(node);
+      node = next;
+      continue;
+    }
+    break;
+  }
+  return replies;
+}
+
+function coalesceAdjacentAssistantReplies(replies) {
+  if (!Array.isArray(replies) || replies.length < 2) return replies?.[0] || null;
+  const first = replies[0];
+  const markdown = replies.map((el) => String(el.dataset?.rawMd || el.textContent || "")).join("");
+  replies.slice(1).forEach((el) => el.remove());
+  if (markdown.trim()) {
+    first.hidden = false;
+    renderMarkdown(first, markdown);
+  }
+  return first;
+}
+
+function coalesceVerdictReplies(turn) {
+  const children = [...(turn?.children || [])];
+  const lastActivity = children.findLast((node) => isActivityNode(node));
+  if (!lastActivity) return;
+  const first = coalesceAdjacentAssistantReplies(consecutiveAssistantRepliesAfter(lastActivity.nextSibling));
+  if (first) first.dataset.workVerdict = "true";
+}
+
+// Merge every run of back-to-back reply blocks under `host` into one block.
+// Adjacent replies with no tool work between them are always fragments of a
+// single answer (older snapshots split them per streamed frame).
+function coalesceAdjacentReplyRuns(host) {
+  if (!host?.children) return;
+  let node = host.firstElementChild;
+  while (node) {
+    if (!node.classList.contains("assistant-reply")) {
+      node = node.nextElementSibling;
+      continue;
+    }
+    const run = consecutiveAssistantRepliesAfter(node);
+    const first = coalesceAdjacentAssistantReplies(run);
+    let next = (first || node).nextElementSibling;
+    while (next && isEmptyAssistantReply(next)) next = next.nextElementSibling;
+    node = next;
+  }
+}
+
+function promoteWorkVerdicts(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".chat-turn.assistant").forEach((turn) => {
+    if (turn.getAttribute("aria-busy") === "true") return;
+    if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return;
+    flattenNestedChatLayout(turn);
+    coalesceAdjacentReplyRuns(turn);
+    trailingStopReplies(turn).forEach((node) => {
+      node.dataset.workVerdict = "true";
+    });
+    coalesceVerdictReplies(turn);
+    const header = lastWorkHeader(turn);
+    if (header && isFinishedWorkHeader(header)) setActivityCollapsed(turn, true);
+  });
+}
+
+function createFoldCaret() {
+  const caret = document.createElement("img");
+  caret.className = "agent-work-caret";
+  caret.src = "assets/icons/chat_fold_caret.svg";
+  caret.alt = "";
+  caret.setAttribute("aria-hidden", "true");
+  return caret;
+}
+
+function attachFoldCaret(toggle) {
+  if (!toggle) return null;
+  const existing = toggle.querySelector(".agent-work-caret");
+  if (existing && existing.tagName === "IMG" && /chat_fold_caret\.svg/.test(existing.getAttribute("src") || "")) {
+    toggle.appendChild(existing);
+    return existing;
+  }
+  existing?.remove();
+  const caret = createFoldCaret();
+  toggle.appendChild(caret);
+  return caret;
+}
+
+function isFoldableWorkLabel(text = "") {
+  return /^(Working for|Worked for|Finished in|Stopped)\b/i.test(String(text || "").trim());
+}
+
+function syncWorkHeaderAffordance(header) {
+  if (!header?.classList) return header;
+  const text = header.querySelector?.(".agent-status-text")?.textContent || "";
+  const foldable = isFoldableWorkLabel(text);
+  header.classList.toggle("is-foldable", foldable);
+  header.dataset.foldable = String(foldable);
+  const caret = header.querySelector(".agent-work-caret");
+  if (foldable) {
+    if (!caret) attachFoldCaret(header);
+    const collapsed = header.closest(".chat-turn.assistant")?.dataset.activityCollapsed === "true";
+    header.setAttribute("aria-expanded", String(!collapsed));
+    header.removeAttribute("tabindex");
+  } else {
+    caret?.remove();
+    header.removeAttribute("aria-expanded");
+    header.tabIndex = -1;
+  }
+  return header;
+}
+
+function upgradeStatusLineToToggle(block) {
+  if (!block) return null;
+  const isButton = block.tagName === "BUTTON";
+  const toggle = isButton ? block : document.createElement("button");
+  if (!isButton) {
+    toggle.type = "button";
+    toggle.className = block.className || "agent-status-line";
+    for (const attr of [...block.attributes]) {
+      if (attr.name === "class" || attr.name === "role") continue;
+      toggle.setAttribute(attr.name, attr.value);
+    }
+    toggle.innerHTML = block.innerHTML;
+    block.replaceWith(toggle);
+  }
+  toggle.type = "button";
+  toggle.removeAttribute("role");
+  syncWorkHeaderAffordance(toggle);
+  return toggle;
+}
+
+function setCollapsibleFoldExpanded(fold, expanded) {
+  if (!fold) return;
+  const next = Boolean(expanded);
+  fold.dataset.expanded = String(next);
+  fold.querySelector(":scope > .agent-status-line, :scope > .agent-explored-toggle, :scope > .agent-thinking-toggle, :scope > .agent-file-stack-toggle")?.setAttribute("aria-expanded", String(next));
+}
+
+function toggleCollapsibleFold(fold) {
+  if (!fold) return;
+  setCollapsibleFoldExpanded(fold, fold.dataset.expanded === "false");
+}
+
+function setWorkFoldExpanded(fold, expanded) {
+  if (!fold) return;
+  if (fold.classList.contains("chat-turn") || fold.classList.contains("agent-stream")) {
+    setActivityCollapsed(fold, !expanded);
+    return;
+  }
+  const turn = fold.closest?.(".chat-turn.assistant");
+  if (fold.classList.contains("agent-work-header") && turn) {
+    setActivityCollapsed(turn, !expanded);
+    return;
+  }
+  setCollapsibleFoldExpanded(fold, expanded);
+}
+
+function toggleWorkFold(fold) {
+  toggleCollapsibleFold(fold);
+}
+
+function isEmptyAssistantReply(node) {
+  return Boolean(node?.classList?.contains("assistant-reply")
+    && (node.hidden || !String(node.textContent || "").trim()));
+}
+
+function lastReusableExploredFold(host) {
+  void host;
+  return null;
+}
+
+function createExploredFold() {
+  const fold = document.createElement("div");
+  fold.className = "agent-explored-fold";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "agent-explored-toggle";
+  const text = document.createElement("span");
+  text.className = "agent-explored-text";
+  text.textContent = "Tool Used";
+  toggle.append(text, createFoldCaret());
+  const body = document.createElement("div");
+  body.className = "agent-explored-body";
+  fold.append(toggle, body);
+  setCollapsibleFoldExpanded(fold, true);
+  return fold;
+}
+
+function hydrateExploredFoldLabels(root) {
+  root?.querySelectorAll?.(".agent-explored-text").forEach((el) => {
+    if (/^Explored$/i.test(String(el.textContent || "").trim())) el.textContent = "Tool Used";
+  });
+}
+
+function exploredBodyOf(fold) {
+  return fold?.querySelector?.(":scope > .agent-explored-body") || fold;
+}
+
+function thinkingBodyOf(fold) {
+  return fold?.querySelector?.(":scope > .agent-thinking-body") || fold;
+}
+
+function thinkingContentOf(fold) {
+  return fold?.querySelector?.(".agent-thinking-content") || null;
+}
+
+function lastStandaloneThinkingFold(host) {
+  const last = [...(host?.children || [])].findLast((child) => !isEmptyAssistantReply(child));
+  return last?.classList.contains("agent-thinking-fold") ? last : null;
+}
+
+function createThinkingFold({ startedAt = Date.now() } = {}) {
+  const fold = document.createElement("div");
+  fold.className = "agent-thinking-fold";
+  fold.dataset.lane = "activity";
+  fold.dataset.startedAt = String(startedAt);
+  fold.dataset.final = "false";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "agent-thinking-toggle";
+  const text = document.createElement("span");
+  text.className = "agent-thinking-text";
+  text.textContent = "Thinking";
+  toggle.append(text, createFoldCaret());
+  const body = document.createElement("div");
+  body.className = "agent-thinking-body";
+  const content = document.createElement("div");
+  content.className = "agent-thinking-content streaming";
+  content.hidden = true;
+  body.appendChild(content);
+  fold.append(toggle, body);
+  setCollapsibleFoldExpanded(fold, true);
+  return fold;
+}
+
+function thinkingFoldLabel(startedAt, endedAt = Date.now(), { live = false, durationMs = null } = {}) {
+  if (live) return "Thinking";
+  const elapsedMs = thinkingElapsedMs({ startedAt, endedAt, durationMs });
+  if (elapsedMs < 10_000) return "Thought briefly";
+  const start = Number(startedAt);
+  const end = Number(endedAt);
+  const from = Number.isFinite(start) ? start : (Number.isFinite(end) ? end - elapsedMs : 0);
+  const to = Number.isFinite(end) && end >= from ? end : from + elapsedMs;
+  return `Thought for ${formatAgentWorkDuration(from, to)}`;
+}
+
+function setThinkingFoldLabel(fold, { live = false, endedAt = Date.now(), durationMs = null } = {}) {
+  if (!fold) return;
+  const text = fold.querySelector(":scope > .agent-thinking-toggle > .agent-thinking-text");
+  const stored = durationMs != null ? durationMs : fold.dataset.durationMs;
+  if (text) text.textContent = thinkingFoldLabel(fold.dataset.startedAt, endedAt, { live, durationMs: stored });
+}
+
+function finishThinkingFold(fold, { collapse = true, endedAt = Date.now() } = {}) {
+  if (!fold?.isConnected) return;
+  const start = Number(fold.dataset.startedAt);
+  const durationMs = Number.isFinite(start) ? Math.max(0, endedAt - start) : 0;
+  fold.dataset.final = "true";
+  fold.dataset.durationMs = String(durationMs);
+  fold.dataset.endedAt = String(endedAt);
+  setThinkingFoldLabel(fold, { live: false, endedAt, durationMs });
+  thinkingContentOf(fold)?.classList.remove("streaming");
+  if (collapse) setCollapsibleFoldExpanded(fold, false);
+}
+
+function hydrateThinkingFolds(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".agent-thinking-fold").forEach((fold) => {
+    const stored = Number(fold.dataset.durationMs);
+    const durationMs = Number.isFinite(stored) && stored >= 0 ? stored : 0;
+    const startedAt = Number(fold.dataset.startedAt);
+    const endedAt = Number(fold.dataset.endedAt) || (Number.isFinite(startedAt) ? startedAt + durationMs : startedAt);
+    fold.dataset.final = "true";
+    fold.dataset.durationMs = String(durationMs);
+    if (Number.isFinite(endedAt)) fold.dataset.endedAt = String(endedAt);
+    setThinkingFoldLabel(fold, { live: false, endedAt, durationMs });
+    thinkingContentOf(fold)?.classList.remove("streaming");
+    setCollapsibleFoldExpanded(fold, false);
+  });
+}
+
+function sealExploredFolds(host) {
+  if (!host?.querySelectorAll) return;
+  host.querySelectorAll(":scope > .agent-explored-fold").forEach((fold) => {
+    fold.dataset.sealed = "true";
+  });
+}
+
+function stackVerbForLabel(verb = "") {
+  const value = String(verb || "").trim();
+  const completed = completedToolLabelFromRunning(value);
+  const label = completed || value;
+  return splitToolStatusLabel(label).verb || label;
+}
+
+function fileRowVerb(row) {
+  return stackVerbForLabel(
+    row?.dataset?.fileVerb
+    || row?.querySelector?.(".agent-tool-verb")?.textContent
+    || "",
+  );
+}
+
+function createFileStack(verb) {
+  const stack = document.createElement("div");
+  stack.className = "agent-file-stack";
+  stack.dataset.lane = "activity";
+  stack.dataset.verb = verb;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "agent-file-stack-toggle";
+  const text = document.createElement("span");
+  text.className = "agent-file-stack-text";
+  toggle.append(text, createFoldCaret());
+  const body = document.createElement("div");
+  body.className = "agent-file-stack-body";
+  stack.append(toggle, body);
+  setCollapsibleFoldExpanded(stack, true);
+  return stack;
+}
+
+function syncFileRowPresentation(row) {
+  if (!row) return;
+  const fileEl = row.querySelector(".tool-card-file");
+  if (!fileEl) return;
+  const inStack = Boolean(row.closest(".agent-file-stack-body"));
+  const verb = fileRowVerb(row);
+  const detail = String(
+    row.dataset.file
+    || row.dataset.path
+    || fileEl.querySelector(".agent-tool-detail")?.textContent
+    || "",
+  ).trim();
+  if (inStack) renderToolStatusLabel(fileEl, "", detail || verb);
+  else renderToolStatusLabel(fileEl, verb, detail);
+}
+
+function updateFileStackLabel(stack) {
+  if (!stack) return stack;
+  const rows = [...stack.querySelectorAll(":scope > .agent-file-stack-body > .agent-file-row, :scope > .agent-file-stack-body > .tool-card")];
+  const verb = stack.dataset.verb || "Read";
+  const text = stack.querySelector(".agent-file-stack-text");
+  const n = rows.length;
+  if (text) text.textContent = n === 1 ? `${verb} 1 file` : `${verb} ${n} files`;
+  rows.forEach(syncFileRowPresentation);
+  if (n <= 1) {
+    const parent = stack.parentElement;
+    const row = rows[0];
+    if (parent && row) {
+      parent.insertBefore(row, stack);
+      stack.remove();
+      markActivityNode(row);
+      syncFileRowPresentation(row);
+      return row;
+    }
+    if (!n) stack.remove();
+  }
+  return stack;
+}
+
+function absorbFileRow(row) {
+  if (!row?.isConnected) return row;
+  markActivityNode(row);
+  const verb = fileRowVerb(row);
+  if (!verb) return row;
+  row.dataset.fileVerb = verb;
+  if (row.closest(".agent-file-stack-body")) {
+    return updateFileStackLabel(row.closest(".agent-file-stack"));
+  }
+  const prev = row.previousElementSibling;
+  const bodyOf = (stack) => stack.querySelector(":scope > .agent-file-stack-body") || stack;
+  if (prev?.classList.contains("agent-file-stack") && prev.dataset.verb === verb) {
+    bodyOf(prev).appendChild(row);
+    return updateFileStackLabel(prev);
+  }
+  if ((prev?.classList.contains("agent-file-row") || prev?.classList.contains("tool-card"))
+    && fileRowVerb(prev) === verb) {
+    const stack = createFileStack(verb);
+    prev.before(stack);
+    bodyOf(stack).append(prev, row);
+    markActivityNode(stack);
+    return updateFileStackLabel(stack);
+  }
+  syncFileRowPresentation(row);
+  return row;
+}
+
+function restackFileRows(root) {
+  if (!root?.querySelectorAll) return;
+  const hosts = root.classList?.contains("chat-turn")
+    ? [root]
+    : [...root.querySelectorAll(".chat-turn.assistant")];
+  for (const host of hosts) {
+    for (const child of [...host.children]) {
+      if (!child.classList.contains("tool-card") && !child.classList.contains("agent-file-row")) continue;
+      if (child.classList.contains("agent-file-stack")) continue;
+      child.classList.add("agent-file-row");
+      markActivityNode(child);
+      if (!child.dataset.fileVerb) child.dataset.fileVerb = fileRowVerb(child);
+      absorbFileRow(child);
+    }
+  }
+}
+
+function flattenNestedChatLayout(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".agent-explored-fold").forEach((fold) => {
+    const parent = fold.parentElement;
+    const body = exploredBodyOf(fold);
+    if (!parent) {
+      fold.remove();
+      return;
+    }
+    while (body?.firstChild) parent.insertBefore(body.firstChild, fold);
+    fold.remove();
+  });
+  root.querySelectorAll(".agent-work-fold").forEach((fold) => {
+    const parent = fold.parentElement;
+    if (!parent) {
+      fold.remove();
+      return;
+    }
+    const toggle = fold.querySelector(":scope > .agent-status-line");
+    const body = fold.querySelector(":scope > .agent-work-fold-body");
+    if (toggle) {
+      toggle.classList.add("agent-work-header");
+      parent.insertBefore(toggle, fold);
+    }
+    while (body?.firstChild) parent.insertBefore(body.firstChild, fold);
+    const finished = isFinishedWorkHeader(toggle);
+    fold.remove();
+    const turn = parent.closest?.(".chat-turn.assistant") || (parent.classList?.contains("chat-turn") ? parent : null);
+    if (turn && finished && turn.getAttribute("aria-busy") !== "true") {
+      setActivityCollapsed(turn, true);
+    }
+  });
+  root.querySelectorAll(".agent-thinking-fold, .agent-command-event, .agent-file-stack, .agent-file-row, .tool-card, .subagent-run-card").forEach(markActivityNode);
+  restackFileRows(root);
+  root.querySelectorAll(".agent-work-header").forEach(syncWorkHeaderAffordance);
+}
+
+function createWorkHeader({
+  label = "Working for a moment",
+  startedAt = Date.now(),
+  final = false,
+  state = "",
+} = {}) {
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "agent-work-header agent-status-line";
+  toggle.dataset.lane = "chrome";
+  if (startedAt) toggle.dataset.startedAt = String(startedAt);
+  if (final) toggle.dataset.final = "true";
+  if (state) toggle.dataset.state = state;
+  toggle.innerHTML = `<span class="agent-status-text">${label}</span>`;
+  syncWorkHeaderAffordance(toggle);
+  return toggle;
+}
+
+function isChatStreamPlaceholder(node) {
+  return Boolean(node?.classList)
+    && (node.classList.contains("assistant-reply-footer")
+      || (node.classList.contains("assistant-reply") && isEmptyAssistantReply(node)));
+}
+
+function appendChatStreamNode(host, node) {
+  if (!host || !node) return node;
+  const before = [...host.children].find((child) => child !== node && isChatStreamPlaceholder(child));
+  if (before) host.insertBefore(node, before);
+  else host.appendChild(node);
+  return node;
+}
+
+function placeWorkHeader(host, header) {
+  if (!host || !header) return header;
+  const first = [...host.children].find((child) => child !== header);
+  if (first) host.insertBefore(header, first);
+  else if (!header.isConnected) host.appendChild(header);
+  return header;
+}
+
+function ensureWorkHeader(host, status = null) {
+  if (!host) return null;
+  host.classList.add("has-agent-run", "agent-stream");
+  let header = host.querySelector(":scope > .agent-work-header");
+  const source = (!header && status?.isConnected && status.classList.contains("agent-status-line"))
+    ? status
+    : (!header ? [...host.children].find((child) => child.classList.contains("agent-status-line") && !child.classList.contains("agent-work-header")) : null);
+  if (!header && source) {
+    header = upgradeStatusLineToToggle(source);
+    header.classList.add("agent-work-header");
+  }
+  if (!header) header = createWorkHeader({ startedAt: Date.now() });
+  placeWorkHeader(host, header);
+  syncWorkHeaderAffordance(header);
+  return header;
+}
+
+function promoteExploredFolds(root) {
+  flattenNestedChatLayout(root);
+}
+
+function wrapTurnInWorkFold(turn, status = null) {
+  if (!turn || turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return null;
+  flattenNestedChatLayout(turn);
+  return ensureWorkHeader(turn, status);
+}
+
+function mergeWorkFolds(root) {
+  flattenNestedChatLayout(root);
+}
+
+function promoteWorkFolds(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".chat-turn.assistant").forEach((turn) => {
+    if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return;
+    flattenNestedChatLayout(turn);
+    if (!boxHasToolUsage(turn)) return;
+    if (turn.querySelector(":scope > .agent-work-header")) return;
+    const status = turn.querySelector(":scope > .agent-status-line");
+    wrapTurnInWorkFold(turn, status);
+  });
+}
+
 function wrapAssistantInRunChunk(turn) {
   if (!turn) return null;
   if (turn.classList.contains("agent-run-chunk")) return turn;
-  if (turn.parentElement?.classList.contains("agent-run-chunk")) return turn.parentElement;
+  if (turn.parentElement?.classList.contains("agent-run-chunk")) {
+    const existing = turn.parentElement;
+    if (!existing.classList.contains("agent-run-stop")) existing.classList.add("agent-run-working");
+    return existing;
+  }
   if (!turn.classList.contains("assistant")) return null;
   const host = turn.closest(".agent-response-host")
     || ensureAgentResponseHost(turn.closest(".chat-exchange"))
     || turn.parentElement;
   if (!host) return null;
   const chunk = document.createElement("div");
-  chunk.className = "agent-run-chunk";
+  chunk.className = turn.classList.contains("agent-run-stop")
+    ? "agent-run-chunk agent-run-stop"
+    : "agent-run-chunk agent-run-working";
   if (turn.parentElement === host) host.insertBefore(chunk, turn);
   else host.appendChild(chunk);
   chunk.appendChild(turn);
@@ -1489,7 +2295,7 @@ function promoteCheckpointNotices(root) {
     nextTurn.dataset.createdAt = turn.dataset.createdAt || "";
     trailing.forEach((item) => nextTurn.appendChild(item));
     const nextChunk = document.createElement("div");
-    nextChunk.className = "agent-run-chunk";
+    nextChunk.className = "agent-run-chunk agent-run-working";
     nextChunk.appendChild(nextTurn);
     notice.after(nextChunk);
   });
@@ -1542,6 +2348,7 @@ function appendChatTurn(turn, { startsExchange = false, container = messages } =
 // the next prompt to push the previous one away instead of crossing through it.
 function normalizeChatExchanges() {
   if (!messages) return;
+  messages.querySelectorAll(".chat-turn.error").forEach((node) => node.remove());
   const children = [...messages.children];
   let exchange = null;
 
@@ -1577,7 +2384,13 @@ function normalizeChatExchanges() {
     ensureAgentResponseHost(exchange);
   });
   promoteCheckpointNotices(messages);
+  flattenNestedChatLayout(messages);
+  promoteWorkFolds(messages);
+  hydrateExploredFoldLabels(messages);
+  hydrateToolStatusLabels(messages);
   stripFailedToolCardStubs(messages);
+  pruneEmptyWorkFolds(messages);
+  promoteWorkVerdicts(messages);
   messages?.querySelectorAll(".harness-wait-line").forEach((node) => node.remove());
   messages?.querySelectorAll(".chat-exchange").forEach((exchange) => {
     const host = ensureAgentResponseHost(exchange);
@@ -1605,6 +2418,7 @@ function renderCanonicalChatHistory(history = []) {
       if (!content) return;
       const turn = document.createElement("div");
       turn.className = "chat-turn user";
+      if (message.createdAt) turn.dataset.createdAt = message.createdAt;
       const box = createUserPromptBox(content);
       turn.appendChild(box);
       appendChatTurn(turn, { startsExchange: true, container });
@@ -1651,6 +2465,210 @@ function renderCanonicalChatHistory(history = []) {
     if (copyAnchor) attachAssistantCopyButton(copyAnchor);
   });
   messages.replaceChildren(fragment);
+  syncChatStickyMask();
+  syncChatEmptyState();
+}
+
+function captureSessionTranscript(session, root) {
+  if (!session || !root) return;
+  session.transcript = captureChatTranscript(root);
+}
+
+function toolFromTranscriptItem(item = {}) {
+  const name = String(item.name || item.toolName || "tool");
+  const args = item.args && typeof item.args === "object" && !Array.isArray(item.args)
+    ? { ...item.args }
+    : {};
+  if (item.target && !args.path) args.path = item.target;
+  if (item.command) args.command = item.command;
+  if (item.cwd) args.cwd = item.cwd;
+  return { toolName: name, action: name, args };
+}
+
+function applyThinkingRecord(fold, item = {}) {
+  const startedAt = Date.parse(item.started_at || "") || Number(fold.dataset.startedAt) || Date.now();
+  const durationMs = thinkingElapsedMs({
+    startedAt,
+    endedAt: Date.parse(item.ended_at || "") || Number(item.endedAt),
+    durationMs: item.duration_ms ?? item.durationMs,
+  });
+  const endedAt = Date.parse(item.ended_at || "") || startedAt + durationMs;
+  fold.dataset.startedAt = String(startedAt);
+  fold.dataset.endedAt = String(endedAt);
+  fold.dataset.durationMs = String(durationMs);
+  fold.dataset.final = "true";
+  const content = thinkingContentOf(fold);
+  const text = String(item.text || "").trim();
+  if (content && text) {
+    content.hidden = false;
+    renderMarkdown(content, text);
+    content.classList.remove("streaming");
+  }
+  setThinkingFoldLabel(fold, { live: false, endedAt, durationMs });
+  setCollapsibleFoldExpanded(fold, false);
+  return fold;
+}
+
+function createWorkHeaderFromRun(run = {}) {
+  const workedForMs = Number(run.worked_for_ms) || 0;
+  const startedAt = Date.parse(run.started_at || "");
+  const endedAt = Date.parse(run.ended_at || "");
+  const duration = formatAgentWorkDuration(0, workedForMs);
+  const label = run.status === "stopped"
+    ? "Stopped"
+    : run.status === "inconclusive"
+      ? `Finished in ${duration}`
+      : `Worked for ${duration}`;
+  const header = createWorkHeader({
+    label,
+    startedAt: Number.isFinite(startedAt) ? startedAt : Date.now(),
+    final: true,
+    state: run.status === "stopped" ? "stopped" : "complete",
+  });
+  header.dataset.workedForMs = String(workedForMs);
+  if (Number.isFinite(endedAt)) header.dataset.endedAt = String(endedAt);
+  return header;
+}
+
+function createRestoredWorkFold(run = {}) {
+  return createWorkHeaderFromRun(run);
+}
+
+function createTranscriptChatReply(event = {}) {
+  const el = document.createElement("div");
+  el.className = "assistant-reply";
+  el.dataset.lane = "prose";
+  if (event.verdict) el.dataset.workVerdict = "true";
+  if (event.created_at) el.dataset.createdAt = event.created_at;
+  const text = String(event.text || "").trim();
+  if (!text) {
+    el.hidden = true;
+    return el;
+  }
+  renderMarkdown(el, text);
+  return el;
+}
+
+function createToolCardFromRecord(item) {
+  if (!item || item.status === "error") return null;
+  const card = createToolCard(toolFromTranscriptItem(item), { pending: false });
+  if (item.verb) card.dataset.fileVerb = item.verb;
+  if (item.path) card.dataset.path = item.path;
+  setToolCardStatus(card, "success");
+  markActivityNode(card);
+  return card?.isConnected || card ? card : null;
+}
+
+function createCommandFromRecord(item = {}) {
+  const row = createCommandTimelineRow(toolFromTranscriptItem({
+    name: "exec_command",
+    command: item.command,
+    cwd: item.cwd,
+    args: { command: item.command, cwd: item.cwd || "." },
+  }), { state: item.status === "error" ? "error" : "success" });
+  markActivityNode(row);
+  if (item.exit_code != null) row.dataset.exitCode = String(item.exit_code);
+  if (item.stdout) row.dataset.stdout = String(item.stdout);
+  if (item.cwd) row.dataset.cwd = String(item.cwd);
+  const startedAt = Date.parse(item.started_at || "");
+  const endedAt = Date.parse(item.ended_at || "");
+  if (Number.isFinite(startedAt)) row.dataset.startedAt = String(startedAt);
+  if (Number.isFinite(endedAt)) row.dataset.endedAt = String(endedAt);
+  if (item.duration_ms != null) row.dataset.durationMs = String(item.duration_ms);
+  return row;
+}
+
+function createFileStackFromRecord(event = {}) {
+  const verb = event.verb || "Read";
+  const stack = createFileStack(verb);
+  setCollapsibleFoldExpanded(stack, false);
+  const body = stack.querySelector(":scope > .agent-file-stack-body");
+  for (const file of event.files || []) {
+    const row = createToolCardFromRecord({ ...file, verb: file.verb || verb });
+    if (row) {
+      row.dataset.fileVerb = verb;
+      body.appendChild(row);
+    }
+  }
+  markActivityNode(stack);
+  updateFileStackLabel(stack);
+  return stack.isConnected || (stack.querySelector(".agent-file-row, .tool-card") ? stack : null);
+}
+
+function appendTranscriptEvent(host, event) {
+  if (!host || !event) return;
+  if (event.type === "chat") {
+    const reply = createTranscriptChatReply(event);
+    if (!reply.hidden) host.appendChild(reply);
+    return;
+  }
+  if (event.type === "thinking") {
+    const fold = createThinkingFold({ startedAt: Date.parse(event.started_at || "") || Date.now() });
+    applyThinkingRecord(fold, event);
+    markActivityNode(fold);
+    host.appendChild(fold);
+    return;
+  }
+  if (event.type === "file_stack") {
+    const stack = createFileStackFromRecord(event);
+    if (stack) {
+      host.appendChild(stack);
+      updateFileStackLabel(stack);
+    }
+    return;
+  }
+  if (event.type === "command") {
+    host.appendChild(createCommandFromRecord(event));
+    return;
+  }
+  if (event.type === "tool") {
+    const card = createToolCardFromRecord(event);
+    if (!card) return;
+    host.appendChild(card);
+    absorbFileRow(card);
+    return;
+  }
+  if (event.type !== "tool_group") return;
+  for (const item of event.items || []) appendTranscriptEvent(host, item);
+}
+
+function renderTranscriptRun(run, container) {
+  if (run.user?.message) {
+    const userTurn = document.createElement("div");
+    userTurn.className = "chat-turn user";
+    if (run.user.created_at) userTurn.dataset.createdAt = run.user.created_at;
+    userTurn.appendChild(createUserPromptBox(run.user.message));
+    appendChatTurn(userTurn, { startsExchange: true, container });
+  }
+  const events = Array.isArray(run.events) ? run.events : [];
+  if (!events.length) return;
+  const hasActivity = events.some((event) => event.type !== "chat");
+  const turn = document.createElement("div");
+  turn.className = "chat-turn assistant agent-stream";
+  turn.setAttribute("aria-busy", "false");
+  if (run.ended_at) turn.dataset.createdAt = run.ended_at;
+  else if (run.started_at) turn.dataset.createdAt = run.started_at;
+  if (hasActivity) {
+    turn.classList.add("has-agent-run");
+    turn.dataset.usedTools = "true";
+    turn.appendChild(createWorkHeaderFromRun(run));
+  }
+  for (const event of events) appendTranscriptEvent(turn, event);
+  if (hasActivity) setActivityCollapsed(turn, true);
+  if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event")) return;
+  appendChatTurn(turn, { container });
+  wrapAssistantInRunChunk(turn);
+}
+
+function renderStructuredChatTranscript(transcript, container = messages) {
+  const fragment = document.createDocumentFragment();
+  for (const run of normalizeUiTranscript(transcript).runs) renderTranscriptRun(run, fragment);
+  fragment.querySelectorAll(".chat-exchange").forEach((exchange) => {
+    const replies = [...exchange.querySelectorAll(".assistant-reply")];
+    const copyAnchor = replies.findLast((reply) => !reply.hidden) || replies.at(-1);
+    if (copyAnchor) attachAssistantCopyButton(copyAnchor);
+  });
+  container.replaceChildren(fragment);
   syncChatStickyMask();
   syncChatEmptyState();
 }
@@ -1705,14 +2723,22 @@ function stashActiveChatRunView(session = activeChatSession()) {
   while (messages.firstChild) host.appendChild(messages.firstChild);
   run.viewHost = host;
   session.messagesHtml = sanitizePersistedChatHtml(host.innerHTML);
+  captureSessionTranscript(session, host);
 }
 
 function hydratePersistedChatTranscript(root = messages) {
   if (!root) return;
+  root.querySelectorAll?.(".chat-turn.error").forEach((node) => node.remove());
+  // A restored snapshot is never live, even if it was captured mid-run.
+  root.querySelectorAll?.(".chat-turn.assistant[aria-busy='true']").forEach((turn) => turn.setAttribute("aria-busy", "false"));
   stripFailedToolCardStubs(root);
+  flattenNestedChatLayout(root);
+  pruneEmptyWorkFolds(root);
   redactThinkingDisclosures(root);
   hydrateSubagentRunCards(root);
   hydrateContextCheckpointNotices(root);
+  hydrateExploredFoldLabels(root);
+  hydrateThinkingFolds(root);
   for (const row of root.querySelectorAll?.(".agent-command-event") || []) {
     stopCommandTimelineTicker(row);
     if (row.dataset.state === "running" && row.dataset.waiting === "true") {
@@ -1811,7 +2837,10 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
   session.chatFamily = run.family;
   session.selectedModel = run.model;
   const container = run.viewHost || (activeChatSessionId === session.id ? messages : null);
-  if (container) session.messagesHtml = sanitizePersistedChatHtml(container.innerHTML || "");
+  if (container) {
+    captureSessionTranscript(session, container);
+    session.messagesHtml = sanitizePersistedChatHtml(container.innerHTML || "");
+  }
   session.updatedAt = new Date().toISOString();
   if (activeChatSessionId === session.id) {
     chatHistory = session.history;
@@ -1831,6 +2860,7 @@ function prepareActiveChatSessionForSwitch(nextSessionId = "") {
 }
 
 function applyActiveChatSession(session) {
+  hideChatErrorToast();
   prepareActiveChatSessionForSwitch(session?.id || "");
   if (!session) {
     activeChatSessionId = "";
@@ -1864,6 +2894,9 @@ function applyActiveChatSession(session) {
   if (liveRun?.viewHost) {
     messages.replaceChildren(...liveRun.viewHost.childNodes);
     liveRun.viewHost = null;
+  } else if (hasStructuredTranscript(session.transcript)) {
+    renderStructuredChatTranscript(session.transcript, messages);
+    hydratePersistedChatTranscript(messages);
   } else if (session.messagesHtml) {
     messages.innerHTML = session.messagesHtml;
     hydratePersistedChatTranscript(messages);
@@ -7213,6 +8246,7 @@ function syncActiveChatSession({ persist = true } = {}) {
   session.contextFilesCache = contextFilesCache;
   session.activeStreamContent = activeStreamContent;
   session.messagesHtml = sanitizePersistedChatHtml(messages?.innerHTML || "");
+  captureSessionTranscript(session, messages);
   session.chatMode = chatMode;
   session.chatFamily = chatFamily;
   session.selectedModel = selectedModel;
@@ -8065,14 +9099,9 @@ function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SU
     notice.className = "context-checkpoint-notice";
     notice.setAttribute("role", "status");
     notice.setAttribute("aria-live", "polite");
-    const icon = document.createElement("img");
-    icon.className = "context-checkpoint-icon";
-    icon.src = "assets/icons/compress_icon.svg";
-    icon.alt = "";
-    icon.setAttribute("aria-hidden", "true");
     const label = document.createElement("span");
     label.className = "context-checkpoint-text";
-    notice.append(icon, label);
+    notice.append(label);
     if (assistant?.splitAtContextCheckpoint) {
       assistant.splitAtContextCheckpoint(notice);
     } else {
@@ -8097,18 +9126,14 @@ function setContextCheckpointNoticeText(notice, text) {
 
 function hydrateContextCheckpointNotices(root = messages) {
   for (const notice of root.querySelectorAll?.(".context-checkpoint-notice") || []) {
-    if (notice.querySelector(":scope > .context-checkpoint-icon")) continue;
+    notice.querySelectorAll(":scope > .context-checkpoint-icon").forEach((icon) => icon.remove());
+    if (notice.querySelector(":scope > .context-checkpoint-text")) continue;
     const text = String(notice.textContent || "").trim();
     notice.replaceChildren();
-    const icon = document.createElement("img");
-    icon.className = "context-checkpoint-icon";
-    icon.src = "assets/icons/compress_icon.svg";
-    icon.alt = "";
-    icon.setAttribute("aria-hidden", "true");
     const label = document.createElement("span");
     label.className = "context-checkpoint-text";
     label.textContent = text;
-    notice.append(icon, label);
+    notice.append(label);
   }
 }
 
@@ -13582,17 +14607,11 @@ function toolIconClass(tool = {}) {
 
 const FILE_MUTATION_TOOL_NAMES = new Set([
   "apply_patch",
-  "manage_identity",
   "create_guidance",
 ]);
 
 const FILE_READ_TOOL_NAMES = new Set([
   "read_file",
-  "search_workspace",
-  "replay_request",
-  "browser_action",
-  "delegate_agent",
-  "web_research",
 ]);
 
 function toolActionName(tool = {}) {
@@ -13608,7 +14627,7 @@ function isFileReadTool(tool = {}) {
 }
 
 function isFileActionTool(tool = {}) {
-  return isFileMutationTool(tool) || isFileReadTool(tool);
+  return Boolean(fileActionKindForTool(tool));
 }
 
 function toolCardKey(tool = {}) {
@@ -13621,39 +14640,326 @@ function toolCardKey(tool = {}) {
   ].join("\u0000");
 }
 
-function fileActionMessage(tool = {}, result = {}, phase = "running") {
-  const action = toolActionName(tool);
-  const isDelete = action === "apply_patch" && Array.isArray(tool?.args?.operations) && tool.args.operations.some((op) => op.kind === "delete");
-  const isCreate = action === "apply_patch" && Array.isArray(tool?.args?.operations) && tool.args.operations.some((op) => op.kind === "create");
-  if (phase === "running") {
-    if (isFileReadTool(tool)) return "Reading...";
-    if (isDelete) return "Deleting...";
-    if (isCreate || action === "create_guidance") return "Creating...";
-    return "Editing...";
+function toolTargetPath(tool = {}, result = {}) {
+  const args = tool.args && typeof tool.args === "object" ? tool.args : {};
+  const resultPath = result?.relativePath || result?.path || result?.file || "";
+  const operations = Array.isArray(args.operations) ? args.operations : [];
+  const op = operations.find((item) => item && (item.path || item.target)) || operations[0] || {};
+  return String(resultPath || args.path || args.file || tool.file || op.path || op.target || "").trim();
+}
+
+function toolTargetBasename(tool = {}, result = {}) {
+  const value = toolTargetPath(tool, result).replace(/\\/g, "/");
+  if (!value || value === "workspace" || value === ".") return "";
+  const parts = value.split("/").filter(Boolean);
+  return parts.at(-1) || value;
+}
+
+function compactText(text = "", max = 48) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return "";
+  return value.length > max ? `${value.slice(0, Math.max(1, max - 1))}\u2026` : value;
+}
+
+function toolArgsOf(tool = {}) {
+  return tool.args && typeof tool.args === "object" && !Array.isArray(tool.args) ? tool.args : {};
+}
+
+function compactUrlDetail(url = "") {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const path = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
+    return compactText(`${parsed.host || ""}${path}`, 48);
+  } catch {
+    return compactText(raw.replace(/^https?:\/\//i, ""), 48);
   }
-  if (phase === "error") return "Failed";
-  if (isFileReadTool(tool)) return "Read";
-  if (isDelete) return "Deleted";
-  if (isCreate || action === "create_guidance") return "Created";
-  return "Edited";
+}
+
+function compactSearchNeedle(tool = {}) {
+  const args = toolArgsOf(tool);
+  return compactText(args.query || args.pattern || args.filename || args.text || args.symbol || tool.query || "");
+}
+
+function isAskQuestionsTool(tool = {}) {
+  return toolActionName(tool) === "ask_questions";
+}
+
+function isSearchTool(tool = {}) {
+  const action = toolActionName(tool);
+  return action === "search_workspace" || (action !== "web_research" && /search|grep|find/.test(action));
+}
+
+function applyPatchOperations(tool = {}) {
+  const operations = toolArgsOf(tool).operations;
+  return Array.isArray(operations) ? operations.filter((item) => item && typeof item === "object") : [];
+}
+
+function applyPatchKind(tool = {}, result = {}) {
+  if (result?.mode === "delete") return "delete";
+  const operations = applyPatchOperations(tool);
+  if (!operations.length) return "modify";
+  if (operations.every((op) => op.kind === "delete")) return "delete";
+  if (operations.every((op) => op.kind === "create")) return "create";
+  if (operations.every((op) => op.kind === "move")) return "move";
+  if (operations.every((op) => op.kind === "ensure_dir")) return "ensure_dir";
+  return String(operations[0]?.kind || "modify");
+}
+
+function applyPatchDetail(tool = {}, result = {}) {
+  const operations = applyPatchOperations(tool);
+  const op = operations[0] || {};
+  if (applyPatchKind(tool, result) === "move") {
+    const from = toolTargetBasename({ args: { path: op.path } }, result) || toolTargetBasename(tool, result);
+    const to = toolTargetBasename({ args: { path: op.target } }, {});
+    if (from && to) return `${from} \u2192 ${to}`;
+    return to || from;
+  }
+  return toolTargetBasename(tool, result);
+}
+
+function isDeletePatchTool(tool = {}, result = {}) {
+  return toolActionName(tool) === "apply_patch" && applyPatchKind(tool, result) === "delete";
+}
+
+function webResearchParts(tool = {}, result = {}, running = false) {
+  const args = toolArgsOf(tool);
+  const operation = String(args.operation || result.operation || "").toLowerCase();
+  if (operation === "fetch_page") {
+    return {
+      verb: running ? "Reading page" : "Read page",
+      detail: compactText(result.title || "") || compactUrlDetail(args.url || result.url || ""),
+    };
+  }
+  return {
+    verb: running ? "Searching web" : "Searched web",
+    detail: compactSearchNeedle(tool) || compactText(result.query || ""),
+  };
+}
+
+function browserActionDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  const action = String(args.action || result.action || "").replace(/_/g, " ").trim();
+  const target = compactUrlDetail(args.url || result.url || "")
+    || compactText(args.selector || args.text || args.option || args.pageId || "", 40);
+  if (action && target) return `${action} ${target}`;
+  return target || action;
+}
+
+function replayRequestDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  const request = args.request && typeof args.request === "object" ? args.request : {};
+  const method = String(request.method || result.method || "GET").toUpperCase();
+  const path = compactUrlDetail(request.url || result.url || "") || compactText(request.url || result.url || "", 40);
+  return path ? `${method} ${path}` : method;
+}
+
+function identityActionDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  const operation = String(args.operation || result.operation || "").trim();
+  const name = compactText(args.name || args.identityId || result.name || result.identityId || "", 32);
+  if (operation && name) return `${operation} ${name}`;
+  return name || operation;
+}
+
+function delegateAgentDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  return compactText(
+    args.task
+    || args.prompt
+    || args.summary
+    || args.name
+    || result.task
+    || result.summary
+    || args.contextPackage?.role
+    || "",
+  );
+}
+
+function guidanceDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  return compactText(args.name || result.name || "") || toolTargetBasename(tool, result);
+}
+
+function fileActionKindForTool(tool = {}, result = {}) {
+  const action = toolActionName(tool);
+  const args = toolArgsOf(tool);
+  if (action === "web_research") return String(args.operation || result.operation || "").toLowerCase() === "fetch_page" ? "read" : "search";
+  if (action === "browser_action") return "browse";
+  if (action === "replay_request") return "replay";
+  if (action === "manage_identity") return "identity";
+  if (action === "delegate_agent") return "delegate";
+  if (isSearchTool(tool)) return "search";
+  if (isDeletePatchTool(tool, result) || action === "delete" || result?.mode === "delete") return "delete";
+  if (isFileReadTool(tool) || /read|list|inspect|outline|index|web_page/.test(action)) return "read";
+  if (isFileMutationTool(tool) || /write|patch|edit|creat|delet|mutat/.test(action)) return "write";
+  return "";
+}
+
+function joinVerbAndTarget(verb, target) {
+  const name = String(target || "").trim();
+  return name ? `${verb} ${name}` : verb;
+}
+
+const TOOL_STATUS_VERBS = [
+  "Running Command",
+  "Ran Command",
+  "Command failed",
+  "Updating identity",
+  "Updated identity",
+  "Creating folder",
+  "Created folder",
+  "Searching web",
+  "Searched web",
+  "Reading page",
+  "Read page",
+  "Searching",
+  "Searched",
+  "Reading",
+  "Deleting",
+  "Deleted",
+  "Editing",
+  "Edited",
+  "Creating",
+  "Created",
+  "Moving",
+  "Moved",
+  "Browsing",
+  "Browsed",
+  "Replaying",
+  "Replayed",
+  "Delegating",
+  "Delegated",
+  "Failed",
+  "Read",
+];
+
+function splitToolStatusLabel(text = "") {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  const verb = TOOL_STATUS_VERBS.find((item) => value === item || value.startsWith(`${item} `));
+  if (!verb) return { verb: value, detail: "" };
+  return { verb, detail: value.slice(verb.length).trim() };
+}
+
+function isBareToolVerbLabel(label = "") {
+  const { verb, detail } = splitToolStatusLabel(label);
+  return Boolean(verb && !detail && KEEPABLE_TOOL_LABEL.test(verb));
+}
+
+function recoveredToolTargetName(card) {
+  const file = String(card?.dataset?.file || "").trim();
+  if (!file) return "";
+  return toolTargetBasename({ args: { path: file } }, {});
+}
+
+function decorateBareToolLabel(card, label = "") {
+  const value = String(label || "").trim();
+  if (!isBareToolVerbLabel(value)) return value;
+  const detail = recoveredToolTargetName(card);
+  if (!detail) return "";
+  return `${splitToolStatusLabel(value).verb} ${detail}`;
+}
+
+function renderToolStatusLabel(host, verb, detail = "") {
+  if (!host) return;
+  const nextVerb = isStubToolStatusLabel(verb) ? "" : String(verb || "").trim();
+  const nextDetail = isStubToolStatusLabel(detail) ? "" : String(detail || "").trim();
+  host.replaceChildren();
+  if (!nextVerb && !nextDetail) return;
+  const verbEl = document.createElement("span");
+  verbEl.className = "agent-tool-verb";
+  verbEl.textContent = nextVerb || nextDetail;
+  host.appendChild(verbEl);
+  if (nextVerb && nextDetail) {
+    host.appendChild(document.createTextNode(" "));
+    const detailEl = document.createElement("span");
+    detailEl.className = "agent-tool-detail";
+    detailEl.textContent = nextDetail;
+    host.appendChild(detailEl);
+  }
+}
+
+function renderToolStatusLabelFromText(host, text = "") {
+  const parts = splitToolStatusLabel(text);
+  renderToolStatusLabel(host, parts.verb, parts.detail);
+}
+
+function hydrateToolStatusLabels(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".tool-card-file, .agent-command-label, .agent-file-stack-text").forEach((el) => {
+    if (el.querySelector(".agent-tool-verb")) return;
+    if (isStubToolStatusLabel(el.textContent)) {
+      el.replaceChildren();
+      return;
+    }
+    renderToolStatusLabelFromText(el, el.textContent);
+  });
+}
+
+function exploredToolParts(tool = {}, result = {}, phase = "success") {
+  const action = toolActionName(tool);
+  const file = toolTargetBasename(tool, result);
+  if (phase === "error") return { verb: "Failed", detail: file };
+  const running = phase === "running";
+  if (isAskQuestionsTool(tool)) return { verb: "", detail: "" };
+  if (isAgentTerminalTool(tool) || /^(exec_command)$/.test(action) || /command|terminal|process|shell|script|exec/.test(action)) {
+    return {
+      verb: running ? "Running Command" : "Ran Command",
+      detail: agentTerminalCommandForTool(tool),
+    };
+  }
+  if (action === "web_research") return webResearchParts(tool, result, running);
+  if (action === "browser_action") {
+    return { verb: running ? "Browsing" : "Browsed", detail: browserActionDetail(tool, result) };
+  }
+  if (action === "replay_request") {
+    return { verb: running ? "Replaying" : "Replayed", detail: replayRequestDetail(tool, result) };
+  }
+  if (action === "manage_identity") {
+    return { verb: running ? "Updating identity" : "Updated identity", detail: identityActionDetail(tool, result) };
+  }
+  if (action === "delegate_agent") {
+    return { verb: running ? "Delegating" : "Delegated", detail: delegateAgentDetail(tool, result) };
+  }
+  if (action === "create_guidance") {
+    return { verb: running ? "Creating" : "Created", detail: guidanceDetail(tool, result) };
+  }
+  if (isSearchTool(tool)) {
+    return { verb: running ? "Searching" : "Searched", detail: compactSearchNeedle(tool) || file };
+  }
+  if (action === "apply_patch") {
+    const kind = applyPatchKind(tool, result);
+    const detail = applyPatchDetail(tool, result);
+    if (kind === "delete") return { verb: running ? "Deleting" : "Deleted", detail };
+    if (kind === "create") return { verb: running ? "Creating" : "Created", detail };
+    if (kind === "move") return { verb: running ? "Moving" : "Moved", detail };
+    if (kind === "ensure_dir") return { verb: running ? "Creating folder" : "Created folder", detail };
+    return { verb: running ? "Editing" : "Edited", detail };
+  }
+  if (isDeletePatchTool(tool, result) || action === "delete" || result?.mode === "delete") {
+    return { verb: running ? "Deleting" : "Deleted", detail: file };
+  }
+  if (isFileReadTool(tool) || /read|list|inspect|outline|index/.test(action)) {
+    return { verb: running ? "Reading" : "Read", detail: file };
+  }
+  if (isFileMutationTool(tool) || /write|patch|edit|creat|delet|mutat/.test(action)) {
+    return { verb: running ? "Editing" : "Edited", detail: file };
+  }
+  return { verb: "", detail: file };
+}
+
+function exploredToolLabel(tool = {}, result = {}, phase = "success") {
+  const parts = exploredToolParts(tool, result, phase);
+  return joinVerbAndTarget(parts.verb, parts.detail);
+}
+
+function fileActionMessage(tool = {}, result = {}, phase = "running") {
+  return exploredToolLabel(tool, result, phase);
 }
 
 function toolRunningMessage(tool = {}) {
-  if (isFileActionTool(tool)) return fileActionMessage(tool, {}, "running");
-  const action = toolActionName(tool).toLowerCase();
-  if (/command|terminal|process|shell|script|exec/.test(action)) {
-    const command = agentTerminalCommandForTool(tool);
-    return command ? String(command) : "Running command\u2026";
-  }
-  if (/search|find|grep|web_search|web_research/.test(action)) return "Searching\u2026";
-  if (/read|list|inspect|outline|index|web_page/.test(action)) return "Reading\u2026";
-  if (/verify|test|check/.test(action)) return "Verifying\u2026";
-  if (/browser|navigate|click|type/.test(action)) return "Driving browser\u2026";
-  if (/replay|traffic|ingest/.test(action)) return "Replaying traffic\u2026";
-  if (/compare|responses/.test(action)) return "Comparing responses\u2026";
-  if (/delegate|subagent/.test(action)) return "Delegating sub-agent\u2026";
-  if (/manage_identity/.test(action)) return "Managing identity\u2026";
-  return "Working\u2026";
+  return exploredToolLabel(tool, {}, "running");
 }
 
 function toolUiResult(result = {}) {
@@ -13674,43 +14980,36 @@ function toolUiResult(result = {}) {
 
 function minimalToolSuccessLabel(tool = {}, result = {}) {
   const uiResult = toolUiResult(result);
-  if (isFileActionTool(tool)) return fileActionMessage(tool, uiResult, "success");
   if (uiResult?.error) return "Failed";
-  if (uiResult?.mode === "command") return uiResult.timedOut ? "Timed out" : uiResult.exitCode === 0 ? "Completed" : "Failed";
-  if (["read", "read_many", "inspect", "list", "index", "search", "web_search", "web_page", "outline"].includes(uiResult?.mode)) return "Read";
-  if (["process_start", "process_read", "process_stop"].includes(result?.mode)) return "Process updated";
-  if (result?.mode === "terminal_wait") return "Waiting on terminal";
-  if (result?.mode === "subagent_wait") return "Waiting on subagent";
-  if (result?.mode === "delete") return "Deleted";
-  return "Done";
+  return exploredToolLabel(tool, uiResult, "success");
 }
 
 function createToolCard(tool, { pending = false } = {}) {
-  const card = document.createElement("div");
+  const card = document.createElement("button");
+  card.type = "button";
   const fileAction = isFileActionTool(tool);
-  card.className = `tool-card${pending ? " pending" : ""}${fileAction ? " file-action" : ""}`;
+  card.className = `agent-file-row tool-card${pending ? " pending" : ""}${fileAction ? " file-action" : ""}`;
+  card.dataset.lane = "activity";
   const label = ToolMap.targetForTool(tool);
   const callId = String(tool.callId || "").trim();
+  const path = toolTargetPath(tool);
   card.dataset.file = label;
+  if (path) card.dataset.path = path;
   card.dataset.toolAction = toolActionName(tool);
   card.dataset.toolKey = toolCardKey(tool);
   if (callId) card.dataset.callId = callId;
-  card.dataset.fileActionKind = isFileReadTool(tool) ? "read" : isFileMutationTool(tool) ? "write" : "";
-  card.dataset.runningLabel = toolRunningMessage(tool);
+  card.dataset.fileActionKind = fileActionKindForTool(tool);
+  card.dataset.runningLabel = exploredToolLabel(tool, {}, "running");
+  card.dataset.completedLabel = exploredToolLabel(tool, {}, "success");
   card.dataset.state = pending ? "queued" : "running";
-  const detail = fileAction ? "" : ToolParser.toolCardDetail(tool);
-  const iconMarkup = fileAction
-    ? '<img class="tool-card-icon tool-card-file-icon" src="assets/icons/chat_read_edit_file_icon.svg" alt="" aria-hidden="true">'
-    : `<span class="codicon ${toolIconClass(tool)} tool-card-icon"></span>`;
-  card.innerHTML = `
-    <div class="tool-card-header">
-      ${iconMarkup}
-      <span class="tool-card-file">${escapeHtml(card.dataset.runningLabel)}</span>
-      <span class="tool-card-badge">${escapeHtml(detail)}</span>
-      <span class="tool-card-status running"></span>
-    </div>
-  `;
-  card.setAttribute("role", "status");
+  const runningParts = exploredToolParts(tool, {}, "running");
+  card.dataset.fileVerb = stackVerbForLabel(runningParts.verb);
+  const fileEl = document.createElement("span");
+  fileEl.className = "tool-card-file";
+  if (!isStubToolStatusLabel(runningParts.verb)) {
+    renderToolStatusLabel(fileEl, runningParts.verb, runningParts.detail);
+  }
+  card.appendChild(fileEl);
   card.setAttribute("aria-label", card.dataset.runningLabel);
   return syncToolCardPlaceholderVisibility(card);
 }
@@ -13721,45 +15020,60 @@ function setToolCardStatus(card, type, message) {
     card.remove();
     return;
   }
-  const status = card.querySelector(".tool-card-status");
-  if (!status) return;
   const fileEl = card.querySelector(".tool-card-file");
-  const label = type === "running"
-    ? card.dataset.runningLabel || "Working\u2026"
-    : String(message || "").trim();
-  if (type === "success" && isTransientToolCardLabel(label)) {
-    card.remove();
-    return;
+  let label = type === "running"
+    ? card.dataset.runningLabel || ""
+    : String(message || card.dataset.completedLabel || "").trim();
+  label = decorateBareToolLabel(card, label);
+  if (!label || isStubToolStatusLabel(label) || isBareToolVerbLabel(label) || (type === "success" && isTransientToolCardLabel(label))) {
+    const recovered = [card.dataset.completedLabel, card.dataset.runningLabel, toolCardLabelText(card)]
+      .map((value) => decorateBareToolLabel(card, value))
+      .find((value) => keepableToolCardLabel(value));
+    if (recovered) label = recovered;
+    else if (type === "success") {
+      card.remove();
+      return;
+    } else {
+      if (fileEl) fileEl.replaceChildren();
+      card.dataset.state = "running";
+      card.classList.add("pending");
+      card.hidden = true;
+      return;
+    }
   }
-  if (fileEl) fileEl.textContent = label;
+  if (fileEl) renderToolStatusLabelFromText(fileEl, label);
+  const parts = splitToolStatusLabel(label);
+  if (parts.verb) card.dataset.fileVerb = stackVerbForLabel(parts.verb);
   card.dataset.state = type;
   card.classList.toggle("pending", type === "running");
   card.setAttribute("aria-label", label);
   card.classList.remove("status-updated");
   void card.offsetWidth;
   card.classList.add("status-updated");
-  status.className = `tool-card-status ${type}`;
-  status.textContent = "";
+  const status = card.querySelector(".tool-card-status");
+  if (status) {
+    status.className = `tool-card-status ${type}`;
+    status.textContent = "";
+  }
   syncToolCardPlaceholderVisibility(card);
+  if (card.isConnected) absorbFileRow(card);
 }
 
-// Completed tool cards collapse and fade out of the chat, matching the
-// transient activity-feed style of modern agent harnesses. Only terminal
-// command/proc/security cards are auto-faded; file edits stay so the user
-// can still see what changed. Failed tool cards are removed instead of
-// leaving a "Failed" stub.
+// Timeline rows (Read / Edited / Searched / commands) stay in the Tool Used
+// fold. Only unlabeled transient stubs are eligible to auto-fade.
 const TOOL_CARD_FADE_MS = 900;
 const TOOL_CARD_KEEP_MUTATION = new Set(["create_guidance"]);
 function shouldAutoFadeToolCard(card) {
+  if (!card) return false;
   if (card.dataset.state === "error") return false;
-  if (card.dataset.fileActionKind) return false;
-  if (card.dataset.toolAction === "exec_command") return false;
+  if (isKeepableToolCard(card)) return false;
   if (TOOL_CARD_KEEP_MUTATION.has(card.dataset.toolAction)) return false;
   return true;
 }
 function fadeToolCard(card) {
   if (!card || !card.isConnected || card.dataset.faded) return;
   if (card.dataset.state !== "success") return;
+  if (!shouldAutoFadeToolCard(card)) return;
   card.dataset.faded = "1";
   card.classList.add("tool-card-fade");
   card.setAttribute("aria-label", `${card.dataset.runningLabel || "Tool"} done`);
@@ -13770,45 +15084,73 @@ function fadeToolCard(card) {
 }
 
 function markAssistantToolUse(turn) {
-  if (!turn) return;
+  if (!turn) return null;
   for (const run of activeChatRuns.values()) {
     const assistant = run.assistant;
     if (!assistant) continue;
     if (assistant.turn === turn || assistant.rootTurn === turn || assistant.assistantTurns?.().includes(turn)) {
       assistant.markToolUse();
-      return;
+      return assistant;
     }
   }
+  return null;
+}
+
+function toolCardMountHost(turn, contentEl, assistant) {
+  const explored = assistant?.exploredMount?.();
+  if (explored && !explored.classList?.contains("assistant-reply")) return explored;
+  const work = assistantWorkHost(turn);
+  if (work && !work.classList.contains("assistant-reply")) return work;
+  const parent = contentEl?.parentElement;
+  if (parent && !parent.classList.contains("assistant-reply")) return parent;
+  return turn;
 }
 
 function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
-  markAssistantToolUse(turn);
+  if (!tool || isAskQuestionsTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) return null;
+  const assistant = markAssistantToolUse(turn);
   const fileKey = ToolMap.targetForTool(tool);
   const action = toolActionName(tool);
   const callId = String(tool.callId || "").trim();
   const key = toolCardKey(tool);
-  const cards = [...turn.querySelectorAll(".tool-card")];
+  const cards = [...(turn?.closest?.(".chat-exchange") || assistant?.workHostTurn?.() || turn).querySelectorAll(".tool-card")];
   let card = cards.find((candidate) => callId && candidate.dataset.callId === callId)
     || cards.find((candidate) => candidate.dataset.toolKey === key)
     || cards.find((candidate) => candidate.dataset.toolAction === action && candidate.dataset.file === fileKey)
-    // Some providers omit a stable call id and emit create_guidance with a
-    // different display target in tool_call vs tool_start. Keep that one
-    // action as a single compact status line.
     || (action === "create_guidance" ? cards.find((candidate) => candidate.dataset.toolAction === action) : null);
+  const runningLabel = exploredToolLabel(tool, {}, "running");
+  const completedLabel = exploredToolLabel(tool, {}, "success");
+  const host = toolCardMountHost(turn, contentEl, assistant);
+  let mounted = false;
   if (!card) {
+    assistant?.sealCurrentContentSegment?.();
     card = createToolCard(tool, { pending });
-    turn.insertBefore(card, contentEl);
-  } else if (pending) {
-    card.classList.add("pending");
-    setToolCardStatus(card, "running", "Queued...");
-  } else {
-    card.classList.remove("pending");
-    setToolCardStatus(card, "running", "Working...");
+    appendChatStreamNode(host, card);
+    mounted = true;
+  } else if (!card.isConnected || card.closest(".assistant-reply")) {
+    assistant?.sealCurrentContentSegment?.();
+    appendChatStreamNode(host, card);
+    mounted = true;
   }
   card.dataset.file = fileKey;
   card.dataset.toolAction = action;
   card.dataset.toolKey = key;
+  const targetPath = toolTargetPath(tool);
+  if (targetPath) card.dataset.path = targetPath;
+  card.dataset.fileActionKind = card.dataset.fileActionKind || fileActionKindForTool(tool);
   if (callId) card.dataset.callId = callId;
+  card.dataset.runningLabel = runningLabel;
+  card.dataset.completedLabel = completedLabel;
+  if (card.dataset.state !== "success") {
+    card.classList.toggle("pending", pending);
+    setToolCardStatus(card, "running", runningLabel);
+  } else {
+    syncToolCardPlaceholderVisibility(card);
+  }
+  if (mounted) {
+    absorbFileRow(card);
+    assistant?.ensurePostToolContentSegment?.();
+  }
   return card;
 }
 
@@ -14070,34 +15412,44 @@ function rememberCommandCompletion(ids, completion, sessionId = "") {
 function commandTimelineStateLabel(state = "running") {
   if (state === "error") return "Command failed";
   if (state === "success") return "Ran Command";
-  return "Running command…";
+  return "Running Command";
+}
+
+function renderCommandTimelineLabel(row, state = "running", extraDetail = "") {
+  if (!row) return;
+  const label = row.querySelector(".agent-command-label");
+  if (!label) return;
+  const detail = String(extraDetail || row.dataset.commandText || "").trim();
+  renderToolStatusLabel(label, commandTimelineStateLabel(state), detail);
 }
 
 function createCommandTimelineRow(tool, { state = "running" } = {}) {
   const row = document.createElement("details");
   row.className = "agent-command-event";
+  row.dataset.lane = "activity";
   row.dataset.commandKey = commandTimelineKey(tool);
   bindCommandTimelineIdentity(row, tool);
   row.dataset.state = state;
   row.open = false;
+  const command = agentTerminalCommandForTool(tool) || "";
+  if (command) row.dataset.commandText = command;
+  const cwd = tool.args?.cwd || tool.cwd;
+  if (cwd) row.dataset.cwd = String(cwd);
+  row.dataset.startedAt = String(Date.now());
 
   const summary = document.createElement("summary");
   summary.className = "agent-command-summary";
-  summary.innerHTML = `
-    <img class="codicon-terminal agent-command-shell" src="assets/icons/shell_icon.svg" alt="" aria-hidden="true">
-    <span class="agent-command-label"></span>
-    <span class="codicon codicon-chevron-right agent-command-chevron" aria-hidden="true"></span>
-  `;
-  summary.querySelector(".agent-command-label").textContent = commandTimelineStateLabel(state);
+  const label = document.createElement("span");
+  label.className = "agent-command-label";
+  summary.appendChild(label);
+  row.appendChild(summary);
+  renderCommandTimelineLabel(row, state);
 
-  const command = agentTerminalCommandForTool(tool) || "Command details unavailable";
   const body = document.createElement("div");
   body.className = "agent-command-body";
   const code = document.createElement("code");
-  code.textContent = command;
+  code.textContent = command || "Command details unavailable";
   body.appendChild(code);
-
-  row.appendChild(summary);
   row.appendChild(body);
   return row;
 }
@@ -14108,7 +15460,7 @@ function updateCommandTimelineRow(row, state = "success") {
   row.dataset.state = state;
   delete row.dataset.waiting;
   const label = row.querySelector(".agent-command-label");
-  if (label) label.textContent = commandTimelineStateLabel(state);
+  if (label) renderCommandTimelineLabel(row, state);
   persistCommandTimelineRowState(row);
   return row;
 }
@@ -14137,7 +15489,7 @@ function startCommandTimelineTicker(row, startedAt = Date.now()) {
       return;
     }
     const label = row.querySelector(".agent-command-label");
-    if (label) label.textContent = `Running command · ${formatWaitClock(Date.now() - start)}`;
+    if (label) renderCommandTimelineLabel(row, "running");
   };
   tick();
   commandTimelineTickers.set(row, setInterval(tick, 1000));
@@ -14158,14 +15510,16 @@ function updateCommandTimelineLabel(identity, label) {
     if (!commandTimelineIdentityMatches(row, ids)) continue;
     if (row.dataset.waiting !== "true") continue;
     const labelEl = row.querySelector(".agent-command-label");
-    if (labelEl) labelEl.textContent = label;
+    if (labelEl) renderToolStatusLabelFromText(labelEl, label);
     row.dataset.state = "running";
     persistCommandTimelineRowState(row);
   }
 }
 
 async function applyToolResultToUi(tool, result, turn, contentEl) {
+  if (isAskQuestionsTool(tool) || isTaskListTool(tool)) return;
   const card = ensureToolCard(turn, contentEl, tool);
+  if (!card) return;
 
   if (result?.error) {
     setToolCardStatus(card, "error", result.error);
@@ -14179,6 +15533,10 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
   }
 
   let successText = minimalToolSuccessLabel(tool, result);
+  const uiResult = toolUiResult(result);
+  const resultPath = toolTargetPath(tool, uiResult);
+  if (resultPath) card.dataset.file = resultPath;
+  card.dataset.completedLabel = successText;
   if (result?.terminalId) {
     successText = result.mode === "terminal_wait" || result.mode === "subagent_wait" ? "waiting" : "Terminal ready";
     TerminalManager.attachAgentSession({
@@ -14427,6 +15785,7 @@ function addUserMessage(text) {
   if (value && latestExchangeUserPromptText() === value.trim()) return;
   const turn = document.createElement("div");
   turn.className = "chat-turn user";
+  turn.dataset.createdAt = new Date().toISOString();
   const box = createUserPromptBox(value);
   turn.appendChild(box);
   appendChatTurn(turn, { startsExchange: true });
@@ -14435,25 +15794,52 @@ function addUserMessage(text) {
   scrollMessages({ force: true });
 }
 
-function addErrorMessage(text, { container = messages, session = activeChatSession() } = {}) {
-  const turn = document.createElement("div");
-  turn.className = "chat-turn error";
-  const box = document.createElement("div");
-  box.className = "chat-box chat-box-error";
-  const content = document.createElement("div");
-  content.className = "chat-box-content";
-  content.textContent = text;
-  box.appendChild(content);
-  turn.appendChild(box);
-  appendChatTurn(turn, { container });
-  if (container === messages) {
-    syncChatEmptyState();
-    syncActiveChatSession();
-    scrollMessages({ force: true });
-  } else if (session) {
-    session.messagesHtml = sanitizePersistedChatHtml(container.innerHTML || "");
-    schedulePersistChatSessions();
+const CHAT_ERROR_TOAST_MS = 15_000;
+let chatErrorToastTimer = 0;
+
+function hideChatErrorToast() {
+  if (chatErrorToastTimer) {
+    clearTimeout(chatErrorToastTimer);
+    chatErrorToastTimer = 0;
   }
+  const toast = $("chat-error-toast");
+  if (toast) toast.hidden = true;
+}
+
+function ensureChatErrorToast() {
+  let toast = $("chat-error-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "chat-error-toast";
+    toast.className = "chat-error-toast";
+    toast.hidden = true;
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    toast.innerHTML = `<p class="chat-error-toast-text"></p><button type="button" class="chat-error-toast-close" title="Dismiss" aria-label="Dismiss"><span class="codicon codicon-close" aria-hidden="true"></span></button>`;
+    const host = inputBar || $("input-bar");
+    const composer = host?.querySelector?.(".composer");
+    if (host && composer) host.insertBefore(toast, composer);
+    else host?.insertBefore?.(toast, host.firstChild);
+  }
+  if (toast && toast.dataset.bound !== "1") {
+    toast.dataset.bound = "1";
+    toast.querySelector(".chat-error-toast-close")?.addEventListener("click", hideChatErrorToast);
+  }
+  return toast;
+}
+
+function addErrorMessage(text, { container = messages, session = activeChatSession() } = {}) {
+  void container;
+  void session;
+  const message = String(text || "").trim();
+  if (!message) return;
+  const toast = ensureChatErrorToast();
+  const label = toast?.querySelector?.(".chat-error-toast-text");
+  if (label) label.textContent = message;
+  if (!toast) return;
+  toast.hidden = false;
+  if (chatErrorToastTimer) clearTimeout(chatErrorToastTimer);
+  chatErrorToastTimer = setTimeout(hideChatErrorToast, CHAT_ERROR_TOAST_MS);
 }
 
 function agentStateKindForText(text = "") {
@@ -14992,7 +16378,9 @@ function createSubagentRunCard(assistant, payload = {}) {
     summary: summarizeSubagentActivity(payload),
   });
   // Keep delegated rows below the parent's prose and tool timeline.
-  assistant.turn.appendChild(card);
+  assistant.markToolUse();
+  markActivityNode(card);
+  appendChatStreamNode(assistant.toolWorkMount(), card);
   wireSubagentRunCard(card);
   setSubagentCardState(card, card.dataset.state);
   return card;
@@ -15076,12 +16464,13 @@ function finalizeSubagentSessionTab(payload = {}) {
 
 function createAssistantTurn({ container = messages, sessionId = activeChatSessionId } = {}) {
   const turn = document.createElement("div");
-  turn.className = "chat-turn assistant";
+  turn.className = "chat-turn assistant agent-stream";
   turn.setAttribute("aria-busy", "true");
   turn.dataset.createdAt = new Date().toISOString();
 
   const contentEl = document.createElement("div");
   contentEl.className = "assistant-reply";
+  contentEl.dataset.lane = "prose";
   contentEl.hidden = true;
   turn.appendChild(contentEl);
   appendChatTurn(turn, { container });
@@ -15106,12 +16495,19 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     rawContent: "",
     contentSegments: [{ el: contentEl, raw: "" }],
     commandEntries: new Map(),
-    thinkingBlock: null,
-    thinkingBody: null,
-    thinkingPhases: [],
+    thinkingFoldEl: null,
+    thinkingContentEl: null,
+    thinkingRaw: "",
     activityLogEl: null,
     reasoningActivityLine: null,
     liveStateEl: null,
+    workFoldEl: null,
+    workFoldBodyEl: null,
+    workTimer: null,
+    exploredFoldEl: null,
+    exploredBodyEl: null,
+    verdictOpen: false,
+    pendingVerdictBreak: false,
     lastActivityKey: "",
     taskBriefEl: null,
     taskBrief: null,
@@ -15124,21 +16520,205 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     currentContentSegment() {
       return this.contentSegments[this.contentSegments.length - 1];
     },
-    createContentSegment() {
+    createContentSegment({ after = null } = {}) {
       const next = document.createElement("div");
       next.className = "assistant-reply";
+      next.dataset.lane = "prose";
+      if (this.verdictOpen) next.dataset.workVerdict = "true";
       if (this.turn.getAttribute("aria-busy") === "true") next.classList.add("streaming");
       next.hidden = true;
-      this.turn.appendChild(next);
+      const host = this.conversationMount();
+      const anchor = (after && after.parentElement === host ? after : null) || this.contentSegmentAnchor(host);
+      if (anchor) anchor.after(next);
+      else host.appendChild(next);
       const segment = { el: next, raw: "" };
       this.contentSegments.push(segment);
       this.contentEl = next;
+      this.pendingVerdictBreak = false;
       return segment;
+    },
+    contentSegmentAnchor(host) {
+      if (!host) return null;
+      return [...host.children].findLast((child) => (
+        child.classList.contains("agent-work-header")
+        || child.classList.contains("agent-work-fold")
+        || isActivityNode(child)
+        || (child.classList.contains("assistant-reply") && !isEmptyAssistantReply(child))
+      )) || null;
+    },
+    workHostTurn() {
+      const current = this.turn;
+      if (current && !current.classList.contains("agent-run-stop") && !current.closest(".agent-run-stop")) {
+        return current;
+      }
+      const working = this.assistantTurns().filter((turn) => (
+        !turn.classList.contains("agent-run-stop") && !turn.closest(".agent-run-stop")
+      ));
+      return working.at(-1) || this.rootTurn || current;
+    },
+    replyMount() {
+      if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
+        return this.turn;
+      }
+      return this.workHostTurn() || this.turn;
+    },
+    conversationMount() {
+      if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
+        return this.turn;
+      }
+      if (this.verdictOpen) return this.replyMount();
+      return this.workHostTurn() || this.turn;
+    },
+    workingMount() {
+      return this.replyMount();
+    },
+    toolWorkMount() {
+      this.ensureWorkFold();
+      return this.workHostTurn();
+    },
+    ensureExploredGroup() {
+      return null;
+    },
+    exploredMount() {
+      return this.toolWorkMount();
+    },
+    ensureThinkingFold() {
+      this.ensureWorkFold();
+      if (this.thinkingFoldEl?.isConnected && this.thinkingFoldEl.dataset.final !== "true") {
+        this.thinkingContentEl = thinkingContentOf(this.thinkingFoldEl);
+        return this.thinkingFoldEl;
+      }
+      const host = this.conversationMount();
+      const fold = createThinkingFold({ startedAt: Date.now() });
+      markActivityNode(fold);
+      if (host) appendChatStreamNode(host, fold);
+      this.thinkingFoldEl = fold;
+      this.thinkingContentEl = thinkingContentOf(fold);
+      this.thinkingRaw = "";
+      return fold;
+    },
+    appendThinking(token) {
+      const value = String(token || "");
+      this.showPrivateReasoning();
+      const fold = this.ensureThinkingFold();
+      if (!fold) return;
+      setThinkingFoldLabel(fold, { live: true });
+      setCollapsibleFoldExpanded(fold, true);
+      if (value) {
+        this.thinkingRaw = `${this.thinkingRaw || ""}${value}`;
+        const content = thinkingContentOf(fold) || this.thinkingContentEl;
+        if (content) {
+          content.hidden = false;
+          renderMarkdown(content, this.thinkingRaw, { streaming: true });
+        }
+      }
+      scrollMessages();
+    },
+    finishThinking({ collapse = true } = {}) {
+      const folds = [];
+      if (this.thinkingFoldEl?.isConnected) folds.push(this.thinkingFoldEl);
+      const host = this.workHostTurn();
+      host?.querySelectorAll?.(".agent-thinking-fold:not([data-final='true'])").forEach((fold) => {
+        if (!folds.includes(fold)) folds.push(fold);
+      });
+      for (const fold of folds) {
+        const content = thinkingContentOf(fold);
+        const raw = String(content?.dataset?.rawMd || (fold === this.thinkingFoldEl ? this.thinkingRaw : "") || "");
+        finishThinkingFold(fold, { collapse });
+        if (content && raw.trim()) renderMarkdown(content, raw, { streaming: false });
+      }
+    },
+    ensureConversationSegment() {
+      if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
+        return this.currentContentSegment()?.el || null;
+      }
+      const host = this.conversationMount();
+      const current = this.currentContentSegment()?.el;
+      if (current?.isConnected && !current.closest(".agent-explored-fold") && !current.closest(".agent-thinking-fold")) {
+        // Streamed text keeps flowing into the current block. The only things
+        // that may break it are tool work landing after it, or the block being
+        // mounted in the wrong place (inside the fold once the verdict opened,
+        // or outside the fold while work is still running).
+        const inWorkFold = Boolean(current.closest(".agent-work-fold, .agent-thinking-fold, .agent-file-stack"));
+        const misplaced = this.verdictOpen ? inWorkFold : current.parentElement !== host;
+        if (!misplaced) {
+          const followingWork = workFollowingReply(current);
+          if (!followingWork) return current;
+          if (isEmptyAssistantReply(current)) {
+            followingWork.after(current);
+            return current;
+          }
+        } else if (isEmptyAssistantReply(current)) {
+          const anchor = this.contentSegmentAnchor(host);
+          if (anchor) anchor.after(current);
+          else host.appendChild(current);
+          if (this.verdictOpen) current.dataset.workVerdict = "true";
+          return current;
+        }
+      }
+      this.sealCurrentContentSegment();
+      return this.createContentSegment().el;
+    },
+    ensurePostToolContentSegment(exploredFold = null) {
+      void exploredFold;
+      return this.ensureConversationSegment();
+    },
+    createWorkStatus(host) {
+      if (!host) return null;
+      const header = ensureWorkHeader(host);
+      this.statusEl = header;
+      this.liveStateEl = header;
+      this.workFoldEl = header;
+      this.workFoldBodyEl = host;
+      return header;
+    },
+    stopWorkTimer() {
+      if (this.workTimer) {
+        clearInterval(this.workTimer);
+        this.workTimer = null;
+      }
+    },
+    startWorkTimer() {
+      this.stopWorkTimer();
+      const tick = () => {
+        const label = `Working for ${formatAgentWorkDuration(this.startedAt)}`;
+        let live = false;
+        for (const turn of this.assistantTurns()) {
+          if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) continue;
+          for (const block of turn.querySelectorAll(":scope > .agent-work-header, :scope > .agent-work-fold > .agent-status-line")) {
+            if (block.dataset.final === "true") continue;
+            live = true;
+            const textEl = block.querySelector(".agent-status-text");
+            if (textEl) textEl.textContent = label;
+            syncWorkHeaderAffordance(block);
+          }
+        }
+        if (!live) this.stopWorkTimer();
+      };
+      tick();
+      this.workTimer = setInterval(tick, 1000);
+    },
+    ensureWorkFold() {
+      const host = this.workHostTurn();
+      if (!host || host.classList.contains("agent-run-stop") || host.closest(".agent-run-stop")) return null;
+      flattenNestedChatLayout(host);
+      const header = ensureWorkHeader(host, this.liveStateEl);
+      if (!header) return null;
+      if (this.startedAt) header.dataset.startedAt = String(this.startedAt);
+      this.workFoldEl = header;
+      this.workFoldBodyEl = host;
+      this.liveStateEl = header;
+      this.statusEl = header;
+      this.exploredFoldEl = null;
+      this.exploredBodyEl = null;
+      this.startWorkTimer();
+      return header;
     },
     splitAtContextCheckpoint(notice) {
       if (!notice || !this.turn) return null;
       this.sealCurrentContentSegment();
       this.turn.querySelectorAll(".tool-card").forEach((card) => {
+        if (isKeepableToolCard(card)) return;
         if (card.hidden || isPlaceholderToolCardLabel(toolCardLabelText(card))) card.remove();
       });
       const chunk = wrapAssistantInRunChunk(this.turn);
@@ -15156,11 +16736,23 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       nextContent.hidden = true;
       nextTurn.appendChild(nextContent);
       const nextChunk = document.createElement("div");
-      nextChunk.className = "agent-run-chunk";
+      nextChunk.className = "agent-run-chunk agent-run-working";
       nextChunk.appendChild(nextTurn);
       notice.after(nextChunk);
 
       this.turn.setAttribute("aria-busy", "false");
+      this.finishThinking({ collapse: true });
+      this.stopWorkTimer();
+      this.workFoldEl = null;
+      this.workFoldBodyEl = null;
+      this.liveStateEl = null;
+      this.statusEl = null;
+      this.exploredFoldEl = null;
+      this.exploredBodyEl = null;
+      this.thinkingFoldEl = null;
+      this.thinkingContentEl = null;
+      this.thinkingRaw = "";
+      this.verdictOpen = false;
       this.turn = nextTurn;
       this.contentEl = nextContent;
       this.contentSegments.push({ el: nextContent, raw: "" });
@@ -15189,6 +16781,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       segment.el.classList.remove("streaming");
     },
     setRawContent(value) {
+      this.ensureConversationSegment();
       const next = String(value ?? "");
       const previous = this.rawContent;
       const segment = this.currentContentSegment();
@@ -15202,12 +16795,82 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       (this.rootTurn || this.turn).dataset.rawAssistant = next;
     },
     markToolUse() {
+      this.pendingVerdictBreak = false;
+      if (this.verdictOpen) {
+        this.verdictOpen = false;
+        const host = this.workHostTurn();
+        host?.querySelectorAll(":scope > .assistant-reply[data-work-verdict]").forEach((node) => {
+          delete node.dataset.workVerdict;
+        });
+      }
       this.usedTools = true;
       (this.rootTurn || this.turn).dataset.usedTools = "true";
+      this.ensureWorkFold();
     },
     hadToolActivity() {
-      if (this.usedTools || this.assistantTurns().some((turn) => turn.dataset.usedTools === "true")) return true;
-      return this.assistantTurns().some((turn) => turn.querySelector(".tool-card, .agent-command-event, .subagent-run-card"));
+      return this.assistantTurns().some((turn) => boxHasToolUsage(turn));
+    },
+    applyModelRound({ finishReason = "", stop = false } = {}) {
+      const reason = String(finishReason || "").trim().toLowerCase();
+      if (this.turn) this.turn.dataset.finishReason = reason;
+      this.finishThinking({ collapse: true });
+      sealExploredFolds(this.workHostTurn());
+      if (!stop) return;
+      this.openStopSection({ collapse: true, allowEmpty: true });
+    },
+    coalesceLiveVerdict() {
+      const host = this.workHostTurn();
+      const children = [...(host?.children || [])];
+      const lastActivity = children.findLast((node) => isActivityNode(node));
+      if (!lastActivity) return;
+      const replies = consecutiveAssistantRepliesAfter(lastActivity.nextSibling);
+      if (replies.length < 2) return;
+      const raw = this.contentSegments
+        .filter((item) => replies.includes(item.el))
+        .map((item) => item.raw)
+        .join("");
+      const first = replies[0];
+      replies.slice(1).forEach((el) => el.remove());
+      this.contentSegments = this.contentSegments.filter((item) => item.el?.isConnected);
+      const segment = this.contentSegments.find((item) => item.el === first);
+      if (segment) {
+        if (raw) segment.raw = raw;
+        this.renderContentSegment(segment, { streaming: false });
+      } else if (raw.trim()) {
+        first.hidden = false;
+        renderMarkdown(first, raw);
+      }
+      first.dataset.workVerdict = "true";
+      this.contentEl = first;
+    },
+    openStopSection({ collapse = false, allowEmpty = true } = {}) {
+      if (!this.turn || this.turn.classList.contains("agent-run-stop") || this.turn.closest(".agent-run-stop")) return;
+      const host = this.workHostTurn();
+      if (!host) return;
+      this.sealCurrentContentSegment();
+      this.verdictOpen = true;
+      const header = lastWorkHeader(host);
+      const existing = [...(host?.children || [])].filter((node) => isVerdictAssistantReply(node));
+      const trailing = trailingStopReplies(host);
+      if (trailing.length) {
+        for (const node of trailing) node.dataset.workVerdict = "true";
+        this.contentEl = trailing[trailing.length - 1];
+      } else if (allowEmpty && !existing.length) {
+        const current = this.currentContentSegment()?.el;
+        if (current?.isConnected && current.parentElement === host && !isActivityNode(current)) {
+          current.dataset.workVerdict = "true";
+          this.contentEl = current;
+        } else {
+          const next = this.createContentSegment({ after: lastAssistantActivityNode(host) || header }).el;
+          next.dataset.workVerdict = "true";
+          this.contentEl = next;
+        }
+      } else if (existing.length) {
+        this.contentEl = existing[existing.length - 1];
+      }
+      this.coalesceLiveVerdict();
+      this.pendingVerdictBreak = Boolean(String(this.currentContentSegment()?.raw || "").trim());
+      if (collapse) setActivityCollapsed(host, true);
     },
     ensureCommandEvent(tool) {
       this.markToolUse();
@@ -15219,10 +16882,11 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const row = createCommandTimelineRow(tool, { state: "running" });
       row.dataset.sessionId = String(this.sessionId || "");
       row.dataset.commandKey = `${key}:${entries.length + 1}`;
-      this.turn.appendChild(row);
+      markActivityNode(row);
+      appendChatStreamNode(this.toolWorkMount(), row);
       entries.push(row);
       this.commandEntries.set(key, entries);
-      this.createContentSegment();
+      this.ensurePostToolContentSegment();
       scrollMessages();
       return row;
     },
@@ -15231,6 +16895,19 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const entries = this.commandEntries.get(key) || [];
       const row = [...entries].reverse().find((entry) => entry.dataset.state === "running") || entries[entries.length - 1];
       bindCommandTimelineIdentity(row, tool, result);
+      if (row) {
+        const stdout = [result.stdout, result.output, typeof result.transcript === "string" ? result.transcript : "", result.content]
+          .map((value) => String(value || "").trim())
+          .find(Boolean);
+        if (stdout) row.dataset.stdout = stdout.slice(0, 50_000);
+        const exit = result.exitCode ?? result.exit_code;
+        if (exit != null && exit !== "") row.dataset.exitCode = String(exit);
+        const cwd = result.cwd || tool.args?.cwd || tool.cwd;
+        if (cwd) row.dataset.cwd = String(cwd);
+        if (!row.dataset.startedAt) {
+          row.dataset.startedAt = String(Number(result.startedAt || result.value?.startedAt) || Date.now());
+        }
+      }
       const resultMode = result?.mode || result?.value?.mode;
       const resultStatus = String(result?.status || result?.value?.status || "").toLowerCase();
       const waiting = !result?.error && result?.ok !== false && (resultMode === "terminal_wait"
@@ -15246,35 +16923,57 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         return row;
       }
       const failed = Boolean(result?.error || result?.ok === false);
+      if (row) {
+        row.dataset.endedAt = String(Date.now());
+        const start = Number(row.dataset.startedAt);
+        if (Number.isFinite(start)) row.dataset.durationMs = String(Math.max(0, Date.now() - start));
+      }
       return updateCommandTimelineRow(row, failed ? "error" : "success");
     },
     ensureLiveState() {
-      if (this.liveStateEl) return this.liveStateEl;
-      const host = this.rootTurn || this.turn;
-      host.classList.add("has-agent-run");
-      const block = document.createElement("div");
-      block.className = "agent-status-line";
-      block.setAttribute("aria-live", "polite");
-      block.setAttribute("role", "status");
-      block.innerHTML = `<span class="agent-status-text">Working…</span>`;
-      const firstReply = host.querySelector(":scope > .assistant-reply");
-      host.insertBefore(block, firstReply || host.firstChild);
-      this.statusEl = block;
-      this.liveStateEl = block;
-      return block;
+      if (this.liveStateEl?.isConnected) return this.liveStateEl;
+      const host = this.workHostTurn();
+      const existing = host?.querySelector?.(":scope > .agent-work-header, :scope > .agent-work-fold > .agent-status-line, :scope > .agent-status-line");
+      if (existing) {
+        existing.classList.add("agent-work-header");
+        this.liveStateEl = existing;
+        this.statusEl = existing;
+        this.workFoldEl = existing;
+        this.workFoldBodyEl = host;
+        syncWorkHeaderAffordance(existing);
+        return existing;
+      }
+      if (!host) return this.liveStateEl;
+      return this.createWorkStatus(host);
     },
     dismissLiveState() {
-      this.liveStateEl?.remove();
+      this.stopWorkTimer();
+      if (this.liveStateEl?.classList.contains("agent-work-header")) this.liveStateEl.remove();
+      else this.liveStateEl?.remove();
+      this.workFoldEl = null;
+      this.workFoldBodyEl = null;
       this.liveStateEl = null;
       this.statusEl = null;
+      this.exploredFoldEl = null;
+      this.exploredBodyEl = null;
+      this.thinkingFoldEl = null;
+      this.thinkingContentEl = null;
+      this.thinkingRaw = "";
       this.lastActivityKey = "";
     },
     setLiveState({ kind = "working", title = "Working", detail = "", meta = "LIVE" } = {}) {
       const label = conciseAgentStatus(detail || title, kind);
       if (/^Writing response/i.test(label)) return;
-      const existing = this.liveStateEl;
-      if (existing?.isConnected && existing.dataset.final !== "true") {
-        if (kind === "working" || isPlaceholderToolCardLabel(label) || /^Working/i.test(label)) return;
+      if (this.workFoldEl?.isConnected && this.liveStateEl?.dataset.final !== "true") {
+        this.startWorkTimer();
+        this.turn?.setAttribute("aria-busy", "true");
+        (this.rootTurn || this.turn)?.setAttribute("aria-busy", "true");
+        return;
+      }
+      if (kind === "working" || isStubToolStatusLabel(label)) {
+        this.turn?.setAttribute("aria-busy", "true");
+        (this.rootTurn || this.turn)?.setAttribute("aria-busy", "true");
+        return;
       }
       const block = this.ensureLiveState();
       const stateKey = `${kind}|${label}`;
@@ -15285,6 +16984,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       block.querySelector(".agent-status-icon")?.remove();
       const textEl = block.querySelector(".agent-status-text");
       if (textEl) textEl.textContent = label;
+      syncWorkHeaderAffordance(block);
       block.classList.remove("status-updated");
       void block.offsetWidth;
       block.classList.add("status-updated");
@@ -15298,18 +16998,18 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       for (const card of pendingCards) {
         if (card.classList.contains("subagent-wait")) continue;
         const runningLabel = String(card.dataset.runningLabel || card.querySelector(".tool-card-file")?.textContent || "").trim();
-        const completedLabel = /^Reading/i.test(runningLabel)
-          ? "Read"
-          : /^Deleting/i.test(runningLabel)
-            ? "Deleted"
-            : /^Creating/i.test(runningLabel)
-              ? "Created"
-              : /^Editing/i.test(runningLabel)
-                ? "Edited"
-                : "";
-        if (failed || !completedLabel || isTransientToolCardLabel(completedLabel)) {
+        let completedLabel = String(card.dataset.completedLabel || "").trim()
+          || completedToolLabelFromRunning(runningLabel);
+        if (failed && !isKeepableToolCard(card)) {
           card.remove();
           continue;
+        }
+        if (!completedLabel || isTransientToolCardLabel(completedLabel)) {
+          if (!isKeepableToolCard(card)) {
+            card.remove();
+            continue;
+          }
+          if (!completedLabel) completedLabel = completedToolLabelFromRunning(runningLabel) || runningLabel;
         }
         setToolCardStatus(card, "success", completedLabel);
       }
@@ -15322,31 +17022,62 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
     },
     finishLiveState(outcome = "complete") {
+      this.stopWorkTimer();
       this.finalOutcome = outcome;
       this.settlePendingActivities(outcome);
-      for (const turn of this.assistantTurns()) turn.setAttribute("aria-busy", "false");
+      this.finishThinking({ collapse: true });
+      this.openStopSection({ collapse: true, allowEmpty: false });
+      for (const turn of this.assistantTurns()) {
+        stripFailedToolCardStubs(turn);
+        pruneEmptyWorkFolds(turn);
+        turn.setAttribute("aria-busy", "false");
+      }
       const stopped = outcome === "stopped";
       if (!stopped && !this.hadToolActivity()) {
         this.dismissLiveState();
         return;
       }
-      const block = this.ensureLiveState();
+      if (this.hadToolActivity()) this.ensureWorkFold();
       const duration = formatAgentWorkDuration(this.startedAt);
       const label = stopped
         ? "Stopped"
         : outcome === "inconclusive"
           ? `Finished in ${duration}`
           : `Worked for ${duration}`;
-      block.dataset.state = stopped ? "stopped" : "complete";
-      block.dataset.final = "true";
-      block.dataset.stateKey = `${outcome}|${label}`;
+      const blocks = [];
+      for (const turn of this.assistantTurns()) {
+        if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) continue;
+        for (const block of turn.querySelectorAll(":scope > .agent-work-header, :scope > .agent-work-fold > .agent-status-line, :scope > .agent-status-line")) {
+          if (!blocks.includes(block)) blocks.push(block);
+        }
+      }
+      if (!blocks.length) {
+        const block = this.ensureLiveState();
+        if (block) blocks.push(block);
+      }
       if (!stopped) (this.rootTurn || this.turn).dataset.usedTools = "true";
-      block.querySelector(".agent-status-icon")?.remove();
-      const textEl = block.querySelector(".agent-status-text");
-      if (textEl) textEl.textContent = label;
-      block.classList.remove("status-updated");
-      void block.offsetWidth;
-      block.classList.add("status-updated");
+      const endedAt = Date.now();
+      const workedForMs = Math.max(0, endedAt - Number(this.startedAt || endedAt));
+      for (const block of blocks) {
+        block.dataset.state = stopped ? "stopped" : "complete";
+        block.dataset.final = "true";
+        block.dataset.stateKey = `${outcome}|${label}`;
+        block.querySelector(".agent-status-icon")?.remove();
+        const textEl = block.querySelector(".agent-status-text");
+        if (textEl) textEl.textContent = label;
+        syncWorkHeaderAffordance(block);
+        block.classList.remove("status-updated");
+        void block.offsetWidth;
+        block.classList.add("status-updated");
+        block.dataset.workedForMs = String(workedForMs);
+        block.dataset.startedAt = String(this.startedAt || endedAt - workedForMs);
+        block.dataset.endedAt = String(endedAt);
+        const turn = block.closest(".chat-turn.assistant");
+        if (turn) {
+          turn.dataset.workedForMs = String(workedForMs);
+        }
+      }
+      for (const turn of this.assistantTurns()) collapseFinishedWorkFolds(turn);
     },
     requestQuestions({
       reason = "The agent needs your input before continuing.",
@@ -15435,8 +17166,15 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       scrollMessages();
     },
     appendContent(token) {
-      const value = String(token || "");
+      let value = String(token || "");
+      this.ensureConversationSegment();
       const segment = this.currentContentSegment();
+      if (this.pendingVerdictBreak) {
+        // A new model round is extending an already-finished verdict: keep it
+        // in the same block, but as its own paragraph.
+        this.pendingVerdictBreak = false;
+        if (segment && String(segment.raw || "").trim() && value.trim() && !/^\s*\n/.test(value)) value = `\n\n${value}`;
+      }
       this.rawContent += value;
       if (segment) segment.raw += value;
       (this.rootTurn || this.turn).dataset.rawAssistant = this.rawContent;
@@ -15450,7 +17188,10 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         segment.el.classList.remove("streaming");
       }
       const subagentRows = this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".subagent-run-card")]);
-      if (subagentRows.length) (this.turn || this.rootTurn).append(...subagentRows);
+      if (subagentRows.length) {
+        const host = assistantWorkHost(this.workHostTurn()) || this.rootTurn || this.turn;
+        host.append(...subagentRows);
+      }
       this.finishLiveState(this.finalOutcome || "complete");
       const copyAnchor = this.contentSegments.find((segment) => !segment.el.hidden)?.el || this.contentEl;
       attachAssistantCopyButton(copyAnchor);
@@ -15460,9 +17201,9 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const hasContent = this.contentSegments.some((segment) => !segment.el.hidden && segment.el.textContent.trim());
       const statusActive = this.assistantTurns().some((turn) => turn.getAttribute("aria-busy") === "true");
       const hasStatus = Boolean(this.statusEl?.isConnected && !this.statusEl.hidden);
-      const hasThinking = this.thinkingBlock && !this.thinkingBlock.hidden;
+      const hasThinking = this.assistantTurns().some((turn) => turn.querySelector(".agent-thinking-fold"));
       const hasActivity = Boolean(this.activityLogEl?.childElementCount && this.activityLogEl.isConnected);
-      const hasTools = this.assistantTurns().some((turn) => turn.querySelector(".tool-card, .agent-command-event"));
+      const hasTools = this.assistantTurns().some((turn) => turn.querySelector(".tool-card, .agent-command-event, .agent-thinking-fold"));
       if (!hasContent && !statusActive && !hasStatus && !hasThinking && !hasActivity && !hasTools) {
         for (const turn of this.assistantTurns()) {
           const chunk = turn.closest(".agent-run-chunk");
@@ -15474,7 +17215,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       for (const turn of this.assistantTurns()) {
         if (turn === this.rootTurn) continue;
         const visible = [...turn.querySelectorAll(".assistant-reply")].some((el) => !el.hidden && el.textContent.trim());
-        const extras = turn.querySelector(".tool-card, .agent-command-event, .subagent-run-card, .agent-status-line");
+        const extras = turn.querySelector(".tool-card, .agent-command-event, .subagent-run-card, .agent-status-line, .agent-thinking-fold");
         if (!visible && !extras) (turn.closest(".agent-run-chunk") || turn).remove();
       }
     },
@@ -15483,6 +17224,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       return true;
     },
     finalizeThinking() {
+      this.finishThinking({ collapse: true });
       return this.completeReasoningActivity();
     },
     completeReasoningActivity() {
@@ -15490,11 +17232,13 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       this.reasoningActivityLine = null;
       this.lastActivityKey = "";
       if (wasThinking && this.liveStateEl?.isConnected && this.liveStateEl.dataset.final !== "true") {
-        const textEl = this.liveStateEl.querySelector(".agent-status-text");
-        if (textEl) textEl.textContent = "Working…";
-        this.liveStateEl.dataset.state = "working";
-        this.liveStateEl.dataset.stateKey = "working|Working…";
-        this.liveStateEl.dataset.final = "false";
+        if (this.workFoldEl?.isConnected) {
+          this.startWorkTimer();
+        } else {
+          this.liveStateEl.remove();
+          this.liveStateEl = null;
+          this.statusEl = null;
+        }
       }
       return wasThinking;
     },
@@ -16146,8 +17890,13 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "thinking") {
-      assistant.showPrivateReasoning();
       assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
+      assistant.appendThinking(payload.token || payload.delta || "");
+      return;
+    }
+
+    if (payload.type === "model_round") {
+      assistant.applyModelRound(payload);
       return;
     }
 
@@ -16754,7 +18503,10 @@ function handleParentSubagentLifecycle(payload = {}) {
     if (session.messagesHtml) {
       const host = document.createElement("div");
       host.innerHTML = session.messagesHtml;
-      if (updateRenderedSubagentCard(payload, host)) session.messagesHtml = sanitizePersistedChatHtml(host.innerHTML);
+      if (updateRenderedSubagentCard(payload, host)) {
+        session.messagesHtml = sanitizePersistedChatHtml(host.innerHTML);
+        captureSessionTranscript(session, host);
+      }
     }
     schedulePersistChatSessions(session);
   }
@@ -16768,11 +18520,14 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
   if (!assistant) return;
   const type = String(payload.type || "");
   if (type === "thinking") {
-    assistant.showPrivateReasoning();
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
+    assistant.appendThinking(payload.token || payload.delta || "");
+  } else if (type === "model_round") {
+    assistant.applyModelRound(payload);
   } else if (type === "content" || type === "token") {
     const delta = String(payload.delta || payload.token || "");
     if (delta) {
+      assistant.finalizeThinking();
       assistant.appendContent(delta);
       run.activeStreamContent = assistant.rawContent;
       syncAssistantDraftToHistory(run, assistant);
@@ -16941,8 +18696,10 @@ async function renderParentContinuationEvent(payload = {}) {
   const assistant = run.assistant;
   const visible = activeChatSessionId === run.sessionId && !run.viewHost;
   if (type === "thinking") {
-    assistant.showPrivateReasoning();
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
+    assistant.appendThinking(payload.token || payload.delta || "");
+  } else if (type === "model_round") {
+    assistant.applyModelRound(payload);
   } else if (type === "content" || type === "token") {
     const delta = String(payload.delta || payload.token || "");
     if (delta) {
@@ -17238,7 +18995,7 @@ function startWaitCardTicker(card) {
     const elapsed = formatWaitClock(Date.now() - startedAt);
     const label = waitKind === "terminal" ? `Running command · ${elapsed}` : `waiting ${elapsed}`;
     const fileEl = card.querySelector(".tool-card-file");
-    if (fileEl) fileEl.textContent = label;
+    if (fileEl) renderToolStatusLabelFromText(fileEl, label);
     card.setAttribute("aria-label", label);
   };
   tick();
@@ -17258,7 +19015,7 @@ function updateWaitCardLabel(waitId, label) {
     const cardId = card.dataset.subagentId || card.dataset.waitId || "";
     if (cardId !== waitId) continue;
     const fileEl = card.querySelector(".tool-card-file");
-    if (fileEl) fileEl.textContent = label;
+    if (fileEl) renderToolStatusLabelFromText(fileEl, label);
     card.setAttribute("aria-label", label);
   }
 }
@@ -17276,6 +19033,10 @@ function finalizeCommandTimeline(identity, status = "complete", exitCode = null)
   for (const row of commandTimelineRows()) {
     if (!commandTimelineIdentityMatches(row, ids)) continue;
     updateCommandTimelineRow(row, completion.state);
+    if (exitCode != null && exitCode !== "") row.dataset.exitCode = String(exitCode);
+    if (typeof source.stdout === "string" && source.stdout) row.dataset.stdout = source.stdout.slice(0, 50_000);
+    if (Number.isFinite(Number(source.elapsedMs))) row.dataset.durationMs = String(Number(source.elapsedMs));
+    row.dataset.endedAt = String(Date.parse(source.endedAt || "") || Date.now());
   }
 }
 
@@ -17291,7 +19052,7 @@ function finalizeSubagentWaitingCard(subagentId, status, elapsedLabel = "") {
     const label = elapsedLabel
       ? `waited ${elapsedLabel}`
       : `${card.dataset.waitKind === "terminal" ? "terminal" : "traffsucker subagent"} ${status === "complete" ? "completed" : status}`;
-    if (fileEl) fileEl.textContent = label;
+    if (fileEl) renderToolStatusLabelFromText(fileEl, label);
     card.setAttribute("aria-label", label);
     const statusEl = card.querySelector(".tool-card-status");
     if (statusEl) statusEl.className = `tool-card-status ${status === "complete" || status === "running" ? "success" : "error"}`;
@@ -17626,6 +19387,36 @@ messages.addEventListener("click", (e) => {
     chatInput.value = starter.dataset.chatStarter || "";
     onChatInputChange();
     chatInput.focus();
+    return;
+  }
+
+  const workHeader = e.target.closest(".agent-work-header");
+  if (workHeader) {
+    if (workHeader.dataset.foldable === "false" || workHeader.dataset.state === "planning") return;
+    toggleActivityCollapsed(workHeader.closest(".chat-turn.assistant") || workHeader.parentElement);
+    return;
+  }
+
+  const fileStackToggle = e.target.closest(".agent-file-stack-toggle");
+  if (fileStackToggle) {
+    toggleCollapsibleFold(fileStackToggle.parentElement);
+    return;
+  }
+
+  const workFoldToggle = e.target.closest(".agent-work-fold > .agent-status-line, .agent-explored-toggle, .agent-thinking-toggle");
+  if (workFoldToggle) {
+    toggleCollapsibleFold(workFoldToggle.parentElement);
+    return;
+  }
+
+  const fileRow = e.target.closest(".agent-file-row");
+  if (fileRow) {
+    const rel = String(fileRow.dataset.path || fileRow.dataset.file || "").trim();
+    if (rel && rel !== "workspace" && rel !== "." && !/^[a-z]+:\/\//i.test(rel)) {
+      e.preventDefault();
+      const name = rel.split(/[/\\]/).pop();
+      openFile(joinWorkspacePath(rel), name, { focusEditor: true });
+    }
     return;
   }
 

@@ -12,7 +12,6 @@ const { sampleProcessTree } = require("./process-tree-sampler.js");
 const DEFAULT_MONITOR_INTERVAL_MS = 30_000;
 const DEFAULT_OUTPUT_POLL_MS = 250;
 const DEFAULT_REVIEW_INTERVAL_MS = 30 * 60 * 1000;
-const DEFAULT_FOREGROUND_WAIT_MS = 1_500;
 const MAX_STREAM_CHUNK = 50_000;
 
 function createDurableProcessManager({
@@ -311,26 +310,13 @@ function createDurableProcessManager({
     });
     child.once?.("exit", (exitCode, signal) => {
       if (entry.finished) return;
-      entry.rootExited = true;
-      entry.rootExitCode = exitCode;
-      entry.rootSignal = signal;
-      waitForTreeExit(entry).catch(() => {
-        if (!entry.finished) completeEntry(entry, { status: exitCode === 0 ? "complete" : "failed", exitCode, signal, terminationReason: signal ? "signaled" : "exit_code" });
+      completeEntry(entry, {
+        status: exitCode === 0 ? "complete" : "failed",
+        exitCode,
+        signal,
+        terminationReason: signal ? "signaled" : "exit_code",
       });
     });
-  }
-  async function waitForTreeExit(entry) {
-    if (entry.finished || !entry.rootExited) return;
-    let tree;
-    try { tree = await sampleTree(entry.record.pid, { fsImpl, platform: process.platform }); } catch { tree = { pids: [], alive: false }; }
-    if (entry.finished) return;
-    entry.tree = tree;
-    const descendantsAlive = Array.isArray(tree?.pids) && tree.pids.some((pid) => Number(pid) !== Number(entry.record.pid));
-    if (descendantsAlive) {
-      entry.finishPollTimer = setTimeout(() => { entry.finishPollTimer = null; waitForTreeExit(entry).catch(() => {}); }, Math.max(100, Number(outputPollMs) || DEFAULT_OUTPUT_POLL_MS));
-      return;
-    }
-    completeEntry(entry, { status: entry.rootExitCode === 0 ? "complete" : "failed", exitCode: entry.rootExitCode, signal: entry.rootSignal, terminationReason: entry.rootSignal ? "signaled" : "exit_code" });
   }
   function activateMonitoring(entry) {
     entry.outputTimer = setInterval(() => pollOutput(entry), Math.max(50, Number(outputPollMs) || DEFAULT_OUTPUT_POLL_MS));
@@ -443,30 +429,40 @@ function createDurableProcessManager({
     const onAbort = () => { if (!detached) stop(workspace, { process_id: processId, reason: "agent_cancelled" }).catch(() => {}); };
     if (runtime.signal?.aborted) onAbort();
     else runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
-    const waitMs = Math.max(0, input.wait_ms ?? DEFAULT_FOREGROUND_WAIT_MS);
+    const waitSpecified = Object.prototype.hasOwnProperty.call(input, "wait_ms");
+    const waitMs = waitSpecified ? Math.max(0, Number(input.wait_ms) || 0) : null;
+    const finishWith = (completed) => {
+      runtime.signal?.removeEventListener?.("abort", onAbort);
+      return projectResult({ ok: completed.status === "complete" && completed.exitCode === 0, value: { ...completed, mode: "command" } });
+    };
+    const detachWithPartial = () => {
+      detached = true;
+      runtime.signal?.removeEventListener?.("abort", onAbort);
+      const record = readRecord(workspace, processId) || entry.record;
+      const value = snapshot(workspace, record, { tail_chars: 50_000 }, entry);
+      value.mode = "terminal_wait";
+      value.status = "running";
+      value.processId = processId;
+      value.terminalId = record.terminalId || "";
+      value.startedAt = new Date(record.startedAt).getTime();
+      value.elapsedMs = Date.now() - value.startedAt;
+      value.outputCompleteness = "partial";
+      value.waiting = true;
+      runtime.onDetached?.(value);
+      emit(runtime, { type: "terminal_wait", processId, terminalId: value.terminalId, command: record.command, ...value });
+      return projectResult({ ok: true, value });
+    };
+    if (waitMs === 0) return detachWithPartial();
+    if (waitMs == null) {
+      const completed = await entry.donePromise;
+      return completed ? finishWith(completed) : detachWithPartial();
+    }
     let timer;
     const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), waitMs); });
     const completed = await Promise.race([entry.donePromise, timeout]);
     if (timer) clearTimeout(timer);
-    if (completed) {
-      runtime.signal?.removeEventListener?.("abort", onAbort);
-      return projectResult({ ok: completed.status === "complete" && completed.exitCode === 0, value: { ...completed, mode: "command" } });
-    }
-    detached = true;
-    runtime.signal?.removeEventListener?.("abort", onAbort);
-    const record = readRecord(workspace, processId) || entry.record;
-    const value = snapshot(workspace, record, { tail_chars: 50_000 }, entry);
-    value.mode = "terminal_wait";
-    value.status = "running";
-    value.processId = processId;
-    value.terminalId = record.terminalId || "";
-    value.startedAt = new Date(record.startedAt).getTime();
-    value.elapsedMs = Date.now() - value.startedAt;
-    value.outputCompleteness = "partial";
-    value.waiting = true;
-    runtime.onDetached?.(value);
-    emit(runtime, { type: "terminal_wait", processId, terminalId: value.terminalId, command: record.command, ...value });
-    return projectResult({ ok: true, value });
+    if (completed) return finishWith(completed);
+    return detachWithPartial();
   }
   async function status(workspace, input = {}, runtime = {}) {
     let record = readRecord(workspace, input.process_id);

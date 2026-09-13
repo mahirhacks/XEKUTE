@@ -62,8 +62,15 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
         status: "active",
       },
       display_html: "",
+      ui_transcript: { version: 1, runs: [] },
       blocks: [],
     };
+  }
+  function normalizeUiTranscript(value) {
+    const cloned = clone(value);
+    if (!cloned || typeof cloned !== "object") return { version: 1, runs: [] };
+    const runs = Array.isArray(cloned.runs) ? clone(cloned.runs).slice(0, 200) : [];
+    return { version: Number(cloned.version) || 1, runs };
   }
   function normalizeMessages(messages, salt) {
     return (Array.isArray(messages) ? messages : [])
@@ -135,6 +142,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       session_id: sessionId,
       metadata: normalizeMetadata(source.metadata, sessionId, fallback),
       display_html: messageContent(source.display_html || source.displayHtml || ""),
+      ui_transcript: normalizeUiTranscript(source.ui_transcript || source.uiTranscript || source.transcript_ui),
       blocks,
     };
   }
@@ -170,6 +178,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       history,
       messages: clone(history),
       messagesHtml: messageContent(document.display_html || ""),
+      transcript: clone(document.ui_transcript) || { version: 1, runs: [] },
       contextFilesCache: [],
       lastContextUsage: clone(metadata.last_context_usage) || null,
       chatMode: text(metadata.mode || "agent", "agent", 100),
@@ -256,6 +265,9 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       if (event.displayHtml !== undefined || event.display_html !== undefined) {
         document.display_html = messageContent(event.displayHtml ?? event.display_html ?? "");
       }
+      if (event.uiTranscript !== undefined || event.ui_transcript !== undefined) {
+        document.ui_transcript = normalizeUiTranscript(event.uiTranscript ?? event.ui_transcript);
+      }
       if (event.outcome) block.outcome = text(event.outcome, "pending", 40);
       if (["completed", "failed", "stopped", "incomplete"].includes(block.outcome)) block.completed_at = stamp();
     } else if (type === "tool_usage") {
@@ -277,6 +289,9 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       }
       if (event.displayHtml !== undefined || event.display_html !== undefined) {
         document.display_html = messageContent(event.displayHtml ?? event.display_html ?? "");
+      }
+      if (event.uiTranscript !== undefined || event.ui_transcript !== undefined) {
+        document.ui_transcript = normalizeUiTranscript(event.uiTranscript ?? event.ui_transcript);
       }
       if (event.outcome) block.outcome = text(event.outcome, "pending", 40);
       if (["completed", "failed", "stopped", "incomplete"].includes(block.outcome)) block.completed_at = stamp();

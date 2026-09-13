@@ -73,7 +73,7 @@ test("durable PowerShell runs persist workspace writes on Windows", { skip: proc
   }
 });
 
-test("run defaults omitted wait_ms to 1500 and explicit wait_ms 0 backgrounds immediately", async (t) => {
+test("run waits until exit when wait_ms is omitted and backgrounds only when wait_ms is 0", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-wait-default-"));
   const manager = makeManager();
   t.after(async () => {
@@ -97,14 +97,15 @@ test("run defaults omitted wait_ms to 1500 and explicit wait_ms 0 backgrounds im
   const startedAt = Date.now();
   const defaultWait = await manager.run(workspace, {
     executable: process.execPath,
-    args: ["-e", "setTimeout(() => {}, 10000)"],
+    args: ["-e", "setTimeout(() => process.stdout.write('later'), 400)"],
   });
   const elapsed = Date.now() - startedAt;
   assert.equal(defaultWait.ok, true);
-  assert.ok(elapsed >= 1_200, `expected ~1500ms wait, got ${elapsed}ms`);
-  assert.ok(elapsed < 3_000, `expected ~1500ms wait, got ${elapsed}ms`);
-  assert.equal(defaultWait.value.mode, "terminal_wait");
-  await manager.stop(workspace, { process_id: defaultWait.value.processId });
+  assert.equal(defaultWait.value.mode, "command");
+  assert.equal(defaultWait.value.status, "complete");
+  assert.match(String(defaultWait.value.stdout || ""), /later/);
+  assert.ok(elapsed >= 350, `expected run to wait for exit, got ${elapsed}ms`);
+  assert.ok(elapsed < 8_000, `expected run to return after exit, got ${elapsed}ms`);
 });
 
 test("timeout_ms during run wait returns timeout result not terminal_wait", async (t) => {

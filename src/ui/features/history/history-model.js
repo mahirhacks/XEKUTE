@@ -5,7 +5,7 @@ export const RECENT_HISTORY_LIMIT = 20;
 
 export function hasPersistedConversation(session) {
   const history = Array.isArray(session?.history) ? session.history : [];
-  return Boolean(session?.memorySessionId || history.length || session?.messagesHtml);
+  return Boolean(session?.memorySessionId || history.length || session?.messagesHtml || session?.transcript?.runs?.length);
 }
 
 export function matchesHistoryQuery(session, query = "") {

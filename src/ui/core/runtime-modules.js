@@ -5,6 +5,7 @@ import "./dom.js";
 import "../features/terminal/terminal-controller.js";
 import "../features/security/security-inspector.js";
 import "../../prompts/rules/request-intent-rules.js";
+import "../../prompts/rules/continue-intent.js";
 import "../../prompts/skills/context-router.js";
 import "../../agent/modes/mode-registry.js";
 import "../../prompts/instructions/system-prompt.js";

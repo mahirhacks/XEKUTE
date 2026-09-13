@@ -1251,3 +1251,38 @@ test("post-loop round-limit block_complete stays terminal", async () => {
   const blockComplete = events.filter((event) => event.type === "context_checkpoint" && event.reason === "block_complete");
   assert.equal(blockComplete.some((event) => event.status === "started" || event.status === "completed"), false);
 });
+
+test("model rounds emit stop only when finishReason is stop and there are no tool calls", async () => {
+  const events = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "Check package.json",
+    tools: [{ type: "function", function: { name: "exec_command", description: "run a command", parameters: {} } }],
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) {
+        return {
+          ok: true,
+          fullText: "Reading the file.",
+          toolCalls: [{ id: "call-1", type: "function", function: { name: "exec_command", arguments: { executable: process.execPath, args: ["-e", "console.log(1)"] } } }],
+          finishReason: "tool_calls",
+        };
+      }
+      return { ok: true, fullText: "The start script is electron .", toolCalls: [], finishReason: "stop" };
+    },
+    async executeToolCall() {
+      return { ok: true, value: { stdout: "1", stderr: "", exitCode: 0 } };
+    },
+  });
+  assert.equal(result.ok, true, result.error || "");
+  const roundsEmitted = events.filter((event) => event.type === "model_round");
+  assert.equal(roundsEmitted.length, 2);
+  assert.equal(roundsEmitted[0].finishReason, "tool_calls");
+  assert.equal(roundsEmitted[0].stop, false);
+  assert.equal(roundsEmitted[1].finishReason, "stop");
+  assert.equal(roundsEmitted[1].stop, true);
+  assert.equal(result.finalText, "The start script is electron .");
+});

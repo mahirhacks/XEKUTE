@@ -1034,6 +1034,12 @@ export default memo(function AppShell() {
             <div id="chat-history-security-warning" className="chat-history-security-warning" role="status" aria-live="polite" hidden></div>
             <div id="composer-questions" className="composer-questions" hidden aria-live="polite"></div>
             <div id="composer-task-list" className="composer-task-list" hidden aria-live="polite"></div>
+            <div id="chat-error-toast" className="chat-error-toast" role="status" aria-live="polite" hidden>
+              <p className="chat-error-toast-text"></p>
+              <button type="button" className="chat-error-toast-close" title="Dismiss" aria-label="Dismiss">
+                <span className="codicon codicon-close" aria-hidden="true"></span>
+              </button>
+            </div>
             <div className="composer">
               <div id="slash-command-suggestions" className="slash-command-suggestions" role="listbox" aria-label="Available slash commands" hidden></div>
               <div className="composer-input-row">

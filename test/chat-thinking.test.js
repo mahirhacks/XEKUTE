@@ -11,18 +11,25 @@ const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styl
 const controller = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "controller", "agent-controller.js"), "utf8");
 const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
 
-test("thinking uses one private status line and never exposes model reasoning", () => {
+test("thinking streams into a Thinking / Thought for fold", () => {
   assert.match(renderer, /thinking:\s*null,\s*\n\s*thinkingConfigured:\s*false/);
   assert.match(renderer, /return settings\?\.thinking !== false/);
   assert.doesNotMatch(renderer, /createAssistantTurn\(modelThinkingEnabled\(settings\)\)/);
   assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = activeChatSessionId \} = \{\}\)/);
   assert.match(renderer, /showPrivateReasoning\(\)/);
   assert.doesNotMatch(renderer, /assistant\.setStatus\("Thinking…"\)/);
-  assert.match(renderer, /block\.className = "agent-status-line"/);
+  assert.match(renderer, /className = "agent-work-header agent-status-line"/);
   assert.match(renderer, /assistant\.setLiveState\(\{ kind: "thinking", detail: "Thinking" \}\)/);
-  assert.doesNotMatch(renderer, /appendThinking|rawThinking|const completedThinking/);
+  assert.match(renderer, /appendThinking\(/);
+  assert.match(renderer, /function createThinkingFold/);
+  assert.match(renderer, /textContent = "Thinking"/);
+  assert.match(renderer, /return "Thought briefly"/);
+  assert.match(renderer, /`Thought for \$\{formatAgentWorkDuration/);
+  assert.match(renderer, /if \(elapsedMs < 10_000\) return "Thought briefly"/);
+  assert.match(renderer, /function lastReusableExploredFold\(host\)/);
+  assert.match(renderer, /lastStandaloneThinkingFold\(host\)/);
   assert.doesNotMatch(renderer, /thinking-block collapsed is-thinking/);
-  assert.doesNotMatch(renderer, /renderMarkdown\(phase\.body|activeThinkingPhase/);
+  assert.doesNotMatch(renderer, /activeThinkingPhase/);
 });
 
 test("content and tool events replace thinking and completion settles to elapsed time", () => {
@@ -31,7 +38,10 @@ test("content and tool events replace thinking and completion settles to elapsed
   assert.match(renderer, /dismissLiveState\(\)/);
   assert.doesNotMatch(renderer, /detail: "Writing response"/);
   assert.doesNotMatch(renderer, /if \(payload\.type === "content" \|\| payload\.type === "token"\)[\s\S]*?assistant\.dismissLiveState\(\)/);
-  assert.match(renderer, /if \(kind === "working" \|\| isPlaceholderToolCardLabel\(label\) \|\| \/\^Working\/i\.test\(label\)\) return/);
+  assert.match(renderer, /if \(kind === "working" \|\| isStubToolStatusLabel\(label\)\)/);
+  assert.doesNotMatch(renderer, /if \(kind === "working" \|\| isPlaceholderToolCardLabel\(label\) \|\| \/\^Working\/i\.test\(label\)\) return/);
+  assert.doesNotMatch(renderer, /verb: running \? "Working" : "Done"/);
+  assert.match(renderer, /function isStubToolStatusLabel/);
   assert.match(renderer, /completeReasoningActivity\(\)/);
   assert.match(renderer, /finishLiveState\(outcome = "complete"\)/);
   assert.match(renderer, /hadToolActivity\(\)/);
@@ -43,7 +53,12 @@ test("content and tool events replace thinking and completion settles to elapsed
   assert.match(renderer, /const label = stopped[\s\S]*\? "Stopped"/);
   assert.doesNotMatch(renderer, /if \(outcome === "error" \|\| outcome === "stopped"\) \{[\s\S]{0,220}?this\.liveStateEl\?\.remove\(\)/);
   assert.match(renderer, /if \(kind === "planning"\) return "Planning/);
+  assert.match(renderer, /function isFoldableWorkLabel/);
+  assert.match(renderer, /function syncWorkHeaderAffordance/);
+  assert.match(renderer, /if \(workHeader\.dataset\.foldable === "false" \|\| workHeader\.dataset\.state === "planning"\) return/);
   assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\] \{[\s\S]*font-size: 12px/);
+  assert.match(chatStyles, /#messages \.agent-work-header\[data-foldable="false"\] \.agent-work-caret/);
+  assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\] \.agent-work-caret/);
   assert.match(renderer, /isTransientToolCardLabel/);
   assert.match(renderer, /isPlaceholderToolCardLabel/);
   assert.match(chatStyles, /#messages \.agent-status-line\[data-final="true"\] \{[\s\S]*font-weight: 400/);
@@ -61,14 +76,14 @@ test("turn finalization settles orphaned file and command activity without a pro
   assert.match(renderer, /settlePendingActivities\(outcome = "complete"\)/);
   assert.doesNotMatch(renderer, /progressEntries|setProgressUpdate/);
   assert.match(renderer, /\.tool-card\.pending, \.tool-card\[data-state='queued'\], \.tool-card\[data-state='running'\]/);
-  assert.match(renderer, /\^Editing[\s\S]*?"Edited"/);
+  assert.match(renderer, /completedToolLabelFromRunning\(runningLabel\)/);
   assert.match(renderer, /\.agent-command-event\[data-state='running'\]/);
   assert.match(renderer, /if \(card\.classList\.contains\("subagent-wait"\)\) continue/);
 });
 
 test("status renderer owns one node and updates it in place", () => {
-  assert.match(renderer, /if \(this\.liveStateEl\) return this\.liveStateEl/);
-  assert.match(renderer, /host\.insertBefore\(block, firstReply \|\| host\.firstChild\)/);
+  assert.match(renderer, /if \(this\.liveStateEl\?\.isConnected\) return this\.liveStateEl/);
+  assert.match(renderer, /host\.insertBefore\(header, first\)/);
   assert.match(renderer, /block\.dataset\.stateKey === stateKey/);
   assert.match(renderer, /block\.classList\.add\("status-updated"\)/);
   assert.doesNotMatch(renderer, /list\.className = "agent-activity-lines"/);
@@ -140,19 +155,115 @@ test("large Agent work uses a temporary collapsible composer checklist", () => {
 test("status styling is chrome-free, neutral, animated, and motion-safe", () => {
   assert.match(chatStyles, /#messages \.agent-status-line \{[\s\S]*?border: 0[\s\S]*?background: transparent/);
   assert.match(chatStyles, /#messages \.agent-status-line \{[\s\S]{0,220}font: 400 14px/);
-  assert.match(chatStyles, /#messages \.context-checkpoint-notice \{[\s\S]{0,220}font: 500 14px/);
+  assert.match(chatStyles, /#messages \.context-checkpoint-notice \{[\s\S]{0,220}font: 400 14px/);
   assert.match(chatStyles, /#messages \.agent-status-line\[data-final="true"\]/);
   assert.doesNotMatch(chatStyles, /#messages \.agent-status-line\[data-final="true"\] \{[\s\S]{0,120}font-size: 11\.5px/);
   assert.match(chatStyles, /@keyframes agent-status-update/);
   assert.match(chatStyles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?agent-status-line\.status-updated/);
 });
 
-test("raw reasoning never crosses into the renderer or stored agent history", () => {
-  assert.match(controller, /sendEvent\(\{ type: "thinking" \}\)/);
-  assert.doesNotMatch(controller, /sendEvent\(\{ type: "thinking", delta/);
+test("tool activity sits in a two-lane stream under a Worked for header", () => {
+  assert.match(renderer, /function wrapTurnInWorkFold/);
+  assert.match(renderer, /function promoteWorkFolds/);
+  assert.match(renderer, /function assistantWorkHost/);
+  assert.match(renderer, /ensureWorkFold\(\)/);
+  assert.match(renderer, /this\.ensureWorkFold\(\)/);
+  assert.match(renderer, /`Working for \$\{formatAgentWorkDuration\(this\.startedAt\)\}`/);
+  assert.match(renderer, /`Worked for \$\{duration\}`/);
+  assert.match(renderer, /className = "agent-work-header agent-status-line"/);
+  assert.match(renderer, /function flattenNestedChatLayout/);
+  assert.match(renderer, /function appendChatStreamNode/);
+  assert.match(renderer, /function placeWorkHeader/);
+  assert.match(renderer, /host\.insertBefore\(header, first\)/);
+  assert.doesNotMatch(renderer, /if \(node\.classList\.contains\("agent-thinking-fold"\)\) continue;/);
+  assert.match(renderer, /turn\.appendChild\(createWorkHeaderFromRun\(run\)\);/);
+  assert.match(renderer, /for \(const event of events\) appendTranscriptEvent\(turn, event\);/);
+  assert.match(renderer, /className = "agent-work-caret"/);
+  assert.match(renderer, /const host = assistantWorkHost\(turn\)/);
+  assert.match(renderer, /toggleActivityCollapsed\(/);
+  assert.match(renderer, /toggleCollapsibleFold\(workFoldToggle\.parentElement\)/);
+  assert.match(chatStyles, /#messages \.agent-work-fold\[data-expanded="false"\] > \.agent-work-fold-body/);
+  assert.match(chatStyles, /#messages \.chat-turn\.assistant\[data-activity-collapsed="true"\] > \[data-lane="activity"\]/);
+  assert.match(renderer, /assets\/icons\/chat_fold_caret\.svg/);
+  assert.match(renderer, /className = "agent-file-stack"/);
+  assert.match(renderer, /agent-file-row tool-card/);
+  assert.match(renderer, /function lastReusableExploredFold/);
+  assert.match(renderer, /ensureExploredGroup\(\)/);
+  assert.match(renderer, /exploredMount\(\)/);
+  assert.match(renderer, /ensurePostToolContentSegment\(/);
+  assert.match(renderer, /assistant\?\.ensurePostToolContentSegment\?\.\(\)/);
+  assert.match(renderer, /function isKeepableToolCard/);
+  assert.match(renderer, /if \(isKeepableToolCard\(card\)\) return false/);
+  assert.doesNotMatch(renderer, /if \(card\.closest\?\.\("\.agent-explored-fold"\)\) return true/);
+  assert.match(renderer, /function pruneEmptyWorkFolds/);
+  assert.match(renderer, /hadToolActivity\(\) \{\s*return this\.assistantTurns\(\)\.some\(\(turn\) => boxHasToolUsage\(turn\)\)/);
+  assert.match(renderer, /stripFailedToolCardStubs\(turn\);\s*pruneEmptyWorkFolds\(turn\)/);
+  assert.match(renderer, /toolWorkMount\(\)/);
+  assert.match(renderer, /conversationMount\(\)/);
+  assert.match(renderer, /function lastReusableWorkFold/);
+  assert.match(renderer, /function adoptTrailingWorkIntoFold/);
+  assert.match(renderer, /function adoptWorkAroundFold/);
+  assert.match(renderer, /function mergeWorkFolds/);
+  assert.match(renderer, /function promoteWorkVerdicts/);
+  assert.match(renderer, /function collapseFinishedWorkFolds/);
+  assert.match(renderer, /dataset\.workVerdict = "true"/);
+  assert.match(renderer, /this\.verdictOpen = true/);
+  assert.match(renderer, /openStopSection\(\{ collapse: true, allowEmpty: true \}\)/);
+  assert.match(renderer, /collapseFinishedWorkFolds\(turn\)/);
+  assert.match(renderer, /function workFollowingReply/);
+  assert.match(renderer, /const followingWork = workFollowingReply\(current\);\s*if \(!followingWork\) return current;/);
+  assert.match(renderer, /const misplaced = this\.verdictOpen \? inWorkFold : current\.parentElement !== host;/);
+  assert.match(renderer, /this\.pendingVerdictBreak = false;/);
+  assert.match(renderer, /function coalesceVerdictReplies/);
+  assert.match(renderer, /function coalesceAdjacentReplyRuns/);
+  assert.match(renderer, /\.chat-turn\.assistant\[aria-busy='true'\]"\)\.forEach\(\(turn\) => turn\.setAttribute\("aria-busy", "false"\)\)/);
+  assert.match(renderer, /coalesceLiveVerdict\(\)/);
+  assert.doesNotMatch(renderer, /function promoteConversationOutOfWorkFolds/);
+  assert.match(renderer, /function isBareToolVerbLabel/);
+  assert.match(renderer, /ensureConversationSegment\(\)/);
+  assert.match(renderer, /this\.ensureConversationSegment\(\)/);
+  assert.match(chatStyles, /#messages \.agent-work-fold-body > \.assistant-reply \{[\s\S]{0,80}padding: 0/);
+  assert.match(chatStyles, /#messages \.agent-work-fold \+ \.assistant-reply \{[\s\S]{0,80}padding: 0/);
+  assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line\[data-final="true"\] \{[\s\S]{0,80}font-weight: 400[\s\S]{0,40}opacity: 0\.6/);
+  assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line \{[\s\S]{0,160}font: 400 14px/);
+  assert.match(renderer, /assistant\?\.sealCurrentContentSegment\?\.\(\)/);
+  assert.doesNotMatch(renderer, /exploredMount\(\) \{[\s\S]{0,180}?agent-run-stop[\s\S]{0,80}?return this\.turn/);
+  assert.match(chatStyles, /#messages \.agent-explored-fold \.tool-card\.tool-card-fade \{/);
+  assert.match(renderer, /if \(!shouldAutoFadeToolCard\(card\)\) return/);
+  assert.match(renderer, /running \? "Reading" : "Read"/);
+  assert.match(renderer, /running \? "Searching" : "Searched"/);
+  assert.match(renderer, /running \? "Editing" : "Edited"/);
+  assert.match(renderer, /running \? "Browsing" : "Browsed"/);
+  assert.match(renderer, /running \? "Replaying" : "Replayed"/);
+  assert.match(renderer, /running \? "Delegating" : "Delegated"/);
+  assert.match(renderer, /running \? "Searching web" : "Searched web"/);
+  assert.match(renderer, /running \? "Reading page" : "Read page"/);
+  assert.match(renderer, /running \? "Updating identity" : "Updated identity"/);
+  assert.match(renderer, /"Ran Command"/);
+  assert.match(renderer, /function isAskQuestionsTool/);
+  assert.match(renderer, /KEEPABLE_TOOL_ACTIONS/);
+  assert.doesNotMatch(chatStyles, /#messages \.agent-work-caret::before/);
+  assert.match(chatStyles, /#messages \.agent-work-caret \{[\s\S]{0,180}?transform: none;/);
+  assert.match(chatStyles, /#messages \.agent-thinking-fold\[data-expanded="false"\] > \.agent-thinking-toggle \.agent-work-caret[\s\S]{0,400}?transform: rotate\(-90deg\)/);
+  assert.doesNotMatch(chatStyles, /#messages \.agent-work-caret \{[\s\S]{0,180}?transform: rotate\(-180deg\)/);
+  assert.match(chatStyles, /#messages \.agent-explored-fold\[data-expanded="false"\] > \.agent-explored-body/);
+  assert.match(chatStyles, /#messages \.agent-explored-fold:not\(:has\(\.tool-card:not\(\[hidden\]\), \.agent-command-event, \.subagent-run-card, \.agent-thinking-fold\)\)/);
+  assert.match(chatStyles, /#messages \.agent-thinking-fold\[data-expanded="false"\] > \.agent-thinking-body/);
+  assert.match(chatStyles, /#messages \.agent-tool-verb \{ opacity: \.8; \}/);
+  assert.match(chatStyles, /#messages \.agent-tool-detail \{ opacity: \.5; \}/);
+  assert.match(chatStyles, /#messages \.chat-turn\.assistant > :not\(\.assistant-reply-footer\),[\s\S]*?margin: 4px 0 0/);
+  assert.match(chatStyles, /#messages \.agent-response-host,[\s\S]*?padding: 0;/);
+  assert.match(chatStyles, /padding: 12px 16px 24px/);
+});
+
+test("raw reasoning streams on thinking events and settles into a fold", () => {
+  assert.match(controller, /sendEvent\(\{ type: "thinking", token: String\(token \|\| ""\) \}\)/);
+  assert.doesNotMatch(controller, /thinkingSignaled/);
   assert.doesNotMatch(controller, /thinkingTrace|thinking:\s*String\(result\.thinking/);
   assert.match(main, /event\.sender\.send\("ollama:thinking", null\)/);
-  assert.doesNotMatch(renderer, /result\?\.thinking|payload\.delta\s*\|\|\s*""\)\)\s*\{\s*assistant\.setStatus\("Thinking/);
+  assert.match(renderer, /assistant\.setLiveState\(\{ kind: "thinking", detail: "Thinking" \}\);\s*assistant\.appendThinking\(payload\.token \|\| payload\.delta \|\| ""\)/);
+  assert.match(renderer, /this\.finishThinking\(\{ collapse: true \}\)/);
+  assert.match(renderer, /sealExploredFolds\(this\.workHostTurn\(\)\)/);
 });
 
 test("streaming text fades in by delta without restoring the old activity line", () => {
@@ -176,4 +287,30 @@ test("every agent failure path restores the composer", () => {
   assert.match(renderer, /let assistant = null;[\s\S]*?try \{[\s\S]*?await refreshDirMap\(\)/);
   assert.match(renderer, /catch \(error\) \{[\s\S]*?addErrorMessage\(error\?\.message/);
   assert.match(renderer, /finally \{[\s\S]*?activeChatRuns\.delete\(runSession\.id\)[\s\S]*?chatInput\.disabled = false;[\s\S]*?chatInput\.readOnly = false;[\s\S]*?chatInput\.focus\(\)/);
+});
+
+test("agent errors toast above the composer instead of staying in chat", () => {
+  assert.match(renderer, /function addErrorMessage/);
+  assert.match(renderer, /function hideChatErrorToast/);
+  assert.match(renderer, /CHAT_ERROR_TOAST_MS = 15_000/);
+  assert.match(renderer, /toast\.id = "chat-error-toast"/);
+  assert.match(renderer, /class="chat-error-toast-close"/);
+  assert.doesNotMatch(renderer, /turn\.className = "chat-turn error"/);
+  assert.match(renderer, /querySelectorAll\("\.chat-turn\.error"\)\.forEach\(\(node\) => node\.remove\(\)\)/);
+  assert.match(chatStyles, /\.chat-error-toast-text \{[\s\S]*?color: #dcdcdc/);
+  assert.match(chatStyles, /\.chat-error-toast-close/);
+  assert.match(chatStyles, /#messages \.chat-turn\.error \{ display: none; \}/);
+});
+
+test("thinking folds persist stored duration and never recompute wall-clock age on hydrate", () => {
+  assert.match(renderer, /fold\.dataset\.durationMs = String\(durationMs\)/);
+  assert.match(renderer, /function hydrateThinkingFolds/);
+  assert.match(renderer, /thinkingElapsedMs\(\{ startedAt, endedAt, durationMs \}\)/);
+  assert.doesNotMatch(renderer, /function hydrateThinkingFolds\([\s\S]*?finishThinkingFold\(fold, \{ collapse: true \}\)/);
+  assert.match(renderer, /data-duration-ms/);
+  assert.match(renderer, /data-worked-for-ms/);
+  assert.match(renderer, /hasStructuredTranscript\(session\.transcript\)/);
+  assert.match(renderer, /renderStructuredChatTranscript\(session\.transcript, messages\)/);
+  assert.match(renderer, /agent-work-fold-body/);
+  assert.match(renderer, /dataset\.workVerdict = "true"/);
 });

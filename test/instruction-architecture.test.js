@@ -40,12 +40,14 @@ test("skills are model guidance, not runtime gates", () => {
   assert.doesNotMatch(controller, /evaluateAction|requestApproval|approval_required|GATES_DISABLED/);
 });
 
-test("agent skill teaches wait-then-background and status as secondary", () => {
+test("agent skill teaches run waits for exit and status as secondary", () => {
   const agentSkill = read("src/prompts/skills/modes/agent-skill.js");
-  assert.match(agentSkill, /1500/);
+  assert.match(agentSkill, /waits until the command exits/);
+  assert.match(agentSkill, /one at a time/);
   assert.match(agentSkill, /wait_ms:\s*0/);
   assert.match(agentSkill, /timeout_ms/);
   assert.match(agentSkill, /terminal_complete/);
   assert.match(agentSkill, /secondary/);
+  assert.doesNotMatch(agentSkill, /default 1500/);
   assert.doesNotMatch(agentSkill, /operation=status[\s\S]{0,120}wait mechanism/i);
 });

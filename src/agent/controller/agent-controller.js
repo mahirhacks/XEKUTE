@@ -210,6 +210,11 @@ function normalizedFinishReason(result = {}) {
   ).trim().toLowerCase();
 }
 
+function isStopModelRound(result = {}, hasToolCalls = false) {
+  if (hasToolCalls || reachedOutputBoundary(result)) return false;
+  return normalizedFinishReason(result) === "stop";
+}
+
 function reachedOutputBoundary(result = {}) {
   const reason = normalizedFinishReason(result).replace(/[\s-]+/g, "_");
   return new Set([
@@ -664,7 +669,6 @@ async function runAgentTurn({
   const outputSegments = [];
   let outputContinuationCount = 0;
   let lastUsage = null;
-  let thinkingSignaled = false;
   const successfulToolRefs = new Set();
   const appendedMessages = () => [
     ...archivedTurnMessages,
@@ -970,11 +974,7 @@ async function runAgentTurn({
       contextPlan,
       contextUsage,
       signal,
-      onThinking: () => {
-        if (thinkingSignaled) return;
-        thinkingSignaled = true;
-        sendEvent({ type: "thinking" });
-      },
+      onThinking: (token) => sendEvent({ type: "thinking", token: String(token || "") }),
       onToken: (token) => sendEvent({ type: "token", token }),
       onToolCalls: (calls) => sendEvent({ type: "tool_call", tools: calls }),
       onStreamEvent: (event) => sendEvent({ type: "stream", event }),
@@ -1055,6 +1055,12 @@ async function runAgentTurn({
     const rawOutput = String(result?.fullText || "");
     const rawText = cleanAssistantText(rawOutput);
     const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+    const finishReason = normalizedFinishReason(result);
+    sendEvent({
+      type: "model_round",
+      finishReason,
+      stop: isStopModelRound(result, rawCalls.length > 0),
+    });
     if (!rawCalls.length) {
       if (reachedOutputBoundary(result) && rawOutput) {
         outputSegments.push(rawOutput);

@@ -8,7 +8,7 @@ const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
   type: "object",
   description: "Run an arbitrary shell command or launch an executable in the active workspace. On Windows, command mode defaults to PowerShell and supports pipelines, redirects, variables, quoting, and multiline scripts.",
   properties: {
-    operation: { type: "string", enum: ["run", "start", "status", "stop", "list"], description: "run waits up to wait_ms (default 1500 ms) then backgrounds if still running; start creates a durable background job immediately; status, stop, and list are secondary inspect, cancel, and list operations." },
+    operation: { type: "string", enum: ["run", "start", "status", "stop", "list"], description: "run waits until the command exits, then returns stdout/stderr/exit to the agent. start creates a durable background job immediately; status, stop, and list are secondary inspect, cancel, and list operations." },
     command: { type: "string", description: "Complete shell command or multiline script. Prefer this for PowerShell/cmd syntax, pipelines, redirection, and compound commands." },
     shell: { type: "string", enum: ["auto", "powershell", "pwsh", "cmd", "bash", "sh"], description: "Shell used for command mode. auto selects PowerShell on Windows and bash elsewhere." },
     executable: { type: "string", description: "Executable name or path for direct process mode. Use with args instead of command." },
@@ -20,7 +20,7 @@ const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
     context: { type: "string", description: "For run/start only. Required operator label: at most 5 whitespace-separated words. Extra words are rejected before the command starts." },
     process_id: { type: "string", description: "Durable process-… handle used by status or stop. Not an OS PID." },
     tail_chars: { type: "integer", minimum: 0, maximum: 200000, description: "Maximum recent stdout/stderr characters returned by status." },
-    wait_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "For run, how long this call blocks for exit before backgrounding (omit → 1500; 0 → immediate background). Never kills. For status, an observation window for state or output change. Never kills." },
+    wait_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "For run, optional cap on how long this call blocks for exit before backgrounding (omit → wait until the command exits; 0 → immediate background). Never kills. For status, an observation window for state or output change. Never kills." },
     stdout_offset: { type: "integer", minimum: 0, description: "Optional byte cursor returned by a previous status call. When supplied, stdout contains only newer output." },
     stderr_offset: { type: "integer", minimum: 0, description: "Optional byte cursor returned by a previous status call. When supplied, stderr contains only newer output." },
   },
