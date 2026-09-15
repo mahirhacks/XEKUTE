@@ -10678,45 +10678,14 @@ function highlightExactText(text, query, highlights = []) {
   return html;
 }
 
-function setQuickSearchAssistVisible(visible) {
-  const show = Boolean(visible && quickMode === "search");
-  if (quickSearchAssist) quickSearchAssist.hidden = !show;
-  if (quickSearchHelp) quickSearchHelp.setAttribute("aria-expanded", String(show));
-  if (show) {
-    if (quickSearchSuggestions) quickSearchSuggestions.hidden = true;
-    quickPanel?.classList.remove("quick-panel-minimal");
-  }
+function setQuickSearchAssistVisible(_visible) {
+  if (quickSearchAssist) quickSearchAssist.hidden = true;
+  if (quickSearchHelp) quickSearchHelp.setAttribute("aria-expanded", "false");
   if (quickResults?.classList.contains("is-virtualized")) requestAnimationFrame(() => renderVirtualizedSearchResults());
 }
 
 function initializeAdvancedSearchHelp() {
-  if (quickSearchPresets && !quickSearchPresets.childElementCount) {
-    for (const preset of ADVANCED_SEARCH_PRESETS) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "quick-search-preset";
-      button.textContent = preset.label;
-      button.title = preset.query;
-      button.addEventListener("click", () => {
-        if (!quickInput) return;
-        quickInput.value = preset.query;
-        setQuickSearchAssistVisible(false);
-        quickSelection = 0;
-        renderWorkspaceSearch();
-        quickInput.focus();
-        quickInput.setSelectionRange(quickInput.value.length, quickInput.value.length);
-      });
-      quickSearchPresets.appendChild(button);
-    }
-  }
-  if (quickSearchReference && !quickSearchReference.childElementCount) {
-    for (const operator of ADVANCED_SEARCH_OPERATORS) {
-      const row = document.createElement("span");
-      row.title = `${operator.name}: ${operator.description}`;
-      row.innerHTML = `<code>${escapeHtml(operator.name)}:</code> ${escapeHtml(operator.description)}`;
-      quickSearchReference.appendChild(row);
-    }
-  }
+  setQuickSearchAssistVisible(false);
 }
 
 function advancedSearchTokenRange() {
@@ -11263,7 +11232,8 @@ quickInput?.addEventListener("keydown", (e) => {
 
 quickSearchHelp?.addEventListener("click", (event) => {
   event.stopPropagation();
-  setQuickSearchAssistVisible(quickSearchAssist?.hidden !== false);
+  setQuickSearchAssistVisible(false);
+  quickInput?.focus();
 });
 
 quickOverlay?.addEventListener("mousedown", (e) => {

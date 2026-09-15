@@ -28,8 +28,8 @@ body,
 
 /* Title bar */
 #app-topbar {
-  height: 38px;
-  min-height: 38px;
+  height: 34px;
+  min-height: 34px;
   justify-content: flex-start;
   gap: 4px;
   padding-left: 16px;
@@ -39,12 +39,17 @@ body,
 
 #app-menu {
   order: 2;
+  align-items: stretch;
   gap: 11px;
 }
 
 .app-menu-button {
-  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  height: auto;
+  align-self: stretch;
   padding: 0 8px;
+  border-radius: 0;
   color: var(--revamp-text);
   font-size: 12px;
 }
@@ -55,8 +60,8 @@ body,
 }
 
 .app-brand-icon {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 4px;
   filter: grayscale(1) brightness(1.55);
 }
@@ -80,7 +85,7 @@ body,
   width: auto;
   min-width: 92px;
   max-width: none;
-  height: 28px;
+  height: 26px;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -96,27 +101,29 @@ body,
 }
 
 .command-center .codicon {
-  color: var(--revamp-text);
-  font-size: 14px;
+  display: none;
 }
 
 .topbar-icon {
   width: 32px;
-  height: 30px;
+  height: auto;
+  min-height: 0;
+  align-self: stretch;
+  border-radius: 0;
 }
 
 .chrome-icon {
   display: block;
   width: auto;
-  height: 14px;
+  height: 12px;
   flex: 0 0 auto;
   pointer-events: none;
 }
 
 #btn-top-chat .chrome-icon,
 #btn-chat-collapse .chrome-icon {
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
 }
 
 .topbar-icon.inactive .chrome-icon {
@@ -124,7 +131,10 @@ body,
 }
 
 .window-control {
-  height: 38px;
+  height: auto;
+  min-height: 0;
+  align-self: stretch;
+  border-radius: 0;
 }
 
 /* Three-pane frame */
@@ -821,11 +831,53 @@ body,
   margin: 0 0 0 67px;
   padding: 0;
   overflow-y: auto;
-  scrollbar-width: none;
 }
 
+/* Match the chat transcript scrollbar on settings options, and keep both
+   thumbs painted (not overlay/hover-only). */
+#messages,
+.app-settings-content,
+.app-settings-tabs {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(56, 56, 56, .55) transparent !important;
+}
+
+#messages::-webkit-scrollbar,
+.app-settings-content::-webkit-scrollbar,
 .app-settings-tabs::-webkit-scrollbar {
-  display: none;
+  width: 10px;
+  height: 10px;
+  display: block !important;
+  background: transparent !important;
+}
+
+#messages::-webkit-scrollbar-track,
+#messages::-webkit-scrollbar-corner,
+.app-settings-content::-webkit-scrollbar-track,
+.app-settings-content::-webkit-scrollbar-corner,
+.app-settings-tabs::-webkit-scrollbar-track,
+.app-settings-tabs::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+#messages::-webkit-scrollbar-thumb,
+.app-settings-content::-webkit-scrollbar-thumb,
+.app-settings-tabs::-webkit-scrollbar-thumb {
+  min-width: 0;
+  min-height: 24px;
+  background: rgba(56, 56, 56, .55) !important;
+  border: 3px solid transparent !important;
+  background-clip: padding-box !important;
+  border-radius: 5px !important;
+  opacity: 1;
+}
+
+#messages::-webkit-scrollbar-thumb:hover,
+.app-settings-content::-webkit-scrollbar-thumb:hover,
+.app-settings-tabs::-webkit-scrollbar-thumb:hover {
+  background: rgba(66, 66, 66, .7) !important;
 }
 
 .app-settings-nav-group {
@@ -981,6 +1033,7 @@ body,
 .app-settings-content {
   padding: 0 63px 52px 48px;
   overflow-x: hidden;
+  overflow-y: scroll;
   background: var(--revamp-surface);
 }
 
@@ -2097,12 +2150,18 @@ body,
 
 .security-proxy-browser-menu,
 .security-tool-menu,
-.security-history-menu {
-  padding: 4px;
+.security-history-menu,
+.terminal-session-menu {
   border: 1px solid var(--revamp-divider, var(--border));
   border-radius: 6px;
   background: var(--revamp-surface, var(--bg-0));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .55);
+  box-shadow: none;
+}
+
+.security-proxy-browser-menu,
+.security-tool-menu,
+.security-history-menu {
+  padding: 4px;
 }
 
 .editor-tab-context-menu {
@@ -2120,9 +2179,47 @@ body,
 .security-proxy-browser-menu button:hover,
 .security-proxy-browser-menu button:focus-visible,
 .security-tool-option:hover,
-.security-history-menu-item:hover {
+.security-history-menu-item:hover,
+.terminal-menu-item:hover,
+.terminal-menu-item.active {
   background: var(--bg-3);
   color: #fff;
+}
+
+.terminal-menu-item {
+  border-radius: 0;
+  color: var(--revamp-text);
+}
+
+#terminal-more-menu,
+#terminal-session-menu {
+  background: var(--revamp-surface) !important;
+  border-color: var(--revamp-divider) !important;
+  box-shadow: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.terminal-more-menu,
+.terminal-session-menu,
+.chat-mode-menu,
+.authority-menu,
+.model-menu,
+.model-edit-menu {
+  overflow-x: hidden;
+}
+
+.terminal-more-menu button,
+.terminal-menu-item,
+.chat-mode-option,
+.authority-menu-option,
+.model-item,
+.reasoning-option,
+.context-option,
+.model-add-btn {
+  width: 100%;
+  border-radius: 0 !important;
+  box-sizing: border-box;
 }
 
 .security-tool-menu-separator {

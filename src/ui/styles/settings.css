@@ -122,8 +122,6 @@
   overflow:auto;
   border:0;
   background:transparent;
-  scrollbar-width:thin;
-  scrollbar-color:#343434 transparent;
 }
 
 .app-settings-nav-group {
@@ -271,16 +269,6 @@
   padding:0 48px 52px;
   overflow:auto;
   background:var(--settings-bg);
-  scrollbar-width:thin;
-  scrollbar-color:#373737 transparent;
-}
-.app-settings-content::-webkit-scrollbar { width:9px; }
-.app-settings-content::-webkit-scrollbar-track { background:transparent; }
-.app-settings-content::-webkit-scrollbar-thumb {
-  border:3px solid transparent;
-  border-radius:9px;
-  background:#3b3b3b;
-  background-clip:padding-box;
 }
 .app-settings-content > .app-settings-panel {
   width:min(830px,100%);

@@ -74,7 +74,6 @@
       <img class="chrome-icon" src="assets/icons/filetree_collapse_expand_icon.svg" alt="" aria-hidden="true">
     </button>
     <button type="button" id="command-center" class="command-center" title="Search (Ctrl+F)">
-      <span class="codicon codicon-search"></span>
       <span>Search</span>
     </button>
     <div class="app-topbar-spacer"></div>
@@ -854,8 +853,11 @@
               <span id="terminal-active-name">Terminal</span>
               <span class="codicon codicon-chevron-down terminal-session-chevron"></span>
             </button>
-            <button id="btn-terminal-new" class="icon-btn terminal-action terminal-shell-action terminal-new-action" title="New Terminal" aria-haspopup="menu" aria-expanded="false">
-              <span class="codicon codicon-add"></span><span class="codicon codicon-chevron-down terminal-new-chevron"></span>
+            <button type="button" id="btn-terminal-new" class="icon-btn terminal-action terminal-shell-action" title="New Terminal">
+              <span class="codicon codicon-add"></span>
+            </button>
+            <button type="button" id="btn-terminal-new-menu" class="icon-btn terminal-action terminal-shell-action" title="New terminal with profile" aria-haspopup="menu" aria-expanded="false">
+              <span class="codicon codicon-chevron-down"></span>
             </button>
             <button id="btn-terminal-split" class="icon-btn terminal-action terminal-shell-action" title="Split Terminal" disabled>
               <span class="codicon codicon-split-horizontal"></span>
@@ -1189,8 +1191,8 @@
       <div class="quick-input-row">
         <span id="quick-icon" class="codicon codicon-chevron-right"></span>
         <input id="quick-input" type="text" autocomplete="off" spellcheck="false" />
-        <button id="quick-search-help" class="quick-search-help" type="button" title="Advanced search" aria-label="Show advanced search help" aria-expanded="false">
-          <span class="codicon codicon-filter"></span>
+        <button id="quick-search-help" class="quick-search-help" type="button" title="Workspace search" aria-label="Workspace search" aria-expanded="false">
+          <span class="codicon codicon-copilot"></span>
         </button>
       </div>
       <div id="quick-search-suggestions" class="quick-search-suggestions" role="listbox" aria-label="Advanced search suggestions" hidden></div>

@@ -74,7 +74,7 @@ html, body {
 
 #app-menu {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   align-self: stretch;
   gap: 2px;
   -webkit-app-region: no-drag;
@@ -85,14 +85,14 @@ html, body {
   align-items: center;
   gap: 7px;
   color: #dedede;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.01em;
 }
 
 .app-brand .codicon {
   color: #75beff;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .app-brand-icon {
@@ -104,16 +104,20 @@ html, body {
 
 .app-menu-item {
   position: relative;
-  height: 100%;
+  height: auto;
+  align-self: stretch;
   display: flex;
-  align-items: center;
+  align-items: stretch;
 }
 
 .app-menu-button {
-  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  height: auto;
+  align-self: stretch;
   padding: 0 8px;
   border: none;
-  border-radius: 3px;
+  border-radius: 0;
   background: transparent;
   color: #cccccc;
   font: 12px var(--font-ui);
@@ -128,7 +132,7 @@ html, body {
 
 .app-menu-dropdown {
   position: absolute;
-  top: 28px;
+  top: 100%;
   left: 0;
   min-width: 178px;
   padding: 4px;
@@ -181,7 +185,7 @@ html, body {
   gap: 7px;
   width: min(34vw, 420px);
   max-width: 420px;
-  height: 22px;
+  height: 20px;
   margin-left: 0;
   border: 1px solid #3a3a3a;
   border-radius: 5px;
@@ -198,8 +202,7 @@ html, body {
 }
 
 .command-center .codicon {
-  font-size: 13px;
-  color: var(--fg-dim);
+  display: none;
 }
 
 @media (max-width: 900px) {
@@ -210,7 +213,9 @@ html, body {
 
 .topbar-icon {
   width: 28px;
-  height: 24px;
+  height: auto;
+  min-height: 0;
+  align-self: stretch;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -218,7 +223,7 @@ html, body {
   border: none;
   color: var(--fg-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 0;
   -webkit-app-region: no-drag;
 }
 
@@ -236,12 +241,14 @@ html, body {
 }
 
 .topbar-icon .codicon {
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .window-control {
   width: 46px;
-  height: 30px;
+  height: auto;
+  min-height: 0;
+  align-self: stretch;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -264,7 +271,7 @@ html, body {
 }
 
 .window-control .codicon {
-  font-size: 14px;
+  font-size: 12px;
 }
 
 #statusbar {
@@ -2867,11 +2874,11 @@ html.panel-resizing iframe {
   width: min(280px, calc(100% - 18px));
   max-height: 320px;
   overflow-y: auto;
-  padding: 4px;
-  border: 1px solid #454545;
+  padding: 0;
+  border: 1px solid var(--revamp-divider, var(--border));
   border-radius: 4px;
-  background: #252526;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+  background: var(--revamp-surface, var(--bg-0));
+  box-shadow: none;
 }
 
 .terminal-session-menu[hidden] { display: none !important; }
@@ -2883,9 +2890,9 @@ html.panel-resizing iframe {
   gap: 6px;
   width: 100%;
   min-height: 28px;
-  padding: 3px 7px;
+  padding: 3px 10px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 0;
   background: transparent;
   color: #cccccc;
   font: 12px var(--font-ui);
@@ -3217,8 +3224,8 @@ html.panel-resizing iframe {
 }
 
 @container (max-width: 390px) {
-  .terminal-actions { gap: 0; }
-  .terminal-action { width: 20px; }
+  .terminal-actions { gap: 4px; }
+  .terminal-action { width: 22px; }
   .security-tool-switcher { margin-right: 1px; }
 }
 
@@ -4138,14 +4145,9 @@ html.panel-resizing iframe {
   white-space: nowrap;
 }
 
+.quick-panel-search .quick-search-assist,
 .quick-panel-search .quick-search-assist:not([hidden]) {
-  display: block;
-  flex: 0 0 auto;
-  max-height: min(430px, calc(100vh - 160px));
-  overflow-y: auto;
-  padding: 12px 14px 13px;
-  border-bottom: 1px solid #2d2d2d;
-  background: #151515;
+  display: none !important;
 }
 
 .quick-search-assist-heading {
@@ -5207,7 +5209,7 @@ html.panel-resizing iframe {
   max-height: calc(100vh - 16px);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px;
+  padding: 0;
   border: 1px solid var(--revamp-divider, var(--border));
   border-radius: 7px;
   background: var(--revamp-surface, var(--bg-0));
@@ -5236,9 +5238,9 @@ html.panel-resizing iframe {
   gap: 9px;
   width: 100%;
   min-height: 29px;
-  padding: 4px 8px;
+  padding: 4px 10px;
   border: none;
-  border-radius: 5px;
+  border-radius: 0;
   background: transparent;
   text-align: left;
   font: 12px var(--font-ui);
@@ -5670,7 +5672,7 @@ html.panel-resizing iframe {
 }
 
 .model-menu.is-openrouter .model-list {
-  padding: 0 3px;
+  padding: 0;
   max-height: 280px;
 }
 
@@ -5701,7 +5703,7 @@ html.panel-resizing iframe {
   max-height: 320px;
   display: flex;
   flex-direction: column;
-  padding: 4px;
+  padding: 0;
   border: 1px solid var(--revamp-divider, var(--border));
   border-radius: 8px;
   background: var(--revamp-surface, var(--bg-0));
@@ -5718,9 +5720,9 @@ html.panel-resizing iframe {
   gap: 9px;
   width: 100%;
   min-height: 36px;
-  padding: 6px 8px;
+  padding: 6px 10px;
   border: none;
-  border-radius: 5px;
+  border-radius: 0;
   background: transparent;
   color: #d2d2d2;
   text-align: left;
@@ -5816,7 +5818,7 @@ html.panel-resizing iframe {
 .model-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 4px;
+  padding: 0;
   min-height: 80px;
   max-height: 240px;
 }
@@ -5834,10 +5836,10 @@ html.panel-resizing iframe {
   gap: 8px;
   width: 100%;
   min-height: 42px;
-  padding: 6px 9px;
+  padding: 6px 10px;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 0;
   color: var(--fg);
   font-family: var(--font-ui);
   font-size: 13px;
@@ -5991,7 +5993,7 @@ html.panel-resizing iframe {
   position: fixed;
   z-index: 10001;
   width: 230px;
-  padding: 4px;
+  padding: 0;
   background: var(--revamp-surface, var(--bg-0));
   border: 1px solid var(--revamp-divider, var(--border));
   border-radius: 6px;
@@ -6090,9 +6092,9 @@ html.panel-resizing iframe {
   justify-content: space-between;
   width: 100%;
   min-height: 28px;
-  padding: 5px 6px;
+  padding: 5px 10px;
   border: none;
-  border-radius: 4px;
+  border-radius: 0;
   background: transparent;
   color: #bcbcbc;
   font-family: var(--font-ui);
@@ -6187,10 +6189,10 @@ html.panel-resizing iframe {
   justify-content: space-between;
   width: 100%;
   min-height: 28px;
-  padding: 5px 6px;
+  padding: 5px 10px;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 0;
   color: #bcbcbc;
   font-family: var(--font-ui);
   font-size: 12px;
@@ -6202,8 +6204,8 @@ html.panel-resizing iframe {
 
 .model-edit-menu .context-option {
   min-height: 28px;
-  padding: 5px 6px;
-  border-radius: 4px;
+  padding: 5px 10px;
+  border-radius: 0;
 }
 
 .context-option:hover { background: #1c1c1c; color: #e8e8e8; }

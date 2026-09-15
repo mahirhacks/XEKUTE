@@ -78,7 +78,6 @@ export default memo(function AppShell() {
           <img className="chrome-icon" src="assets/icons/filetree_collapse_expand_icon.svg" alt="" aria-hidden="true" />
         </button>
         <button type="button" id="command-center" className="command-center" title="Search (Ctrl+F)">
-          <span className="codicon codicon-search"></span>
           <span>Search</span>
         </button>
         <div className="app-topbar-spacer"></div>
@@ -847,8 +846,11 @@ export default memo(function AppShell() {
                   <span id="terminal-active-name">Terminal</span>
                   <span className="codicon codicon-chevron-down terminal-session-chevron"></span>
                 </button>
-                <button id="btn-terminal-new" className="icon-btn terminal-action terminal-shell-action terminal-new-action" title="New Terminal" aria-haspopup="menu" aria-expanded="false">
-                  <span className="codicon codicon-add"></span><span className="codicon codicon-chevron-down terminal-new-chevron"></span>
+                <button type="button" id="btn-terminal-new" className="icon-btn terminal-action terminal-shell-action" title="New Terminal">
+                  <span className="codicon codicon-add"></span>
+                </button>
+                <button type="button" id="btn-terminal-new-menu" className="icon-btn terminal-action terminal-shell-action" title="New terminal with profile" aria-haspopup="menu" aria-expanded="false">
+                  <span className="codicon codicon-chevron-down"></span>
                 </button>
                 <button id="btn-terminal-split" className="icon-btn terminal-action terminal-shell-action" title="Split Terminal" disabled={true}>
                   <span className="codicon codicon-split-horizontal"></span>
@@ -1181,8 +1183,8 @@ export default memo(function AppShell() {
           <div className="quick-input-row">
             <span id="quick-icon" className="codicon codicon-chevron-right"></span>
             <input id="quick-input" type="text" autoComplete="off" spellCheck="false" />
-            <button id="quick-search-help" className="quick-search-help" type="button" title="Advanced search" aria-label="Show advanced search help" aria-expanded="false">
-              <span className="codicon codicon-filter"></span>
+            <button id="quick-search-help" className="quick-search-help" type="button" title="Workspace search" aria-label="Workspace search" aria-expanded="false">
+              <span className="codicon codicon-copilot"></span>
             </button>
           </div>
           <div id="quick-search-suggestions" className="quick-search-suggestions" role="listbox" aria-label="Advanced search suggestions" hidden></div>

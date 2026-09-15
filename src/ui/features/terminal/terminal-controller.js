@@ -9,6 +9,7 @@ const TerminalManager = (() => {
   const viewport      = $("terminal-viewport");
   const terminalEmpty = $("terminal-empty");
   const btnNew        = $("btn-terminal-new");
+  const btnNewMenu    = $("btn-terminal-new-menu");
   const btnSplit      = $("btn-terminal-split");
   const btnClear      = $("btn-terminal-clear");
   const btnKill       = $("btn-terminal-kill");
@@ -281,7 +282,7 @@ const TerminalManager = (() => {
     if (!sessionMenu || !activeSessionButton) return;
     sessionMenu.hidden = true;
     activeSessionButton.setAttribute("aria-expanded", "false");
-    btnNew?.setAttribute("aria-expanded", "false");
+    btnNewMenu?.setAttribute("aria-expanded", "false");
   }
 
   function closeMoreMenu() {
@@ -298,11 +299,12 @@ const TerminalManager = (() => {
   }
 
   function toggleSessionMenu() {
-    if (!sessionMenu || !activeSessionButton || activeSessionButton.disabled) return;
+    if (!sessionMenu) return;
     renderSessionMenu();
     sessionMenu.hidden = !sessionMenu.hidden;
-    activeSessionButton.setAttribute("aria-expanded", String(!sessionMenu.hidden));
-    btnNew?.setAttribute("aria-expanded", String(!sessionMenu.hidden));
+    const expanded = String(!sessionMenu.hidden);
+    activeSessionButton?.setAttribute("aria-expanded", expanded);
+    btnNewMenu?.setAttribute("aria-expanded", expanded);
   }
 
   function renderTabsList() {
@@ -768,13 +770,12 @@ const TerminalManager = (() => {
     }).catch(() => {});
   }
 
-  btnNew?.addEventListener("click", (event) => {
-    if (event.target.closest(".terminal-new-chevron")) {
-      event.stopPropagation();
-      toggleSessionMenu();
-      return;
-    }
+  btnNew?.addEventListener("click", () => {
     createTerminalAndShow();
+  });
+  btnNewMenu?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleSessionMenu();
   });
   btnSplit?.addEventListener("click", () => splitActive());
   btnClear?.addEventListener("click", () => {

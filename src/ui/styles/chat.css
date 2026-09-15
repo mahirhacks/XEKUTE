@@ -552,7 +552,7 @@
 
 .chat-mode-menu {
   width: 174px;
-  padding: 4px;
+  padding: 0;
   border: 1px solid var(--revamp-divider, var(--border));
   border-radius: 8px;
   background: var(--revamp-surface, var(--bg-0));
@@ -723,7 +723,7 @@
   gap: 0;
   background: #171717;
   scrollbar-gutter: stable;
-  scrollbar-color: transparent transparent !important;
+  scrollbar-color: rgba(56, 56, 56, .55) transparent !important;
   scrollbar-width: thin !important;
 }
 
@@ -731,6 +731,7 @@
    remains in front and usable while the conversation fades underneath. */
 #messages::-webkit-scrollbar {
   width: 10px;
+  display: block;
   background: transparent !important;
 }
 
@@ -740,32 +741,20 @@
 }
 
 #messages::-webkit-scrollbar-thumb {
-  background: transparent !important;
+  background: rgba(56, 56, 56, .55) !important;
   border: 3px solid transparent !important;
   background-clip: padding-box;
   border-radius: 5px !important;
-  opacity: 0;
-  transition: background-color 160ms ease, opacity 160ms ease;
+  opacity: 1;
 }
 
 #messages.scrollbar-hover {
-  scrollbar-color: rgba(56, 56, 56, .55) transparent !important;
+  scrollbar-color: rgba(66, 66, 66, .7) transparent !important;
 }
 
-#messages.scrollbar-hover::-webkit-scrollbar-thumb {
-  background: rgba(56, 56, 56, .55) !important;
-  opacity: 1;
-}
-
-#messages.scrollbar-hover::-webkit-scrollbar-thumb:hover {
-  background: rgba(66, 66, 66, .7) !important;
-}
-
-/* Native hover is the fallback when the browser keeps the scrollbar outside
-   the element's pointer-event stream. */
+#messages.scrollbar-hover::-webkit-scrollbar-thumb,
 #messages::-webkit-scrollbar-thumb:hover {
-  background: rgba(56, 56, 56, .55) !important;
-  opacity: 1;
+  background: rgba(66, 66, 66, .7) !important;
 }
 
 /* One exchange owns a user prompt and everything produced in response to it.
@@ -1126,8 +1115,8 @@
 #terminal-header {
   height: 36px;
   padding: 0 8px 0 0;
-  background: #1a1a1a;
-  border-bottom-color: #2b2b2b;
+  background: var(--revamp-surface, var(--bg-0));
+  border-bottom-color: var(--revamp-divider, var(--border));
 }
 
 .terminal-panel-tabs {
@@ -1166,7 +1155,7 @@
 
 .terminal-actions {
   margin-left: auto;
-  gap: 1px;
+  gap: 6px;
   padding-left: 8px;
 }
 
@@ -1191,26 +1180,18 @@
   color: #ffffff;
 }
 
-.terminal-new-action {
-  display: inline-flex !important;
-  width: 38px;
-  gap: 2px;
-}
-
-.terminal-new-action .codicon-add { font-size: 18px; }
-.terminal-new-chevron { font-size: 11px !important; }
-
 .terminal-more-menu {
   position: absolute;
   top: 35px;
   right: 43px;
   z-index: 70;
   width: 170px;
-  padding: 4px;
-  border: 1px solid #454545;
-  border-radius: 5px;
-  background: #252526;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, .46);
+  padding: 0;
+  border: 1px solid var(--revamp-divider, var(--border));
+  border-radius: 6px;
+  background: var(--revamp-surface, var(--bg-0)) !important;
+  box-shadow: none;
+  overflow: hidden;
 }
 
 .terminal-more-menu[hidden] { display: none !important; }
@@ -1219,19 +1200,22 @@
   display: block;
   width: 100%;
   min-height: 28px;
-  padding: 5px 8px;
+  padding: 5px 10px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 0;
   background: transparent;
-  color: #cccccc;
-  font: 12px var(--font-ui);
+  color: var(--fg);
+  font: 13px var(--font-ui);
   text-align: left;
   cursor: pointer;
+  transition: background 0.1s;
 }
 
-.terminal-more-menu button:hover {
-  background: #37373d;
-  color: #ffffff;
+.terminal-more-menu button:hover,
+.terminal-more-menu button:focus-visible {
+  outline: none;
+  background: var(--bg-3);
+  color: var(--fg);
 }
 
 #terminal-body,
@@ -2201,7 +2185,7 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 1px;
   scrollbar-width: thin;
   scrollbar-color: #3a3a3a transparent;
 }
@@ -2296,7 +2280,12 @@
   transition: transform 120ms ease;
 }
 .chat-history-archive-chevron.expanded { transform: rotate(90deg); }
-.chat-history-archive-list { padding-top: 1px; }
+.chat-history-archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 1px;
+}
 .chat-history-archive-empty {
   padding: 7px 6px 8px 23px;
   color: #777;
