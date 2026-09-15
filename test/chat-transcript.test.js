@@ -2,8 +2,6 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 
 async function load() {
   return import("../src/ui/features/chat/chat-transcript.js");
@@ -30,7 +28,33 @@ test("thinking duration uses stored elapsed time instead of wall-clock age", asy
 
 test("chat.json example is a flat two-lane Cursor-style transcript", async () => {
   const { normalizeUiTranscript, hasStructuredTranscript } = await load();
-  const example = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "chat.json"), "utf8"));
+  const example = {
+    version: 2,
+    runs: [{
+      worked_for_ms: 98_000,
+      user: { message: "can you fix the problem? Idk what to do." },
+      events: [
+        { type: "chat", lane: "prose", text: "I'll take a look." },
+        { type: "thinking", lane: "activity", duration_ms: 12_000, text: "Checking the files." },
+        {
+          type: "file_stack",
+          lane: "activity",
+          verb: "Read",
+          files: [
+            { target: "index.js" },
+            { target: "styles.css" },
+            { target: "index.html" },
+          ],
+        },
+        { type: "chat", lane: "prose", text: "Found the bug." },
+        { type: "tool", lane: "activity", verb: "Edited", name: "apply_patch", target: "index.js" },
+        { type: "command", lane: "activity", command: "node --test test/dom.test.js" },
+        { type: "thinking", lane: "activity", duration_ms: 1_000, text: "Verifying." },
+        { type: "tool", lane: "activity", verb: "Read", name: "read_file", target: "index.js" },
+        { type: "chat", lane: "prose", verdict: true, text: "Fixed." },
+      ],
+    }],
+  };
   const transcript = normalizeUiTranscript(example);
   assert.equal(hasStructuredTranscript(transcript), true);
   assert.equal(transcript.version, 2);

@@ -1002,6 +1002,7 @@ export default memo(function AppShell() {
                   </aside>
                 </div>
               </div>
+              <div id="terminal-tabs-resize" className="sash-v" role="separator" tabIndex="0" aria-label="Resize terminal session list" aria-orientation="vertical" hidden></div>
               <div id="terminal-tabs-list" hidden></div>
             </div>
           </section>

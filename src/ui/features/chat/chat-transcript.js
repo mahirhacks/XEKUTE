@@ -466,7 +466,9 @@ function captureExchangeRun(exchange, index) {
     captureAssistantTurn(turn, events);
   }
   if (!userText && !events.length) return null;
-  const header = host.querySelector?.(".chat-turn.assistant > .agent-work-header, .chat-turn.assistant > .agent-work-fold");
+  const fold = host.querySelector?.(".chat-turn.assistant > .agent-work-fold");
+  const header = fold?.querySelector?.(":scope > .agent-work-header")
+    || host.querySelector?.(".chat-turn.assistant > .agent-work-header, .chat-turn.assistant > .agent-work-fold");
   const startedAt = toIso(dataset(header).startedAt) || toIso(dataset(userTurn).createdAt)
     || toIso(events[0]?.created_at || events[0]?.started_at);
   return compact({

@@ -33,8 +33,10 @@ function sourceFiles(relativeDirectory) {
   const visit = (current) => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const absolute = path.join(current, entry.name);
-      if (entry.isDirectory()) visit(absolute);
-      else result.push(absolute);
+      if (entry.isDirectory()) {
+        if (entry.name === "dist" || entry.name === "node_modules") continue;
+        visit(absolute);
+      } else result.push(absolute);
     }
   };
   visit(directory);
@@ -313,7 +315,8 @@ assert.deepEqual(
 assert.doesNotMatch(read("src/prompts/instructions/system-prompt.js"), /AUTO-GENERATED|content\/build|prompt_builder/i);
 assert.doesNotMatch(read("src/agent/runtime/prompt-compiler.js"), /prompt-source|content-loader|prompt_builder/i);
 
-assert.match(html, /<script type="module" src="bootstrap\.js"><\/script>/);
+assert.match(html, /<script type="module" src="\/react\/main\.jsx"><\/script>/);
+assert.match(read("src/ui/react/App.jsx"), /startRenderer\(\)/);
 assert.doesNotMatch(html, /data-app-settings-section="memory"|id="app-settings-memory-panel"|id="memory-health-reset"|Memory Health/);
 assert.doesNotMatch(read("src/ui/bootstrap.js"), /loadMemoryHealthPanel/);
 assert.doesNotMatch(html, /presentation\/ui|application\/prompt|prompts\/instructs|src\/preload\.js/);
@@ -323,8 +326,9 @@ const rendererSyntax = spawnSync(process.execPath, ["--input-type=module", "--ch
 });
 assert.equal(rendererSyntax.status, 0, `renderer ES module must parse: ${rendererSyntax.stderr || rendererSyntax.stdout}`);
 for (const match of html.matchAll(/<script(?:\s+type="module")?\s+src="([^"]+)"\s*><\/script>/g)) {
-  const scriptPath = path.join(root, "src/ui", match[1]);
-  if (/node_modules/.test(match[1])) continue;
+  const relativeSrc = String(match[1] || "").replace(/^\//, "");
+  const scriptPath = path.join(root, "src/ui", relativeSrc);
+  if (/node_modules/.test(relativeSrc)) continue;
   assert.ok(fs.existsSync(scriptPath), `renderer script must exist: ${match[1]}`);
 }
 

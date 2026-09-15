@@ -6,9 +6,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const read = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 test("Tools and MCP settings keep generic MCP configuration separate from optional Kali access", () => {
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
   const renderer = read("src/ui/bootstrap.js");
   const preload = read("src/app/electron/preload.js");
   for (const id of ["mcp-settings-list", "kali-access-panel", "kali-access-enabled", "kali-access-host", "kali-access-key", "kali-access-test"]) {

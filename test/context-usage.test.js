@@ -66,7 +66,7 @@ test("the meter reads Tier 1 for an idle chat instead of waiting for the first s
 test("context checkpointing is automatic and renderer-owned compaction is absent", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "react", "AppShell.jsx"), "utf8");
 
   const preload = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "preload.js"), "utf8");
   const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");

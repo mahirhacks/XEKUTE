@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { buildChatRequest } = require("../src/agent/llm/openrouter/providers.js");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 test("OpenRouter requests preserve an explicitly requested output cap and deterministic transform policy", () => {
   const request = buildChatRequest({
@@ -56,7 +57,7 @@ test("live OpenRouter chat does not turn context reserve into an output cap", ()
 
 test("renderer keeps Ollama thinking separate from OpenRouter effort selection", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const markup = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const markup = readUiShell();
   const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.match(markup, /id="ollama-thinking-row"/);
   assert.match(markup, /id="openrouter-reasoning-row"[^>]*>[\s\S]*?<div class="model-edit-label">Effort<\/div>/);

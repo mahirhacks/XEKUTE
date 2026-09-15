@@ -1,18 +1,5 @@
-/* Chat surface: deliberately uses the same restrained language as the editor. */
-
-#chat-pane {
-  background: var(--bg-0);
-  border-left: 1px solid var(--border);
-}
-
-#chat-header {
-  min-height: 40px;
-  padding: 0 6px 0 8px;
-  gap: 5px;
-  background: var(--bg-2);
-  position: relative;
-  border-bottom: 0;
-}
+/* Chat surface: one live theme. Spacing tokens on #messages are the knobs
+   for transcript layout so row/run/work gaps are not restated per selector. */
 
 #chat-header::after {
   content: "";
@@ -27,8 +14,6 @@
 }
 
 .chat-session-tabs {
-  gap: 2px;
-  padding: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none !important;
@@ -39,57 +24,8 @@
   width: 0 !important;
   height: 0 !important;
 }
-.chat-session-tab {
-  height: 32px;
-  min-width: 103px;
-  max-width: 145px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  background: transparent;
-  color: #9d9d9d;
-}
-.chat-session-tab.active { background: #2a2d2e; border-color: #454545; color: #f0f0f0; box-shadow: none; }
-.chat-session-tab:hover { background: #313131; color: #fff; }
-.chat-title-icon { color: #75beff; font-size: 13px; }
-.chat-session-controls { height: 32px; gap: 2px; padding: 0 0 0 2px; background: transparent; }
-.chat-session-action { width: 23px; height: 23px; border-radius: 4px; color: #9d9d9d; }
 
-#messages {
-  padding: 12px 16px 24px;
-  gap: 0;
-  background: var(--bg-0);
-}
-
-.chat-turn { gap: 0; }
-.chat-turn.user { align-items: flex-end; }
-.chat-turn.user::before, .chat-turn.assistant::before {
-  color: #858585;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .06em;
-}
-.chat-turn.user::before { margin: 0 3px -2px 0; }
-.chat-turn.assistant { padding-left: 0; }
-.chat-turn.assistant::before { top: 3px; left: 0; color: #858585; }
-.chat-turn.assistant.has-agent-run { padding-top: 0; }
-.chat-turn.assistant.has-agent-run::before { top: 2px; left: 0; }
-.chat-turn.assistant.has-agent-run::after { top: 20px; left: 0; }
-.chat-turn.assistant.has-agent-run .assistant-reply { padding-top: 0; }
-.chat-turn.assistant::after {
-  top: 20px;
-  width: 18px;
-  height: 18px;
-  border: 1px solid #4a4d50;
-  border-radius: 5px;
-  background: #2a2d2e;
-  color: #75beff;
-  font-size: 11px;
-  box-shadow: none;
-}
-.assistant-reply { padding-top: 17px; color: #d4d4d4; font-size: 13px; line-height: 1.6; }
 .assistant-reply h1, .assistant-reply h2, .assistant-reply h3, .assistant-reply h4 { color: #e4e4e4; }
-
 
 .agent-task-brief {
   margin: 0 0 2px;
@@ -550,14 +486,6 @@
 .agent-activity-line.success .agent-activity-icon { color: #89d185; }
 .agent-activity-line.error .agent-activity-icon { color: #f48771; }
 
-#messages .tool-card { margin: 4px 0 0; border-color: #3b3b3b; border-radius: 5px; background: #1e1e1e; box-shadow: none; }
-#messages .tool-card.pending { position: relative; overflow: hidden; border-color: #4c6c87; background: #202a33; }
-#messages .tool-card.pending::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(105deg, transparent 20%, rgba(117, 190, 255, .08) 45%, transparent 70%); transform: translateX(-100%); animation: tool-sweep 1.7s ease-in-out infinite; }
-#messages .tool-card-header { min-height: 33px; padding: 7px 8px; }
-#messages .tool-card-status.running::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: #75beff; animation: live-dot 1.2s ease-in-out infinite; }
-#messages .tool-card-status.success::before { content: "✓"; margin-right: 4px; color: #89d185; }
-#messages .tool-card-status.error::before { content: "!"; margin-right: 4px; color: #f48771; }
-
 /* Transient tool/command cards: complete cards fade out and collapse away. */
 #messages .tool-card { transition: opacity 320ms ease, transform 320ms ease, margin 320ms ease, max-height 320ms ease; }
 #messages .tool-card.tool-card-fade { opacity: 0; transform: translateY(-2px); pointer-events: none; }
@@ -576,11 +504,6 @@
 #messages .tool-card.subagent-wait { position: relative; overflow: hidden; border-color: #a371c8; background: #2a2333; }
 #messages .tool-card.subagent-wait::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(105deg, transparent 20%, rgba(190, 140, 230, .12) 45%, transparent 70%); transform: translateX(-100%); animation: tool-sweep 1.9s ease-in-out infinite; }
 #messages .tool-card.subagent-wait .tool-card-file { color: #d3b8e8; }
-
-#input-bar { padding: 0 12px 10px; background: var(--bg-0); }
-#chat-input { padding: 8px 9px 3px; color: #dcdcdc; font-size: 13px; }
-.composer-toolbar { min-height: 31px; padding: 3px 6px 5px; }
-.chat-mode-button, .model-pill, .authority-pill { height: 23px; border-color: #454545; border-radius: 8px; background: #252526; color: #bcbcbc; }
 
 @keyframes chat-state-in {
   from { opacity: 0; transform: translateY(3px); }
@@ -610,10 +533,6 @@
 @media (prefers-reduced-motion: reduce) {
   .agent-live-state, .agent-live-state.state-pulse, .agent-activity-line { animation: none; }
   .thinking-header::after, #messages .tool-card.pending::after, #messages .tool-card-status.running::before { animation: none; }
-}
-
-@media (max-width: 1180px) {
-  .chat-session-tab { min-width: 86px; }
 }
 
 /* Cursor-style chat contract.
@@ -709,6 +628,7 @@
 }
 
 #chat-header {
+  position: relative;
   height: 35px;
   min-height: 35px;
   padding: 0 7px 0 0;
@@ -795,6 +715,10 @@
 .chat-session-action:focus-visible { background: #313131; color: #fff; }
 
 #messages {
+  --chat-row-gap: 4px;
+  --chat-work-gap: 24px;
+  --chat-run-gap: 24px;
+  --chat-stream-inset: 6px;
   padding: 12px 16px 24px;
   gap: 0;
   background: #171717;
@@ -848,43 +772,41 @@
    Bounding sticky positioning to this real DOM group gives the Cursor-style
    handoff: the next prompt smoothly pushes the previous prompt upward while
    the gap between them remains intact. */
-#messages .chat-exchange {
-  position: relative;
+#messages .chat-exchange,
+#messages .chat-exchange-body,
+#messages .agent-response-host,
+#messages .agent-stream,
+#messages .agent-run-chunk,
+#messages .chat-turn,
+.chat-turn.assistant {
   display: flex;
-  flex: 0 0 auto;
-  min-width: 0;
-  max-width: 100%;
   flex-direction: column;
   gap: 0;
+  min-width: 0;
+}
+
+#messages .chat-exchange {
+  position: relative;
+  flex: 0 0 auto;
+  max-width: 100%;
 }
 
 #messages .chat-exchange-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  min-width: 0;
   padding: 0;
   margin: 0;
 }
 
 #messages .agent-response-host,
 #messages .agent-stream {
-  display: flex;
   flex: 0 0 auto;
-  flex-direction: column;
-  gap: 0;
-  min-width: 0;
-  padding-left: 6px;
-  padding-right: 6px;
-  margin-bottom: 24px;
+  padding: 0;
+  padding-left: var(--chat-stream-inset);
+  padding-right: var(--chat-stream-inset);
+  margin: 0 0 var(--chat-run-gap);
 }
 
 #messages .agent-run-chunk {
-  display: flex;
   flex: 0 0 auto;
-  flex-direction: column;
-  gap: 0;
-  min-width: 0;
   padding: 0;
   margin: 0;
 }
@@ -902,13 +824,9 @@
 /* Cursor keeps assistant prose on the content edge and lets run cards carry
  * the visual hierarchy themselves. */
 .chat-turn.assistant {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
   padding: 0;
-  margin-bottom: 24px;
+  margin: 0 0 var(--chat-run-gap);
   width: 100%;
-  min-width: 0;
 }
 
 .chat-turn.assistant::before,
@@ -927,7 +845,7 @@
 
 .agent-command-event {
   width: 100%;
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap, 4px) 0 0;
   padding: 0;
   color: #a8a8a8;
   font: 400 13px/1.45 var(--font-ui);
@@ -957,7 +875,7 @@
 
 .agent-command-body {
   max-width: 100%;
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap, 4px) 0 0;
   padding: 0;
   overflow-x: auto;
   border: 0;
@@ -1333,7 +1251,7 @@
 }
 
 .terminal-instance {
-  padding: 12px 22px 4px 24px;
+  padding: 8px 10px;
   border: 0 !important;
   outline: 0;
 }
@@ -1354,20 +1272,21 @@
 
 #terminal-tabs-list.visible {
   display: flex;
-  width: 180px;
-  padding: 5px 4px 0;
+  width: 140px;
+  flex: 0 0 140px;
+  padding: 3px 2px 0;
   background: #191919;
   border-left-color: #2b2b2b;
 }
 
 .terminal-tab-item {
-  min-height: 28px;
+  min-height: 22px;
   margin: 0 0 1px;
-  padding: 5px 9px 5px 12px;
-  gap: 8px;
-  border-radius: 4px;
+  padding: 2px 6px;
+  gap: 5px;
+  border-radius: 3px;
   color: #b8b8b8;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .terminal-tab-item:hover,
@@ -1383,8 +1302,27 @@
   color: #b8b8b8;
 }
 
-.terminal-tab-item .codicon { font-size: 15px; }
+.terminal-tab-item .codicon { font-size: 13px; }
+.terminal-tab-item .terminal-shell-icon { font-size: 14px; }
+.terminal-tab-item .codicon-terminal-powershell,
+.terminal-menu-item .codicon-terminal-powershell { color: #5391fe; }
+.terminal-tab-item .codicon-terminal-cmd,
+.terminal-menu-item .codicon-terminal-cmd { color: #c8c8c8; }
+.terminal-tab-item .codicon-terminal-git-bash,
+.terminal-menu-item .codicon-terminal-git-bash { color: #f05133; }
 .terminal-tab-status { color: #858585; }
+
+#terminal-tabs-list.compact .terminal-tab-name,
+#terminal-tabs-list.compact .terminal-tab-status,
+#terminal-tabs-list.compact .terminal-tab-close {
+  display: none !important;
+}
+
+#terminal-tabs-list.compact .terminal-tab-item {
+  justify-content: center;
+  gap: 0;
+  padding: 3px 0;
+}
 
 @container (max-width: 520px) {
   .terminal-panel-tab,
@@ -1547,7 +1485,7 @@
   gap: 7px;
   min-width: 0;
   min-height: 24px;
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap) 0 0;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1566,7 +1504,8 @@
   font: 400 14px/1.45 var(--font-ui);
 }
 
-#messages .agent-explored-fold {
+#messages .agent-explored-fold,
+#messages .agent-thinking-fold {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
@@ -1574,7 +1513,9 @@
   min-width: 0;
 }
 
-#messages .agent-explored-toggle {
+#messages .agent-explored-toggle,
+#messages .agent-thinking-toggle,
+#messages .agent-file-stack-toggle {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -1593,13 +1534,25 @@
   -webkit-appearance: none;
 }
 
-#messages .agent-explored-body {
+#messages .agent-explored-body,
+#messages .agent-thinking-body,
+#messages .agent-file-stack-body,
+#messages .agent-command-body {
   display: flex;
   flex-direction: column;
   gap: 0;
   min-width: 0;
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap) 0 0;
   padding: 0;
+}
+
+#messages .agent-command-body {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 0;
+  color: #c3c3c3;
+  background: transparent;
 }
 
 #messages .agent-explored-fold[data-expanded="false"] > .agent-explored-body {
@@ -1610,42 +1563,9 @@
   display: none;
 }
 
-#messages .agent-thinking-fold {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  gap: 0;
-  min-width: 0;
-}
-
-#messages .agent-thinking-toggle {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  width: max-content;
-  max-width: 100%;
+#messages .agent-thinking-content {
   margin: 0;
   padding: 0;
-  border: 0;
-  background: transparent;
-  color: #8a8a8a;
-  font: 400 13px/1.45 var(--font-ui);
-  text-align: left;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-#messages .agent-thinking-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  margin: 4px 0 0;
-  padding: 0;
-}
-
-#messages .agent-thinking-content {
   color: #9a9a9a;
   font: 400 13px/1.5 var(--font-ui);
   white-space: pre-wrap;
@@ -1671,10 +1591,10 @@
   transform-origin: 50% 50%;
 }
 
+#messages .agent-work-fold[data-expanded="false"] > .agent-work-header .agent-work-caret,
 #messages .agent-work-fold[data-expanded="false"] > .agent-status-line .agent-work-caret,
 #messages .agent-explored-fold[data-expanded="false"] > .agent-explored-toggle .agent-work-caret,
 #messages .agent-thinking-fold[data-expanded="false"] > .agent-thinking-toggle .agent-work-caret,
-#messages .chat-turn.assistant[data-activity-collapsed="true"] > .agent-work-header .agent-work-caret,
 #messages .agent-file-stack[data-expanded="false"] > .agent-file-stack-toggle .agent-work-caret {
   transform: rotate(-90deg);
 }
@@ -1718,7 +1638,7 @@
   width: max-content;
   max-width: 100%;
   min-height: 22px;
-  margin: 24px 0 0;
+  margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1736,58 +1656,44 @@
   opacity: 0.6;
 }
 
-#messages .chat-turn.assistant > .assistant-reply {
-  margin: 4px 0 0;
+#messages .chat-turn.assistant > .assistant-reply,
+#messages .agent-work-fold-body > * {
   padding: 0;
   width: 100%;
 }
 
-#messages .chat-turn.assistant > .assistant-reply:first-child {
-  margin: 4px 0 0;
+/* Interim narration is work, not an answer, so it reads like the rows it sits
+   beside rather than competing with the reply below the fold. */
+#messages .agent-work-fold-body > .assistant-reply {
+  color: #9a9a9a;
 }
 
-#messages .chat-turn.assistant > .assistant-reply[data-work-verdict="true"] {
-  margin: 4px 0 0;
-  padding: 0;
-}
-
-#messages .chat-turn.assistant > [data-lane="activity"] {
-  margin: 4px 0 0;
-  padding: 0;
-  width: 100%;
-}
-
-#messages .chat-turn.assistant[data-activity-collapsed="true"] > [data-lane="activity"] {
+/* Reply blocks are created before their text arrives. An empty one must not
+   hold open a gap the run never fills. */
+#messages .assistant-reply[hidden],
+#messages .assistant-reply:empty {
   display: none;
-}
-
-#messages .chat-turn {
-  gap: 0;
 }
 
 #messages .chat-turn.assistant > :not(.assistant-reply-footer),
 #messages .chat-turn.user {
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap) 0 0;
   margin-bottom: 0;
   max-width: 100%;
   box-sizing: border-box;
 }
 
-#messages .chat-turn.assistant > .agent-work-header {
-  margin: 24px 0 0;
+/* The fold carries the run's top gap; its header sits flush inside it. */
+#messages .chat-turn.assistant > .agent-work-fold {
+  margin: var(--chat-work-gap) 0 0;
 }
 
-#messages .agent-thinking-body,
-#messages .agent-file-stack-body,
-#messages .agent-command-body,
-#messages .agent-explored-body {
-  margin: 4px 0 0;
-  padding: 0;
+#messages .agent-work-fold-body > * {
+  margin: var(--chat-row-gap) 0 0;
 }
 
-#messages .agent-thinking-content {
-  margin: 0;
-  padding: 0;
+#messages .agent-work-fold-body > :first-child {
+  margin-top: 0;
 }
 
 #messages .agent-file-stack-body > :first-child,
@@ -1808,7 +1714,7 @@
   width: max-content;
   max-width: 100%;
   min-height: 0;
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap) 0 0;
   padding: 0;
   overflow: visible;
   border: 0;
@@ -1841,35 +1747,7 @@
   gap: 0;
   width: 100%;
   min-width: 0;
-  margin: 4px 0 0;
-  padding: 0;
-}
-
-#messages .agent-file-stack-toggle {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  width: max-content;
-  max-width: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #8a8a8a;
-  font: 400 13px/1.45 var(--font-ui);
-  text-align: left;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-#messages .agent-file-stack-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  min-width: 0;
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap) 0 0;
   padding: 0;
 }
 
@@ -1878,17 +1756,6 @@
 }
 
 #messages .agent-file-stack-body > .agent-file-row {
-  padding: 0;
-}
-
-#messages .agent-thinking-toggle,
-#messages .agent-file-stack-toggle,
-#messages .agent-command-summary {
-  padding: 0;
-}
-
-#messages .agent-thinking-body {
-  margin: 4px 0 0;
   padding: 0;
 }
 
@@ -1975,7 +1842,7 @@
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap) 0 0;
   padding: 2px 0;
   color: #d4d4d4;
   font: 400 14px/1.45 var(--font-ui);
@@ -1996,30 +1863,6 @@
   color: #c9a7a2;
   font-weight: 400;
 }
-
-/* Neutral action language: status cards stay quiet until the result matters. */
-#messages .tool-card,
-#messages .tool-card.pending {
-  border: 1px solid #3b3b3b !important;
-  border-radius: 6px !important;
-  background: #202020 !important;
-  box-shadow: none !important;
-  opacity: 1 !important;
-}
-
-#messages .tool-card.pending { border-style: solid !important; }
-#messages .tool-card-header { min-height: 30px !important; padding: 7px 8px !important; }
-#messages .tool-card-icon { color: #a9a9a9 !important; }
-#messages .tool-card-file { color: #d4d4d4 !important; font-family: var(--font-ui) !important; font-weight: 400 !important; }
-#messages .tool-card-badge { display: none !important; }
-#messages .tool-card-status,
-#messages .tool-card-status.running,
-#messages .tool-card-status.success,
-#messages .tool-card-status.error { color: #9d9d9d !important; }
-#messages .tool-card-status.running::before { background: #9d9d9d !important; animation: none !important; }
-#messages .tool-card.file-action .tool-card-file { font-weight: 400; }
-#messages .tool-card.file-action .tool-card-icon { color: #a9a9a9 !important; }
-#messages .tool-card.file-action .tool-card-status { display: none !important; }
 
 .agent-task-step:not(:last-child)::after,
 .agent-task-step[data-task-status="done"]:not(:last-child)::after { background: #4b4b4b !important; }
@@ -2056,6 +1899,7 @@
   text-align: left !important;
   cursor: default !important;
 }
+#messages .tool-card-badge { display: none !important; }
 
 #messages .agent-file-row.tool-card,
 #messages .agent-file-row.tool-card.pending,
@@ -2227,7 +2071,7 @@
   top: 8px;
   z-index: 12;
   align-self: stretch;
-  margin: 4px 0 0;
+  margin: var(--chat-row-gap) 0 0;
   padding: 0;
 }
 
@@ -2250,7 +2094,7 @@
 #messages .chat-turn.assistant > .assistant-reply-footer {
   flex: 0 0 auto;
   align-self: flex-end;
-  margin: 4px 0 0 auto;
+  margin: var(--chat-row-gap) 0 0 auto;
 }
 
 #messages .chat-turn.user .chat-box-content.user-prompt-preview {

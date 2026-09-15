@@ -5,7 +5,8 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const theme = require("../src/ui/features/project/seti-icon-theme.js");
-const html = fs.readFileSync(path.join(root, "src", "ui", "index.html"), "utf8");
+const { readUiShell } = require("./helpers/ui-shell.js");
+const html = readUiShell();
 const renderer = fs.readFileSync(path.join(root, "src", "ui", "bootstrap.js"), "utf8");
 const styles = fs.readFileSync(path.join(root, "src", "ui", "styles", "base.css"), "utf8");
 const layoutStyles = fs.readFileSync(path.join(root, "src", "ui", "styles", "layout-revamp.css"), "utf8");

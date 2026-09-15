@@ -5,7 +5,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+const { readUiShell } = require("./helpers/ui-shell.js");
+
+const html = readUiShell();
 const editor = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "editor", "editor-controller.js"), "utf8");
 const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
 const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
@@ -13,11 +15,11 @@ const layoutStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "st
 const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
 
 test("workspace files open in the Monaco-powered center editor", () => {
-  assert.match(html, /monaco-editor\/min\/vs\/loader\.js/);
-assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "runtime-modules.js"), "utf8"), /features\/editor\/editor-controller\.js/);
+  assert.match(editor, /\$\{monacoBase\(\)\}\/vs\/loader\.js/);
+  assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "runtime-modules.js"), "utf8"), /features\/editor\/editor-controller\.js/);
   assert.doesNotMatch(html, /id="editor-(?:tab-bar|body)" class="ide-internal"/);
   assert.match(html, /id="markdown-preview" class="markdown-file-preview assistant-reply"/);
-  assert.match(html, /id="editor-empty">\s*<img src="\.\.\/\.\.\/xekute_icon\.png" alt="" class="resource-viewer-empty-logo">\s*<\/div>/);
+  assert.match(html, /id="editor-empty">\s*<img src="\.\/xekute_icon\.png" alt="" class="resource-viewer-empty-logo" \/>/);
   assert.match(renderer, /const EditorManager = globalThis\.XekuteEditorManager/);
   assert.match(renderer, /const TerminalManager = globalThis\.XekuteTerminalManager/);
   assert.match(renderer, /path: SETTINGS_TAB_PATH[\s\S]*?special: "settings"/);
@@ -70,8 +72,8 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
 });
 
 test("editor provides VS Code-style models, syntax languages, tabs, cursor events, and saving", () => {
-  assert.match(editor, /new URL\("\.\.\/\.\.\/node_modules\/monaco-editor\/min\/vs\/loader\.js"/);
-  assert.match(editor, /paths: \{ vs: "\.\.\/\.\.\/node_modules\/monaco-editor\/min\/vs" \}/);
+  assert.match(editor, /\$\{monacoBase\(\)\}\/vs\/loader\.js/);
+  assert.match(editor, /paths: \{ vs: `\$\{monacoBase\(\)\}\/vs` \}/);
   assert.match(editor, /monaco\.editor\.create\(container/);
   assert.match(editor, /monaco\.editor\.createModel\(String\(value\), languageFor\(name\), modelUri\(path\)\)/);
   for (const language of ["javascript", "typescript", "python", "html", "css", "json", "markdown"]) {
@@ -107,7 +109,7 @@ test("Project activity icon only toggles the file-tree sidebar", () => {
 });
 
 test("workspace context menu renames files and folders without discarding open editor state", () => {
-  const workspaceContextMenuMarkup = html.match(/<div id="workspace-context-menu"[\s\S]*?<\/div>\s*<div id="update-toast"/)?.[0] || "";
+  const workspaceContextMenuMarkup = html.match(/<div id="workspace-context-menu"[\s\S]*id="update-toast"/)?.[0] || "";
   assert.match(workspaceContextMenuMarkup, /data-workspace-context-action="cut"[\s\S]*?<span>Cut<\/span>/);
   assert.match(workspaceContextMenuMarkup, /data-workspace-context-action="delete"[\s\S]*?workspace-context-delete-label/);
   assert.match(html, /data-workspace-context-action="rename"[\s\S]*?<span>Rename<\/span>/);

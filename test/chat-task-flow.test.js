@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createV3SessionStore } = require("../src/app/storage/memory/v3-session-store.js");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 const read = (relativePath) => fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
 
@@ -33,7 +34,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   const main = read("src/app/electron/main.js");
   const projectIpc = read("src/app/ipc/project.js");
   const activeIpc = `${main}\n${projectIpc}`;
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
   assert.match(renderer, /payload\.type === "task_brief"/);
   assert.match(renderer, /completeTaskBrief\(/);
   assert.match(renderer, /FILE_READ_TOOL_NAMES/);
@@ -135,7 +136,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   for (const label of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP", "Summarized Conversation", "Active Conversation", "Current Workflow"]) assert.match(renderer, new RegExp(`label: "${label}"`));
   assert.doesNotMatch(renderer, /label: "Working References"/);
   assert.ok(renderer.indexOf("const CONTEXT_USAGE_ROW_LABELS") < renderer.indexOf("\nsyncChatModeUi();"), "context labels must initialize before the first context render");
-  assert.match(renderer, /contextUsageUsed\.textContent = `\$\{Math\.round\(pct \* 100\)\}%`/);
+  assert.match(renderer, /contextUsageUsed\.textContent = `\$\{Math\.round\(displayPct \* 100\)\}%`/);
   assert.doesNotMatch(renderer, /context-usage-row-value">~/);
   assert.match(layoutStyles, /\.context-ring-btn \{[\s\S]*?display: inline-flex;[\s\S]*?width: 24px;[\s\S]*?height: 24px;/);
   assert.match(layoutStyles, /\.send-btn:disabled \{[\s\S]*?visibility: visible;/);
@@ -144,7 +145,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(layoutStyles, /\.chat-tab-close::before \{[\s\S]*?display: block;[\s\S]*?line-height: 1;[\s\S]*?transform: translateY\([12]px\);/);
   assert.doesNotMatch(chatMarkup, /12\s*Files|paperclip|microphone|attachment/i);
   assert.doesNotMatch(chatMarkup, /chat-sticky-user/);
-  assert.match(html, /href="styles\/chat\.css"/);
+  assert.match(read("src/ui/react/main.jsx"), /import "\.\.\/styles\/chat\.css"/);
   assert.doesNotMatch(renderer, /chatStickyUser|syncStickyUserTurn|cloneNode\(true\)/);
   assert.match(renderer, /function normalizeChatExchanges\(/);
   assert.match(renderer, /appendChatTurn\(turn, \{ startsExchange: true \}\)/);
@@ -164,7 +165,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /scrollbar-hover/);
   assert.match(chatStyles, /#messages\.scrollbar-hover[\s\S]*rgba\(56, 56, 56, \.55\)/);
   assert.match(chatStyles, /transition: background-color 160ms ease, opacity 160ms ease/);
-  assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*margin: 0[\s\S]*padding: 0/);
+  assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*margin: var\(--chat-row-gap\) 0 0[\s\S]*padding: 0/);
   assert.doesNotMatch(chatStyles, /\.chat-sticky-user/);
 });
 
@@ -172,7 +173,7 @@ test("chat history is compact, searchable, and keeps archive/delete actions hove
   const renderer = read("src/ui/bootstrap.js");
   const history = read("src/ui/features/history/history-model.js");
   const chatStyles = read("src/ui/styles/chat.css");
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
 
   assert.match(html, /id="chat-history-search"[^>]*placeholder="Search Agents\.\.\."/);
   assert.doesNotMatch(html, /chat-history-close/);
@@ -255,7 +256,7 @@ test("running chats stay navigable and signal background completion per tab", ()
 test("question-tool cards use the refreshed UI and stay scoped to their owning chat", () => {
   const renderer = read("src/ui/bootstrap.js");
   const chatStyles = read("src/ui/styles/chat.css");
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
 
   assert.match(html, /id="composer-questions"[^>]*hidden/);
   assert.match(renderer, /const pendingComposerQuestionsBySession = new Map\(\)/);
@@ -281,7 +282,7 @@ test("question-tool cards use the refreshed UI and stay scoped to their owning c
 
 test("mouse-picked slash commands use a yellow chip while typed commands remain plain", () => {
   const renderer = read("src/ui/bootstrap.js");
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
   const chatStyles = read("src/ui/styles/chat.css");
   const parser = read("src/app/commands/command-parser.js");
 
@@ -555,7 +556,7 @@ test("command execution renders as sequential collapsed chat events without ente
   assert.match(renderer, /row\.open = false/);
   assert.doesNotMatch(renderer, /createCommandTimelineRow[\s\S]*?codicon-terminal agent-command-shell/);
   assert.match(renderer, /if \(state === "success"\) return "Ran Command"/);
-  assert.match(renderer, /sealCurrentContentSegment\(\);[\s\S]*?appendChild\(row\)[\s\S]*?ensurePostToolContentSegment\(/);
+  assert.match(renderer, /sealCurrentContentSegment\(\);[\s\S]*?appendChatStreamNode\(this\.toolWorkMount\(\), row\)[\s\S]*?ensurePostToolContentSegment\(/);
   assert.match(renderer, /assistant\.ensureCommandEvent\(payload\.tool\)/);
   assert.match(renderer, /assistant\.completeCommandEvent\(payload\.tool, uiResult\)/);
   assert.match(renderer, /\(this\.rootTurn \|\| this\.turn\)\.dataset\.rawAssistant = this\.rawContent/);

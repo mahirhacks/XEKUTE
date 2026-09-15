@@ -2773,13 +2773,21 @@ html.panel-resizing iframe {
 .terminal-session-button,
 .terminal-tab-item,
 .terminal-tab-name,
-.terminal-tab-status,
-.terminal-instance,
-.terminal-instance .xterm,
-.terminal-instance .xterm-viewport,
-.terminal-instance .xterm-screen {
+.terminal-tab-status {
   font-family: Arial, Helvetica, sans-serif !important;
   font-weight: 400 !important;
+}
+
+.terminal-instance .xterm,
+.terminal-instance .xterm-viewport,
+.terminal-instance .xterm-screen,
+.terminal-instance .xterm-helpers,
+.terminal-instance .xterm-helper-textarea {
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace !important;
+  font-weight: 400 !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
 }
 
 #terminal-header .panel-title {
@@ -3216,19 +3224,29 @@ html.panel-resizing iframe {
 
 #terminal-tabs-list {
   display: none;
+  container-type: inline-size;
   flex-direction: column;
   width: 0;
-  flex-shrink: 0;
+  flex: 0 0 0;
   overflow-x: hidden;
   overflow-y: auto;
   background: #181818;
-  border-left: 1px solid var(--border);
-  padding: 4px 0;
+  border-left: 0;
+  padding: 3px 0;
 }
 
 #terminal-tabs-list.visible {
   display: flex;
-  width: 175px;
+  width: 140px;
+  flex: 0 0 140px;
+}
+
+#terminal-tabs-resize {
+  display: none;
+}
+
+#terminal-tabs-resize:not([hidden]) {
+  display: block;
 }
 
 #terminal-tabs-list::-webkit-scrollbar { width: 8px; }
@@ -3240,18 +3258,18 @@ html.panel-resizing iframe {
 .terminal-tab-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   width: 100%;
-  padding: 4px 8px;
+  padding: 2px 6px;
   border: none;
   background: transparent;
   color: var(--fg-muted);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
   text-align: left;
   cursor: pointer;
   overflow: hidden;
-  min-height: 24px;
+  min-height: 20px;
 }
 
 .terminal-tab-item:hover {
@@ -3288,7 +3306,7 @@ html.panel-resizing iframe {
 }
 
 .terminal-tab-item .codicon {
-  font-size: 14px;
+  font-size: 13px;
   flex-shrink: 0;
 }
 
@@ -3311,8 +3329,8 @@ html.panel-resizing iframe {
 }
 
 .terminal-tab-close {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
@@ -3331,6 +3349,32 @@ html.panel-resizing iframe {
   color: var(--fg);
 }
 
+#terminal-tabs-list.compact .terminal-tab-name,
+#terminal-tabs-list.compact .terminal-tab-status,
+#terminal-tabs-list.compact .terminal-tab-close {
+  display: none !important;
+}
+
+#terminal-tabs-list.compact .terminal-tab-item {
+  justify-content: center;
+  gap: 0;
+  padding: 3px 0;
+}
+
+@container (max-width: 72px) {
+  .terminal-tab-name,
+  .terminal-tab-status,
+  .terminal-tab-close {
+    display: none !important;
+  }
+
+  .terminal-tab-item {
+    justify-content: center;
+    gap: 0;
+    padding: 3px 0;
+  }
+}
+
 #terminal-viewport {
   flex: 1;
   position: relative;
@@ -3346,7 +3390,7 @@ html.panel-resizing iframe {
   flex: 1 1 0;
   min-width: 0;
   height: 100%;
-  padding: 6px 12px 4px 14px;
+  padding: 8px 10px;
 }
 
 .terminal-instance + .terminal-instance { border-left: 1px solid #3c3c3c; }

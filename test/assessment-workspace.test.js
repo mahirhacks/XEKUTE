@@ -13,9 +13,10 @@ const {
   validateCustomEntryPath,
 } = require("../src/domain/assessment/assessment-workspace");
 const { createProjectArtifactService } = require("../src/app/services/artifacts/project-artifact-service.js");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 test("every assessment sidebar item maps to its required backing file", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   for (const [item, relativePath] of Object.entries(ASSESSMENT_ITEM_FILES)) {
     if (String(relativePath).startsWith(".xekute/")) continue;
     if (!html.includes(`data-bounty-item="${item}"`)) continue;
@@ -59,7 +60,7 @@ test("multi-delete removes only selected Custom roots and never assessment files
 });
 
 test("security workspace exposes Traffic Raw history with request and response details", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   assert.ok(html.includes('id="security-history-toggle"'));
   assert.ok(html.includes('id="security-history-rows"'));
@@ -86,7 +87,7 @@ test("security workspace exposes Traffic Raw history with request and response d
 });
 
 test("workspace editor renders synchronized logical line numbers", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('id="resource-editor-shell"'));
@@ -123,7 +124,7 @@ test("chat sessions are restored per workspace and saved after explicit lifecycl
 });
 
 test("authority UI does not offer unrestricted mode", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   assert.doesNotMatch(html, /Unrestricted|data-authority-mode=["']unrestricted["']/);
   assert.doesNotMatch(renderer, /\["unrestricted",\s*"Unrestricted"/);
@@ -145,7 +146,7 @@ test("terminal sash resizing is frame-synchronized and deduplicates PTY dimensio
 test("panel dividers keep a thin line with an expanded pointer hit area", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   const layoutCss = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
 
   assert.match(css, /--sash-hit-size:\s+12px;/);
   assert.match(css, /\.sash-v::before\s*\{[^}]*width:\s*var\(--sash-hit-size\);/s);
@@ -159,7 +160,7 @@ test("panel dividers keep a thin line with an expanded pointer hit area", () => 
 });
 
 test("terminal stays collapsed without a session and creates one when expanded", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
@@ -190,7 +191,7 @@ test("agent-owned terminals close automatically when their process exits", () =>
 });
 
 test("project workspace exposes a plain folder flow and professional project settings", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   const settingsStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "settings.css"), "utf8");
@@ -285,7 +286,7 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.doesNotMatch(html, /Explore Subagent Model/);
   assert.match(renderer, /function modelsVisibleInPicker\(\)[\s\S]*?filter\(\(name\) => enabled\.has\(name\)\)/);
   assert.match(renderer, /option\.textContent = "Enable a model in Models"/);
-  assert.ok(html.includes('<img src="../../xekute_icon.png" alt="" class="resource-viewer-empty-logo">'));
+  assert.ok(html.includes('<img src="./xekute_icon.png" alt="" class="resource-viewer-empty-logo" />'));
   assert.doesNotMatch(html, /Do something to get started/);
   assert.ok(baseStyles.includes(".resource-viewer-empty-logo {"));
   assert.match(baseStyles, /width: 84px;/);
@@ -373,7 +374,7 @@ test("project workspace exposes a plain folder flow and professional project set
 });
 
 test("application graph workspace and attack_graph are removed", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
@@ -398,7 +399,7 @@ test("clean assessment schemas no longer seed recon, enumeration, or run stores"
 });
 
 test("runtime controls are app-managed Project Settings, not assessment files", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const profileSource = fs.readFileSync(path.join(__dirname, "..", "src", "app", "storage", "project-profile-store.js"), "utf8");
   assert.match(html, /data-app-settings-section="project"/);
   assert.match(profileSource, /runtime:\s*\{/);
@@ -417,7 +418,7 @@ test("project settings tabs map vertical wheel movement to horizontal scrolling"
 });
 
 test("Custom actions are hover-revealed and Scope/Config files are not workspace items", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('class="bounty-subsection-label bounty-custom-label"'));
@@ -441,7 +442,7 @@ test("Custom actions are hover-revealed and Scope/Config files are not workspace
 });
 
 test("incomplete assessments keep the tree visible and expose a repair review dialog", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('id="assessment-repair-overlay"'));
@@ -455,7 +456,7 @@ test("incomplete assessments keep the tree visible and expose a repair review di
 });
 
 test("framework checklist JSON stores are not part of the assessment workspace", () => {
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   assert.equal(JSON_TEMPLATES["penetration-testing/wstg-checklist.json"], undefined);
   assert.equal(JSON_TEMPLATES["penetration-testing/mitre-checklist.json"], undefined);
   assert.equal(JSON_TEMPLATES["penetration-testing/asvs-checklist.json"], undefined);

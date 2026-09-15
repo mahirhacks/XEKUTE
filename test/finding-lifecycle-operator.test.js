@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createProjectArtifactService } = require("../src/app/services/artifacts/project-artifact-service.js");
 const { createAssessmentWorkspace } = require("../src/domain/assessment/assessment-workspace.js");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 function boot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-finding-ui-"));
@@ -58,7 +59,7 @@ test("workspace has no findings API; verified evidence is E-#### and leftover fi
 
 test("Explorer has no leftover findings layer", () => {
   const bootstrap = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
-  const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+  const html = readUiShell();
   assert.doesNotMatch(bootstrap, /\.xekute\/findings\/index\.md/);
   assert.doesNotMatch(html, /data-bounty-file="\.xekute\/findings\/index\.md"/);
   assert.doesNotMatch(html, /data-bounty-file="findings\/findings\.json"/);

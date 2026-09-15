@@ -14,6 +14,21 @@ import {
   normalizeUiTranscript,
   thinkingElapsedMs,
 } from "./features/chat/chat-transcript.js";
+import {
+  createWorkFold,
+  ensureTurnWorkFold,
+  hasWorkNode,
+  isFinishedWorkFold,
+  isWorkNode,
+  promoteFinalAnswer,
+  setWorkFoldExpanded,
+  syncWorkHeaderAffordance,
+  toggleWorkFold,
+  turnWorkFold,
+  unwrapWorkFold,
+  workFoldBody,
+  workFoldHeader,
+} from "./features/chat/chat-work-fold.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
 const SetiIconTheme = globalThis.XekuteSetiIconTheme;
@@ -1151,13 +1166,13 @@ function stripFailedToolCardStubs(root) {
   });
 }
 
+// A run that produced no tool work has nothing to fold, so its replies go back
+// to the turn rather than hiding behind a header that summarises nothing.
 function pruneEmptyWorkFolds(root) {
   if (!root?.querySelectorAll) return;
-  flattenNestedChatLayout(root);
-  root.querySelectorAll(".agent-work-header").forEach((header) => {
-    const turn = header.closest(".chat-turn");
-    if (turn && !boxHasToolUsage(turn)) header.remove();
-  });
+  for (const fold of [...root.querySelectorAll(".agent-work-fold")]) {
+    if (!hasWorkNode(workFoldBody(fold))) unwrapWorkFold(fold);
+  }
 }
 
 function sanitizePersistedChatHtml(html) {
@@ -1165,7 +1180,7 @@ function sanitizePersistedChatHtml(html) {
   const clean = globalThis.DOMPurify
     ? globalThis.DOMPurify.sanitize(raw, {
       ADD_TAGS: ["button", "img"],
-       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "data-expanded", "data-file", "data-file-action-kind", "data-file-verb", "data-tool-action", "data-tool-key", "data-call-id", "data-running-label", "data-completed-label", "data-work-verdict", "data-sealed", "data-started-at", "data-ended-at", "data-duration-ms", "data-worked-for-ms", "data-command-text", "data-cwd", "data-exit-code", "data-stdout", "data-lane", "data-path", "data-verb", "data-activity-collapsed", "data-foldable", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
+       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "data-expanded", "data-file", "data-file-action-kind", "data-file-verb", "data-tool-action", "data-tool-key", "data-call-id", "data-running-label", "data-completed-label", "data-work-verdict", "data-sealed", "data-started-at", "data-ended-at", "data-duration-ms", "data-worked-for-ms", "data-command-text", "data-cwd", "data-exit-code", "data-stdout", "data-lane", "data-path", "data-verb", "data-foldable", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
     })
     : "";
   const template = document.createElement("template");
@@ -1185,7 +1200,6 @@ function sanitizePersistedChatHtml(html) {
     const text = String(node.querySelector(".agent-status-text")?.textContent || "").trim();
     if (/^Stopped after /i.test(text) || /^(Failed|Action failed)\.?$/i.test(text)) node.remove();
   });
-  flattenNestedChatLayout(template.content);
   stripFailedToolCardStubs(template.content);
   pruneEmptyWorkFolds(template.content);
   template.content.querySelectorAll(".chat-turn.error").forEach((node) => node.remove());
@@ -1536,16 +1550,10 @@ function collapseExpandedUserPrompts(except = null) {
   });
 }
 
-function assistantWorkHost(turn) {
-  return turn;
-}
-
-function lastAssistantActivityNode(turn) {
-  if (!turn?.querySelectorAll) return null;
-  const host = assistantWorkHost(turn);
-  const nodes = [...host.querySelectorAll(":scope > .assistant-reply, :scope > .tool-card, :scope > .agent-file-row, :scope > .agent-file-stack, :scope > .agent-command-event, :scope > .subagent-run-card, :scope > .agent-thinking-fold, :scope > .agent-explored-fold")];
-  const status = turn.querySelector(":scope > .agent-work-header, :scope > .agent-work-fold > .agent-status-line, :scope > .agent-status-line");
-  return nodes.at(-1) || status || null;
+// Streaming appends land in the work body once a fold exists, so ordering
+// questions are answered against whichever container currently holds the run.
+function assistantStreamHost(turn) {
+  return workFoldBody(turnWorkFold(turn)) || turn || null;
 }
 
 function isAgentResponseChild(node) {
@@ -1578,17 +1586,6 @@ function ensureAgentResponseHost(root) {
   return host;
 }
 
-function isActivityNode(node) {
-  return Boolean(node?.classList)
-    && (node.classList.contains("agent-thinking-fold")
-      || node.classList.contains("agent-file-stack")
-      || node.classList.contains("agent-file-row")
-      || node.classList.contains("agent-command-event")
-      || node.classList.contains("subagent-run-card")
-      || node.classList.contains("tool-card")
-      || node.classList.contains("agent-explored-fold"));
-}
-
 function markActivityNode(node) {
   if (node?.dataset) node.dataset.lane = "activity";
   return node;
@@ -1598,26 +1595,6 @@ function boxHasToolUsage(root) {
   return Boolean(root?.querySelector?.(".tool-card:not([hidden]), .agent-file-row, .agent-file-stack, .agent-command-event, .subagent-run-card, .agent-thinking-fold"));
 }
 
-function isToolWorkNode(node) {
-  return Boolean(node?.classList)
-    && (node.classList.contains("tool-card")
-      || node.classList.contains("agent-file-row")
-      || node.classList.contains("agent-file-stack")
-      || node.classList.contains("agent-command-event")
-      || node.classList.contains("subagent-run-card")
-      || node.classList.contains("agent-explored-fold"));
-}
-
-function isWorkFoldChild(node) {
-  return isActivityNode(node);
-}
-
-function lastVisibleAssistantReply(host) {
-  return [...(host?.children || [])].findLast((child) => (
-    child.classList.contains("assistant-reply") && !isEmptyAssistantReply(child)
-  )) || null;
-}
-
 // Last sibling after `reply` that carries tool work or visible model text.
 // Status lines, timers, and empty placeholders never count: streamed text must
 // keep flowing into the same block across them.
@@ -1625,97 +1602,11 @@ function workFollowingReply(reply) {
   let found = null;
   for (let node = reply?.nextElementSibling; node; node = node.nextElementSibling) {
     if (node.classList.contains("assistant-reply-footer")) break;
-    if (isActivityNode(node) || node.classList.contains("agent-work-fold") || (node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node))) {
+    if (isWorkNode(node) || node.classList.contains("agent-work-fold") || (node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node))) {
       found = node;
     }
   }
   return found;
-}
-
-function lastWorkHeader(host) {
-  return [...(host?.children || [])].findLast((child) => (
-    child.classList.contains("agent-work-header")
-    || child.classList.contains("agent-work-fold")
-  )) || null;
-}
-
-function lastReusableWorkFold(host) {
-  return lastWorkHeader(host);
-}
-
-function lastWorkFold(host) {
-  return lastWorkHeader(host);
-}
-
-function isVerdictAssistantReply(node) {
-  return Boolean(node?.classList?.contains("assistant-reply") && node.dataset?.workVerdict === "true");
-}
-
-function adoptLeadingWorkIntoFold(fold, host) {
-  flattenNestedChatLayout(host || fold);
-  return lastWorkHeader(host);
-}
-
-function adoptTrailingWorkIntoFold(fold, host) {
-  flattenNestedChatLayout(host || fold);
-  return lastWorkHeader(host);
-}
-
-function adoptWorkAroundFold(fold, host) {
-  flattenNestedChatLayout(host || fold?.parentElement);
-  return lastWorkHeader(host || fold?.parentElement);
-}
-
-function trailingStopReplies(turn) {
-  if (!turn || turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return [];
-  const children = [...turn.children];
-  const lastWorkIndex = children.findLastIndex((node) => isActivityNode(node));
-  const candidates = lastWorkIndex >= 0 ? children.slice(lastWorkIndex + 1) : [];
-  return candidates.filter((node) => (
-    node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node)
-  ));
-}
-
-function isFinishedWorkHeader(header) {
-  const toggle = header?.classList?.contains("agent-status-line")
-    ? header
-    : header?.querySelector?.(":scope > .agent-status-line");
-  if (toggle?.dataset.final === "true" || header?.dataset?.final === "true") return true;
-  const text = String(
-    toggle?.querySelector?.(".agent-status-text")?.textContent
-    || header?.querySelector?.(".agent-status-text")?.textContent
-    || "",
-  ).trim();
-  return /^(Worked for|Finished in|Stopped)\b/i.test(text);
-}
-
-function isFinishedWorkFold(fold) {
-  return isFinishedWorkHeader(fold);
-}
-
-function setActivityCollapsed(host, collapsed) {
-  if (!host) return;
-  const next = Boolean(collapsed);
-  host.dataset.activityCollapsed = String(next);
-  const header = host.querySelector(":scope > .agent-work-header");
-  if (header) syncWorkHeaderAffordance(header);
-}
-
-function toggleActivityCollapsed(host) {
-  if (!host) return;
-  setActivityCollapsed(host, host.dataset.activityCollapsed !== "true");
-}
-
-function collapseFinishedWorkFolds(root) {
-  if (!root?.querySelectorAll) return;
-  const turns = root.classList?.contains("chat-turn")
-    ? [root]
-    : [...root.querySelectorAll(".chat-turn.assistant")];
-  for (const turn of turns) {
-    if (turn.getAttribute("aria-busy") === "true") continue;
-    const header = lastWorkHeader(turn);
-    if (header && isFinishedWorkHeader(header)) setActivityCollapsed(turn, true);
-  }
 }
 
 function consecutiveAssistantRepliesAfter(startNode) {
@@ -1749,14 +1640,6 @@ function coalesceAdjacentAssistantReplies(replies) {
   return first;
 }
 
-function coalesceVerdictReplies(turn) {
-  const children = [...(turn?.children || [])];
-  const lastActivity = children.findLast((node) => isActivityNode(node));
-  if (!lastActivity) return;
-  const first = coalesceAdjacentAssistantReplies(consecutiveAssistantRepliesAfter(lastActivity.nextSibling));
-  if (first) first.dataset.workVerdict = "true";
-}
-
 // Merge every run of back-to-back reply blocks under `host` into one block.
 // Adjacent replies with no tool work between them are always fragments of a
 // single answer (older snapshots split them per streamed frame).
@@ -1776,20 +1659,33 @@ function coalesceAdjacentReplyRuns(host) {
   }
 }
 
-function promoteWorkVerdicts(root) {
+// Settle a finished turn into the shape a finished turn always has: one work
+// fold holding everything the run did, and the closing answer beside it. Both
+// the live stream and a restored snapshot land here, so reopening a session
+// cannot drift from what was on screen.
+function normalizeAssistantTurns(root) {
   if (!root?.querySelectorAll) return;
-  root.querySelectorAll(".chat-turn.assistant").forEach((turn) => {
-    if (turn.getAttribute("aria-busy") === "true") return;
-    if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return;
-    flattenNestedChatLayout(turn);
-    coalesceAdjacentReplyRuns(turn);
-    trailingStopReplies(turn).forEach((node) => {
-      node.dataset.workVerdict = "true";
-    });
-    coalesceVerdictReplies(turn);
-    const header = lastWorkHeader(turn);
-    if (header && isFinishedWorkHeader(header)) setActivityCollapsed(turn, true);
-  });
+  const turns = root.classList?.contains("chat-turn") && root.classList.contains("assistant")
+    ? [root]
+    : [...root.querySelectorAll(".chat-turn.assistant")];
+  for (const turn of turns) {
+    if (turn.getAttribute("aria-busy") === "true") continue;
+    if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) {
+      coalesceAdjacentReplyRuns(turn);
+      continue;
+    }
+    if (!hasWorkNode(turn)) {
+      pruneEmptyWorkFolds(turn);
+      coalesceAdjacentReplyRuns(turn);
+      continue;
+    }
+    const fold = ensureTurnWorkFold(turn);
+    restackFileRows(turn);
+    coalesceAdjacentReplyRuns(workFoldBody(fold));
+    const answer = promoteFinalAnswer(turn);
+    if (answer) answer.dataset.workVerdict = "true";
+    if (isFinishedWorkFold(fold)) setWorkFoldExpanded(fold, false);
+  }
 }
 
 function createFoldCaret() {
@@ -1799,63 +1695,6 @@ function createFoldCaret() {
   caret.alt = "";
   caret.setAttribute("aria-hidden", "true");
   return caret;
-}
-
-function attachFoldCaret(toggle) {
-  if (!toggle) return null;
-  const existing = toggle.querySelector(".agent-work-caret");
-  if (existing && existing.tagName === "IMG" && /chat_fold_caret\.svg/.test(existing.getAttribute("src") || "")) {
-    toggle.appendChild(existing);
-    return existing;
-  }
-  existing?.remove();
-  const caret = createFoldCaret();
-  toggle.appendChild(caret);
-  return caret;
-}
-
-function isFoldableWorkLabel(text = "") {
-  return /^(Working for|Worked for|Finished in|Stopped)\b/i.test(String(text || "").trim());
-}
-
-function syncWorkHeaderAffordance(header) {
-  if (!header?.classList) return header;
-  const text = header.querySelector?.(".agent-status-text")?.textContent || "";
-  const foldable = isFoldableWorkLabel(text);
-  header.classList.toggle("is-foldable", foldable);
-  header.dataset.foldable = String(foldable);
-  const caret = header.querySelector(".agent-work-caret");
-  if (foldable) {
-    if (!caret) attachFoldCaret(header);
-    const collapsed = header.closest(".chat-turn.assistant")?.dataset.activityCollapsed === "true";
-    header.setAttribute("aria-expanded", String(!collapsed));
-    header.removeAttribute("tabindex");
-  } else {
-    caret?.remove();
-    header.removeAttribute("aria-expanded");
-    header.tabIndex = -1;
-  }
-  return header;
-}
-
-function upgradeStatusLineToToggle(block) {
-  if (!block) return null;
-  const isButton = block.tagName === "BUTTON";
-  const toggle = isButton ? block : document.createElement("button");
-  if (!isButton) {
-    toggle.type = "button";
-    toggle.className = block.className || "agent-status-line";
-    for (const attr of [...block.attributes]) {
-      if (attr.name === "class" || attr.name === "role") continue;
-      toggle.setAttribute(attr.name, attr.value);
-    }
-    toggle.innerHTML = block.innerHTML;
-    block.replaceWith(toggle);
-  }
-  toggle.type = "button";
-  toggle.removeAttribute("role");
-  syncWorkHeaderAffordance(toggle);
-  return toggle;
 }
 
 function setCollapsibleFoldExpanded(fold, expanded) {
@@ -1868,24 +1707,6 @@ function setCollapsibleFoldExpanded(fold, expanded) {
 function toggleCollapsibleFold(fold) {
   if (!fold) return;
   setCollapsibleFoldExpanded(fold, fold.dataset.expanded === "false");
-}
-
-function setWorkFoldExpanded(fold, expanded) {
-  if (!fold) return;
-  if (fold.classList.contains("chat-turn") || fold.classList.contains("agent-stream")) {
-    setActivityCollapsed(fold, !expanded);
-    return;
-  }
-  const turn = fold.closest?.(".chat-turn.assistant");
-  if (fold.classList.contains("agent-work-header") && turn) {
-    setActivityCollapsed(turn, !expanded);
-    return;
-  }
-  setCollapsibleFoldExpanded(fold, expanded);
-}
-
-function toggleWorkFold(fold) {
-  toggleCollapsibleFold(fold);
 }
 
 function isEmptyAssistantReply(node) {
@@ -2116,9 +1937,10 @@ function absorbFileRow(row) {
 
 function restackFileRows(root) {
   if (!root?.querySelectorAll) return;
-  const hosts = root.classList?.contains("chat-turn")
-    ? [root]
-    : [...root.querySelectorAll(".chat-turn.assistant")];
+  const hosts = [...root.querySelectorAll(".agent-work-fold-body")];
+  if (root.classList?.contains("agent-work-fold-body")) hosts.unshift(root);
+  if (root.classList?.contains("chat-turn")) hosts.push(root);
+  else hosts.push(...root.querySelectorAll(".chat-turn.assistant"));
   for (const host of hosts) {
     for (const child of [...host.children]) {
       if (!child.classList.contains("tool-card") && !child.classList.contains("agent-file-row")) continue;
@@ -2129,61 +1951,6 @@ function restackFileRows(root) {
       absorbFileRow(child);
     }
   }
-}
-
-function flattenNestedChatLayout(root) {
-  if (!root?.querySelectorAll) return;
-  root.querySelectorAll(".agent-explored-fold").forEach((fold) => {
-    const parent = fold.parentElement;
-    const body = exploredBodyOf(fold);
-    if (!parent) {
-      fold.remove();
-      return;
-    }
-    while (body?.firstChild) parent.insertBefore(body.firstChild, fold);
-    fold.remove();
-  });
-  root.querySelectorAll(".agent-work-fold").forEach((fold) => {
-    const parent = fold.parentElement;
-    if (!parent) {
-      fold.remove();
-      return;
-    }
-    const toggle = fold.querySelector(":scope > .agent-status-line");
-    const body = fold.querySelector(":scope > .agent-work-fold-body");
-    if (toggle) {
-      toggle.classList.add("agent-work-header");
-      parent.insertBefore(toggle, fold);
-    }
-    while (body?.firstChild) parent.insertBefore(body.firstChild, fold);
-    const finished = isFinishedWorkHeader(toggle);
-    fold.remove();
-    const turn = parent.closest?.(".chat-turn.assistant") || (parent.classList?.contains("chat-turn") ? parent : null);
-    if (turn && finished && turn.getAttribute("aria-busy") !== "true") {
-      setActivityCollapsed(turn, true);
-    }
-  });
-  root.querySelectorAll(".agent-thinking-fold, .agent-command-event, .agent-file-stack, .agent-file-row, .tool-card, .subagent-run-card").forEach(markActivityNode);
-  restackFileRows(root);
-  root.querySelectorAll(".agent-work-header").forEach(syncWorkHeaderAffordance);
-}
-
-function createWorkHeader({
-  label = "Working for a moment",
-  startedAt = Date.now(),
-  final = false,
-  state = "",
-} = {}) {
-  const toggle = document.createElement("button");
-  toggle.type = "button";
-  toggle.className = "agent-work-header agent-status-line";
-  toggle.dataset.lane = "chrome";
-  if (startedAt) toggle.dataset.startedAt = String(startedAt);
-  if (final) toggle.dataset.final = "true";
-  if (state) toggle.dataset.state = state;
-  toggle.innerHTML = `<span class="agent-status-text">${label}</span>`;
-  syncWorkHeaderAffordance(toggle);
-  return toggle;
 }
 
 function isChatStreamPlaceholder(node) {
@@ -2200,55 +1967,16 @@ function appendChatStreamNode(host, node) {
   return node;
 }
 
-function placeWorkHeader(host, header) {
-  if (!host || !header) return header;
-  const first = [...host.children].find((child) => child !== header);
-  if (first) host.insertBefore(header, first);
-  else if (!header.isConnected) host.appendChild(header);
-  return header;
-}
-
-function ensureWorkHeader(host, status = null) {
-  if (!host) return null;
-  host.classList.add("has-agent-run", "agent-stream");
-  let header = host.querySelector(":scope > .agent-work-header");
-  const source = (!header && status?.isConnected && status.classList.contains("agent-status-line"))
-    ? status
-    : (!header ? [...host.children].find((child) => child.classList.contains("agent-status-line") && !child.classList.contains("agent-work-header")) : null);
-  if (!header && source) {
-    header = upgradeStatusLineToToggle(source);
-    header.classList.add("agent-work-header");
-  }
-  if (!header) header = createWorkHeader({ startedAt: Date.now() });
-  placeWorkHeader(host, header);
-  syncWorkHeaderAffordance(header);
-  return header;
-}
-
-function promoteExploredFolds(root) {
-  flattenNestedChatLayout(root);
-}
-
-function wrapTurnInWorkFold(turn, status = null) {
+// The fold owns the turn's work, so a turn that needs one gets it here and
+// every existing row and interim reply is adopted into its body.
+function ensureAssistantWorkFold(turn, { startedAt = 0 } = {}) {
   if (!turn || turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return null;
-  flattenNestedChatLayout(turn);
-  return ensureWorkHeader(turn, status);
-}
-
-function mergeWorkFolds(root) {
-  flattenNestedChatLayout(root);
-}
-
-function promoteWorkFolds(root) {
-  if (!root?.querySelectorAll) return;
-  root.querySelectorAll(".chat-turn.assistant").forEach((turn) => {
-    if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return;
-    flattenNestedChatLayout(turn);
-    if (!boxHasToolUsage(turn)) return;
-    if (turn.querySelector(":scope > .agent-work-header")) return;
-    const status = turn.querySelector(":scope > .agent-status-line");
-    wrapTurnInWorkFold(turn, status);
-  });
+  turn.classList.add("has-agent-run", "agent-stream");
+  const fold = ensureTurnWorkFold(turn, { startedAt });
+  // Keep the section open while the run is live so streamed work is not hidden
+  // behind a click the operator has not made yet.
+  if (fold && turn.getAttribute("aria-busy") === "true") setWorkFoldExpanded(fold, true);
+  return fold;
 }
 
 function wrapAssistantInRunChunk(turn) {
@@ -2384,13 +2112,10 @@ function normalizeChatExchanges() {
     ensureAgentResponseHost(exchange);
   });
   promoteCheckpointNotices(messages);
-  flattenNestedChatLayout(messages);
-  promoteWorkFolds(messages);
   hydrateExploredFoldLabels(messages);
   hydrateToolStatusLabels(messages);
   stripFailedToolCardStubs(messages);
-  pruneEmptyWorkFolds(messages);
-  promoteWorkVerdicts(messages);
+  normalizeAssistantTurns(messages);
   messages?.querySelectorAll(".harness-wait-line").forEach((node) => node.remove());
   messages?.querySelectorAll(".chat-exchange").forEach((exchange) => {
     const host = ensureAgentResponseHost(exchange);
@@ -2509,7 +2234,7 @@ function applyThinkingRecord(fold, item = {}) {
   return fold;
 }
 
-function createWorkHeaderFromRun(run = {}) {
+function createRestoredWorkFold(run = {}) {
   const workedForMs = Number(run.worked_for_ms) || 0;
   const startedAt = Date.parse(run.started_at || "");
   const endedAt = Date.parse(run.ended_at || "");
@@ -2519,19 +2244,17 @@ function createWorkHeaderFromRun(run = {}) {
     : run.status === "inconclusive"
       ? `Finished in ${duration}`
       : `Worked for ${duration}`;
-  const header = createWorkHeader({
+  const fold = createWorkFold({
     label,
     startedAt: Number.isFinite(startedAt) ? startedAt : Date.now(),
     final: true,
     state: run.status === "stopped" ? "stopped" : "complete",
+    expanded: false,
   });
+  const header = workFoldHeader(fold);
   header.dataset.workedForMs = String(workedForMs);
   if (Number.isFinite(endedAt)) header.dataset.endedAt = String(endedAt);
-  return header;
-}
-
-function createRestoredWorkFold(run = {}) {
-  return createWorkHeaderFromRun(run);
+  return fold;
 }
 
 function createTranscriptChatReply(event = {}) {
@@ -2648,13 +2371,20 @@ function renderTranscriptRun(run, container) {
   turn.setAttribute("aria-busy", "false");
   if (run.ended_at) turn.dataset.createdAt = run.ended_at;
   else if (run.started_at) turn.dataset.createdAt = run.started_at;
+  let mount = turn;
   if (hasActivity) {
     turn.classList.add("has-agent-run");
     turn.dataset.usedTools = "true";
-    turn.appendChild(createWorkHeaderFromRun(run));
+    const fold = createRestoredWorkFold(run);
+    turn.appendChild(fold);
+    mount = workFoldBody(fold);
   }
-  for (const event of events) appendTranscriptEvent(turn, event);
-  if (hasActivity) setActivityCollapsed(turn, true);
+  for (const event of events) appendTranscriptEvent(mount, event);
+  if (hasActivity) {
+    restackFileRows(turn);
+    const answer = promoteFinalAnswer(turn);
+    if (answer) answer.dataset.workVerdict = "true";
+  }
   if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event")) return;
   appendChatTurn(turn, { container });
   wrapAssistantInRunChunk(turn);
@@ -2732,8 +2462,7 @@ function hydratePersistedChatTranscript(root = messages) {
   // A restored snapshot is never live, even if it was captured mid-run.
   root.querySelectorAll?.(".chat-turn.assistant[aria-busy='true']").forEach((turn) => turn.setAttribute("aria-busy", "false"));
   stripFailedToolCardStubs(root);
-  flattenNestedChatLayout(root);
-  pruneEmptyWorkFolds(root);
+  normalizeAssistantTurns(root);
   redactThinkingDisclosures(root);
   hydrateSubagentRunCards(root);
   hydrateContextCheckpointNotices(root);
@@ -15097,10 +14826,8 @@ function markAssistantToolUse(turn) {
 }
 
 function toolCardMountHost(turn, contentEl, assistant) {
-  const explored = assistant?.exploredMount?.();
-  if (explored && !explored.classList?.contains("assistant-reply")) return explored;
-  const work = assistantWorkHost(turn);
-  if (work && !work.classList.contains("assistant-reply")) return work;
+  const work = assistant?.toolWorkMount?.() || assistantStreamHost(turn);
+  if (work && !work.classList?.contains("assistant-reply")) return work;
   const parent = contentEl?.parentElement;
   if (parent && !parent.classList.contains("assistant-reply")) return parent;
   return turn;
@@ -16542,7 +16269,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       return [...host.children].findLast((child) => (
         child.classList.contains("agent-work-header")
         || child.classList.contains("agent-work-fold")
-        || isActivityNode(child)
+        || isWorkNode(child)
         || (child.classList.contains("assistant-reply") && !isEmptyAssistantReply(child))
       )) || null;
     },
@@ -16556,25 +16283,29 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       ));
       return working.at(-1) || this.rootTurn || current;
     },
+    // The closing answer belongs beside the fold, never inside it.
     replyMount() {
       if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
         return this.turn;
       }
       return this.workHostTurn() || this.turn;
     },
+    // Interim narration is part of the work, so it streams into the body while
+    // the fold is open. A run with no work at all has no fold to stream into.
     conversationMount() {
       if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
         return this.turn;
       }
       if (this.verdictOpen) return this.replyMount();
-      return this.workHostTurn() || this.turn;
+      const host = this.workHostTurn() || this.turn;
+      return workFoldBody(turnWorkFold(host)) || host;
     },
     workingMount() {
       return this.replyMount();
     },
     toolWorkMount() {
-      this.ensureWorkFold();
-      return this.workHostTurn();
+      const fold = this.ensureWorkFold();
+      return workFoldBody(fold) || this.workHostTurn();
     },
     ensureExploredGroup() {
       return null;
@@ -16583,12 +16314,12 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       return this.toolWorkMount();
     },
     ensureThinkingFold() {
-      this.ensureWorkFold();
+      const work = this.ensureWorkFold();
       if (this.thinkingFoldEl?.isConnected && this.thinkingFoldEl.dataset.final !== "true") {
         this.thinkingContentEl = thinkingContentOf(this.thinkingFoldEl);
         return this.thinkingFoldEl;
       }
-      const host = this.conversationMount();
+      const host = workFoldBody(work) || this.conversationMount();
       const fold = createThinkingFold({ startedAt: Date.now() });
       markActivityNode(fold);
       if (host) appendChatStreamNode(host, fold);
@@ -16664,12 +16395,13 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       return this.ensureConversationSegment();
     },
     createWorkStatus(host) {
-      if (!host) return null;
-      const header = ensureWorkHeader(host);
+      const fold = ensureAssistantWorkFold(host, { startedAt: this.startedAt });
+      if (!fold) return null;
+      const header = workFoldHeader(fold);
       this.statusEl = header;
       this.liveStateEl = header;
-      this.workFoldEl = header;
-      this.workFoldBodyEl = host;
+      this.workFoldEl = fold;
+      this.workFoldBodyEl = workFoldBody(fold);
       return header;
     },
     stopWorkTimer() {
@@ -16685,7 +16417,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         let live = false;
         for (const turn of this.assistantTurns()) {
           if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) continue;
-          for (const block of turn.querySelectorAll(":scope > .agent-work-header, :scope > .agent-work-fold > .agent-status-line")) {
+          for (const block of turn.querySelectorAll(":scope > .agent-work-fold > .agent-work-header")) {
             if (block.dataset.final === "true") continue;
             live = true;
             const textEl = block.querySelector(".agent-status-text");
@@ -16698,21 +16430,22 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       tick();
       this.workTimer = setInterval(tick, 1000);
     },
+    // Creating the fold adopts whatever the run already wrote, so narration
+    // that arrived before the first tool call moves inside the section it
+    // belongs to instead of being stranded above it.
     ensureWorkFold() {
-      const host = this.workHostTurn();
-      if (!host || host.classList.contains("agent-run-stop") || host.closest(".agent-run-stop")) return null;
-      flattenNestedChatLayout(host);
-      const header = ensureWorkHeader(host, this.liveStateEl);
-      if (!header) return null;
-      if (this.startedAt) header.dataset.startedAt = String(this.startedAt);
-      this.workFoldEl = header;
-      this.workFoldBodyEl = host;
+      const fold = ensureAssistantWorkFold(this.workHostTurn(), { startedAt: this.startedAt });
+      if (!fold) return null;
+      const header = workFoldHeader(fold);
+      if (this.startedAt && header) header.dataset.startedAt = String(this.startedAt);
+      this.workFoldEl = fold;
+      this.workFoldBodyEl = workFoldBody(fold);
       this.liveStateEl = header;
       this.statusEl = header;
       this.exploredFoldEl = null;
       this.exploredBodyEl = null;
       this.startWorkTimer();
-      return header;
+      return fold;
     },
     splitAtContextCheckpoint(notice) {
       if (!notice || !this.turn) return null;
@@ -16818,12 +16551,23 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       if (!stop) return;
       this.openStopSection({ collapse: true, allowEmpty: true });
     },
+    // Make `el` the block that further streamed text appends to.
+    makeCurrentSegment(el) {
+      if (!el) return null;
+      const index = this.contentSegments.findIndex((item) => item.el === el);
+      const segment = index >= 0
+        ? this.contentSegments.splice(index, 1)[0]
+        : { el, raw: String(el.dataset?.rawMd || "") };
+      this.contentSegments.push(segment);
+      this.contentEl = el;
+      return segment;
+    },
+    // An answer delivered over several frames is still one answer.
     coalesceLiveVerdict() {
-      const host = this.workHostTurn();
-      const children = [...(host?.children || [])];
-      const lastActivity = children.findLast((node) => isActivityNode(node));
-      if (!lastActivity) return;
-      const replies = consecutiveAssistantRepliesAfter(lastActivity.nextSibling);
+      const turn = this.workHostTurn();
+      const replies = [...(turn?.children || [])].filter((node) => (
+        node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node)
+      ));
       if (replies.length < 2) return;
       const raw = this.contentSegments
         .filter((item) => replies.includes(item.el))
@@ -16832,45 +16576,29 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const first = replies[0];
       replies.slice(1).forEach((el) => el.remove());
       this.contentSegments = this.contentSegments.filter((item) => item.el?.isConnected);
-      const segment = this.contentSegments.find((item) => item.el === first);
-      if (segment) {
-        if (raw) segment.raw = raw;
-        this.renderContentSegment(segment, { streaming: false });
-      } else if (raw.trim()) {
-        first.hidden = false;
-        renderMarkdown(first, raw);
-      }
+      const segment = this.makeCurrentSegment(first);
+      if (raw) segment.raw = raw;
+      this.renderContentSegment(segment, { streaming: false });
       first.dataset.workVerdict = "true";
-      this.contentEl = first;
     },
+    // Closing a run: the answer moves out beside the fold so it survives the
+    // collapse, and any remaining text streams into it there.
     openStopSection({ collapse = false, allowEmpty = true } = {}) {
       if (!this.turn || this.turn.classList.contains("agent-run-stop") || this.turn.closest(".agent-run-stop")) return;
-      const host = this.workHostTurn();
-      if (!host) return;
+      const turn = this.workHostTurn();
+      if (!turn) return;
       this.sealCurrentContentSegment();
       this.verdictOpen = true;
-      const header = lastWorkHeader(host);
-      const existing = [...(host?.children || [])].filter((node) => isVerdictAssistantReply(node));
-      const trailing = trailingStopReplies(host);
-      if (trailing.length) {
-        for (const node of trailing) node.dataset.workVerdict = "true";
-        this.contentEl = trailing[trailing.length - 1];
-      } else if (allowEmpty && !existing.length) {
-        const current = this.currentContentSegment()?.el;
-        if (current?.isConnected && current.parentElement === host && !isActivityNode(current)) {
-          current.dataset.workVerdict = "true";
-          this.contentEl = current;
-        } else {
-          const next = this.createContentSegment({ after: lastAssistantActivityNode(host) || header }).el;
-          next.dataset.workVerdict = "true";
-          this.contentEl = next;
-        }
-      } else if (existing.length) {
-        this.contentEl = existing[existing.length - 1];
+      const fold = turnWorkFold(turn);
+      const answer = promoteFinalAnswer(turn)
+        || (allowEmpty ? this.createContentSegment({ after: fold }).el : null);
+      if (answer) {
+        answer.dataset.workVerdict = "true";
+        this.makeCurrentSegment(answer);
       }
       this.coalesceLiveVerdict();
       this.pendingVerdictBreak = Boolean(String(this.currentContentSegment()?.raw || "").trim());
-      if (collapse) setActivityCollapsed(host, true);
+      if (collapse && fold) setWorkFoldExpanded(fold, false);
     },
     ensureCommandEvent(tool) {
       this.markToolUse();
@@ -16932,24 +16660,14 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     ensureLiveState() {
       if (this.liveStateEl?.isConnected) return this.liveStateEl;
-      const host = this.workHostTurn();
-      const existing = host?.querySelector?.(":scope > .agent-work-header, :scope > .agent-work-fold > .agent-status-line, :scope > .agent-status-line");
-      if (existing) {
-        existing.classList.add("agent-work-header");
-        this.liveStateEl = existing;
-        this.statusEl = existing;
-        this.workFoldEl = existing;
-        this.workFoldBodyEl = host;
-        syncWorkHeaderAffordance(existing);
-        return existing;
-      }
-      if (!host) return this.liveStateEl;
-      return this.createWorkStatus(host);
+      const fold = this.ensureWorkFold();
+      return workFoldHeader(fold) || this.liveStateEl;
     },
     dismissLiveState() {
       this.stopWorkTimer();
-      if (this.liveStateEl?.classList.contains("agent-work-header")) this.liveStateEl.remove();
-      else this.liveStateEl?.remove();
+      const fold = (this.workFoldEl?.classList?.contains("agent-work-fold") && this.workFoldEl)
+        || this.liveStateEl?.closest?.(".agent-work-fold");
+      if (fold && !hasWorkNode(workFoldBody(fold))) unwrapWorkFold(fold);
       this.workFoldEl = null;
       this.workFoldBodyEl = null;
       this.liveStateEl = null;
@@ -17047,7 +16765,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const blocks = [];
       for (const turn of this.assistantTurns()) {
         if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) continue;
-        for (const block of turn.querySelectorAll(":scope > .agent-work-header, :scope > .agent-work-fold > .agent-status-line, :scope > .agent-status-line")) {
+        for (const block of turn.querySelectorAll(":scope > .agent-work-fold > .agent-work-header, :scope > .agent-status-line")) {
           if (!blocks.includes(block)) blocks.push(block);
         }
       }
@@ -17077,7 +16795,14 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
           turn.dataset.workedForMs = String(workedForMs);
         }
       }
-      for (const turn of this.assistantTurns()) collapseFinishedWorkFolds(turn);
+      for (const turn of this.assistantTurns()) {
+        if (turn.getAttribute("aria-busy") === "true") continue;
+        const fold = turnWorkFold(turn);
+        if (!fold) continue;
+        const answer = promoteFinalAnswer(turn);
+        if (answer) answer.dataset.workVerdict = "true";
+        if (isFinishedWorkFold(fold)) setWorkFoldExpanded(fold, false);
+      }
     },
     requestQuestions({
       reason = "The agent needs your input before continuing.",
@@ -17189,11 +16914,11 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
       const subagentRows = this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".subagent-run-card")]);
       if (subagentRows.length) {
-        const host = assistantWorkHost(this.workHostTurn()) || this.rootTurn || this.turn;
+        const host = assistantStreamHost(this.workHostTurn()) || this.rootTurn || this.turn;
         host.append(...subagentRows);
       }
       this.finishLiveState(this.finalOutcome || "complete");
-      const copyAnchor = this.contentSegments.find((segment) => !segment.el.hidden)?.el || this.contentEl;
+      const copyAnchor = this.contentSegments.findLast((segment) => !segment.el.hidden)?.el || this.contentEl;
       attachAssistantCopyButton(copyAnchor);
       this.pruneIfEmpty();
     },
@@ -19393,7 +19118,7 @@ messages.addEventListener("click", (e) => {
   const workHeader = e.target.closest(".agent-work-header");
   if (workHeader) {
     if (workHeader.dataset.foldable === "false" || workHeader.dataset.state === "planning") return;
-    toggleActivityCollapsed(workHeader.closest(".chat-turn.assistant") || workHeader.parentElement);
+    toggleWorkFold(workHeader.closest(".agent-work-fold"));
     return;
   }
 

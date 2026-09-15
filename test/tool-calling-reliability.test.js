@@ -149,7 +149,7 @@ test("T-017: obsolete legacy tool names are absent from runtime prompts", () => 
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "build" || entry.name === ".git") continue;
+        if (entry.name === "node_modules" || entry.name === "build" || entry.name === "dist" || entry.name === ".git") continue;
         walk(full);
       } else if (entry.isFile() && /\.(js|md)$/.test(entry.name)) {
         files.push(full);

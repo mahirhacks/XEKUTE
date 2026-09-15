@@ -4,6 +4,8 @@ const TerminalManager = (() => {
   const $ = (id) => document.getElementById(id);
 
   const tabsList      = $("terminal-tabs-list");
+  const tabsResize    = $("terminal-tabs-resize");
+  const terminalBody  = $("terminal-body");
   const viewport      = $("terminal-viewport");
   const terminalEmpty = $("terminal-empty");
   const btnNew        = $("btn-terminal-new");
@@ -53,6 +55,28 @@ const TerminalManager = (() => {
     brightWhite: "#e5e5e5",
   };
 
+  // Dense Windows-terminal stack. Cascadia is the WT/VS Code face; Consolas
+  // and Courier New stay as fallbacks so cells never drop to the UI sans-serif.
+  const xtermFontFamily = `"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace`;
+
+  function xtermOptions({ cursorBlink = true } = {}) {
+    return {
+      theme: xtermTheme,
+      fontFamily: xtermFontFamily,
+      fontSize: 12,
+      fontWeight: "400",
+      fontWeightBold: "700",
+      lineHeight: 1,
+      letterSpacing: 0,
+      cursorBlink,
+      cursorStyle: "block",
+      scrollback: 5000,
+      convertEol: true,
+      minimumContrastRatio: 1,
+      allowProposedApi: false,
+    };
+  }
+
   function nextName(base = "terminal") {
     const existing = [...sessions.values()].map((s) => s.name);
     if (!existing.includes(base)) return base;
@@ -61,15 +85,149 @@ const TerminalManager = (() => {
     return `${base} (${i})`;
   }
 
+  const TABS_MIN_RATIO = 0.02;
+  const TABS_MAX_RATIO = 0.30;
+  const TABS_DEFAULT_PX = 140;
+  const TABS_COMPACT_PX = 72;
+  let tabsWidthRatio = null;
+  let tabsResizeFrame = 0;
+
+  function tabsHostWidth() {
+    return terminalBody?.clientWidth || tabsList?.parentElement?.clientWidth || 0;
+  }
+
+  function tabsWidthBounds() {
+    const width = tabsHostWidth();
+    return {
+      width,
+      min: Math.max(1, Math.round(width * TABS_MIN_RATIO)),
+      max: Math.max(1, Math.round(width * TABS_MAX_RATIO)),
+    };
+  }
+
+  function preferredTabsWidth() {
+    const { width, min, max } = tabsWidthBounds();
+    if (!width) return TABS_DEFAULT_PX;
+    const raw = tabsWidthRatio == null ? TABS_DEFAULT_PX : width * tabsWidthRatio;
+    return Math.max(min, Math.min(max, Math.round(raw)));
+  }
+
+  function setTabsCompact(widthPx) {
+    tabsList?.classList.toggle("compact", widthPx < TABS_COMPACT_PX);
+  }
+
+  function applyTabsWidth(px, { persist = true } = {}) {
+    if (!tabsList) return 0;
+    const { width, min, max } = tabsWidthBounds();
+    const next = Math.max(min, Math.min(max, Math.round(Number(px) || TABS_DEFAULT_PX)));
+    if (persist && width) tabsWidthRatio = next / width;
+    tabsList.style.width = `${next}px`;
+    tabsList.style.flex = `0 0 ${next}px`;
+    setTabsCompact(next);
+    if (tabsResize) {
+      tabsResize.setAttribute("aria-valuemin", String(min));
+      tabsResize.setAttribute("aria-valuemax", String(max));
+      tabsResize.setAttribute("aria-valuenow", String(next));
+    }
+    return next;
+  }
+
+  function syncTabsWidth() {
+    if (!tabsList?.classList.contains("visible")) return;
+    applyTabsWidth(preferredTabsWidth(), { persist: tabsWidthRatio != null });
+  }
+
+  function setTabsListVisible(visible) {
+    if (!tabsList) return;
+    tabsList.hidden = !visible;
+    tabsList.classList.toggle("visible", visible);
+    if (tabsResize) tabsResize.hidden = !visible;
+    if (visible) syncTabsWidth();
+    else {
+      tabsList.style.width = "";
+      tabsList.style.flex = "";
+      tabsList.classList.remove("compact");
+    }
+  }
+
+  function bindTabsResize() {
+    if (!tabsResize || !terminalBody || !tabsList) return;
+    let dragging = false;
+    let pointerId = null;
+
+    const onMove = (event) => {
+      if (!dragging || event.pointerId !== pointerId) return;
+      const rect = terminalBody.getBoundingClientRect();
+      applyTabsWidth(rect.right - event.clientX);
+      if (tabsResizeFrame) return;
+      tabsResizeFrame = requestAnimationFrame(() => {
+        tabsResizeFrame = 0;
+        fitActive();
+      });
+    };
+    const onEnd = (event) => {
+      if (!dragging || event.pointerId !== pointerId) return;
+      dragging = false;
+      pointerId = null;
+      tabsResize.classList.remove("dragging");
+      document.documentElement.classList.remove("panel-resizing", "resizing-column");
+      try { tabsResize.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+      if (tabsResizeFrame) {
+        cancelAnimationFrame(tabsResizeFrame);
+        tabsResizeFrame = 0;
+      }
+      fitActive();
+    };
+
+    tabsResize.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || tabsResize.hidden) return;
+      event.preventDefault();
+      dragging = true;
+      pointerId = event.pointerId;
+      tabsResize.classList.add("dragging");
+      document.documentElement.classList.add("panel-resizing", "resizing-column");
+      tabsResize.setPointerCapture(event.pointerId);
+    });
+    tabsResize.addEventListener("pointermove", onMove);
+    tabsResize.addEventListener("pointerup", onEnd);
+    tabsResize.addEventListener("pointercancel", onEnd);
+    tabsResize.addEventListener("keydown", (event) => {
+      if (tabsResize.hidden) return;
+      const step = event.shiftKey ? 24 : 8;
+      if (event.key === "ArrowLeft") {
+        applyTabsWidth(tabsList.offsetWidth + step);
+        fitActive();
+        event.preventDefault();
+      } else if (event.key === "ArrowRight") {
+        applyTabsWidth(tabsList.offsetWidth - step);
+        fitActive();
+        event.preventDefault();
+      }
+    });
+  }
+
   function displayShellName(label) {
     return /powershell/i.test(String(label || "")) ? "powershell" : String(label || "terminal");
+  }
+
+  function shellIconClass(profileId = "", label = "") {
+    const key = `${profileId} ${label}`.toLowerCase();
+    if (/\b(pwsh|powershell)\b/.test(key)) return "codicon-terminal-powershell";
+    if (/\b(cmd|command prompt)\b/.test(key)) return "codicon-terminal-cmd";
+    if (/\bgit[- ]?bash\b/.test(key)) return "codicon-terminal-git-bash";
+    if (/\bbash\b/.test(key)) return "codicon-terminal-bash";
+    return "codicon-terminal";
+  }
+
+  function sessionIconClass(session) {
+    if (session?.agent) return "codicon-sparkle";
+    return shellIconClass(session?.profileId, session?.name);
   }
 
   function updateEmptyState() {
     const has = sessions.size > 0;
     if (terminalEmpty) terminalEmpty.hidden = true;
-    tabsList.hidden = sessions.size <= 1;
-    tabsList.classList.toggle("visible", sessions.size > 1);
+    setTabsListVisible(sessions.size > 1);
     btnClear.disabled = !has;
     btnKill.disabled = !has;
     if (btnSplit) btnSplit.disabled = !has;
@@ -99,11 +257,11 @@ const TerminalManager = (() => {
     if (!sessionMenu) return;
     const sessionRows = [...sessions.values()].map((session) => `
       <button type="button" class="terminal-menu-item${session.id === activeId ? " active" : ""}" data-terminal-id="${escapeHtml(session.id)}" role="menuitem">
-        <span class="codicon codicon-terminal"></span><span>${escapeHtml(session.name)}</span>${session.exited ? "<small>exited</small>" : ""}<span class="codicon codicon-check"></span>
+        <span class="codicon terminal-shell-icon ${sessionIconClass(session)}"></span><span>${escapeHtml(session.name)}</span>${session.exited ? "<small>exited</small>" : ""}<span class="codicon codicon-check"></span>
       </button>`).join("");
     const shellRows = shellProfiles.map((profile) => `
       <button type="button" class="terminal-menu-item" data-shell-profile="${escapeHtml(profile.id)}" role="menuitem">
-        <span class="codicon codicon-add"></span><span>New ${escapeHtml(profile.label)}</span>${profile.default ? "<small>default</small>" : ""}
+        <span class="codicon terminal-shell-icon ${shellIconClass(profile.id, profile.label)}"></span><span>New ${escapeHtml(profile.label)}</span>${profile.default ? "<small>default</small>" : ""}
       </button>`).join("");
     sessionMenu.innerHTML = `
       ${sessionRows || '<div class="terminal-menu-empty">No terminal sessions</div>'}
@@ -164,7 +322,7 @@ const TerminalManager = (() => {
           ? `${session.name} — AI agent command`
           : session.name;
       btn.innerHTML = `
-        <span class="codicon ${session.agent ? "codicon-sparkle" : "codicon-terminal"}"></span>
+        <span class="codicon terminal-shell-icon ${sessionIconClass(session)}"></span>
         <span class="terminal-tab-name">${escapeHtml(session.name)}</span>
         <span class="terminal-tab-status">${session.agent ? "AI" : ""}${session.exited ? (session.agent ? " · exited" : "exited") : ""}</span>
         <span class="codicon codicon-close terminal-tab-close" title="Close"></span>`;
@@ -268,20 +426,7 @@ const TerminalManager = (() => {
         return null;
       }
 
-      const term = new globalThis.Terminal({
-        theme: xtermTheme,
-        fontFamily: "Consolas, 'Cascadia Code', monospace",
-        fontSize: 14,
-        fontWeight: "400",
-        lineHeight: 1.15,
-        letterSpacing: 0,
-        cursorBlink: true,
-        cursorStyle: "block",
-        scrollback: 5000,
-        convertEol: true,
-        minimumContrastRatio: 1,
-        allowProposedApi: false,
-      });
+      const term = new globalThis.Terminal(xtermOptions({ cursorBlink: true }));
 
       const fitAddon = new FitCtor();
       term.loadAddon(fitAddon);
@@ -474,20 +619,7 @@ const TerminalManager = (() => {
       return null;
     }
 
-    const term = new globalThis.Terminal({
-      theme: xtermTheme,
-      fontFamily: "Consolas, 'Cascadia Code', monospace",
-      fontSize: 14,
-      fontWeight: "400",
-      lineHeight: 1.15,
-      letterSpacing: 0,
-      cursorBlink: false,
-      cursorStyle: "block",
-      scrollback: 5000,
-      convertEol: true,
-      minimumContrastRatio: 1,
-      allowProposedApi: false,
-    });
+    const term = new globalThis.Terminal(xtermOptions({ cursorBlink: false }));
 
     const fitAddon = new FitCtor();
     term.loadAddon(fitAddon);
@@ -698,6 +830,14 @@ const TerminalManager = (() => {
     }
   });
 
+  bindTabsResize();
+  if (terminalBody && globalThis.ResizeObserver) {
+    const tabsHostObserver = new ResizeObserver(() => {
+      syncTabsWidth();
+      fitActive();
+    });
+    tabsHostObserver.observe(terminalBody);
+  }
   if (viewport && globalThis.ResizeObserver) {
     const observer = new ResizeObserver(() => fitActive());
     observer.observe(viewport);

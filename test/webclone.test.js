@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { createWebCloneService, extractReferences, safeRelativePath } = require("../src/app/services/research/webclone.js");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 test("WebClone extracts unique same-document references and bounds paths", () => {
   const refs = extractReferences('<link href="/app.css"><script src="/app.js"></script><img src="/app.css">', "https://example.test/");
@@ -12,7 +13,7 @@ test("WebClone extracts unique same-document references and bounds paths", () =>
 });
 
 test("WebClone workspace keeps the central view separate from the right file drawer", () => {
-  const html = fs.readFileSync(require.resolve("../src/ui/index.html"), "utf8");
+  const html = readUiShell();
   assert.match(html, /id="webclone-files-toggle"/);
   assert.match(html, /class="webclone-preview-pane" hidden/);
   assert.match(html, /id="webclone-preview-frame" class="webclone-preview-surface"/);
