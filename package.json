@@ -1,18 +1,23 @@
 {
   "name": "xekute-app",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
   "main": "src/app/electron/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electronmon --inspect=5858 . --dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:electron": "electronmon --inspect=5858 . --dev",
+    "dev:ui": "vite --config src/ui/vite.config.mjs",
+    "build:ui": "vite build --config src/ui/vite.config.mjs && node scripts/copy-ui-assets.mjs",
+    "prestart": "npm run build:ui",
     "test": "node --test --test-concurrency=2",
     "verify:production": "node scripts/verify-production.js",
     "package": "electron-forge package",
     "prepare:update-config": "node scripts/prepare-update-config.js",
     "make": "npm run package && npm run prepare:update-config && electron-builder --win nsis --x64 --prepackaged out/XEKUTE-win32-x64 --config ./electron-builder.config.js --publish never",
     "release:metadata": "node scripts/release-metadata.js",
+    "update:seti-icons": "node scripts/update-vscode-seti-icons.js",
     "verify:native": "node -e \"require('node-pty'); console.log('node-pty prebuild available')\"",
     "verify:memory-assets": "node scripts/verify-memory-assets.js",
     "audit:runtime": "npm audit --omit=dev --audit-level=high"
@@ -22,15 +27,25 @@
     "@electron-forge/plugin-fuses": "7.11.2",
     "@electron/fuses": "1.8.0",
     "@electron/rebuild": "4.2.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "electron": "43.4.0",
     "electron-builder": "^26.15.3",
-    "electronmon": "2.0.4"
+    "electronmon": "2.0.4",
+    "jsdom": "^29.1.1",
+    "vite": "^8.2.2"
   },
   "electronmon": {
     "patterns": [
       "!test/**",
       "!graphify-out/**",
-      "!version_tracking/**"
+      "!version_tracking/**",
+      "!src/ui/react/**",
+      "!src/ui/dist/**",
+      "!src/ui/styles/**",
+      "!src/ui/index.html",
+      "!src/ui/vite.config.mjs",
+      "!public-ui/**",
+      "!node_modules/**"
     ]
   },
   "dependencies": {
@@ -48,6 +63,8 @@
     "monaco-editor": "0.56.0",
     "node-pty": "^1.1.0",
     "playwright-core": "1.62.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tldts": "^7.4.10"
   },
   "overrides": {
@@ -55,7 +72,9 @@
     "sharp": "0.35.4",
     "uuid": "11.1.1",
     "tar": "7.5.22",
-    "tmp": "0.2.7"
+    "tmp": "0.2.7",
+    "fast-uri": "4.1.5",
+    "js-yaml": "4.3.2"
   },
   "engines": {
     "node": ">=22.0.0",

@@ -78,7 +78,7 @@
     const passiveRecon = PASSIVE_RECON_RE.test(requestText) || (/\bpassive\b/i.test(requestText) && /\b(?:scan|recon|enumerat)\w*\b/i.test(requestText));
     const research = RESEARCH_RE.test(requestText);
     const map = MAP_RE.test(requestText) || MAP_ANALYSIS_RE.test(requestText);
-    const assessmentMode = ["agent", "ask", "plan", "hypothesis"].includes(String(mode || "").toLowerCase()) || family === "testing";
+    const assessmentMode = ["agent", "ask"].includes(String(mode || "").toLowerCase()) || family === "testing";
     const evidence = EVIDENCE_RE.test(requestText) && (cyberTopic || map || assessmentMode);
     const requiresEvidence = Boolean(evidence || (passiveRecon && assessmentMode));
     const namedActiveTool = /\b(?:nmap|httpx|gobuster|ffuf|nuclei|sqlmap|katana|subfinder|amass|nikto|testssl|wafw00f|traffsucker)\b/i.test(requestText);
@@ -106,12 +106,7 @@
     const osMode = !osRequested ? "none" : EXECUTION_RE.test(requestText) ? "execute" : MUTATION_RE.test(requestText) ? "write" : "read";
     const osMutates = Boolean(osRequested && MUTATION_RE.test(requestText));
     const kind = cyberTopic ? (osRequested ? "hybrid" : "cyber") : osRequested ? "workspace" : research ? "research" : "conversation";
-    let promptDepth = cyberTopic ? "cyber" : osRequested ? "workspace" : "compact";
-    const planningMode = ["plan", "planner"].includes(String(mode || "").toLowerCase()) || /:planner$/i.test(String(mode || ""));
-    const hypothesisMode = String(mode || "").toLowerCase() === "hypothesis" || /:hypothesis$/i.test(String(mode || ""));
-    if ((planningMode || hypothesisMode) && inProject) {
-      promptDepth = assessmentMode || cyberTopic ? "cyber" : "workspace";
-    }
+    const promptDepth = cyberTopic ? "cyber" : osRequested ? "workspace" : "compact";
     const hypothesisRelated = Boolean(
       requiresEvidence
       || active
@@ -120,7 +115,7 @@
     );
     const workflowRelated = Boolean(
       !hypothesisRelated
-      && (planningMode || osRequested || map || (cyberTopic && (passiveRecon || active))),
+      && (osRequested || map || (cyberTopic && (passiveRecon || active))),
     );
     const interactionType = hypothesisRelated ? "hypothesis" : workflowRelated ? "workflow" : "conversation";
     const classificationReason = hypothesisRelated
@@ -146,10 +141,10 @@
       },
       interactionType,
       classification: { type: interactionType, evidence: hypothesisRelated, taskBrief: workflowRelated, reason: classificationReason },
-      includeWorkspaceContext: inProject || planningMode || hypothesisMode,
-      includeWorkspaceDiscovery: Boolean(inProject && (planningMode || hypothesisMode || osRequested || map || evidence || followUp || cyberTopic)),
-      includeProjectContext: inProject || planningMode || hypothesisMode,
-      includeMemory: Boolean(inProject || planningMode || hypothesisMode || followUp || osRequested || cyberTopic),
+      includeWorkspaceContext: inProject,
+      includeWorkspaceDiscovery: Boolean(inProject && (osRequested || map || evidence || followUp || cyberTopic)),
+      includeProjectContext: inProject,
+      includeMemory: Boolean(inProject || followUp || osRequested || cyberTopic),
       reason: `${toolCategories.length ? `${kind}:${toolCategories.join("+")}` : `${kind}:no-tools`}${inheritedOffer ? ":follow-up" : ""}`,
       followUp,
       inheritedIntent: Boolean(inheritedOffer),

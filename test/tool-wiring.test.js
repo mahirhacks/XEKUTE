@@ -1,6 +1,6 @@
 "use strict";
 
-// Tool-wiring tests: the DI container builds the 22-tool registry, and the
+// Tool-wiring tests: the DI container builds the canonical tool registry, and the
 // execution path (registry adapter + restricted context projection) works
 // end-to-end for apply_patch/read_file/search_workspace.
 
@@ -19,12 +19,9 @@ const { createExecCommandTool } = require("../src/agent/tools/process/exec-comma
 
 const EXPECTED_TOOLS = [
   "ask_questions",
-  "update_task_list",
-  "exec_command", "read_file", "search_workspace", "apply_patch", "inspect_environment",
-  "update_project_artifacts", "manage_state", "ingest_traffic", "manage_identity", "replay_request",
-  "run_test_case", "browser_action", "compare_responses", "verify_finding",
-  "attack_graph", "delegate_agent",
-  "query_assessment", "expand_evidence", "query_knowledge", "web_research",
+  "exec_command", "view_active_terminal", "read_file", "search_workspace", "apply_patch",
+  "manage_identity", "replay_request",
+  "browser_action", "delegate_agent", "web_research",
 ];
 
 function restrictedContext(root, toolName) {
@@ -106,10 +103,23 @@ test("wiring: adapters reject unrestricted contexts (safety preserved)", async (
 
 test("wiring: exec_command adapter is executable under a restricted projection", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wire-tool-"));
-  const tool = createExecCommandTool();
-  const result = await tool.execute({ executable: process.execPath, args: ["-e", "console.log('hi')"] }, restrictedContext(root, "exec_command"));
+  const { createContainer } = require("../src/infrastructure/di/container");
+  const app = { getPath: (name) => path.join(os.tmpdir(), "xekute-wire-exec", String(name)) };
+  const container = createContainer({ app, safeStorage: { isEncryptionAvailable: () => false } });
+  const tool = container.toolRegistry.get("exec_command").adapter;
+  const result = await tool.execute({ executable: process.execPath, args: ["-e", "console.log('hi')"], wait_ms: 5_000, context: "node hello" }, restrictedContext(root, "exec_command"));
   assert.equal(result.ok, true);
-  assert.match(result.value.stdout, /hi/);
+  assert.match(result.value.processId, /^process-/);
+  if (result.value.stdout) assert.match(result.value.stdout, /hi/);
+  container.dispose();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("wiring: unbound exec_command adapter fails closed", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wire-tool-"));
+  const tool = createExecCommandTool();
+  const result = await tool.execute({ command: "echo hi", context: "echo hi" }, restrictedContext(root, "exec_command"));
+  assert.equal(result.error.code, "DURABLE_PROCESS_PROVIDER_UNAVAILABLE");
   fs.rmSync(root, { recursive: true, force: true });
 });
 

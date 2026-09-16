@@ -33,8 +33,6 @@ const LARGE_CHANNELS = new Set([
   "assessment:intelligenceRebuild",
   "assessment:intelligenceQuery",
   "assessment:intelligenceExpand",
-  "assessment:deepCollectGraph",
-  "knowledge:install",
 ]);
 
 const COMMAND_CHANNELS = new Set([

@@ -28,8 +28,8 @@ body,
 
 /* Title bar */
 #app-topbar {
-  height: 38px;
-  min-height: 38px;
+  height: 34px;
+  min-height: 34px;
   justify-content: flex-start;
   gap: 4px;
   padding-left: 16px;
@@ -39,12 +39,17 @@ body,
 
 #app-menu {
   order: 2;
+  align-items: stretch;
   gap: 11px;
 }
 
 .app-menu-button {
-  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  height: auto;
+  align-self: stretch;
   padding: 0 8px;
+  border-radius: 0;
   color: var(--revamp-text);
   font-size: 12px;
 }
@@ -55,8 +60,8 @@ body,
 }
 
 .app-brand-icon {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 4px;
   filter: grayscale(1) brightness(1.55);
 }
@@ -80,7 +85,7 @@ body,
   width: auto;
   min-width: 92px;
   max-width: none;
-  height: 28px;
+  height: 26px;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -90,35 +95,35 @@ body,
 
 .command-center:hover,
 .command-center:focus-visible {
-  width: 50vw;
-  min-width: 50vw;
   border-color: transparent;
   border-radius: 999px;
   background: rgba(40, 40, 40, .55);
 }
 
 .command-center .codicon {
-  color: var(--revamp-text);
-  font-size: 14px;
+  display: none;
 }
 
 .topbar-icon {
   width: 32px;
-  height: 30px;
+  height: auto;
+  min-height: 0;
+  align-self: stretch;
+  border-radius: 0;
 }
 
 .chrome-icon {
   display: block;
   width: auto;
-  height: 14px;
+  height: 12px;
   flex: 0 0 auto;
   pointer-events: none;
 }
 
 #btn-top-chat .chrome-icon,
 #btn-chat-collapse .chrome-icon {
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
 }
 
 .topbar-icon.inactive .chrome-icon {
@@ -126,7 +131,10 @@ body,
 }
 
 .window-control {
-  height: 38px;
+  height: auto;
+  min-height: 0;
+  align-self: stretch;
+  border-radius: 0;
 }
 
 /* Three-pane frame */
@@ -208,8 +216,8 @@ body,
 #explorer-title {
   flex: 1 1 auto;
   color: var(--revamp-text);
-  font-size: 14px;
-  font-weight: 400;
+  font-size: 12px;
+  font-weight: 700;
   line-height: 32px;
   text-transform: uppercase;
   opacity: .78;
@@ -246,20 +254,20 @@ body,
 }
 
 .tree-item {
-  height: 24px;
+  height: 22px;
   color: var(--revamp-text);
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .tree-chevron,
 .tree-icon,
 .tree-file-icon {
-  height: 24px;
+  height: 22px;
 }
 
 .tree-name {
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 13px;
+  line-height: 22px;
 }
 
 .tree-item:hover {
@@ -302,6 +310,7 @@ body,
 #terminal-body,
 #terminal-viewport,
 #terminal-empty,
+#terminal-tabs-resize,
 #terminal-tabs-list,
 .terminal-instance,
 .terminal-instance .xterm,
@@ -362,17 +371,18 @@ body,
 }
 
 .editor-tab .tab-icon {
-  display: none !important;
-}
-
-/* Built-in workspace pages are easier to distinguish from ordinary files
-   when several tabs are open. Their renderer assigns the page-specific
-   Codicon; regular file-tab icons remain intentionally hidden. */
-.editor-tab.special-workspace-tab .tab-icon {
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
+  width: 16px;
+  flex: 0 0 16px;
+}
+
+/* Built-in workspace pages keep their page-specific Codicon while regular
+   editor tabs use the corresponding VS Code Seti file glyph. */
+.editor-tab.special-workspace-tab .tab-icon {
   width: 14px;
+  flex-basis: 14px;
   color: currentColor;
 }
 
@@ -545,7 +555,7 @@ body,
 }
 
 .chat-session-label {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
 }
 
@@ -578,39 +588,36 @@ body,
 }
 
 #messages {
-  gap: 18px;
-  padding: 0 22px 20px;
+  gap: 0;
+  padding: 12px 16px 24px;
   background: var(--revamp-panel);
 }
 
 #messages .chat-turn.user .chat-box {
   border: 1px solid var(--revamp-divider) !important;
-  border-radius: 8px !important;
+  border-radius: 10px !important;
   background: var(--revamp-prompt) !important;
-  padding-top: 12px !important;
-  padding-bottom: 12px !important;
+  padding: 8px 12px !important;
 }
 
-#messages .tool-card .tool-card-file-icon {
-  width: 20px !important;
-  height: 20px !important;
-  flex: 0 0 20px !important;
-}
-
+#messages .tool-card .tool-card-file-icon,
 #messages .agent-command-shell {
-  width: 20px;
-  height: 20px;
+  display: block;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
   margin-top: 0;
+  object-fit: contain;
 }
 
 .assistant-reply-copy .chat-action-icon {
-  width: 14px;
-  height: 16px;
+  width: 11px;
+  height: 12px;
 }
 
 .assistant-reply-copy {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
 }
 
 #input-bar {
@@ -651,12 +658,12 @@ body,
 #chat-input {
   min-height: 36px;
   color: #fff;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 18px;
 }
 
 #chat-input-measure {
-  font-size: 12px;
+  font-size: 13px;
   line-height: 18px;
 }
 
@@ -680,7 +687,7 @@ body,
 .authority-pill {
   height: 24px;
   padding: 0 12px;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .chat-mode-button {
@@ -824,11 +831,59 @@ body,
   margin: 0 0 0 67px;
   padding: 0;
   overflow-y: auto;
-  scrollbar-width: none;
 }
 
-.app-settings-tabs::-webkit-scrollbar {
-  display: none;
+/* Match the chat transcript scrollbar on settings options, and keep both
+   thumbs painted (not overlay/hover-only). */
+#messages,
+.app-settings-content,
+.app-settings-tabs,
+.chat-history-body {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(56, 56, 56, .55) transparent !important;
+}
+
+#messages::-webkit-scrollbar,
+.app-settings-content::-webkit-scrollbar,
+.app-settings-tabs::-webkit-scrollbar,
+.chat-history-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  display: block !important;
+  background: transparent !important;
+}
+
+#messages::-webkit-scrollbar-track,
+#messages::-webkit-scrollbar-corner,
+.app-settings-content::-webkit-scrollbar-track,
+.app-settings-content::-webkit-scrollbar-corner,
+.app-settings-tabs::-webkit-scrollbar-track,
+.app-settings-tabs::-webkit-scrollbar-corner,
+.chat-history-body::-webkit-scrollbar-track,
+.chat-history-body::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+#messages::-webkit-scrollbar-thumb,
+.app-settings-content::-webkit-scrollbar-thumb,
+.app-settings-tabs::-webkit-scrollbar-thumb,
+.chat-history-body::-webkit-scrollbar-thumb {
+  min-width: 0;
+  min-height: 24px;
+  background: rgba(56, 56, 56, .55) !important;
+  border: 3px solid transparent !important;
+  background-clip: padding-box !important;
+  border-radius: 5px !important;
+  opacity: 1;
+}
+
+#messages::-webkit-scrollbar-thumb:hover,
+.app-settings-content::-webkit-scrollbar-thumb:hover,
+.app-settings-tabs::-webkit-scrollbar-thumb:hover,
+.chat-history-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(66, 66, 66, .7) !important;
 }
 
 .app-settings-nav-group {
@@ -984,6 +1039,7 @@ body,
 .app-settings-content {
   padding: 0 63px 52px 48px;
   overflow-x: hidden;
+  overflow-y: scroll;
   background: var(--revamp-surface);
 }
 
@@ -1960,6 +2016,10 @@ body,
   margin-bottom: 14px;
 }
 
+.app-settings-content #app-settings-certificates-panel .certificate-setting-heading > div {
+  gap: 6px;
+}
+
 .app-settings-content #app-settings-certificates-panel .certificate-setting-heading strong {
   color: #dedede;
   font-size: 13px;
@@ -1969,7 +2029,11 @@ body,
 .app-settings-content #app-settings-certificates-panel .certificate-setting-heading small {
   color: #777;
   font-size: 11px;
-  line-height: 16px;
+  line-height: 1.45;
+}
+
+.app-settings-content #app-settings-certificates-panel .certificate-location-row {
+  margin-bottom: 12px;
 }
 
 .app-settings-content #app-settings-certificates-panel .certificate-location-row input {
@@ -2031,6 +2095,8 @@ body,
   padding: 0 14px 0 27px;
   border-bottom: 1px solid var(--revamp-divider);
   background: var(--revamp-panel);
+  position: relative;
+  z-index: 5;
 }
 
 .security-workspace-heading > .codicon {
@@ -2060,7 +2126,8 @@ body,
   font-size: 12px;
 }
 
-.security-history-toggle {
+.security-history-toggle,
+.security-proxy-browser {
   padding: 0 10px;
   background: rgba(40, 40, 40, .35);
 }
@@ -2089,17 +2156,28 @@ body,
 
 .security-proxy-browser-menu,
 .security-tool-menu,
-.security-history-menu {
-  padding: 4px;
+.security-history-menu,
+.terminal-session-menu {
   border: 1px solid var(--revamp-divider, var(--border));
   border-radius: 6px;
   background: var(--revamp-surface, var(--bg-0));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .55);
+  box-shadow: none;
+}
+
+.security-proxy-browser-menu,
+.security-tool-menu,
+.security-history-menu {
+  padding: 4px;
 }
 
 .editor-tab-context-menu {
   background: var(--revamp-surface, var(--bg-0));
   border-color: var(--revamp-divider, var(--border));
+}
+
+#chat-history-popover {
+  background: var(--revamp-surface) !important;
+  border-color: var(--revamp-divider) !important;
 }
 
 .security-proxy-browser-menu button,
@@ -2112,9 +2190,47 @@ body,
 .security-proxy-browser-menu button:hover,
 .security-proxy-browser-menu button:focus-visible,
 .security-tool-option:hover,
-.security-history-menu-item:hover {
+.security-history-menu-item:hover,
+.terminal-menu-item:hover,
+.terminal-menu-item.active {
   background: var(--bg-3);
   color: #fff;
+}
+
+.terminal-menu-item {
+  border-radius: 0;
+  color: var(--revamp-text);
+}
+
+#terminal-more-menu,
+#terminal-session-menu {
+  background: var(--revamp-surface) !important;
+  border-color: var(--revamp-divider) !important;
+  box-shadow: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.terminal-more-menu,
+.terminal-session-menu,
+.chat-mode-menu,
+.authority-menu,
+.model-menu,
+.model-edit-menu {
+  overflow-x: hidden;
+}
+
+.terminal-more-menu button,
+.terminal-menu-item,
+.chat-mode-option,
+.authority-menu-option,
+.model-item,
+.reasoning-option,
+.context-option,
+.model-add-btn {
+  width: 100%;
+  border-radius: 0 !important;
+  box-sizing: border-box;
 }
 
 .security-tool-menu-separator {
@@ -2953,11 +3069,16 @@ body,
     --revamp-chat-width: min(420px, 34vw);
   }
 
-  #explorer-title,
-  .tree-name,
-  .chat-session-label,
-  #chat-input {
+  .tree-name {
     font-size: 13px;
+  }
+
+  .chat-session-label {
+    font-size: 12px;
+  }
+
+  #chat-input {
+    font-size: 14px;
   }
 
   .editor-tab,

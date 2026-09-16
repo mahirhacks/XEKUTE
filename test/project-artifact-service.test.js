@@ -31,8 +31,8 @@ function commitOps(artifacts, root, mode, operations, extra = {}) {
 }
 
 function seedVerifiedEvidence(artifacts, root) {
-  assert.equal(commitOps(artifacts, root, "hypothesis", [{ kind: "hypothesis.create", client_ref: "h1", title: "Session handling" }]).ok, true);
-  assert.equal(commitOps(artifacts, root, "plan", [{
+  assert.equal(commitOps(artifacts, root, "agent", [{ kind: "hypothesis.create", client_ref: "h1", title: "Session handling" }]).ok, true);
+  assert.equal(commitOps(artifacts, root, "agent", [{
     kind: "checklist.create", client_ref: "c1", hypothesis_id: "H-0001", title: "Check cookies", phase: "execution",
     target: "app.example", knowledge_release_id: "rel-1", procedure_id: "proc-1", source_hash: "abc123",
   }]).ok, true);
@@ -74,14 +74,15 @@ test("context reads deterministic indexes without rebuilding a missing index", (
 
 test("runtime assigns stable H/C/E IDs, resolves refs, and rebuilds both indexes", () => {
   const { root, artifacts } = boot();
-  const h = commitOps(artifacts, root, "hypothesis", [{ kind: "hypothesis.create", client_ref: "h", title: "Unicode 探测" }]);
+  const h = commitOps(artifacts, root, "agent", [{ kind: "hypothesis.create", client_ref: "h", title: "Unicode 探测" }]);
   assert.equal(h.staged.assigned_ids.h, "H-0001");
-  const c = commitOps(artifacts, root, "plan", [{ kind: "checklist.create", client_ref: "c", hypothesis_id: "H-0001", title: "Probe", phase: "passive_recon" }]);
+  const c = commitOps(artifacts, root, "agent", [{ kind: "checklist.create", client_ref: "c", hypothesis_id: "H-0001", title: "Probe", phase: "passive_recon" }]);
   assert.equal(c.staged.assigned_ids.c, "C-0001");
   const e = commitOps(artifacts, root, "agent", [{ kind: "evidence.create", client_ref: "e", title: "Signal", checklist_refs: ["C-0001"], hypothesis_refs: ["H-0001"], source_refs: ["traffic:1"] }]);
   assert.equal(e.staged.assigned_ids.e, "E-0001");
-  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.evidenceDirectory, "E-0001.md")), true);
-  assert.match(fs.readFileSync(path.join(root, Artifacts.PATHS.evidenceIndex), "utf8"), /E-0001/);
+  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.evidenceDirectory, "E-0001.md")), false);
+  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.evidenceIndex)), false);
+  assert.equal(e.inspect.evidence[0].id, "E-0001");
   assert.match(fs.readFileSync(path.join(root, Artifacts.PATHS.projectIndex), "utf8"), /Project Information Index/);
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -102,9 +103,9 @@ test("evidence severity, remediation, and retest fields change only E body and i
   seedVerifiedEvidence(artifacts, root);
   const result = commitOps(artifacts, root, "agent", [{ kind: "evidence.update", id: "E-0001", severity: "critical", remediation: "Rotate and harden", retest_criteria: "No exposed cookie" }]);
   assert.equal(result.ok, true, result.error);
-  assert.equal(fs.existsSync(path.join(root, ".xekute/evidence/E-0001.md")), true);
+  assert.equal(result.inspect.evidence[0].severity, "critical");
+  assert.equal(fs.existsSync(path.join(root, ".xekute/evidence/E-0001.md")), false);
   assert.equal(fs.existsSync(path.join(root, ".xekute/evidence/E-0099.md")), false);
-  assert.match(fs.readFileSync(path.join(root, ".xekute/evidence/E-0001.md"), "utf8"), /Severity: critical/);
   const rename = commitOps(artifacts, root, "agent", [{ kind: "evidence.update", id: "E-0001", path: ".xekute/evidence/E-0099.md" }]);
   assert.equal(rename.ok, false);
   assert.equal(rename.code, "ARTIFACT_RENAME_FORBIDDEN");
@@ -113,12 +114,12 @@ test("evidence severity, remediation, and retest fields change only E body and i
 
 test("reference integrity rejects orphan checklist/evidence and unsupported hypotheses", () => {
   const { root, artifacts } = boot();
-  const orphanC = commitOps(artifacts, root, "plan", [{ kind: "checklist.create", client_ref: "c", hypothesis_id: "H-9999", title: "orphan" }]);
+  const orphanC = commitOps(artifacts, root, "agent", [{ kind: "checklist.create", client_ref: "c", hypothesis_id: "H-9999", title: "orphan" }]);
   assert.equal(orphanC.code, "ARTIFACT_CHECKLIST_HYPOTHESIS_REQUIRED");
-  commitOps(artifacts, root, "hypothesis", [{ kind: "hypothesis.create", client_ref: "h", title: "H" }]);
+  commitOps(artifacts, root, "agent", [{ kind: "hypothesis.create", client_ref: "h", title: "H" }]);
   const orphanE = commitOps(artifacts, root, "agent", [{ kind: "evidence.create", client_ref: "e", title: "orphan", source_refs: ["raw:1"] }]);
   assert.equal(orphanE.code, "ARTIFACT_EVIDENCE_CHECKLIST_REQUIRED");
-  const unsupported = commitOps(artifacts, root, "hypothesis", [{ kind: "hypothesis.support", id: "H-0001" }]);
+  const unsupported = commitOps(artifacts, root, "agent", [{ kind: "hypothesis.support", id: "H-0001" }]);
   assert.equal(unsupported.code, "ARTIFACT_HYPOTHESIS_EVIDENCE_REQUIRED");
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -127,11 +128,26 @@ test("mode ownership is enforced at the service boundary", () => {
   const { root, artifacts } = boot();
   const attempts = [
     ["ask", { kind: "hypothesis.create", client_ref: "h", title: "H" }, "ARTIFACT_MODE_READ_ONLY"],
-    ["hypothesis", { kind: "project.upsert", document: "targets", key: "host", value: "a", source_refs: ["x"] }, "ARTIFACT_OPERATION_FORBIDDEN"],
-    ["plan", { kind: "evidence.create", client_ref: "e", title: "E", checklist_refs: ["C-1"], source_refs: ["x"] }, "ARTIFACT_OPERATION_FORBIDDEN"],
-    ["agent", { kind: "hypothesis.refine", id: "H-1", title: "x" }, "ARTIFACT_OPERATION_FORBIDDEN"],
+    ["hypothesis", { kind: "project.upsert", document: "targets", key: "host", value: "a", source_refs: ["x"] }, "ARTIFACT_MODE_READ_ONLY"],
+    ["plan", { kind: "evidence.create", client_ref: "e", title: "E", checklist_refs: ["C-1"], source_refs: ["x"] }, "ARTIFACT_MODE_READ_ONLY"],
   ];
   for (const [mode, operation, code] of attempts) assert.equal(commitOps(artifacts, root, mode, [operation]).code, code);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("Agent artifact staging can atomically populate project, hypothesis, checklist, and evidence state", () => {
+  const { root, artifacts } = boot();
+  const result = commitOps(artifacts, root, "agent", [
+    { kind: "project.upsert", document: "surface", key: "endpoint", value: "GET /api/profile", source_refs: ["traffic:1"], scope_decision: "in_scope" },
+    { kind: "hypothesis.create", client_ref: "h-profile", title: "Profile object authorization", objective: "Compare object access across authorized identities." },
+    { kind: "checklist.create", client_ref: "c-profile", hypothesis_id: "h-profile", title: "Profile authorization baseline", phase: "assessment_l1", target: "GET /api/profile", knowledge_release_id: "wstg-v3", procedure_id: "wstg-athz-04", source_hash: "abc123" },
+    { kind: "evidence.create", client_ref: "e-profile", title: "Profile baseline observed", status: "observed", checklist_refs: ["c-profile"], hypothesis_refs: ["h-profile"], target_refs: ["GET /api/profile"], source_refs: ["traffic:1"] },
+  ]);
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.inspect.project.documents.surface.length, 1);
+  assert.equal(result.inspect.hypotheses[0].id, "H-0001");
+  assert.equal(result.inspect.checklist[0].phase, "assessment_l1");
+  assert.equal(result.inspect.evidence[0].checklist_refs[0], "C-0001");
   fs.rmSync(root, { recursive: true, force: true });
 });
 

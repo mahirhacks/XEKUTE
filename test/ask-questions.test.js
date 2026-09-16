@@ -76,6 +76,26 @@ test("ask_questions blocks on the UI provider and returns single- and multi-sele
   ]);
 });
 
+test("ask_questions returns a custom written answer when no listed choice fits", async () => {
+  const result = await createAskQuestionsTool().execute(input, context(), {
+    questionProvider: async () => ({
+      skipped: false,
+      answers: [
+        { questionId: "color", selectedOptionId: "free_write", freeText: "green, but only for reports" },
+      ],
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value.answers, [
+    {
+      questionId: "color",
+      question: "What is your favorite color?",
+      selectedChoiceIds: ["free_write"],
+      selectedChoices: ["green, but only for reports"],
+    },
+  ]);
+});
+
 test("ask_questions preserves a skipped decision without inventing answers", async () => {
   const result = await createAskQuestionsTool().execute(input, context(), {
     questionProvider: async () => ({ skipped: true, answers: [] }),

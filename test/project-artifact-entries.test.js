@@ -26,8 +26,6 @@ test("PATHS, SOURCE_ENTRY_PATHS, and gitignore match the canonical tree", () => 
     ".xekute/project_info/identities.md",
     ".xekute/project_info/surface.md",
     ".xekute/project_info/controls.md",
-    ".xekute/hypotheses.md",
-    ".xekute/checklist.md",
   ]);
   assert.equal(Artifacts.gitignoreTemplate(), "/evidence/\n/.internal/\n");
   assert.ok(Artifacts.UNREAD_LEGACY_PATHS.includes(".xekute/project_info.md"));
@@ -41,15 +39,15 @@ test("PATHS, SOURCE_ENTRY_PATHS, and gitignore match the canonical tree", () => 
   assert.ok(!Artifacts.CHECKLIST_PHASES.includes("convergence"));
 });
 
-test("isCanonicalInvestigationPath covers the tree and ignores leftover single files", () => {
+test("isCanonicalInvestigationPath covers project info only", () => {
   for (const relative of [
     ".xekute/project_info/engagement.md",
     ".xekute/project_info/index.md",
-    ".xekute/hypotheses.md",
-    ".xekute/checklist.md",
-    ".xekute/evidence/index.md",
-    ".xekute/evidence/E-0001.md",
   ]) assert.equal(Artifacts.isCanonicalInvestigationPath(relative), true, relative);
+  assert.equal(Artifacts.isCanonicalInvestigationPath(".xekute/hypotheses.md"), false);
+  assert.equal(Artifacts.isCanonicalInvestigationPath(".xekute/checklist.md"), false);
+  assert.equal(Artifacts.isCanonicalInvestigationPath(".xekute/evidence/index.md"), false);
+  assert.equal(Artifacts.isCanonicalInvestigationPath(".xekute/evidence/E-0001.md"), false);
   assert.equal(Artifacts.isCanonicalInvestigationPath(".xekute/project_info.md"), false);
   assert.equal(Artifacts.isCanonicalInvestigationPath(".xekute/investigation_checklist.md"), false);
   assert.equal(Artifacts.isCanonicalInvestigationPath("findings/findings.json"), false);
@@ -155,9 +153,11 @@ test("expectedEntries emits sources and directories only; repair does not write 
   const entries = workspace.expectedEntries(root);
   const relative = entries.map((entry) => entry.relativePath);
   assert.ok(relative.includes(".xekute/project_info/engagement.md"));
-  assert.ok(relative.includes(".xekute/checklist.md"));
   assert.ok(relative.includes(".xekute/project_info"));
-  assert.ok(relative.includes(".xekute/evidence"));
+  assert.ok(relative.includes("traffic"));
+  assert.ok(relative.includes("traffic/raw.jsonl"));
+  assert.ok(!relative.includes(".xekute/checklist.md"));
+  assert.ok(!relative.includes(".xekute/evidence"));
   assert.ok(!relative.includes(".xekute/project_info/index.md"));
   assert.ok(!relative.includes(".xekute/evidence/index.md"));
   assert.ok(!relative.includes(".xekute/project_info.md"));
@@ -169,7 +169,7 @@ test("expectedEntries emits sources and directories only; repair does not write 
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test("bootstrap rebuilds both indexes and preserves valid and malformed sources", () => {
+test("bootstrap rebuilds the project index without creating evidence files", () => {
   const root = tempRoot();
   const artifacts = createProjectArtifactService({ fs, path });
   const workspace = createAssessmentWorkspace({ fs, path, projectArtifacts: artifacts });
@@ -180,7 +180,9 @@ test("bootstrap rebuilds both indexes and preserves valid and malformed sources"
   const boot = artifacts.bootstrap(root);
   assert.equal(boot.ok, true);
   assert.equal(fs.existsSync(path.join(root, ".xekute/project_info/index.md")), true);
-  assert.equal(fs.existsSync(path.join(root, ".xekute/evidence/index.md")), true);
+  assert.equal(fs.existsSync(path.join(root, ".xekute/evidence/index.md")), false);
+  assert.equal(fs.existsSync(path.join(root, ".xekute/hypotheses.md")), false);
+  assert.equal(fs.existsSync(path.join(root, ".xekute/checklist.md")), false);
   assert.equal(fs.readFileSync(engagement, "utf8"), original);
 
   fs.writeFileSync(engagement, "# broken\n");

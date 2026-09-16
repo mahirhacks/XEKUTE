@@ -369,7 +369,7 @@ function createAgentTerminalRunner({
       const processId = `proc-${id}`;
       record.processId = processId;
       record.id = processId;
-      record.ownerId = ownerId;
+      record.toolOwnerId = ownerId;
       record.child = term;
       record.startedAt = Date.now();
       record.exitCode = null;
@@ -414,7 +414,7 @@ function createAgentTerminalRunner({
   function stopProcess(id, ownerId = "agent") {
     const record = toolProcesses.get(id);
     if (!record) return { error: `Unknown process: ${id}` };
-    if (record.ownerId !== ownerId) return { error: "Process is not owned by this caller", code: "PROCESS_NOT_OWNED" };
+    if (String(record.toolOwnerId ?? record.ownerId) !== String(ownerId)) return { error: "Process is not owned by this caller", code: "PROCESS_NOT_OWNED" };
     if (record.running && record.child) {
       try { record.child.kill(); } catch { /* ignore */ }
       if (record.processId) {

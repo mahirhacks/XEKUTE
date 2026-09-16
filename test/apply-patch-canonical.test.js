@@ -35,10 +35,6 @@ const CANONICAL_PATHS = [
   Artifacts.PATHS.projectSurface,
   Artifacts.PATHS.projectControls,
   Artifacts.PATHS.projectIndex,
-  Artifacts.PATHS.hypotheses,
-  Artifacts.PATHS.checklist,
-  Artifacts.PATHS.evidenceIndex,
-  ".xekute/evidence/E-0001.md",
 ];
 
 test("APPLY_PATCH_CANONICAL_ARTIFACT is exported", () => {
@@ -86,7 +82,7 @@ test("leftover project_info.md is not treated as canonical", async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test("update_project_artifacts still writes canonical Markdown", () => {
+test("project artifact service still writes canonical Markdown", () => {
   const root = tempRoot();
   const artifacts = createProjectArtifactService({ fs, path, now: () => new Date("2026-08-30T00:00:00.000Z") });
   assert.equal(artifacts.bootstrap(root).ok, true);

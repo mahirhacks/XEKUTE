@@ -211,6 +211,63 @@ test("a stopped parent continuation leaves the FIFO result available for the nex
   assert.equal(ready.at(-1).resultId, resultId);
 });
 
+test("operator stop without a claimed result pauses FIFO until the next user turn", async () => {
+  const ready = [];
+  const coordinator = createSubagentCoordinator({ onResultReady: (result) => ready.push(result) });
+  const wait = deferred();
+  coordinator.beginParentTurn("p");
+  coordinator.submitChild({
+    parentKey: "p",
+    parentSessionId: "parent",
+    childInvocationId: "child-1",
+    childSessionId: "child-session",
+    start: () => wait.promise,
+  });
+  coordinator.finishParentTurn("p", { stopped: true });
+  wait.resolve({ status: "completed", output: { text: "late" }, metadata: {} });
+  await tick();
+  assert.equal(ready.length, 0);
+
+  coordinator.beginParentTurn("p");
+  coordinator.finishParentTurn("p");
+  assert.equal(ready.length, 1);
+  assert.equal(ready[0].childInvocationId, "child-1");
+});
+
+test("cancelChildrenForParent aborts working and queued children", async () => {
+  const activeController = new AbortController();
+  const coordinator = createSubagentCoordinator({ maxActiveChildren: 1 });
+  const working = deferred();
+  coordinator.submitChild({
+    parentKey: "p",
+    parentSessionId: "parent",
+    childInvocationId: "working",
+    childSessionId: "working-session",
+    controller: activeController,
+    start: () => working.promise,
+  });
+  coordinator.submitChild({
+    parentKey: "p",
+    parentSessionId: "parent",
+    childInvocationId: "queued",
+    childSessionId: "queued-session",
+    start: async () => ({ status: "completed", output: { text: "unexpected" } }),
+  });
+  await tick();
+  const cancelled = coordinator.cancelChildrenForParent("p");
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.cancelled, 2);
+  assert.equal(activeController.signal.aborted, true);
+  working.resolve({
+    status: "stopped",
+    output: { text: "", summary: "stopped" },
+    metadata: { error: "Stopped by operator" },
+  });
+  await tick();
+  assert.equal(coordinator.getChild("working", "p").status, "stopped");
+  assert.equal(coordinator.getChild("queued", "p").status, "stopped");
+});
+
 test("shutdown aborts active children, stops queued children, and closes admission", async () => {
   const activeController = new AbortController();
   const activeResult = new Promise((resolve) => {

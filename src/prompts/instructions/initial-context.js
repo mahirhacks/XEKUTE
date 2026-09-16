@@ -29,44 +29,6 @@
     ].join("\n");
   }
 
-  function toolMenu(tools = [], toolMeta = {}) {
-    if (!Array.isArray(tools) || !tools.length) return "";
-    const groups = { os: [], cyber: [] };
-    for (const tool of tools) {
-      const name = String(tool?.function?.name || tool?.name || "");
-      const category = toolMeta[name]?.category;
-      if (!name || !groups[category]) continue;
-      const description = String(tool.function?.description || tool.purpose || "").replace(/\s+/g, " ").trim();
-      groups[category].push(`- ${name}: ${description}`);
-    }
-    const lines = ["TOOLS AVAILABLE FOR THIS REQUEST ONLY"];
-    if (groups.os.length) lines.push("Workspace & OS", ...groups.os);
-    if (groups.cyber.length) lines.push("Cybersecurity", ...groups.cyber);
-    lines.push("Use no tool when the request can be answered directly. This list is authoritative: do not ask for, simulate, or serialize tools outside it. A prior assistant suggestion or a user confirmation does not add permissions.");
-    return lines.join("\n");
-  }
-
-  function toolCatalog(entries = [], { packs = [] } = {}) {
-    const items = Array.isArray(entries) ? entries : [];
-    if (!items.length) return "";
-    const lines = [
-      "TOOL CATALOG (Mode-granted)",
-      `All ${items.length} granted tools are callable now (no schema-loading step).`,
-    ];
-    if (Array.isArray(packs) && packs.length) {
-      lines.push(`Loadable packs: ${packs.join(", ")}.`);
-    }
-    lines.push("All granted tools:");
-    for (const entry of items) {
-      const mark = entry.schema === "hot" ? "hot" : `catalog/${entry.pack || "other"}`;
-      lines.push(`- ${entry.name} [${mark}]: ${entry.purpose}`);
-    }
-    lines.push(
-      "This catalog is authoritative for names. Do not invent tools outside it.",
-    );
-    return lines.join("\n");
-  }
-
   function workspaceAction({ requiresMutation = false, targetFile = "" } = {}) {
     if (!requiresMutation) return "";
     return [
@@ -78,16 +40,5 @@
     ].join("\n");
   }
 
-  function responseRequirements({ evidenceRequired = false } = {}) {
-    return [
-      "RESPONSE EVIDENCE CLASSIFICATION",
-      "Classify the final response internally before writing it:",
-      "- EVIDENCE_REQUIRED: use this for observed security signals, test or scan results, verification claims, hypotheses, retests, coverage, or evidence-backed reports.",
-      "- EVIDENCE_NOT_REQUIRED: use this for ordinary explanations, recommendations, plans, and workspace edits where the action summary is enough.",
-      `Runtime routing hint: ${evidenceRequired ? "EVIDENCE_REQUIRED" : "EVIDENCE_NOT_REQUIRED"}.`,
-      "Never invent evidence. A runtime action, file change, or verification claim must only be described as completed when its result is available.",
-    ].join("\n");
-  }
-
-  return { projectSettings, untrustedContextHeader, noToolsSurface, toolMenu, toolCatalog, workspaceAction, responseRequirements };
+  return { projectSettings, untrustedContextHeader, noToolsSurface, workspaceAction };
 });

@@ -91,18 +91,15 @@
     const validation = validatePromptConfig(overrides);
     const config = validation.ok ? validation.config : normalizeOverrides(null);
     const compact = depth === "compact";
-    const workspace = depth === "workspace";
     const selectedKeys = compact
       ? []
       : Array.isArray(moduleKeys)
         ? moduleKeys.filter((key) => MODULE_ORDER.includes(key))
-        : workspace
-          ? ["loop", "failure", "feedback", "guardrails"]
-          : MODULE_ORDER;
+        : MODULE_ORDER;
     const sections = compact
       ? [COMPACT_ROLE, ROUTING_PROMPT]
       : [
-          workspace ? COMPACT_ROLE : (config.modules.role || DEFAULT_MODULES.role),
+          config.modules.role || DEFAULT_MODULES.role,
           ROUTING_PROMPT,
           ...selectedKeys.filter((key) => key !== "role").map((key) => config.modules[key] || DEFAULT_MODULES[key]),
         ];

@@ -5,7 +5,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "index.html"), "utf8");
+const { readUiShell } = require("./helpers/ui-shell.js");
+
+const html = readUiShell();
 const editor = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "editor", "editor-controller.js"), "utf8");
 const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
 const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
@@ -13,24 +15,25 @@ const layoutStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "st
 const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
 
 test("workspace files open in the Monaco-powered center editor", () => {
-  assert.match(html, /monaco-editor\/min\/vs\/loader\.js/);
-assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "runtime-modules.js"), "utf8"), /features\/editor\/editor-controller\.js/);
+  assert.match(editor, /\$\{monacoBase\(\)\}\/vs\/loader\.js/);
+  assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "runtime-modules.js"), "utf8"), /features\/editor\/editor-controller\.js/);
   assert.doesNotMatch(html, /id="editor-(?:tab-bar|body)" class="ide-internal"/);
   assert.match(html, /id="markdown-preview" class="markdown-file-preview assistant-reply"/);
-  assert.match(html, /id="editor-empty">\s*<img src="\.\.\/\.\.\/xekute_icon\.png" alt="" class="resource-viewer-empty-logo">\s*<\/div>/);
+  assert.match(html, /id="editor-empty">\s*<img src="\.\/xekute_icon\.png" alt="" class="resource-viewer-empty-logo" \/>/);
   assert.match(renderer, /const EditorManager = globalThis\.XekuteEditorManager/);
   assert.match(renderer, /const TerminalManager = globalThis\.XekuteTerminalManager/);
   assert.match(renderer, /path: SETTINGS_TAB_PATH[\s\S]*?special: "settings"/);
   assert.match(renderer, /path: INTERCEPTOR_TAB_PATH[\s\S]*?special: "interceptor"/);
-  assert.match(renderer, /path: APPLICATION_GRAPH_TAB_PATH[\s\S]*?special: "application-graph"/);
+  assert.doesNotMatch(renderer, /APPLICATION_GRAPH_TAB_PATH|special: "application-graph"/);
   assert.match(renderer, /function showSecurityWorkspace\(tool = ""\) \{\s*openInterceptorTab\(tool\);/);
-  assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\) \|\| isApplicationGraphTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
-  assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\) \|\| isApplicationGraphTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
+  assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
+  assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
   assert.match(renderer, /if \(specialWorkspaceTab\) el\.classList\.add\("special-workspace-tab"\)/);
-  assert.match(renderer, /isSettingsTab\(tab\)[\s\S]*?codicon-settings-gear[\s\S]*?isInterceptorTab\(tab\)[\s\S]*?codicon-debug-disconnect[\s\S]*?isApplicationGraphTab\(tab\)[\s\S]*?codicon-type-hierarchy/);
+  assert.match(renderer, /isSettingsTab\(tab\)[\s\S]*?codicon-settings-gear[\s\S]*?isInterceptorTab\(tab\)[\s\S]*?codicon-debug-disconnect/);
+  assert.doesNotMatch(renderer, /isApplicationGraphTab/);
   assert.match(renderer, /if \(editorBody\) editorBody\.hidden = true;\s*updateEditorPathBar\(\);/);
   assert.match(renderer, /if \(isInterceptorTab\(activeTab\)\) \{[\s\S]*?showSecurityWorkspaceContent\(activeTab\.securityTool \|\| ""\);/);
-  assert.match(renderer, /if \(isApplicationGraphTab\(activeTab\)\) \{[\s\S]*?await showMapWorkspace\(\);/);
+  assert.doesNotMatch(renderer, /showMapWorkspace/);
   const editorPathBarSource = renderer.match(/function updateEditorPathBar\(\)[\s\S]*?\n\}/)?.[0] || "";
   assert.match(editorPathBarSource, /const relativePath = relativePathFromRoot\(filePath\)/);
   assert.match(editorPathBarSource, /const projectPath = relativePath === null \? \(activeTab\.name \|\| ""\) : relativePath/);
@@ -48,7 +51,8 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
   assert.match(renderer, /el\.draggable = true;[\s\S]*?el\.addEventListener\("dragstart"[\s\S]*?el\.addEventListener\("drop"/);
   assert.match(renderer, /key === "s" && activeTabPath[\s\S]*?await saveActiveTab\(\)/);
   assert.doesNotMatch(styles, /\.editor-tab\.preview/);
-  assert.match(layoutStyles, /\.editor-tab\.special-workspace-tab \.tab-icon \{[\s\S]*?display: inline-flex !important;/);
+  assert.match(layoutStyles, /\.editor-tab \.tab-icon \{[\s\S]*?display: inline-flex !important;/);
+  assert.match(layoutStyles, /\.editor-tab\.special-workspace-tab \.tab-icon \{[\s\S]*?color: currentColor;/);
   assert.match(layoutStyles, /\.chat-mode-button \{[\s\S]*?min-width: 0;[\s\S]*?width: fit-content;/);
   assert.match(layoutStyles, /#terminal-pane,[\s\S]*?#terminal-tabs-list,[\s\S]*?background: var\(--revamp-surface\) !important;/);
   assert.match(styles, /\.app-dialog \{[\s\S]*?background: var\(--revamp-surface, var\(--bg-0\)\)/);
@@ -68,8 +72,8 @@ assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "ru
 });
 
 test("editor provides VS Code-style models, syntax languages, tabs, cursor events, and saving", () => {
-  assert.match(editor, /new URL\("\.\.\/\.\.\/node_modules\/monaco-editor\/min\/vs\/loader\.js"/);
-  assert.match(editor, /paths: \{ vs: "\.\.\/\.\.\/node_modules\/monaco-editor\/min\/vs" \}/);
+  assert.match(editor, /\$\{monacoBase\(\)\}\/vs\/loader\.js/);
+  assert.match(editor, /paths: \{ vs: `\$\{monacoBase\(\)\}\/vs` \}/);
   assert.match(editor, /monaco\.editor\.create\(container/);
   assert.match(editor, /monaco\.editor\.createModel\(String\(value\), languageFor\(name\), modelUri\(path\)\)/);
   for (const language of ["javascript", "typescript", "python", "html", "css", "json", "markdown"]) {
@@ -105,7 +109,7 @@ test("Project activity icon only toggles the file-tree sidebar", () => {
 });
 
 test("workspace context menu renames files and folders without discarding open editor state", () => {
-  const workspaceContextMenuMarkup = html.match(/<div id="workspace-context-menu"[\s\S]*?<\/div>\s*<div id="update-toast"/)?.[0] || "";
+  const workspaceContextMenuMarkup = html.match(/<div id="workspace-context-menu"[\s\S]*id="update-toast"/)?.[0] || "";
   assert.match(workspaceContextMenuMarkup, /data-workspace-context-action="cut"[\s\S]*?<span>Cut<\/span>/);
   assert.match(workspaceContextMenuMarkup, /data-workspace-context-action="delete"[\s\S]*?workspace-context-delete-label/);
   assert.match(html, /data-workspace-context-action="rename"[\s\S]*?<span>Rename<\/span>/);
@@ -113,6 +117,9 @@ test("workspace context menu renames files and folders without discarding open e
   assert.match(styles, /\.workspace-context-menu \{[^}]*background:var\(--revamp-surface,var\(--bg-0\)\)/);
   assert.match(renderer, /setHidden\("rename", !target \|\| multiple\)/);
   assert.match(renderer, /async function renameWorkspaceContextTarget\(target\)/);
+  assert.match(renderer, /function startInlineWorkspaceRename\(target\)/);
+  assert.match(renderer, /async function applyWorkspaceRename\(target, normalizedName\)/);
+  assert.doesNotMatch(renderer.match(/function startInlineWorkspaceRename[\s\S]*?async function renameWorkspaceContextTarget/)?.[0] || "", /AppDialog\.prompt/);
   assert.match(renderer, /window\.api\.movePath\(\{[\s\S]*?source: target\.relativePath,[\s\S]*?destination/);
   assert.match(renderer, /function remapOpenTabsUnderWorkspacePath\(sourceAbsolute, destinationAbsolute\)/);
   assert.match(renderer, /tab\.path = nextPath;[\s\S]*?tab\.diskPath = nextPath/);
@@ -154,7 +161,10 @@ test("workspace context menu analyzes every single file in a visible Agent sessi
   assert.match(renderer, /chatSessions\.push\(session\)[\s\S]*?applyActiveChatSession\(session\)/);
   assert.match(renderer, /sendMessageWithAgentRuntime\(\{[\s\S]*?sessionId: session\.id,[\s\S]*?text: prompt,[\s\S]*?modeOverride: "ask",[\s\S]*?skipContextFiles: true,[\s\S]*?activeFile: null/);
   assert.doesNotMatch(renderer.match(/async function startWorkspaceFileAnalysis[\s\S]*?async function runWorkspaceContextAction/)?.[0] || "", /chatInput\.value = prompt/);
-  assert.match(renderer, /finally \{[\s\S]*?session\.chatMode = returnMode[\s\S]*?chatMode = returnMode[\s\S]*?syncChatModeUi\(\)/);
+  assert.doesNotMatch(
+    renderer.match(/async function startWorkspaceFileAnalysis[\s\S]*?async function runWorkspaceContextAction/)?.[0] || "",
+    /finally \{[\s\S]*?chatMode = returnMode/,
+  );
   assert.doesNotMatch(renderer.match(/async function startWorkspaceFileAnalysis[\s\S]*?async function runWorkspaceContextAction/)?.[0] || "", /window\.api\.readFile/);
   assert.match(renderer, /const runMode = options\?\.modeOverride[\s\S]*?canonicalChatMode\(options\.modeOverride\)/);
   assert.match(renderer, /const hasExplicitText = Object\.prototype\.hasOwnProperty\.call\(options \|\| \{\}, "text"\)/);

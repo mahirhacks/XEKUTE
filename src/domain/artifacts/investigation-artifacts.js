@@ -4,7 +4,7 @@ const HYPOTHESIS_STATES = Object.freeze(["proposed", "active", "supported", "rej
 const CHECKLIST_STATES = Object.freeze(["not_started", "in_progress", "explored", "blocked", "confirmed", "rejected", "skipped"]);
 const EVIDENCE_STATES = Object.freeze(["observed", "verified", "rejected", "inconclusive"]);
 const EVIDENCE_SEVERITIES = Object.freeze(["informational", "low", "medium", "high", "critical", "unrated"]);
-const CHECKLIST_PHASES = Object.freeze(["preflight", "passive_recon", "active_recon", "planning", "execution", "verification", "retest"]);
+const CHECKLIST_PHASES = Object.freeze(["preflight", "passive_recon", "active_recon", "planning", "assessment_l1", "assessment_l2", "execution", "verification", "retest"]);
 const FACT_SCOPE_DECISIONS = Object.freeze(["in_scope", "out_of_scope", "unknown", "derived"]);
 const FACT_CONFIDENCE = Object.freeze(["unknown", "low", "medium", "high"]);
 const CHECKLIST_NON_TERMINAL_STATUSES = Object.freeze(["not_started", "in_progress", "blocked"]);
@@ -89,14 +89,11 @@ const SOURCE_ENTRY_PATHS = Object.freeze([
   PATHS.projectIdentities,
   PATHS.projectSurface,
   PATHS.projectControls,
-  PATHS.hypotheses,
-  PATHS.checklist,
 ]);
 
 const CANONICAL_EXACT_PATHS = Object.freeze([
   ...SOURCE_ENTRY_PATHS,
   PATHS.projectIndex,
-  PATHS.evidenceIndex,
 ]);
 
 function cleanText(value, max = 12_000) {
@@ -151,9 +148,12 @@ function normalizeRelativePath(relativePath) {
 
 function isCanonicalInvestigationPath(relativePath) {
   const normalized = normalizeRelativePath(relativePath);
-  if (CANONICAL_EXACT_PATHS.includes(normalized)) return true;
-  if (/^\.xekute\/evidence\/[^/]+\.md$/i.test(normalized)) return true;
-  return false;
+  return CANONICAL_EXACT_PATHS.includes(normalized);
+}
+
+function isPersistedArtifactPath(relativePath) {
+  const normalized = normalizeRelativePath(relativePath);
+  return CANONICAL_EXACT_PATHS.includes(normalized);
 }
 
 function gitignoreTemplate() {
@@ -555,6 +555,7 @@ module.exports = Object.freeze({
   gitignoreTemplate,
   mapCheckpointPhaseToChecklistPhase,
   isCanonicalInvestigationPath,
+  isPersistedArtifactPath,
   headingForFact,
   projectDocumentTemplate,
   parseProjectDocument,

@@ -16,6 +16,25 @@
   const FALLBACK_CONTEXT_TOKENS = 4096;
   const MIN_CONTEXT_TOKENS = 2048;
   const MAX_CONTEXT_TOKENS = 1_048_576;
+  const STANDARD_CONTEXT_TOKENS = Object.freeze([
+    4_096,
+    8_192,
+    16_384,
+    32_768,
+    65_536,
+    131_072,
+    262_144,
+    524_288,
+    1_048_576,
+    2_097_152,
+  ]);
+  const PICKER_STANDARD_TOKENS = Object.freeze([
+    32_768,
+    131_072,
+    262_144,
+    1_048_576,
+  ]);
+  const PICKER_CONTEXT_CHOICES = 3;
   const MIN_RESPONSE_RESERVE = 1024;
   // The response reserve is not hard-capped: it scales with the context
   // window (10%) up to the model's own max completion, so large-context
@@ -152,15 +171,53 @@
     if (value == null || value === "" || value === "Auto") return null;
     const direct = positiveInteger(value);
     if (direct) return direct;
-    const match = /^(\d+(?:\.\d+)?)K$/i.exec(String(value).trim());
-    return match ? positiveInteger(Number(match[1]) * 1024) : null;
+    const match = /^(\d+(?:\.\d+)?)([KM])$/i.exec(String(value).trim());
+    if (!match) return null;
+    const amount = Number(match[1]);
+    const unit = match[2].toUpperCase();
+    return unit === "M"
+      ? positiveInteger(amount * 1_048_576)
+      : positiveInteger(amount * 1024);
   }
 
   function tokensToContextLabel(value) {
     const tokens = positiveInteger(value);
     if (!tokens) return "Auto";
+    if (tokens >= 1_048_576 && tokens % 1_048_576 === 0) return `${tokens / 1_048_576}M`;
     if (tokens % 1024 === 0) return `${tokens / 1024}K`;
     return String(tokens);
+  }
+
+  function snapContextWindowTokens(tokens) {
+    const value = positiveInteger(tokens);
+    if (!value) return null;
+    const nearest = STANDARD_CONTEXT_TOKENS.reduce((best, candidate) => (
+      Math.abs(candidate - value) < Math.abs(best - value) ? candidate : best
+    ), STANDARD_CONTEXT_TOKENS[0]);
+    return Math.abs(nearest - value) / Math.max(nearest, value) < 0.04
+      ? nearest
+      : value;
+  }
+
+  function formatContextWindowLabel(tokens) {
+    const snapped = snapContextWindowTokens(tokens);
+    if (!snapped) return "Auto";
+    if (snapped >= 1_048_576 && snapped % 1_048_576 === 0) return `${snapped / 1_048_576}M`;
+    if (snapped % 1024 === 0) {
+      const kibi = snapped / 1024;
+      if (kibi % 1024 === 0) return `${kibi / 1024}M`;
+      return `${kibi}K`;
+    }
+    if (snapped >= 1_000_000) return `${Math.round(snapped / 1_000_000)}M`;
+    if (snapped >= 1000) return `${Math.round(snapped / 1000)}K`;
+    return String(snapped);
+  }
+
+  function formatPickerContextLabel(tokens) {
+    const snapped = snapContextWindowTokens(tokens);
+    if (!snapped) return "Auto";
+    if (snapped === 262_144) return "262K";
+    return formatContextWindowLabel(snapped);
   }
 
   function normalizePreference(input = {}) {
@@ -230,29 +287,41 @@
     };
   }
 
-  function roundContextTokens(tokens, maximum) {
-    const limit = positiveInteger(maximum) || tokens;
-    const rounded = Math.ceil(tokens / 1000) * 1000;
-    return Math.min(limit, Math.max(MIN_CONTEXT_TOKENS, rounded));
+  function contextOptions(maximum, extras = []) {
+    const limit = positiveInteger(maximum);
+    if (!limit) return [];
+    const near = (left, right) => Math.abs(left - right) / Math.max(left, right) < 0.04;
+    const values = STANDARD_CONTEXT_TOKENS.filter((value) => value >= MIN_CONTEXT_TOKENS && value <= limit);
+    for (const extra of (Array.isArray(extras) ? extras : []).map(positiveInteger)) {
+      if (!extra || extra < MIN_CONTEXT_TOKENS || extra > limit) continue;
+      if (!values.some((value) => near(value, extra))) values.push(extra);
+    }
+    if (limit >= MIN_CONTEXT_TOKENS && !values.some((value) => near(value, limit))) values.push(limit);
+    return [...new Set(values)].sort((a, b) => a - b);
   }
 
-  function contextOptions(maximum) {
-    const limit = positiveInteger(maximum) || MAX_CONTEXT_TOKENS;
-    const values = [1, 2, 3]
-      .map((divisor) => Math.floor(limit / divisor))
-      .filter((value) => value >= MIN_CONTEXT_TOKENS)
-      .map((value) => roundContextTokens(value, limit));
-    if (!values.length && limit >= MIN_CONTEXT_TOKENS) values.push(limit);
-    return [...new Set(values)];
+  function pickerContextOptions(maximum, count = PICKER_CONTEXT_CHOICES) {
+    const limit = positiveInteger(maximum);
+    if (!limit) return [];
+    const size = Math.max(1, positiveInteger(count) || PICKER_CONTEXT_CHOICES);
+    const preferred = PICKER_STANDARD_TOKENS.filter((value) => value <= limit);
+    if (preferred.length) return preferred.slice(-size);
+    return STANDARD_CONTEXT_TOKENS
+      .filter((value) => value >= MIN_CONTEXT_TOKENS && value <= limit)
+      .slice(-size);
   }
 
   return {
     FALLBACK_CONTEXT_TOKENS,
     MIN_CONTEXT_TOKENS,
     MAX_CONTEXT_TOKENS,
+    STANDARD_CONTEXT_TOKENS,
+    PICKER_STANDARD_TOKENS,
+    PICKER_CONTEXT_CHOICES,
     REASONING_EFFORT_ORDER,
     contextKey,
     contextOptions,
+    pickerContextOptions,
     estimateTokenCount,
     legacyContextLabelToTokens,
     normalizeModelMetadata,
@@ -263,5 +332,7 @@
     resolveContextPlan,
     responseReserveFor,
     tokensToContextLabel,
+    formatContextWindowLabel,
+    formatPickerContextLabel,
   };
 });

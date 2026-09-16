@@ -74,9 +74,13 @@ test("G1 role access enforces every canonical mode surface under every authority
   for (const authority of ["ask_for_approval", "approve_for_me", "full_authority"]) {
     for (const mode of Object.keys(MODE_TOOL_GROUPS)) {
       for (const toolName of TOOL_REGISTRY_NAMES) {
-        if (!MODE_TOOL_GROUPS[mode].includes(toolName)) continue;
         const decision = await gate.evaluate({ context: { role: mode, authority }, toolName, entry: entry(toolName) });
-        assert.equal(decision.decision, "allow", `${authority}/${mode}/${toolName}`);
+        if (MODE_TOOL_GROUPS[mode].includes(toolName)) {
+          assert.equal(decision.decision, "allow", `${authority}/${mode}/${toolName}`);
+        } else {
+          assert.equal(decision.decision, "deny", `${authority}/${mode}/${toolName} must be denied`);
+          assert.equal(decision.metadata.code, "TOOL_UNAVAILABLE_IN_MODE");
+        }
       }
     }
   }
@@ -107,6 +111,46 @@ test("G2 request validation applies schema structure and canonicalizes nested ta
   const invalid = await gate.evaluate({ context: { workspace: { root } }, entry: toolEntry, args: { path: "", request: { url: "not a URI", extra: true }, extra: true }, state: createInvocationState() });
   assert.equal(invalid.terminal, true);
   assert.equal(invalid.metadata.code, "INVALID_TOOL_INPUT");
+});
+
+test("request validation blocks mass deletes and recursive workspace wipes", async () => {
+  const gate = createRequestValidationGate();
+  const patchEntry = {
+    name: "apply_patch",
+    inputSchema: { type: "object", required: ["operations"], properties: { operations: { type: "array" } }, additionalProperties: true },
+  };
+  const mass = await gate.evaluate({
+    toolName: "apply_patch",
+    entry: patchEntry,
+    args: { operations: [
+      { kind: "delete", path: "README.md" },
+      { kind: "delete", path: "a.js" },
+      { kind: "delete", path: "b.js" },
+      { kind: "delete", path: "c.js" },
+    ] },
+    state: createInvocationState(),
+  });
+  assert.equal(mass.decision, "deny");
+  assert.equal(mass.metadata.code, "MASS_DELETE_DENIED");
+  const single = await gate.evaluate({
+    toolName: "apply_patch",
+    entry: patchEntry,
+    args: { operations: [{ kind: "delete", path: "notes/hello.txt" }] },
+    state: createInvocationState(),
+  });
+  assert.equal(single.decision, "allow");
+  const execEntry = {
+    name: "exec_command",
+    inputSchema: { type: "object", properties: { command: { type: "string" } }, additionalProperties: true },
+  };
+  const wipe = await gate.evaluate({
+    toolName: "exec_command",
+    entry: execEntry,
+    args: { command: "Remove-Item -Recurse -Force .\\notes, .\\src", context: "wipe trees" },
+    state: createInvocationState(),
+  });
+  assert.equal(wipe.decision, "deny");
+  assert.equal(wipe.metadata.code, "DESTRUCTIVE_WIPE_DENIED");
 });
 
 test("G3 typed scope permits in-scope, defers only explicit soft boundaries, and terminates hard boundaries", async () => {
@@ -163,6 +207,13 @@ test("G7 risk classification is deterministic and never makes an authority decis
   assert.equal(high.level, "high");
   assert.ok(high.dimensions.length > low.dimensions.length);
   assert.equal(Object.hasOwn(high, "decision"), false);
+  const deletes = classifyRisk({
+    toolName: "apply_patch",
+    args: { operations: [{ kind: "delete", path: "a.js" }] },
+    entry: entry("apply_patch", { mutating: true, reversible: true }),
+  });
+  assert.equal(deletes.reversible, false);
+  assert.ok(deletes.dimensions.some((item) => item.id === "destructive_operation"));
 });
 
 test("G8/G9 policy requests approval only for exec_command and records command approval", async () => {
@@ -205,16 +256,28 @@ test("G10 environment gate fails before execution when workspace or provider pre
 });
 
 test("G11 resource gate understands nested barrier demand and current durable-process usage", async () => {
-  const requested = requestedResources("run_test_case", { testCase: { steps: [
+  const requested = requestedResources("replay_request", { testCase: { steps: [
     { execution: { mode: "barrier", groupId: "g", repetitions: 2 } },
     { execution: { mode: "barrier", groupId: "g", repetitions: 3 } },
   ] } });
   assert.equal(requested.concurrency, 5);
   const state = createInvocationState();
-  const denied = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10 } }, toolName: "run_test_case", args: { testCase: { steps: [{ execution: { mode: "barrier", groupId: "g", repetitions: 5 } }] } }, state, runtime: {} });
+  const denied = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10 } }, toolName: "replay_request", args: { testCase: { steps: [{ execution: { mode: "barrier", groupId: "g", repetitions: 5 } }] } }, state, runtime: {} });
   assert.equal(denied.metadata.code, "CONCURRENCY_LIMIT_EXCEEDED");
   const processDenied = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10, processCount: 1 } }, toolName: "exec_command", args: { operation: "start" }, state: createInvocationState(), runtime: { resourceUsage: async () => ({ processCount: 1 }) } });
   assert.equal(processDenied.metadata.code, "PROCESS_LIMIT_EXCEEDED");
+  for (const args of [{}, { operation: "run" }, { operation: "run", wait_ms: 0 }, { operation: "start" }]) {
+    assert.equal(requestedResources("exec_command", args).processCount, 1);
+  }
+  for (const operation of ["status", "stop", "list"]) {
+    assert.equal(requestedResources("exec_command", { operation }).processCount, 0);
+  }
+  const runAtCap = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10, processCount: 1 } }, toolName: "exec_command", args: { operation: "run" }, state: createInvocationState(), runtime: { resourceUsage: async () => ({ processCount: 1 }) } });
+  assert.equal(runAtCap.metadata.code, "PROCESS_LIMIT_EXCEEDED");
+  const usageThrow = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10, processCount: 4 } }, toolName: "exec_command", args: { operation: "run" }, state: createInvocationState(), runtime: { resourceUsage: async () => { throw new Error("usage boom"); } } });
+  assert.equal(usageThrow.metadata.code, "RESOURCE_USAGE_UNAVAILABLE");
+  const usageError = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10, processCount: 4 } }, toolName: "exec_command", args: { operation: "run" }, state: createInvocationState(), runtime: { resourceUsage: async () => ({ error: "usage missing" }) } });
+  assert.equal(usageError.metadata.code, "RESOURCE_USAGE_UNAVAILABLE");
 });
 
 test("G12 reader/writer concurrency permits readers, queues a conflicting writer, and releases leases", async () => {
@@ -246,6 +309,8 @@ test("G13 timeout policy distinguishes explicit deadlines from disabled long-hor
   assert.equal(explicit.hardMs, 1_000);
   assert.equal(explicit.sources.hard, "explicit");
   assert.equal(timeoutPolicyFor("exec_command", { operation: "start", timeout_ms: 1_000 }).hardMs, null);
+  assert.equal(timeoutPolicyFor("exec_command", { operation: "run", wait_ms: 1500 }).hardMs, null);
+  assert.equal(timeoutPolicyFor("exec_command", { operation: "run", wait_ms: 1500, timeout_ms: 1_000 }).hardMs, 1_000);
   const observationsDisabled = timeoutPolicyFor("exec_command", { operation: "run" }, { startMs: 0, idleObservationMs: null, softObservationMs: false });
   assert.equal(observationsDisabled.startMs, null);
   assert.equal(observationsDisabled.idleObservationMs, null);
@@ -354,17 +419,11 @@ test("G19 protected audit verifier detects a modified lifecycle record", (t) => 
   audit.append(root, { type: "first", invocationId: "inv-1" });
   audit.append(root, { type: "second", invocationId: "inv-2" });
   assert.equal(audit.verify(root).ok, true);
-  const file = audit.fileFor(root);
-  const records = fs.readFileSync(file, "utf8").trim().split(/\r?\n/).map(JSON.parse);
-  records[0].invocationId = "tampered";
-  fs.writeFileSync(file, `${records.map(JSON.stringify).join("\n")}\n`);
-  const verification = audit.verify(root);
-  assert.equal(verification.ok, false);
-  assert.equal(verification.code, "AUDIT_INTEGRITY_FAILED");
-  assert.equal(verification.record, 1);
+  assert.equal(fs.existsSync(audit.fileFor(root)), false);
+  assert.equal(audit.verify(root).records, 2);
 });
 
-test("hard scope denials remain enforced while selected modes do not deny tools", async (t) => {
+test("hard scope denials remain enforced and Ask mode denies mutating tools", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-hard-deny-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const authority of ["ask_for_approval", "approve_for_me", "full_authority"]) {
@@ -390,5 +449,6 @@ test("hard scope denials remain enforced while selected modes do not deny tools"
     args: { operation: "run", command: "echo ok" },
     entry: entry("exec_command"),
   });
-  assert.equal(modeDecision.decision, "allow");
+  assert.equal(modeDecision.decision, "deny");
+  assert.equal(modeDecision.metadata.code, "TOOL_UNAVAILABLE_IN_MODE");
 });

@@ -7,9 +7,10 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 test("authority selector offers the three bounded profiles while Agents settings exposes only the sub-agent model", () => {
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
   const renderer = read("src/ui/bootstrap.js");
   const styles = read("src/ui/styles/base.css");
   const chatStyles = read("src/ui/styles/chat.css");

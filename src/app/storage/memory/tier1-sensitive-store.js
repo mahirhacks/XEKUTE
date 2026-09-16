@@ -32,6 +32,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   function sessionDir(projectId, sessionId) { return path.join(projectDir(projectId), "sessions", assertMemoryId(sessionId, "session")); }
   function transcriptFile(projectId, sessionId) { return path.join(sessionDir(projectId, sessionId), "transcript.enc.json"); }
   function checkpointFile(projectId, sessionId, which = "current") { return path.join(sessionDir(projectId, sessionId), which === "previous" ? "checkpoint-previous.enc.json" : "checkpoint-current.enc.json"); }
+  function activeFile(projectId, sessionId) { return path.join(sessionDir(projectId, sessionId), "active.enc.json"); }
   function key(file) { return path.resolve(file); }
 
   function encryptEnvelope(value) {
@@ -270,6 +271,49 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     }
     return checkedLoaded;
   }
+  function validateActiveValue(value, projectId, sessionId) {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || value.schema_version !== 3
+      || value.project_id !== projectId
+      || value.session_id !== sessionId
+      || !Array.isArray(value.active)) {
+      return operationFailure("MEMORY_ACTIVE_INVALID", "The encrypted Tier 1 active conversation is invalid or belongs to another project/session.", { project_id: projectId, session_id: sessionId }, true);
+    }
+    return { ok: true, value };
+  }
+  function readActive(projectId, sessionId) {
+    let project;
+    let session;
+    try {
+      project = assertMemoryId(projectId, "proj");
+      session = assertMemoryId(sessionId, "session");
+    } catch (error) {
+      return operationFailure(error.code || "MEMORY_TIER1_INPUT_INVALID", error.message, {}, false);
+    }
+    const loaded = readFile(activeFile(project, session));
+    if (!loaded.ok || !loaded.exists) return loaded;
+    const checked = validateActiveValue(loaded.value, project, session);
+    return checked.ok ? { ...loaded, value: checked.value } : checked;
+  }
+  function writeActive(projectId, sessionId, messages) {
+    let project;
+    let session;
+    try {
+      project = assertMemoryId(projectId, "proj");
+      session = assertMemoryId(sessionId, "session");
+    } catch (error) {
+      return operationFailure(error.code || "MEMORY_TIER1_INPUT_INVALID", error.message, {}, false);
+    }
+    const candidate = {
+      schema_version: 3,
+      project_id: project,
+      session_id: session,
+      active: (Array.isArray(messages) ? messages : []).slice(0, 2_000).map(clone),
+    };
+    const checked = validateActiveValue(candidate, project, session);
+    if (!checked.ok) return checked;
+    return writeFile(activeFile(project, session), candidate);
+  }
   function deleteSession(projectId, sessionId) {
     let directory;
     try { directory = sessionDir(projectId, sessionId); } catch (error) { return operationFailure(error.code || "MEMORY_SESSION_ID_INVALID", error.message, {}, false); }
@@ -315,7 +359,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   }
   function clearEphemeral() { ephemeral.clear(); }
 
-  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, deleteSession, status, flush, resetProject, clearEphemeral });
+  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, readActive, writeActive, deleteSession, status, flush, resetProject, clearEphemeral });
 }
 
 module.exports = Object.freeze({ createTier1SensitiveStore });

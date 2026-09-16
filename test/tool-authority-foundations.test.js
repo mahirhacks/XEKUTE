@@ -73,6 +73,42 @@ test("browser follow-up actions reuse only an already scoped page target", async
   assert.equal(followUp.ok, true);
 });
 
+test("exec_command network probes require configured scope; local commands do not", () => {
+  const root = path.resolve("scope-fixture");
+  assert.equal(evaluateToolScope({ workspace: root, toolName: "exec_command", args: { command: "echo ok", context: "print ok" } }).ok, true);
+  assert.equal(evaluateToolScope({ workspace: root, toolName: "exec_command", args: { command: "nmap --version", context: "check nmap" } }).ok, true);
+  const unscope = evaluateToolScope({
+    workspace: root,
+    toolName: "exec_command",
+    args: { command: "nmap 8.8.8.8", context: "scan resolver" },
+  });
+  assert.equal(unscope.ok, false);
+  assert.equal(unscope.code, "SCOPE_NOT_CONFIGURED");
+  const allowed = evaluateToolScope({
+    workspace: root,
+    toolName: "exec_command",
+    args: { command: "nmap 10.0.0.5", context: "scan in scope" },
+    projectProfile: { scope: { inScopeTargets: ["10.0.0.5"] } },
+  });
+  assert.equal(allowed.ok, true);
+  const curlDenied = evaluateToolScope({
+    workspace: root,
+    toolName: "exec_command",
+    args: { command: "curl https://example.com", context: "fetch page" },
+  });
+  assert.equal(curlDenied.code, "SCOPE_NOT_CONFIGURED");
+});
+
+test("in-scope literal private IPs are not rejected as DNS rebinding", async () => {
+  const allowed = await evaluateToolScopeAsync({
+    workspace: path.resolve("scope-fixture"),
+    toolName: "exec_command",
+    args: { command: "nmap 10.0.0.5", context: "scan lab host" },
+    projectProfile: { scope: { inScopeTargets: ["10.0.0.5"] } },
+  });
+  assert.equal(allowed.ok, true, allowed.reason || allowed.code || "");
+});
+
 test("scope policy contains no executable or approval gate imports", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "authority", "scope", "scope-policy.js"), "utf8");
   assert.doesNotMatch(source, /approval|risk-classifier|deny-list|allow-list/i);

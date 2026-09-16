@@ -1,15 +1,13 @@
 "use strict";
 
+const fs = require("node:fs");
 const path = require("node:path");
-const { verifyModelAssets, MODEL_ID, MODEL_DTYPE } = require("../src/app/services/memory/local-embedding-service.js");
 
 const root = path.resolve(__dirname, "..");
 const modelPath = path.join(root, "resources", "memory-v3", "models", "bge-base-en-v1.5");
-const result = verifyModelAssets(modelPath);
-if (!result.ok) {
-  console.error(`${result.code}: ${result.error}`);
+if (!fs.existsSync(modelPath) || !fs.statSync(modelPath).isDirectory()) {
+  console.error("BGE asset bundle is missing from resources/memory-v3/models/bge-base-en-v1.5");
   process.exitCode = 1;
 } else {
-  const files = Object.keys(result.manifest.files || {});
-  console.log(`BGE asset bundle verified: ${MODEL_ID} (${MODEL_DTYPE}), ${files.length} files.`);
+  console.log("BGE asset bundle is present (unused after Knowledge Library removal).");
 }

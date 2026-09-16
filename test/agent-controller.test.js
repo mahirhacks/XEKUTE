@@ -14,6 +14,7 @@ const {
   advanceTowardPhase,
   toolCallSignature,
 } = require("../src/agent/controller/agent-controller.js");
+const { createTier1ContextCoordinator, CHECKPOINT_RATIO } = require("../src/app/services/memory/tier1-context-coordinator.js");
 const { classifyEvidenceRequirement } = require("../src/agent/runtime/evidence-classifier.js");
 const ContextRouter = require("../src/prompts/skills/context-router");
 const ModeSkills = require("../src/prompts/skills/mode-skills");
@@ -24,7 +25,7 @@ test("agent tool surface is enabled by default in controller turns", () => {
   assert.equal(AgentToolSurface.toolsEnabled(), true);
 });
 
-test("the temporary task-list tool is exposed only for reasonably large Agent requests", async () => {
+test("Agent catalog never includes the retired task-list tool", async () => {
   assert.equal(isReasonablyLargeAgentRequest("Fix the typo in README.md"), false);
   assert.equal(isReasonablyLargeAgentRequest("Implement the following:\n- inspect the updater\n- fix notification state\n- verify packaging"), false);
   assert.equal(isReasonablyLargeAgentRequest("Implement the following:\n- inspect the updater\n- fix notification state\n- update the tests\n- verify packaging"), true);
@@ -43,34 +44,23 @@ test("the temporary task-list tool is exposed only for reasonably large Agent re
   await run("Fix the typo in README.md");
   await run("Implement the following:\n- inspect the updater\n- fix notification state\n- update the tests\n- verify packaging");
   assert.equal(seen[0].includes("update_task_list"), false);
-  assert.equal(seen[1].includes("update_task_list"), true);
-  assert.equal(seen[0].includes("update_project_artifacts"), true);
-  assert.equal(seen[1].includes("update_project_artifacts"), true);
+  assert.equal(seen[1].includes("update_task_list"), false);
+  assert.equal(seen[0].includes("update_project_artifacts"), false);
+  assert.equal(seen[1].includes("update_project_artifacts"), false);
 });
 
-test("a large Agent task publishes checklist updates and removes the checklist on completion", async () => {
+test("Agent turns do not publish a task-list surface", async () => {
   const events = [];
-  let round = 0;
-  const tasks = [
-    { id: "inspect", title: "Inspect current behavior", status: "in_progress" },
-    { id: "change", title: "Implement the change", status: "pending" },
-    { id: "cover", title: "Add regression coverage", status: "pending" },
-    { id: "verify", title: "Verify the result", status: "pending" },
-  ];
   await runAgentTurn({
     workspace: path.resolve("."),
     mode: "agent",
     userMessage: "Implement the following:\n- inspect current behavior\n- make the required change\n- add regression coverage\n- verify the result",
     sendEvent: (event) => events.push(event),
-    runModelRound: async () => {
-      if (round++ === 0) return { fullText: "", toolCalls: [{ id: "tasks", type: "function", function: { name: "update_task_list", arguments: JSON.stringify({ tasks }) } }] };
-      return { fullText: "Done", toolCalls: [] };
-    },
-    executeToolCall: async () => ({ ok: true, value: { tasks, completed: false, currentIndex: 0, total: 4 } }),
+    runModelRound: async () => ({ fullText: "Done", toolCalls: [] }),
+    executeToolCall: async () => ({ ok: true }),
   });
   assert.equal(events.some((event) => event.type === "task_brief"), false);
-  assert.equal(events.some((event) => event.type === "task_list" && event.tasks?.length === 4), true);
-  assert.equal(events.some((event) => event.type === "task_list" && event.clear === true), true);
+  assert.equal(events.some((event) => event.type === "task_list"), false);
 });
 
 test("scope-only dispatch returns raw tool results to the model", async (t) => {
@@ -190,6 +180,236 @@ test("Tier 1 keeps the current prompt before assistant/tool turns and preserves 
   assert.equal(rounds[1].at(-1).role, "tool");
   assert.deepEqual(result.appendedMessages.map((message) => message.role), ["assistant", "tool", "assistant"]);
   assert.equal(result.appendedMessages.some(currentPrompt), false, "the protected prompt is not duplicated in appended transcript messages");
+  const active = tier1.state(projectId, sessionId).active;
+  assert.deepEqual(active.map((message) => message.role), ["user", "assistant", "tool", "assistant"]);
+  assert.equal(active[0].content, "run the check");
+  assert.equal(active[1].tool_calls[0].function.name, "exec_command");
+  assert.equal(active[2].content.includes("check completed"), true);
+  assert.equal(active[3].content, "done");
+  assert.deepEqual(result.contextUsage.sections.map((section) => section.label), ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP", "Summarized Conversation", "Active Conversation", "Current Workflow"]);
+});
+
+test("Tier 1 excludes tool attempts that never crossed the execution boundary", async () => {
+  const projectId = "proj_00000000-0000-4000-8000-000000004111";
+  const sessionId = "session_00000000-0000-4000-8000-000000004112";
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  let round = 0;
+  const result = await runAgentTurn({
+    model: "local:small",
+    numCtx: 32768,
+    contextBudget: 32768,
+    tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    mode: "agent",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    userMessage: "try the unavailable reader",
+    chatHistory: [],
+    sendEvent() {},
+    async runModelRound() {
+      round += 1;
+      if (round === 1) return { ok: true, fullText: "Trying.", toolCalls: [{ id: "call-missing", type: "function", function: { name: "read_file", arguments: { path: "missing.txt" } } }], finishReason: "tool_calls" };
+      return { ok: true, fullText: "The reader was unavailable.", toolCalls: [], finishReason: "stop" };
+    },
+    async executeToolCall() { throw new Error("an unavailable tool must not execute"); },
+  });
+
+  assert.equal(result.ok, true);
+  const active = tier1.state(projectId, sessionId).active;
+  assert.deepEqual(active.map((message) => message.role), ["user", "assistant"]);
+  assert.equal(JSON.stringify(active).includes("call-missing"), false);
+  assert.equal(JSON.stringify(active).includes("TOOL_UNAVAILABLE"), false);
+});
+
+test("Tier 1 usage snapshots keep local section tokens instead of OpenRouter prompt totals", async () => {
+  const projectId = "proj_00000000-0000-4000-8000-000000004121";
+  const sessionId = "session_00000000-0000-4000-8000-000000004122";
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  const events = [];
+  const result = await runAgentTurn({
+    model: "provider/reconciled-model",
+    numCtx: 32_768,
+    contextBudget: 32_768,
+    contextPlan: { provider: "openrouter", effectiveLimitTokens: 32_768 },
+    mode: "ask",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    userMessage: "Explain the result.",
+    chatHistory: [],
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      return {
+        ok: true,
+        provider: "openrouter",
+        fullText: "Done.",
+        toolCalls: [],
+        finishReason: "stop",
+        usage: { promptTokens: 777, completionTokens: 9, source: "openrouter" },
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.contextUsage.source, "estimate");
+  assert.equal(result.contextUsage.tokenCalculation.method, "tier1-approximate");
+  assert.notEqual(result.contextUsage.promptTokens, 777);
+  assert.equal(result.contextUsage.sections.length, 9);
+  assert.equal(
+    result.contextUsage.sections.reduce((sum, section) => sum + section.tokens, 0),
+    result.contextUsage.promptTokens,
+  );
+  const active = result.contextUsage.sections.find((section) => section.key === "active_conversation");
+  assert.ok(active.tokens > 0, "Active Conversation must come from the T1 ledger");
+  const expectedActive = Number(result.contextUsage.tier1?.rows?.["Active Conversation"]) || 0;
+  assert.equal(active.tokens, expectedActive);
+
+  const snapshots = events.filter((event) => event.type === "context_usage" && event.usage?.sections?.length === 9);
+  assert.ok(snapshots.length >= 2);
+  for (const snapshot of snapshots) {
+    assert.equal(snapshot.usage.source, "estimate");
+    assert.notEqual(snapshot.usage.promptTokens, 777);
+    assert.equal(snapshot.usage.tokenCalculation.method, "tier1-approximate");
+    assert.equal(
+      snapshot.usage.sections.reduce((sum, section) => sum + section.tokens, 0),
+      snapshot.usage.promptTokens,
+      "section rows must match the T1 approximate total",
+    );
+  }
+  assert.equal(events.some((event) => event.type === "context_usage" && event.usage?.source === "openrouter"), false);
+});
+
+test("a Tier 1 preview fills the meter before the first send without running the model", async () => {
+  const projectId = "proj_00000000-0000-4000-8000-000000004141";
+  const sessionId = "session_00000000-0000-4000-8000-000000004142";
+  const { previewTier1Usage } = require("../src/agent/controller/agent-controller.js");
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  const events = [];
+  const preview = await previewTier1Usage({
+    model: "provider/meter-model",
+    numCtx: 32_768,
+    contextBudget: 32_768,
+    contextPlan: { provider: "openrouter", effectiveLimitTokens: 32_768 },
+    tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    mode: "agent",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    chatHistory: [],
+    sendEvent(event) { events.push(event); },
+    async runModelRound() { throw new Error("a context preview must not call the model"); },
+    async executeToolCall() { throw new Error("a context preview must not execute tools"); },
+  });
+
+  assert.equal(preview.ok, true);
+  assert.equal(preview.preview, true);
+  assert.equal(preview.contextUsage.source, "estimate");
+  assert.equal(preview.contextUsage.tokenCalculation.method, "tier1-approximate");
+  assert.equal(preview.contextUsage.sections.length, 9);
+  const rows = Object.fromEntries(preview.contextUsage.sections.map((section) => [section.key, section.tokens]));
+  assert.ok(rows.system_prompt > 0, "Block A rows are available before the first send");
+  assert.ok(rows.tool_definitions > 0);
+  assert.equal(rows.active_conversation, 0, "an unsent chat has no active conversation");
+  assert.deepEqual(tier1.state(projectId, sessionId).active, [], "a preview does not seed the ledger");
+  assert.equal(events.length, 0, "a preview publishes no run events");
+});
+
+test("Tier 1 meter updates when the active ledger changes and survives a coordinator restart", async () => {
+  const crypto = require("node:crypto");
+  const { createTier1SensitiveStore } = require("../src/app/storage/memory/tier1-sensitive-store.js");
+  const { createTier1ContextCoordinator } = require("../src/app/services/memory/tier1-context-coordinator.js");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-t1-meter-restart-"));
+  const protector = {
+    available: () => true,
+    encrypt: (value) => Buffer.from(String(value), "utf8").toString("base64"),
+    decrypt: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+  };
+  const store = createTier1SensitiveStore({ fs, path, crypto, baseDir: root, protector });
+  const projectId = "proj_00000000-0000-4000-8000-000000004131";
+  const sessionId = "session_00000000-0000-4000-8000-000000004132";
+  const first = createTier1ContextCoordinator({ sensitiveStore: store });
+  const events = [];
+  let round = 0;
+  try {
+    const firstTurn = await runAgentTurn({
+      model: "provider/meter-model",
+      numCtx: 32_768,
+      contextBudget: 32_768,
+      contextPlan: { provider: "openrouter", effectiveLimitTokens: 32_768 },
+      tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+      mode: "agent",
+      modeFamily: "assist",
+      projectId,
+      memorySessionId: sessionId,
+      tier1Context: first,
+      userMessage: "run the check",
+      chatHistory: [],
+      sendEvent(event) { events.push(event); },
+      async runModelRound() {
+        round += 1;
+        if (round === 1) {
+          return {
+            ok: true,
+            provider: "openrouter",
+            fullText: "",
+            toolCalls: [{ id: "call-check", type: "function", function: { name: "exec_command", arguments: {} } }],
+            finishReason: "tool_calls",
+            usage: { promptTokens: 777, completionTokens: 2, source: "openrouter" },
+          };
+        }
+        return {
+          ok: true,
+          provider: "openrouter",
+          fullText: "done",
+          toolCalls: [],
+          finishReason: "stop",
+          usage: { promptTokens: 777, completionTokens: 4, source: "openrouter" },
+        };
+      },
+      async executeToolCall() {
+        return { ok: true, value: { summary: "check completed" } };
+      },
+    });
+    assert.equal(firstTurn.ok, true, JSON.stringify(firstTurn.error || ""));
+    const usageEvents = events.filter((event) => event.type === "context_usage" && event.usage?.source === "estimate");
+    assert.ok(usageEvents.length >= 3);
+    const activeTokens = usageEvents.map((event) => (
+      event.usage.sections.find((section) => section.key === "active_conversation")?.tokens || 0
+    ));
+    assert.ok(activeTokens.some((tokens, index) => index > 0 && tokens > activeTokens[0]), "Active Conversation tokens must rise when T1 appends");
+    assert.equal(usageEvents.every((event) => event.usage.promptTokens !== 777), true);
+
+    const restarted = createTier1ContextCoordinator({ sensitiveStore: store });
+    const secondTurn = await runAgentTurn({
+      model: "provider/meter-model",
+      numCtx: 32_768,
+      contextBudget: 32_768,
+      contextPlan: { provider: "openrouter", effectiveLimitTokens: 32_768 },
+      mode: "ask",
+      modeFamily: "assist",
+      projectId,
+      memorySessionId: sessionId,
+      tier1Context: restarted,
+      userMessage: "continue the review",
+      chatHistory: [],
+      sendEvent() {},
+      async runModelRound() {
+        return { ok: true, fullText: "Continuing.", toolCalls: [], finishReason: "stop" };
+      },
+    });
+    assert.equal(secondTurn.ok, true, JSON.stringify(secondTurn.error || ""));
+    const restored = restarted.state(projectId, sessionId).active;
+    assert.ok(restored.some((message) => message.role === "user" && message.content === "run the check"));
+    assert.ok(restored.some((message) => message.role === "tool" || String(message.content || "").includes("check completed")));
+    assert.ok(restored.some((message) => message.role === "user" && message.content === "continue the review"));
+    const secondActive = secondTurn.contextUsage.sections.find((section) => section.key === "active_conversation");
+    assert.ok(secondActive.tokens > activeTokens[0], "restarted T1 Active Conversation must include the persisted ledger");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("simple conversation uses compact context with no tool execution and no workspace writes", async (t) => {
@@ -518,7 +738,7 @@ test("scope questions in an open project inject project settings and scope guida
   assert.match(prompt, /filesystem and network scope separately/i);
   assert.match(prompt, /UNTRUSTED CONTEXT DATA/);
   assert.ok(Array.isArray(roundPayload.tools) && roundPayload.tools.length > 0, "ask mode exposes the canonical tool set");
-  assert.ok(roundPayload.tools.some((tool) => tool.function?.name === "query_assessment"), "ask mode can analyze assessment evidence");
+  assert.ok(roundPayload.tools.some((tool) => tool.function?.name === "search_workspace"), "ask mode can inspect workspace evidence");
   assert.equal(roundPayload.tools.some((tool) => tool.function?.name === "exec_command"), false, "ask mode does not include exec_command");
   assert.equal(result.contextRoute.includeProjectContext, true);
 });
@@ -553,19 +773,18 @@ test("inherited confirmations can complete with a normal text answer when no too
 
 test("mode prompts stay distinct while the tool surface is registry-backed", () => {
   const agentPrompt = buildSystemContext({ mode: "agent", numCtx: 4096, userMessage: "Fix it" });
-  const planPrompt = buildSystemContext({ mode: "plan", numCtx: 4096, userMessage: "Plan it" });
+  const leftoverPlan = buildSystemContext({ mode: "plan", numCtx: 4096, userMessage: "Plan it" });
   const askPrompt = buildSystemContext({ mode: "ask", numCtx: 4096, userMessage: "Explain it" });
-  const hypothesisPrompt = buildSystemContext({ mode: "hypothesis", numCtx: 4096, userMessage: "Hypothesize" });
+  const leftoverHypothesis = buildSystemContext({ mode: "hypothesis", numCtx: 4096, userMessage: "Hypothesize" });
   assert.match(agentPrompt, /PROFILE — Agent/);
-  assert.match(planPrompt, /PROFILE — Plan/);
-  assert.match(hypothesisPrompt, /PROFILE — Hypothesis/);
+  assert.match(leftoverPlan, /PROFILE — Ask/);
+  assert.match(leftoverHypothesis, /PROFILE — Ask/);
   assert.match(askPrompt, /PROFILE — Ask/);
   assert.match(ModeSkills.render("agent"), /tools/i);
-  assert.match(planPrompt, /PROFILE — Plan/i);
-  assert.match(planPrompt, /read-only planning plus one final checklist artifact transaction/i);
+  assert.doesNotMatch(leftoverPlan, /PROFILE — Plan/);
+  assert.doesNotMatch(leftoverHypothesis, /PROFILE — Hypothesis/);
   assert.match(askPrompt, /read-only questions and analysis/i);
   assert.match(askPrompt, /inconclusive/i);
-  assert.match(hypothesisPrompt, /PROFILE — Hypothesis/i);
   assert.match(askPrompt, /Runtime scope checks are enforced/i);
 });
 
@@ -643,3 +862,583 @@ test("tool signatures canonicalize argument key order", () => {
   });
   assert.equal(first, second);
 });
+
+test("a Tier 1 checkpoint fills summarized conversation and current workflow usage", async () => {
+  const projectId = "proj_00000000-0000-4000-8000-000000004301";
+  const sessionId = "session_00000000-0000-4000-8000-000000004302";
+  const tier1 = require("../src/app/services/memory/tier1-context-coordinator.js").createTier1ContextCoordinator();
+  const events = [];
+  let modelCalls = 0;
+  const chatHistory = Array.from({ length: 80 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: `Turn ${index}: ${"finding ".repeat(80)}`,
+  }));
+  const result = await runAgentTurn({
+    model: "local:small",
+    numCtx: 4_096,
+    contextBudget: 4_096,
+    contextPlan: { provider: "ollama", effectiveLimitTokens: 4_096, promptBudgetTokens: 4_096 },
+    mode: "ask",
+    modeFamily: "assist",
+    projectId,
+    memorySessionId: sessionId,
+    tier1Context: tier1,
+    userMessage: "Continue the investigation from the last finding.",
+    chatHistory,
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls > 2) {
+        throw new Error("wrap-up resume must not call runModelRound more than twice");
+      }
+      return { ok: true, fullText: "Continuing from the checkpoint.", toolCalls: [], finishReason: "stop" };
+    },
+  });
+
+  assert.equal(result.ok, true, result.error || "");
+  const completed = events.filter((event) => event.type === "context_checkpoint" && event.status === "completed");
+  assert.ok(completed.length, "the controller must complete at least one conversation checkpoint");
+  const latestCheckpoint = completed.at(-1);
+  assert.ok(latestCheckpoint.summarizedConversationTokens > 0, "summarized conversation must receive checkpoint tokens");
+  assert.ok(latestCheckpoint.currentWorkflowTokens > 0, "current workflow must be populated by the checkpoint");
+  assert.equal(Boolean(latestCheckpoint.currentWorkflow), true);
+
+  const usageAfter = [...events].reverse().find((event) => event.type === "context_usage" && Array.isArray(event.usage?.sections));
+  assert.ok(usageAfter, "a context usage snapshot must follow the checkpoint");
+  const summarized = usageAfter.usage.sections.find((section) => section.key === "summarized_conversation");
+  const workflow = usageAfter.usage.sections.find((section) => section.key === "current_workflow");
+  assert.ok(summarized?.tokens > 0);
+  assert.ok(workflow?.tokens > 0);
+});
+
+function memoryIds(n) {
+  return {
+    projectId: `proj_00000000-0000-4000-8000-00000000${n}`,
+    sessionId: `session_00000000-0000-4000-8000-00000000${n}`,
+  };
+}
+
+function activeConversationHasRole(assembled, role) {
+  const components = assembled?.blocks?.B?.components || [];
+  const active = components.find((entry) => entry.label === "Active Conversation");
+  return Array.isArray(active?.value) && active.value.some((message) => message?.role === role);
+}
+
+function delegateTier1(inner, extras = {}) {
+  return {
+    assemble: (...args) => inner.assemble(...args),
+    pressure: extras.pressure || ((...args) => inner.pressure(...args)),
+    appendConversation: (...args) => inner.appendConversation(...args),
+    checkpoint: extras.checkpoint || ((...args) => inner.checkpoint(...args)),
+    setActiveConversation: (...args) => inner.setActiveConversation?.(...args),
+    setWorkflow: (...args) => inner.setWorkflow?.(...args),
+    state: (...args) => inner.state?.(...args),
+  };
+}
+
+function createWrapUpCrossingCoordinator({
+  failCheckpoint = false,
+  stayOverAfterRotate = false,
+  onAfterCheckpoint = null,
+} = {}) {
+  const inner = createTier1ContextCoordinator();
+  let rotated = false;
+  return delegateTier1(inner, {
+    pressure(input) {
+      const base = inner.pressure(input);
+      const assembled = input.assembled;
+      const crossed = activeConversationHasRole(assembled, "assistant")
+        || activeConversationHasRole(assembled, "tool");
+      if (!rotated) {
+        return { ...base, threshold: crossed ? 0 : Number.MAX_SAFE_INTEGER };
+      }
+      return { ...base, threshold: stayOverAfterRotate ? 0 : Number.MAX_SAFE_INTEGER };
+    },
+    async checkpoint(...args) {
+      if (failCheckpoint) {
+        return { ok: false, code: "MEMORY_CHECKPOINT_FAILED", error: "forced checkpoint failure" };
+      }
+      const result = await inner.checkpoint(...args);
+      if (result?.ok && result?.checkpointed) rotated = true;
+      if (typeof onAfterCheckpoint === "function") onAfterCheckpoint(result);
+      return result;
+    },
+  });
+}
+
+function wrapUpTurnOptions({ ids, events, tier1, runModelRound, extra = {} }) {
+  return {
+    model: "local:small",
+    numCtx: 32_768,
+    contextBudget: 32_768,
+    contextPlan: { provider: "ollama", effectiveLimitTokens: 32_768, promptBudgetTokens: 32_768 },
+    mode: "ask",
+    modeFamily: "assist",
+    projectId: ids.projectId,
+    memorySessionId: ids.sessionId,
+    tier1Context: tier1,
+    userMessage: "Continue the investigation from the last finding.",
+    chatHistory: [],
+    sendEvent(event) { events.push(event); },
+    runModelRound,
+    async executeToolCall() {
+      return { ok: true, value: { summary: "check completed" } };
+    },
+    ...extra,
+    projectId: ids.projectId,
+    memorySessionId: ids.sessionId,
+    tier1Context: extra.tier1Context || tier1,
+  };
+}
+
+test("wrap-up block_complete rotates then resumes the same turn", async () => {
+  assert.equal(CHECKPOINT_RATIO, 0.90);
+  const ids = memoryIds(4401);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+      }
+      return { ok: true, fullText: "Continuing after the summarized conversation.", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(result.runState.status, "completed");
+  const started = events.filter((event) => event.type === "context_checkpoint" && event.status === "started");
+  const completed = events.filter((event) => event.type === "context_checkpoint" && event.status === "completed");
+  assert.ok(started.some((event) => event.reason === "block_complete"));
+  assert.ok(completed.some((event) => event.reason === "block_complete"));
+});
+
+test("a tool-free turn under 90% completes without a wrap-up checkpoint", async () => {
+  const ids = memoryIds(4402);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createTier1ContextCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      return { ok: true, fullText: "XSS is cross-site scripting.", toolCalls: [], finishReason: "stop" };
+    },
+    extra: { userMessage: "What is XSS?" },
+  }));
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(result.runState.status, "completed");
+  assert.equal(events.some((event) => event.type === "context_checkpoint"), false);
+});
+
+test("wrap-up resume latches after one continue when pressure stays at 90%", async () => {
+  const ids = memoryIds(4403);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator({ stayOverAfterRotate: true }),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls > 2) {
+        throw new Error("latch must not allow a third runModelRound");
+      }
+      return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(result.runState.status, "completed");
+});
+
+test("in-loop block_complete checkpoint failure is inconclusive", async () => {
+  const ids = memoryIds(4404);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator({ failCheckpoint: true }),
+    async runModelRound() {
+      modelCalls += 1;
+      return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "MEMORY_CHECKPOINT_FAILED");
+  assert.equal(result.runState.status, "inconclusive");
+  assert.notEqual(result.runState.status, "completed");
+  assert.equal(modelCalls, 1);
+  assert.ok(Array.isArray(result.failureRecords));
+  assert.equal(typeof result.executedTools, "boolean");
+  assert.ok(Array.isArray(result.evidenceIds));
+  assert.equal("lastUsage" in result, true);
+  assert.equal("contextUsage" in result, true);
+});
+
+test("abort after wrap-up checkpoint does not resume the model", async () => {
+  const ids = memoryIds(4405);
+  const events = [];
+  let modelCalls = 0;
+  const abort = new AbortController();
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator({
+      onAfterCheckpoint() { abort.abort(); },
+    }),
+    async runModelRound() {
+      modelCalls += 1;
+      return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+    },
+    extra: { signal: abort.signal },
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.aborted, true);
+  assert.equal(result.runState.status, "stopped");
+  assert.equal(modelCalls, 1);
+});
+
+test("tool-call batches are not checkpointed until the batch seals", async () => {
+  const ids = memoryIds(4406);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return {
+          ok: true,
+          fullText: "",
+          toolCalls: [{ id: "call-pair", type: "function", function: { name: "exec_command", arguments: {} } }],
+          finishReason: "tool_calls",
+        };
+      }
+      return { ok: true, fullText: "The check finished.", toolCalls: [], finishReason: "stop" };
+    },
+    extra: {
+      mode: "agent",
+      tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  const firstToolOpen = events.findIndex((event) => event.type === "tool_call" || event.type === "tool_start");
+  const lastToolResult = events.findLastIndex((event) => event.type === "tool_result");
+  assert.ok(firstToolOpen >= 0, "a tool_call or tool_start must be emitted");
+  assert.ok(lastToolResult >= 0, "tool_result must be emitted");
+  const between = events.slice(firstToolOpen, lastToolResult + 1);
+  assert.equal(between.some((event) => event.type === "context_checkpoint"), false);
+  const toolResultsCheckpoint = events.findIndex((event) => event.type === "context_checkpoint" && event.reason === "tool_results");
+  assert.ok(toolResultsCheckpoint > lastToolResult, "reason tool_results must fire only after the batch seals");
+  assert.equal(events.some((event) => event.type === "context_checkpoint" && event.reason === "tool_results" && events.indexOf(event) < lastToolResult), false);
+});
+
+test("before_model_call does not force a checkpoint when active conversation is empty", async () => {
+  const ids = memoryIds(4407);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator({ stayOverAfterRotate: true }),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls > 2) {
+        throw new Error("empty-active resume must not loop");
+      }
+      if (modelCalls === 1) {
+        return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+      }
+      return { ok: true, fullText: "Continuing after rotation.", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(events.some((event) => event.type === "context_checkpoint" && event.reason === "before_model_call"), false);
+});
+
+test("unlimited MAX_AGENT_ROUNDS still resumes wrap-up in the same for-loop", async () => {
+  assert.equal(MAX_AGENT_ROUNDS, 0);
+  const ids = memoryIds(4408);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+      }
+      return { ok: true, fullText: "Resumed in the same turn.", toolCalls: [], finishReason: "stop" };
+    },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(result.runState.status, "completed");
+});
+
+test("finite maxAgentRounds refunds the wrap-up round so resume is not post-loop", async () => {
+  const ids = memoryIds(4409);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createWrapUpCrossingCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return { ok: true, fullText: "The objective is complete. What would you like to do next?", toolCalls: [], finishReason: "stop" };
+      }
+      return { ok: true, fullText: "Resumed after the wrap-up checkpoint.", toolCalls: [], finishReason: "stop" };
+    },
+    extra: { maxAgentRounds: 1 },
+  }));
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(modelCalls, 2);
+  assert.equal(result.runState.status, "completed");
+  assert.notEqual(result.runState.status, "inconclusive");
+});
+
+test("post-loop round-limit block_complete stays terminal", async () => {
+  const ids = memoryIds(4410);
+  const events = [];
+  let modelCalls = 0;
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids,
+    events,
+    tier1: createTier1ContextCoordinator(),
+    async runModelRound() {
+      modelCalls += 1;
+      return {
+        ok: true,
+        fullText: "",
+        toolCalls: [{ id: `call-limit-${modelCalls}`, type: "function", function: { name: "exec_command", arguments: { n: modelCalls } } }],
+        finishReason: "tool_calls",
+      };
+    },
+    extra: {
+      mode: "agent",
+      maxAgentRounds: 1,
+      tools: [{ type: "function", function: { name: "exec_command", description: "run a check", parameters: { type: "object" } } }],
+    },
+  }));
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result.runState.status, "inconclusive");
+  assert.equal(result.ok, true);
+  const blockComplete = events.filter((event) => event.type === "context_checkpoint" && event.reason === "block_complete");
+  assert.equal(blockComplete.some((event) => event.status === "started" || event.status === "completed"), false);
+});
+
+test("model rounds emit stop only when finishReason is stop and there are no tool calls", async () => {
+  const events = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "Check package.json",
+    tools: [{ type: "function", function: { name: "exec_command", description: "run a command", parameters: {} } }],
+    sendEvent(event) { events.push(event); },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) {
+        return {
+          ok: true,
+          fullText: "Reading the file.",
+          toolCalls: [{ id: "call-1", type: "function", function: { name: "exec_command", arguments: { executable: process.execPath, args: ["-e", "console.log(1)"] } } }],
+          finishReason: "tool_calls",
+        };
+      }
+      return { ok: true, fullText: "The start script is electron .", toolCalls: [], finishReason: "stop" };
+    },
+    async executeToolCall() {
+      return { ok: true, value: { stdout: "1", stderr: "", exitCode: 0 } };
+    },
+  });
+  assert.equal(result.ok, true, result.error || "");
+  const roundsEmitted = events.filter((event) => event.type === "model_round");
+  assert.equal(roundsEmitted.length, 2);
+  assert.equal(roundsEmitted[0].finishReason, "tool_calls");
+  assert.equal(roundsEmitted[0].stop, false);
+  assert.equal(roundsEmitted[1].finishReason, "stop");
+  assert.equal(roundsEmitted[1].stop, true);
+  assert.equal(result.finalText, "The start script is electron .");
+});
+
+function execToolCall(id, args = {}) {
+  return {
+    id,
+    type: "function",
+    function: { name: "exec_command", arguments: { command: `echo ${id}`, context: "echo command", ...args } },
+  };
+}
+
+test("a single exec_command run seals its result as soon as it finishes", async () => {
+  const log = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "run one",
+    tools: [{ type: "function", function: { name: "exec_command", description: "run", parameters: {} } }],
+    sendEvent(event) {
+      if (event.type === "tool_result") log.push(`result:${event.tool.callId}`);
+    },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) return { fullText: "", toolCalls: [execToolCall("call-one")] };
+      return { fullText: "done", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall }) {
+      log.push(`start:${toolCall.id}`);
+      log.push(`end:${toolCall.id}`);
+      return { ok: true, value: { stdout: toolCall.id, exitCode: 0 } };
+    },
+  });
+  assert.equal(result.ok, true, result.error || "");
+  assert.deepEqual(log, ["start:call-one", "end:call-one", "result:call-one"]);
+});
+
+test("multiple exec_command runs seal agent-facing results in call order", async () => {
+  const log = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "run three",
+    tools: [{ type: "function", function: { name: "exec_command", description: "run", parameters: {} } }],
+    sendEvent(event) {
+      if (event.type === "tool_start") log.push(`start-event:${event.tool.callId}`);
+      if (event.type === "tool_result") log.push(`result:${event.tool.callId}:${event.result?.error || event.result?.value?.stdout || ""}`);
+    },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) {
+        return {
+          fullText: "",
+          toolCalls: [execToolCall("call-1"), execToolCall("call-2"), execToolCall("call-3")],
+        };
+      }
+      return { fullText: "done", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall }) {
+      log.push(`exec:${toolCall.id}`);
+      if (toolCall.id === "call-2") return { ok: false, error: "boom", value: { stdout: "call-2", exitCode: 1 } };
+      return { ok: true, value: { stdout: toolCall.id, exitCode: 0 } };
+    },
+  });
+  assert.equal(result.ok, true, result.error || "");
+  assert.deepEqual(log, [
+    "start-event:call-1",
+    "exec:call-1",
+    "result:call-1:call-1",
+    "start-event:call-2",
+    "exec:call-2",
+    "result:call-2:boom",
+    "start-event:call-3",
+    "exec:call-3",
+    "result:call-3:call-3",
+  ]);
+});
+
+test("mixed run and non-run tools seal in call order", async () => {
+  const log = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "run mixed",
+    tools: [
+      { type: "function", function: { name: "exec_command", description: "run", parameters: {} } },
+      { type: "function", function: { name: "read_file", description: "read", parameters: {} } },
+    ],
+    sendEvent(event) {
+      if (event.type === "tool_result") log.push(`result:${event.tool.toolName}:${event.tool.callId}`);
+    },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) {
+        return {
+          fullText: "",
+          toolCalls: [
+            execToolCall("call-run-1"),
+            {
+              id: "call-read",
+              type: "function",
+              function: { name: "read_file", arguments: { path: "README.md" } },
+            },
+            execToolCall("call-run-2"),
+          ],
+        };
+      }
+      return { fullText: "done", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall }) {
+      log.push(`exec:${toolCall.id}`);
+      return { ok: true, value: { stdout: toolCall.id } };
+    },
+  });
+  assert.equal(result.ok, true, result.error || "");
+  assert.deepEqual(log, [
+    "exec:call-run-1",
+    "result:exec_command:call-run-1",
+    "exec:call-read",
+    "result:read_file:call-read",
+    "exec:call-run-2",
+    "result:exec_command:call-run-2",
+  ]);
+  const toolMessages = result.appendedMessages.filter((message) => message.role === "tool");
+  assert.deepEqual(toolMessages.map((message) => message.tool_name), ["exec_command", "read_file", "exec_command"]);
+});
+
+test("aborting an agent run does not execute remaining queued commands", async () => {
+  const log = [];
+  const abort = new AbortController();
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "run two",
+    signal: abort.signal,
+    tools: [{ type: "function", function: { name: "exec_command", description: "run", parameters: {} } }],
+    sendEvent(event) {
+      if (event.type === "tool_result") log.push(`result:${event.tool.callId}`);
+    },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) return { fullText: "", toolCalls: [execToolCall("call-a"), execToolCall("call-b")] };
+      return { fullText: "should not happen", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall }) {
+      log.push(`exec:${toolCall.id}`);
+      if (toolCall.id === "call-a") abort.abort();
+      return { ok: true, aborted: toolCall.id === "call-a", value: { stdout: toolCall.id } };
+    },
+  });
+  assert.equal(result.aborted, true);
+  assert.deepEqual(log, ["exec:call-a", "result:call-a"]);
+  assert.equal(log.includes("exec:call-b"), false);
+});
+

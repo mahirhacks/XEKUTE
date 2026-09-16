@@ -21,6 +21,20 @@ function fakeSafeStorage() {
   };
 }
 
+test("container exposes durable process manager and binds exec_command", () => {
+  const container = createContainer({ app: fakeApp(), safeStorage: fakeSafeStorage(), getMainWindow: () => null });
+  assert.equal(typeof container.durableProcessManager?.run, "function");
+  assert.equal(typeof container.durableProcessManager?.start, "function");
+  assert.equal(typeof container.durableProcessManager?.status, "function");
+  assert.equal(typeof container.durableProcessManager?.stop, "function");
+  assert.equal(typeof container.durableProcessManager?.list, "function");
+  const execEntry = container.toolRegistry.get("exec_command");
+  assert.ok(execEntry?.adapter);
+  const containerSource = require("fs").readFileSync(require("path").join(__dirname, "..", "src", "infrastructure", "di", "container.js"), "utf8");
+  assert.doesNotMatch(containerSource, /registerExecCommand\(toolRegistry,\s*createExecCommandTool\(\)\)/);
+  assert.match(containerSource, /createExecCommandTool\(\{\s*processManager:\s*durableProcessManager\s*\}\)/);
+});
+
 test("container constructs the full service graph with fake Electron deps", () => {
   const container = createContainer({ app: fakeApp(), safeStorage: fakeSafeStorage(), getMainWindow: () => null });
 
@@ -35,7 +49,9 @@ test("container constructs the full service graph with fake Electron deps", () =
   assert.equal(typeof container.webResearch, "object");
   assert.equal(typeof container.webClone, "object");
   assert.equal(typeof container.assessmentWorkspace, "object");
-  assert.equal(typeof container.assessmentMap, "object");
+  assert.equal(typeof container.javascriptArtifacts, "object");
+  assert.equal(typeof container.webArtifacts, "object");
+  assert.equal(Object.prototype.hasOwnProperty.call(container, "assessmentMap"), false);
   assert.equal(typeof container.securityHttpWorkbench, "object");
   assert.equal(typeof container.buildIntruderRequests, "function");
   assert.equal(typeof container.getProxyListener, "function");
@@ -44,12 +60,8 @@ test("container constructs the full service graph with fake Electron deps", () =
   assert.equal(typeof container.memoryProjectIdentityStore, "object");
   assert.equal(typeof container.memorySchemaRegistry, "object");
   assert.equal(typeof container.projectArtifacts, "object");
-  assert.equal(typeof container.knowledgeLibrary, "object");
   assert.equal(typeof container.tier1SensitiveStore, "object");
   assert.equal(typeof container.memoryTier1Coordinator, "object");
-  assert.equal(typeof container.knowledgeStore, "object");
-  assert.equal(typeof container.knowledgeEmbeddingService, "object");
-  assert.equal(typeof container.knowledgeKag, "object");
   for (const retired of [
     "memoryManifestStore", "memoryEventStore", "memorySnapshotStore", "memoryArtifactRegistry",
     "memoryDerivedProjection", "memoryGraphView", "memoryBlockUpdater", "memoryContextCheckpoint",
@@ -68,6 +80,8 @@ test("container exposes singleton state maps and a dispose path", () => {
 
   assert.ok(container.terminals instanceof Map);
   assert.ok(container.toolProcesses instanceof Map);
+  assert.equal(typeof container.activeTerminalCatalog?.setUserActiveTerminal, "function");
+  assert.equal(typeof container.activeTerminalCatalog?.view, "function");
   assert.ok(container.ollamaControllers instanceof Map);
   assert.ok(container.pendingOperatorQuestions instanceof Map);
   assert.ok(container.webClonePreviewDocuments instanceof Map);

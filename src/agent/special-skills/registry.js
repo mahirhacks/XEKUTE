@@ -2,14 +2,14 @@
 
 const pathDefault = require("node:path");
 const { discoverPackages } = require("./loader.js");
+const { MODE_KEY_ALIASES, MODES } = require("../modes/mode-registry.js");
 
-const INTERNAL_SKILL_IDS = Object.freeze(new Set(["pentest", "report", "create-rule", "create-skill", "create-subagent"]));
+const INTERNAL_SKILL_IDS = Object.freeze(new Set(["report", "create-rule", "create-skill", "create-subagent"]));
 const INTERNAL_SKILL_INTENTS = Object.freeze([
   Object.freeze({ id: "create-subagent", pattern: /\b(?:create|add|define|build|make)\b.{0,48}\b(?:subagent|sub-agent|specialist\s+agent)\b/i }),
   Object.freeze({ id: "create-rule", pattern: /\b(?:create|add|define|write|make)\b.{0,48}\b(?:project\s+rule|global\s+rule|xekute\s+rule|agent\s+rule|rule)\b/i }),
   Object.freeze({ id: "create-skill", pattern: /\b(?:create|add|define|build|make)\b.{0,48}\b(?:guidance\s+skill|custom\s+skill|xekute\s+skill|agent\s+skill|skill)\b/i }),
   Object.freeze({ id: "report", pattern: /\b(?:create|generate|write|build|update|export)\b.{0,64}\b(?:vapt|pentest|penetration\s+test|security\s+assessment|assessment)?\s*report\b/i }),
-  Object.freeze({ id: "pentest", pattern: /(?:\b(?:run|start|perform|conduct|execute|continue|resume)\b.{0,64}\b(?:pentest|penetration\s+test|vapt|security\s+assessment|bug\s+bounty\s+assessment)\b|\b(?:pentest|penetration\s+test|vapt)\b.{0,64}(?:\b(?:target|site|application|app|api|assessment)\b|https?:\/\/|[a-z0-9.-]+\.[a-z]{2,}))/i }),
 ]);
 
 function internalSkillSelection(raw) {
@@ -57,9 +57,11 @@ function createSpecialSkillRegistry({ root = pathDefault.resolve(__dirname), fs,
     const normalizedId = String(id || "").trim().toLowerCase();
     const pkg = load().byId.get(normalizedId);
     if (!pkg) return { ok: false, error: `Unknown internal skill: ${normalizedId || "<empty>"}`, code: "SPECIAL_SKILL_NOT_FOUND", id: normalizedId };
-    const mode = String(options?.mode || "").trim().toLowerCase();
-    if (mode && !pkg.manifest.modes.includes(mode)) {
-      return { ok: false, error: `${pkg.manifest.id} is unavailable in ${mode} mode.`, code: "SPECIAL_SKILL_MODE_UNSUPPORTED", id: normalizedId, mode };
+    const rawMode = String(options?.mode || "").trim().toLowerCase();
+    const aliased = rawMode ? (MODE_KEY_ALIASES[rawMode] || rawMode) : "";
+    const mode = aliased ? (MODE_KEY_ALIASES[aliased] || aliased) : "";
+    if (rawMode && (!MODES[mode] || !pkg.manifest.modes.includes(mode))) {
+      return { ok: false, error: `${pkg.manifest.id} is unavailable in ${rawMode} mode.`, code: "SPECIAL_SKILL_MODE_UNSUPPORTED", id: normalizedId, mode: rawMode };
     }
     return { ok: true, ...pkg, id: normalizedId, userContext: "" };
   }

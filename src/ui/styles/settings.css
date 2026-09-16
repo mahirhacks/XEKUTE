@@ -122,8 +122,6 @@
   overflow:auto;
   border:0;
   background:transparent;
-  scrollbar-width:thin;
-  scrollbar-color:#343434 transparent;
 }
 
 .app-settings-nav-group {
@@ -271,16 +269,6 @@
   padding:0 48px 52px;
   overflow:auto;
   background:var(--settings-bg);
-  scrollbar-width:thin;
-  scrollbar-color:#373737 transparent;
-}
-.app-settings-content::-webkit-scrollbar { width:9px; }
-.app-settings-content::-webkit-scrollbar-track { background:transparent; }
-.app-settings-content::-webkit-scrollbar-thumb {
-  border:3px solid transparent;
-  border-radius:9px;
-  background:#3b3b3b;
-  background-clip:padding-box;
 }
 .app-settings-content > .app-settings-panel {
   width:min(830px,100%);
@@ -718,9 +706,45 @@
 .app-settings-content .certificate-settings-panel { overflow:visible; }
 .app-settings-content .certificate-settings-content { width:100%; padding:0 0 44px; }
 .app-settings-content .certificate-settings-card { margin-bottom:14px; padding:18px; border-color:var(--settings-border); border-radius:12px; background:var(--settings-panel); box-shadow:0 1px 0 rgba(255,255,255,.015); }
-.app-settings-content .certificate-setting-heading strong { color:#dedede; font:600 12px var(--font-ui); }
-.app-settings-content .certificate-setting-heading small { color:#858585; font:10px/1.4 var(--font-ui); }
-.app-settings-content .certificate-location-badge { border:1px solid #414141; background:#242424; color:#b5b5b5; }
+.app-settings-content .certificate-setting-heading {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:14px;
+}
+.app-settings-content .certificate-setting-heading > div {
+  display:grid;
+  gap:4px;
+  min-width:0;
+}
+.app-settings-content .certificate-setting-heading strong { display:block; color:#dedede; font:600 12px var(--font-ui); }
+.app-settings-content .certificate-setting-heading small { display:block; color:#858585; font:10px/1.4 var(--font-ui); }
+.app-settings-content .certificate-location-badge {
+  flex:0 0 auto;
+  align-self:flex-start;
+  padding:2px 8px;
+  border:1px solid #414141;
+  border-radius:999px;
+  background:#242424;
+  color:#b5b5b5;
+  font:10px/1.4 var(--font-ui);
+  white-space:nowrap;
+}
+.app-settings-content .certificate-location-row {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:10px;
+  align-items:center;
+  margin-bottom:12px;
+}
+.app-settings-content .certificate-location-row input {
+  width:100%;
+  min-width:0;
+  box-sizing:border-box;
+}
+.app-settings-content .certificate-location-row button { white-space:nowrap; }
+.app-settings-content .certificate-setting-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .app-settings-content .certificate-location-row input,
 .app-settings-content #llm-openrouter-config input,
 .app-settings-content #llm-ollama-config input[type="url"],

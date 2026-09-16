@@ -9,9 +9,7 @@ function fingerprintArtifactRevisions(revisions = {}) {
 }
 
 function artifactSourceRefs({ evidenceSliceInjected = false } = {}) {
-  const refs = [".xekute/project_info/index.md", ".xekute/hypotheses.md", ".xekute/checklist.md"];
-  if (evidenceSliceInjected) refs.push(".xekute/evidence/index.md");
-  return refs;
+  return [".xekute/project_info/index.md"];
 }
 
 function createFirstAgentTurnTracker() {

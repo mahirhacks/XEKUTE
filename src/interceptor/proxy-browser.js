@@ -32,6 +32,62 @@ function proxyConnectHost(host) {
   return ["", "0.0.0.0", "::", "[::]"].includes(value) ? "127.0.0.1" : value;
 }
 
+const PROFILE_LOCK_FILES = ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"];
+
+function browserProcessEnv(env = process.env) {
+  const next = { ...env };
+  for (const key of Object.keys(next)) {
+    if (key === "ELECTRON_RUN_AS_NODE" || key.startsWith("ELECTRON_")) delete next[key];
+  }
+  return next;
+}
+
+function caSpkiHash(caCertPath, fs = nodeFs) {
+  try {
+    const cert = new nodeCrypto.X509Certificate(fs.readFileSync(caCertPath));
+    const key = cert.publicKey;
+    if (!key?.export) return "";
+    return nodeCrypto.createHash("sha256").update(key.export({ type: "spki", format: "der" })).digest("base64");
+  } catch {
+    return "";
+  }
+}
+
+function prepareProfileDirectory(userDataDir, { fs = nodeFs, path = nodePath } = {}) {
+  fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(userDataDir, 0o700); } catch { /* Windows ACLs protect Electron user data. */ }
+  for (const name of PROFILE_LOCK_FILES) {
+    try { fs.rmSync(path.join(userDataDir, name), { force: true }); } catch { /* Stale Chromium locks block the next launch. */ }
+  }
+  const preferencesPath = path.join(userDataDir, "Default", "Preferences");
+  try {
+    if (!fs.existsSync(preferencesPath)) return;
+    const prefs = JSON.parse(fs.readFileSync(preferencesPath, "utf8"));
+    if (!prefs || typeof prefs !== "object") return;
+    if (!prefs.profile || typeof prefs.profile !== "object") prefs.profile = {};
+    prefs.profile.exit_type = "Normal";
+    prefs.profile.exited_cleanly = true;
+    if (!prefs.session || typeof prefs.session !== "object") prefs.session = {};
+    prefs.session.restore_on_startup = 5;
+    fs.writeFileSync(preferencesPath, `${JSON.stringify(prefs)}\n`);
+  } catch { /* A corrupt profile is replaced by Chromium on the next launch. */ }
+}
+
+async function raisePageWindow(page) {
+  try { await page?.bringToFront?.(); } catch { /* Some Playwright fakes omit window focus. */ }
+  try {
+    const context = typeof page?.context === "function" ? page.context() : null;
+    if (!context?.newCDPSession) return;
+    const session = await context.newCDPSession(page);
+    const { windowId } = await session.send("Browser.getWindowForTarget");
+    // Do not minimize first: if the restore step fails, Chrome stays hidden
+    // behind Electron and looks like the proxied browser never opened.
+    await session.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
+    await session.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "maximized" } });
+    await session.detach?.();
+  } catch { /* CDP window bounds are unavailable on some Chrome channels. */ }
+}
+
 function createProxyBrowserService({
   fs = nodeFs,
   path = nodePath,
@@ -138,7 +194,7 @@ function createProxyBrowserService({
     if (existing) {
       try {
         const pages = existing.context.pages();
-        if (pages[0]) await pages[0].bringToFront();
+        if (pages[0]) await raisePageWindow(pages[0]);
         return publicStatus(existing, { alreadyOpen: true });
       } catch { contexts.delete(key); }
     }
@@ -159,31 +215,47 @@ function createProxyBrowserService({
 
     const proxyHost = proxyConnectHost(proxy.host);
     const userDataDir = profileDirectory(root, captureIdentity);
-    fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
-    try { fs.chmodSync(userDataDir, 0o700); } catch { /* Windows ACLs protect Electron user data. */ }
+    prepareProfileDirectory(userDataDir, { fs, path });
+    const spki = caSpkiHash(caCertPath, fs);
+    const launchOptions = {
+      headless: false,
+      executablePath: browser.executablePath,
+      // Playwright otherwise appends --no-sandbox. Installed Windows Chrome
+      // and Edge support Chromium's process sandbox, so keep it enabled for
+      // the operator-facing shared browser.
+      chromiumSandbox: true,
+      ignoreHTTPSErrors: true,
+      viewport: null,
+      timeout: 45_000,
+      env: browserProcessEnv(),
+      proxy: { server: `http://${proxyHost}:${port}`, bypass: "<-loopback>" },
+      ...(captureToken ? { extraHTTPHeaders: { "X-Xekute-Capture-Context": String(captureToken) } } : {}),
+      args: [
+        "--start-maximized",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
+        "--ignore-certificate-errors",
+        ...(spki ? [`--ignore-certificate-errors-spki-list=${spki}`] : []),
+        // HTTP/3 does not traverse an HTTP CONNECT proxy. Force the browser
+        // onto proxy-visible TCP transports instead of allowing QUIC to
+        // silently bypass capture or fail independently of the listener.
+        "--disable-quic",
+      ],
+    };
 
     try {
-      const context = await provider.launchPersistentContext(userDataDir, {
-        headless: false,
-        executablePath: browser.executablePath,
-        // Playwright otherwise appends --no-sandbox. Installed Windows Chrome
-        // and Edge support Chromium's process sandbox, so keep it enabled for
-        // the operator-facing shared browser.
-        chromiumSandbox: true,
-        ignoreHTTPSErrors: true,
-        viewport: null,
-        proxy: { server: `http://${proxyHost}:${port}`, bypass: "<-loopback>" },
-        ...(captureToken ? { extraHTTPHeaders: { "X-Xekute-Capture-Context": String(captureToken) } } : {}),
-        args: [
-          "--start-maximized",
-          "--no-first-run",
-          "--no-default-browser-check",
-          // HTTP/3 does not traverse an HTTP CONNECT proxy. Force the browser
-          // onto proxy-visible TCP transports instead of allowing QUIC to
-          // silently bypass capture or fail independently of the listener.
-          "--disable-quic",
-        ],
-      });
+      let context;
+      try {
+        context = await provider.launchPersistentContext(userDataDir, launchOptions);
+      } catch (firstError) {
+        try {
+          context = await provider.launchPersistentContext(userDataDir, { ...launchOptions, chromiumSandbox: false });
+        } catch {
+          throw firstError;
+        }
+      }
       const record = { context, workspace: root, browser, proxyHost, proxyPort: port, caCertPath, identity: captureIdentity };
       contexts.set(key, record);
       context.on?.("close", () => {
@@ -193,8 +265,8 @@ function createProxyBrowserService({
       });
       let pages = context.pages();
       if (!pages.length) pages = [await context.newPage()];
-      if (startUrl) await pages[0].goto(startUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
-      await pages[0].bringToFront?.();
+      await raisePageWindow(pages[0]);
+      await pages[0].goto(startUrl || "about:blank", { waitUntil: "commit", timeout: 8_000 }).catch(() => {});
       const status = publicStatus(record);
       onStatus(status);
       return status;
@@ -227,4 +299,11 @@ function createProxyBrowserService({
   return Object.freeze({ launch, status, close, findBrowser, profileDirectory, getAgentContext, getAgentPageTarget });
 }
 
-module.exports = { createProxyBrowserService, findInstalledProxyBrowser, browserCandidates, proxyConnectHost };
+module.exports = {
+  createProxyBrowserService,
+  findInstalledProxyBrowser,
+  browserCandidates,
+  proxyConnectHost,
+  browserProcessEnv,
+  caSpkiHash,
+};

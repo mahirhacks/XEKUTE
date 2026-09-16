@@ -1,0 +1,1382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'self' blob:; base-uri 'none'; form-action 'none'" />
+  <title>XEKUTE</title>
+  <link rel="stylesheet" href="../../node_modules/@vscode/codicons/dist/codicon.css" />
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="../../node_modules/highlight.js/styles/github-dark.min.css" />
+  <link rel="stylesheet" href="styles/base.css" />
+  <link rel="stylesheet" href="styles/chat.css" />
+  <link rel="stylesheet" href="styles/settings.css" />
+  <link rel="stylesheet" href="styles/layout-revamp.css" />
+</head>
+<body>
+  <div id="app-shell">
+  <div id="app-topbar">
+    <div class="app-brand" aria-label="XEKUTE">
+      <img src="../../xekute_icon.png" alt="" class="app-brand-icon">
+    </div>
+    <nav id="app-menu" aria-label="Application menu">
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="files" aria-haspopup="true" aria-expanded="false">File</button>
+        <div class="app-menu-dropdown" data-menu-panel="files" role="menu" hidden>
+          <button type="button" data-action="create-project" role="menuitem">Create New Project</button>
+          <button type="button" data-action="open-project" role="menuitem">Open Existing Project</button>
+          <div class="app-menu-separator"></div>
+          <button type="button" data-action="new-file" role="menuitem">Create New File</button>
+          <button type="button" data-action="new-folder" role="menuitem">Create New Folder</button>
+          <div class="app-menu-separator"></div>
+          <button type="button" data-action="open-file" role="menuitem">Open File</button>
+          <button type="button" data-action="save-file" role="menuitem">Save File <span class="app-menu-shortcut">Ctrl+S</span></button>
+          <button type="button" data-action="close-editor" role="menuitem">Close Editor <span class="app-menu-shortcut">Ctrl+W</span></button>
+        </div>
+      </div>
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="edit" aria-haspopup="true" aria-expanded="false">Edit</button>
+        <div class="app-menu-dropdown" data-menu-panel="edit" role="menu" hidden>
+          <button type="button" data-action="undo" role="menuitem">Undo <span class="app-menu-shortcut">Ctrl+Z</span></button>
+          <button type="button" data-action="redo" role="menuitem">Redo <span class="app-menu-shortcut">Ctrl+Y</span></button>
+          <div class="app-menu-separator"></div>
+          <button type="button" data-action="cut" role="menuitem">Cut <span class="app-menu-shortcut">Ctrl+X</span></button>
+          <button type="button" data-action="copy" role="menuitem">Copy <span class="app-menu-shortcut">Ctrl+C</span></button>
+          <button type="button" data-action="paste" role="menuitem">Paste <span class="app-menu-shortcut">Ctrl+V</span></button>
+          <button type="button" data-action="select-all" role="menuitem">Select All <span class="app-menu-shortcut">Ctrl+A</span></button>
+        </div>
+      </div>
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="view" aria-haspopup="true" aria-expanded="false">View</button>
+        <div class="app-menu-dropdown" data-menu-panel="view" role="menu" hidden>
+          <button type="button" data-action="zoom-in" role="menuitem">Zoom In <span class="app-menu-shortcut">Ctrl+=</span></button>
+          <button type="button" data-action="zoom-out" role="menuitem">Zoom Out <span class="app-menu-shortcut">Ctrl+-</span></button>
+          <button type="button" data-action="zoom-reset" role="menuitem">Reset Zoom <span class="app-menu-shortcut">Ctrl+0</span></button>
+          <div class="app-menu-separator"></div>
+          <button type="button" data-action="toggle-minimap" role="menuitem" aria-checked="false">Show Minimap</button>
+          <button type="button" data-action="toggle-terminal" role="menuitem">Toggle Terminal</button>
+          <button type="button" data-action="toggle-chat" role="menuitem">Toggle Chat</button>
+          <button type="button" data-action="show-project" role="menuitem">Project Workspace</button>
+          <button type="button" data-action="show-security" role="menuitem">Security Tools</button>
+          <button type="button" data-action="show-settings" role="menuitem">XEKUTE Settings</button>
+        </div>
+      </div>
+      <div class="app-menu-item">
+        <button type="button" class="app-menu-button" data-menu="help" aria-haspopup="true" aria-expanded="false">Help</button>
+        <div class="app-menu-dropdown" data-menu-panel="help" role="menu" hidden>
+          <button type="button" data-action="check-updates" role="menuitem">Check for Updates</button>
+          <button type="button" data-action="help-guide" role="menuitem">XEKUTE Guide</button>
+          <button type="button" data-action="about" role="menuitem">About XEKUTE</button>
+        </div>
+      </div>
+    </nav>
+    <button type="button" id="btn-top-filetree" class="topbar-icon active" title="Toggle file tree" aria-label="Toggle file tree" aria-pressed="true">
+      <img class="chrome-icon" src="assets/icons/filetree_collapse_expand_icon.svg" alt="" aria-hidden="true">
+    </button>
+    <button type="button" id="command-center" class="command-center" title="Search (Ctrl+F)">
+      <span>Search</span>
+    </button>
+    <div class="app-topbar-spacer"></div>
+    <button type="button" id="btn-notifications" class="topbar-icon notification-button" title="Notifications" aria-haspopup="dialog" aria-expanded="false">
+      <img class="chrome-icon" src="assets/icons/notification_icon.svg" alt="" aria-hidden="true"><span id="notification-count" class="notification-count" hidden>0</span>
+    </button>
+    <div id="notification-panel" class="notification-panel" role="dialog" aria-label="Notifications" hidden>
+      <header><div class="notification-panel-heading"><span class="codicon codicon-bell" aria-hidden="true"></span><strong>Notifications</strong></div><button type="button" id="notification-clear" class="icon-btn" title="Clear notifications" aria-label="Clear notifications"><span class="codicon codicon-clear-all"></span></button></header>
+      <div id="notification-list" class="notification-list"><div class="notification-empty">No notifications</div></div>
+    </div>
+    <button type="button" id="btn-top-terminal" class="topbar-icon active" title="Toggle terminal">
+      <img class="chrome-icon" src="assets/icons/terminal_collapse_expand_icon.svg" alt="" aria-hidden="true">
+    </button>
+    <button type="button" id="btn-top-chat" class="topbar-icon active" title="Toggle AI chat">
+      <img class="chrome-icon" src="assets/icons/chat_collapse_expand_icon.svg" alt="" aria-hidden="true">
+    </button>
+    <button type="button" id="btn-top-settings" class="topbar-icon" title="XEKUTE Settings">
+      <img class="chrome-icon" src="assets/icons/settings_icon.svg" alt="" aria-hidden="true">
+    </button>
+    <button type="button" id="btn-window-minimize" class="window-control" title="Minimize">
+      <span class="codicon codicon-chrome-minimize"></span>
+    </button>
+    <button type="button" id="btn-window-maximize" class="window-control" title="Maximize">
+      <span class="codicon codicon-chrome-maximize"></span>
+    </button>
+    <button type="button" id="btn-window-close" class="window-control close" title="Close">
+      <span class="codicon codicon-chrome-close"></span>
+    </button>
+  </div>
+  <div id="layout">
+    <nav id="activitybar" aria-label="Primary activity">
+      <div class="activitybar-primary">
+        <button type="button" id="activity-search" class="activity-item" title="Search (Ctrl+F)" aria-label="Search">
+          <span class="codicon codicon-search"></span>
+        </button>
+        <button type="button" id="activity-bugbounty" class="activity-item active" title="Project" aria-label="Project" aria-pressed="true">
+          <span class="codicon codicon-folder-library"></span>
+        </button>
+        <button type="button" id="activity-security" class="activity-item" title="Security Tools" aria-label="Security Tools" aria-pressed="false">
+          <span class="codicon codicon-shield"></span>
+        </button>
+      </div>
+    </nav>
+
+    <aside id="sidebar">
+      <div id="sidebar-titlebar">
+        <span id="sidebar-view-title" class="sidebar-view-title">Project</span>
+        <button type="button" id="btn-sidebar-more" class="sidebar-title-action" title="Project Actions" aria-label="Project actions">
+          <span class="codicon codicon-ellipsis"></span>
+        </button>
+      </div>
+      <div id="explorer-sidebar-view" class="sidebar-view" aria-hidden="false">
+        <div id="project-setup" class="project-setup">
+          <span class="codicon codicon-folder-library project-setup-icon" aria-hidden="true"></span>
+          <strong>No Project Open</strong>
+          <p>Create a blank project folder or open an existing folder. XEKUTE does not scaffold files or assessment sections.</p>
+          <div class="project-setup-actions">
+            <button type="button" id="btn-create-project-sidebar" class="bugbounty-primary-button"><span class="codicon codicon-new-folder"></span><span>Create New Project</span></button>
+            <button type="button" id="btn-open-project-sidebar" class="bugbounty-secondary-button"><span class="codicon codicon-folder-opened"></span><span>Open Existing Project</span></button>
+          </div>
+        </div>
+        <div id="sidebar-header" hidden>
+          <button type="button" id="explorer-root-toggle" class="explorer-root-toggle" title="Toggle project tree">
+            <span id="explorer-root-chevron" class="codicon codicon-chevron-down"></span>
+            <span id="explorer-title" class="panel-title" title="">Explorer</span>
+          </button>
+          <div class="sidebar-actions">
+            <button id="btn-new-file" class="icon-btn" title="New File" disabled>
+              <span class="codicon codicon-new-file"></span>
+            </button>
+            <button id="btn-new-folder" class="icon-btn" title="New Folder" disabled>
+              <span class="codicon codicon-new-folder"></span>
+            </button>
+            <button id="btn-open-folder" class="icon-btn" title="Open Folder">
+              <span class="codicon codicon-folder-opened"></span>
+            </button>
+          </div>
+        </div>
+        <div id="file-tree" role="tree" aria-multiselectable="true"></div>
+      </div>
+
+      <div id="bugbounty-sidebar-view" class="sidebar-view bugbounty-sidebar-view ide-internal" hidden aria-hidden="true">
+        <div class="bugbounty-target-header">
+          <span class="codicon codicon-target" aria-hidden="true"></span>
+          <span id="bugbounty-target-label" class="bugbounty-target-label">ASSESSMENT</span>
+          <button type="button" id="btn-create-project-header" class="icon-btn project-create-header" title="Create New Project" aria-label="Create new project">
+            <span class="codicon codicon-add"></span>
+          </button>
+          <button type="button" id="btn-bugbounty-more" class="icon-btn bugbounty-action" title="Assessment Actions" aria-label="Assessment actions">
+            <span class="codicon codicon-ellipsis"></span>
+          </button>
+        </div>
+        <div id="bugbounty-setup" class="bugbounty-setup">
+          <span id="bugbounty-state-icon" class="codicon codicon-folder-library bugbounty-setup-icon" aria-hidden="true"></span>
+          <strong id="bugbounty-state-title" class="bugbounty-state-title">No Assessment</strong>
+          <span id="bugbounty-state-message" class="bugbounty-state-message">No assessment folder is linked.</span>
+          <div class="bugbounty-setup-actions">
+            <button type="button" id="btn-create-project" class="bugbounty-primary-button">
+              <span class="codicon codicon-folder-library" aria-hidden="true"></span>
+              <span>Create New Project</span>
+            </button>
+            <button type="button" id="btn-create-assessment" class="bugbounty-secondary-button">
+              <span class="codicon codicon-new-folder" aria-hidden="true"></span>
+              <span>Create Assessment Folder</span>
+            </button>
+            <button type="button" id="btn-open-assessment" class="bugbounty-secondary-button">
+              <span class="codicon codicon-folder-opened" aria-hidden="true"></span>
+              <span>Open Existing Assessment</span>
+            </button>
+          </div>
+        </div>
+        <div id="bugbounty-tree" class="bugbounty-tree" role="tree" aria-label="Bug bounty assessment phases" hidden>
+          <div class="bounty-subsection-label"><span>Project Artifacts</span></div>
+          <button type="button" class="bounty-report-item" data-bounty-item="project-info" data-bounty-file=".xekute/project_info/index.md" role="treeitem"><span class="codicon codicon-project"></span><span>Project Info</span></button>
+          <section class="bounty-phase expanded" data-bounty-section="traffic">
+            <button type="button" class="bounty-phase-toggle" aria-expanded="true">
+              <span class="codicon codicon-chevron-right bounty-chevron" aria-hidden="true"></span>
+              <span class="bounty-phase-name">Traffic</span>
+              <span class="bounty-phase-count">0/2</span>
+            </button>
+            <div class="bounty-phase-items" role="group">
+              <button type="button" class="bounty-tree-item" data-bounty-item="raw-traffic" data-bounty-file="traffic/raw.jsonl" role="treeitem"><span class="bounty-status"></span><span>Raw</span></button>
+              <button type="button" class="bounty-tree-item" data-bounty-item="filtered-traffic" data-bounty-file="traffic/filtered.jsonl" role="treeitem"><span class="bounty-status"></span><span>Filtered</span></button>
+            </div>
+          </section>
+          <div class="bounty-subsection-label bounty-custom-label"><span>Custom</span><span class="bounty-subsection-actions"><button type="button" id="btn-custom-file" class="icon-btn" title="New custom file"><span class="codicon codicon-new-file"></span></button><button type="button" id="btn-custom-folder" class="icon-btn" title="New custom folder"><span class="codicon codicon-new-folder"></span></button></span></div>
+          <div id="custom-tree-items" class="custom-tree-items"></div>
+        </div>
+        <button type="button" id="bugbounty-repair" class="bugbounty-repair" hidden aria-hidden="true" tabindex="-1">
+          <span class="codicon codicon-warning" aria-hidden="true"></span>
+          <span id="bugbounty-repair-label">Some files are missing, click here to fix</span>
+        </button>
+      </div>
+    </aside>
+
+    <div id="sidebar-resize" class="sash-v" role="separator" tabindex="0" aria-label="Resize Project sidebar" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="360" aria-valuenow="240"></div>
+
+    <div id="center-panel">
+      <main id="editor-pane" aria-label="Resource preview">
+        <section id="resource-viewer" class="resource-viewer">
+          <header class="resource-viewer-header">
+            <div class="resource-viewer-heading">
+              <span id="resource-viewer-icon" class="codicon codicon-folder-library" aria-hidden="true"></span>
+              <div>
+                <strong id="resource-viewer-title">Project workspace</strong>
+                <span id="resource-viewer-meta">Open a project, select a file, or use Search to preview content.</span>
+              </div>
+            </div>
+            <div id="resource-viewer-actions" class="resource-viewer-actions">
+              <button type="button" id="resource-viewer-save" class="icon-btn" title="Save (Ctrl+S)" disabled>
+                <span class="codicon codicon-save" aria-hidden="true"></span>
+              </button>
+              <button type="button" id="resource-viewer-copy" class="icon-btn" title="Copy resource contents" disabled>
+                <span class="codicon codicon-copy" aria-hidden="true"></span>
+              </button>
+            </div>
+          </header>
+          <div id="resource-viewer-empty" class="resource-viewer-empty">
+            <img src="../../xekute_icon.png" alt="" class="resource-viewer-empty-logo">
+          </div>
+          <div id="resource-editor-shell" class="resource-editor-shell">
+            <div id="resource-line-numbers" class="resource-line-numbers" aria-hidden="true"></div>
+            <textarea id="resource-viewer-content" class="resource-viewer-content" wrap="off" spellcheck="false" aria-label="Workspace editor" hidden></textarea>
+          </div>
+          <div id="checklist-ui-view" class="checklist-ui-view" hidden>
+            <header class="checklist-dashboard">
+              <div><strong id="checklist-framework-name">Security checklist</strong><span id="checklist-framework-version"></span></div>
+              <div id="checklist-progress" class="checklist-progress"></div>
+            </header>
+            <div class="checklist-filters"><span class="codicon codicon-search"></span><input id="checklist-search" type="search" placeholder="Filter checks, IDs, and categories"><select id="checklist-status-filter"><option value="all">All statuses</option><option value="not-tested">Not tested</option><option value="in-progress">In progress</option><option value="passed">Passed</option><option value="failed">Failed / observed</option><option value="not-applicable">Not applicable</option><option value="blocked">Blocked</option></select></div>
+            <div id="checklist-groups" class="checklist-groups"></div>
+          </div>
+          <div id="scope-ui-view" class="scope-ui-view" hidden>
+            <header class="scope-ui-header"><div><strong id="scope-ui-title">Scope</strong><span id="scope-ui-description"></span></div></header>
+            <div id="scope-ui-form" class="scope-ui-form"></div>
+          </div>
+          <div id="assessment-module-view" class="assessment-module-view" hidden>
+            <header class="assessment-module-header">
+              <div><strong id="assessment-module-title">Assessment module</strong><span id="assessment-module-description"></span></div>
+              <div class="assessment-module-actions">
+                <button type="button" id="assessment-module-open-json" class="secondary-button"><span class="codicon codicon-json"></span>Open JSON</button>
+                <button type="button" id="assessment-report-generate" class="secondary-button" hidden><span class="codicon codicon-file-text"></span>Generate report</button>
+                <select id="assessment-run-profile" aria-label="Run role"><option value="agent">Agent</option><option value="ask">Ask</option></select>
+                <button type="button" id="assessment-run-start" class="primary-button"><span class="codicon codicon-play"></span>Start run</button>
+                <button type="button" id="assessment-run-stop" class="secondary-button" disabled><span class="codicon codicon-debug-stop"></span>Stop run</button>
+              </div>
+            </header>
+            <div id="assessment-module-summary" class="assessment-module-summary"></div>
+            <div id="assessment-module-content" class="assessment-module-content"></div>
+          </div>
+        </section>
+        <section id="app-settings-workspace" class="app-settings-workspace" aria-label="XEKUTE Settings" hidden>
+          <aside class="app-settings-sidebar">
+            <div class="app-settings-profile"><span class="app-settings-avatar">X</span><div><strong id="app-settings-profile-name">Local workspace</strong><small id="app-settings-profile-plan">XEKUTE</small></div></div>
+            <label class="app-settings-search"><span class="codicon codicon-search" aria-hidden="true"></span><input id="app-settings-search" type="search" placeholder="Search settings" autocomplete="off" spellcheck="false" aria-label="Search settings"></label>
+            <nav class="app-settings-tabs" aria-label="Settings sections">
+              <div class="app-settings-nav-group">
+                <button type="button" class="active" data-app-settings-section="general" aria-label="General" aria-pressed="true"><span class="codicon codicon-settings-gear"></span><span>General</span></button>
+                <button type="button" data-app-settings-section="project" aria-label="Project" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/project_file_icon.svg" alt="" aria-hidden="true"><span>Project</span></button>
+              </div>
+              <div class="app-settings-nav-divider" aria-hidden="true"></div>
+              <div class="app-settings-nav-group">
+                <button type="button" data-app-settings-section="authority" aria-label="Agents" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/agents_icon.svg" alt="" aria-hidden="true"><span>Agents</span></button>
+              </div>
+              <div class="app-settings-nav-divider" aria-hidden="true"></div>
+              <div class="app-settings-nav-group">
+                <button type="button" data-app-settings-section="llm" aria-label="Models" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/models_icon.svg" alt="" aria-hidden="true"><span>Models</span></button>
+                <button type="button" data-app-settings-section="prompts" aria-label="Rules, Skills, Subagents" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/rulesnskillnsubagent_icon.svg" alt="" aria-hidden="true"><span>Rules, Skills, Subagents</span></button>
+                <button type="button" data-app-settings-section="commands" aria-label="Tools and MCPs" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/tools_icon.svg" alt="" aria-hidden="true"><span>Tools &amp; MCPs</span></button>
+                <button type="button" data-app-settings-section="certificates" aria-label="Browser &amp; Network" aria-pressed="false"><img class="settings-nav-icon" src="assets/icons/browse.svg" alt="" aria-hidden="true"><span>Browser &amp; Network</span></button>
+              </div>
+            </nav>
+          </aside>
+          <div class="app-settings-main">
+            <header class="app-settings-workspace-header"><div><span class="codicon codicon-settings-gear" aria-hidden="true"></span><div><strong id="app-settings-page-title">General</strong><small id="app-settings-page-subtitle"></small></div></div><div class="app-settings-workspace-actions"><span id="command-settings-status" hidden>Ready</span></div></header>
+            <div class="app-settings-content">
+          <section id="app-settings-general-panel" class="app-settings-panel general-settings-panel">
+            <div class="general-settings-canvas">
+
+              <h2 class="general-settings-section-title">Interface</h2>
+              <section class="general-settings-card general-settings-list">
+                <div class="general-settings-row">
+                  <div><strong>Status Bar</strong><p>Show status bar at the bottom of the window</p></div>
+                  <label class="general-toggle" aria-label="Show status bar"><input id="general-status-bar-toggle" type="checkbox" checked><span aria-hidden="true"></span></label>
+                </div>
+              </section>
+              <h2 class="general-settings-section-title">Updates</h2>
+              <section class="general-settings-card general-settings-list">
+                <div class="general-settings-row">
+                  <div><strong>Check for updates automatically</strong><p>XEKUTE checks GitHub for a new version each time it starts. You can still check manually from the Help menu.</p></div>
+                  <label class="general-toggle" aria-label="Check for updates automatically"><input id="general-updates-toggle" type="checkbox" checked><span aria-hidden="true"></span></label>
+                </div>
+                <div class="general-settings-divider" aria-hidden="true"></div>
+                <div class="general-settings-row">
+                  <div><strong>Current version</strong><p id="general-current-version">Loading current version…</p></div>
+                </div>
+              </section>
+            </div>
+          </section>
+          <section id="app-settings-project-panel" class="app-settings-panel project-settings-panel">
+            <div id="project-settings-unavailable" class="project-settings-unavailable" hidden>
+              <span class="codicon codicon-folder-library" aria-hidden="true"></span>
+              <h2>Open a project to configure its engagement</h2>
+              <p>Project settings are linked to a folder without creating files inside it.</p>
+              <div><button type="button" id="project-settings-create" class="primary-button">Create New Project</button><button type="button" id="project-settings-open" class="secondary-button">Open Existing Project</button></div>
+            </div>
+            <div id="project-settings-shell" class="project-settings-shell">
+              <aside class="project-settings-nav" aria-label="Project settings sections">
+                <div class="project-settings-identity"><span class="codicon codicon-folder-library"></span><div><strong id="project-settings-name">Project</strong><small id="project-settings-root"></small></div></div>
+                <button type="button" class="active" data-project-settings-target="project-settings-overview"><span class="codicon codicon-dashboard"></span>Overview</button>
+                <button type="button" data-project-settings-target="project-settings-engagement"><span class="codicon codicon-organization"></span>Engagement</button>
+                <button type="button" data-project-settings-target="project-settings-authorization"><span class="codicon codicon-verified"></span>Authorization</button>
+                <button type="button" data-project-settings-target="project-settings-scope"><span class="codicon codicon-target"></span>Scope &amp; ROE</button>
+                <button type="button" data-project-settings-target="project-settings-context"><span class="codicon codicon-book"></span>Context</button>
+                <button type="button" data-project-settings-target="project-settings-data"><span class="codicon codicon-lock"></span>Data Handling</button>
+                <aside class="project-storage-note"><span class="codicon codicon-shield"></span><p>Saved in protected XEKUTE app data. The project folder stays untouched.</p></aside>
+              </aside>
+              <main id="project-settings-form" class="project-settings-form">
+                <section id="project-settings-overview" class="project-settings-section">
+                  <header><div><span class="codicon codicon-dashboard"></span><div><h2>Project Overview</h2><p>Identify this engagement clearly across operators, clients, and reporting.</p></div></div><span class="project-settings-badge">App-managed</span></header>
+                  <div class="project-settings-card">
+                    <div class="project-field-grid">
+                      <label class="wide">Project name<input data-project-field="project.name" maxlength="240" autocomplete="off"></label>
+                      <label>Project code<input data-project-field="project.code" maxlength="120" placeholder="ENG-2026-001"></label>
+                      <label>Status<select data-project-field="project.status"><option value="draft">Draft</option><option value="active">Active</option><option value="paused">Paused</option><option value="completed">Completed</option><option value="archived">Archived</option></select></label>
+                      <label>Classification<select data-project-field="project.classification"><option value="public">Public</option><option value="internal">Internal</option><option value="confidential">Confidential</option><option value="restricted">Restricted</option></select></label>
+                      <label class="wide">Description<textarea data-project-field="project.description" rows="3" placeholder="Purpose, owner, and concise project summary"></textarea></label>
+                      <label class="wide">Tags <small>One per line</small><textarea data-project-field="project.tags" data-project-kind="array" rows="3" placeholder="web&#10;external&#10;priority"></textarea></label>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="project-settings-engagement" class="project-settings-section">
+                  <header><div><span class="codicon codicon-organization"></span><div><h2>Professional Engagement</h2><p>Record who owns the work, why it is being performed, and what must be delivered.</p></div></div></header>
+                  <div class="project-settings-card">
+                    <div class="project-field-grid">
+                      <label>Engagement name<input data-project-field="engagement.name"></label>
+                      <label>Client/Asset Owner<input data-project-field="engagement.clientOrOwner"></label>
+                      <label>Program name<input data-project-field="engagement.programName"></label>
+                      <label>Platform/Portal<input data-project-field="engagement.platform"></label>
+                      <label>Engagement type<select data-project-field="engagement.engagementType"><option value="penetration-test">Penetration test</option><option value="bug-bounty">Bug bounty</option><option value="vulnerability-assessment">Vulnerability assessment</option><option value="red-team">Red team</option><option value="security-review">Security review</option></select></label>
+                      <label>Environment<select data-project-field="engagement.environment"><option value="production">Production</option><option value="staging">Staging</option><option value="development">Development</option><option value="mixed">Mixed</option></select></label>
+                      <label>Methodology<input data-project-field="engagement.methodology" placeholder="OWASP WSTG / PTES / client standard"></label>
+                      <label>Time Zone<input data-project-field="engagement.timezone" placeholder="UTC or Asia/Kuala_Lumpur"></label>
+                      <label class="wide">Execution path<select data-project-field="engagement.executionModel"><option value="operator_choice">Ask me when browser state changes the approach</option><option value="browser_bound">Use the shared browser for stateful or JS-gated work</option><option value="standard">Use normal scoped tools</option></select><small>This is operator guidance. Shared browser state is not exported to command-line scanners.</small></label>
+                      <label>Start date<input type="date" data-project-field="engagement.startDate"></label>
+                      <label>End date<input type="date" data-project-field="engagement.endDate"></label>
+                      <label class="wide">Objective<textarea data-project-field="engagement.objective" rows="4" placeholder="Business and security objectives"></textarea></label>
+                      <label>Success criteria <small>One per line</small><textarea data-project-field="engagement.successCriteria" data-project-kind="array" rows="5"></textarea></label>
+                      <label>Deliverables <small>One per line</small><textarea data-project-field="engagement.deliverables" data-project-kind="array" rows="5" placeholder="Technical report&#10;Executive summary&#10;Retest memo"></textarea></label>
+                   </div>
+                  </div>
+                  <section class="engagement-subsection engagement-authentication-accounts" aria-labelledby="engagement-authentication-title">
+                    <h3 id="engagement-authentication-title">Authentication Accounts</h3>
+                    <div id="engagement-account-list" class="engagement-account-list"></div>
+                    <button type="button" id="engagement-account-add" class="engagement-account-add">Add more +</button>
+                  </section>
+                  <div class="project-settings-card">
+                    <h3>Contacts &amp; Reporting</h3>
+                    <div class="project-field-grid">
+                      <label>Primary Contact<input data-project-field="contacts.primary"></label>
+                      <label>Emergency Contact<input data-project-field="contacts.emergency"></label>
+                      <label>Escalation window<input data-project-field="contacts.escalationWindow" placeholder="Business hours / immediate for critical"></label>
+                      <label>Report Recipients<input data-project-field="contacts.reportRecipients" data-project-kind="array"></label>
+                      <label class="wide">Notification Preferences<textarea data-project-field="contacts.notificationPreferences" rows="4"></textarea></label>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="project-settings-authorization" class="project-settings-section">
+                  <header><div><span class="codicon codicon-verified"></span><div><h2>Authorization &amp; Review</h2><p>Record the engagement authorization and review metadata. Runtime tool access is determined by the active mode and configured scope.</p></div></div></header>
+                  <div class="project-settings-card project-critical-card">
+                    <div class="project-toggle-grid">
+                      <label><input type="checkbox" data-project-field="authorization.confirmed" data-project-kind="boolean"><span><strong>Written Authorization Confirmed</strong><small>Confirms the named owner has authorized this work.</small></span></label>
+                      <label><input type="checkbox" data-project-field="review.scopeReviewed" data-project-kind="boolean"><span><strong>In-scope targets reviewed</strong><small>Every target and wildcard has been checked.</small></span></label>
+                      <label><input type="checkbox" data-project-field="review.exclusionsConfirmed" data-project-kind="boolean"><span><strong>Exclusions confirmed</strong><small>Out-of-scope and third-party assets are understood.</small></span></label>
+                      <label><input type="checkbox" data-project-field="review.thirdPartyRiskReviewed" data-project-kind="boolean"><span><strong>Third-party risk reviewed</strong><small>Ownership and dependent services have been considered.</small></span></label>
+                      <label><input type="checkbox" data-project-field="review.rulesAccepted" data-project-kind="boolean"><span><strong>Rules of Engagement accepted</strong><small>Windows, techniques, limits, and stop conditions are approved.</small></span></label>
+                    </div>
+                    <div class="project-field-grid">
+                      <label>Authorized by<input data-project-field="authorization.authorizedBy"></label>
+                      <label>Authorization reference<input data-project-field="authorization.authorizationReference" placeholder="Contract, ticket, URL, or document ID"></label>
+                      <label>Signed at<input type="datetime-local" data-project-field="authorization.signedAt"></label>
+                      <label>Expires at<input type="datetime-local" data-project-field="authorization.expiresAt"></label>
+                      <label>Reviewed by<input data-project-field="review.reviewedBy"></label>
+                      <label>Reviewed at<input type="datetime-local" data-project-field="review.reviewedAt"></label>
+                      <label class="wide">Authorization evidence references <small>One per line; references only, no files are copied</small><textarea data-project-field="authorization.evidenceReferences" data-project-kind="array" rows="4"></textarea></label>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="project-settings-scope" class="project-settings-section">
+                  <header><div><span class="codicon codicon-target"></span><div><h2>Scope &amp; Rules of Engagement</h2><p>Define a strict allowlist, exclusions, operating limits, techniques, and emergency stops.</p></div></div></header>
+                  <div class="project-settings-card">
+                    <h3>Scope boundaries</h3>
+                    <div class="project-field-grid">
+                      <label>In-scope targets <small>One host, URL, or CIDR per line</small><textarea data-project-field="scope.inScopeTargets" data-project-kind="array" rows="8" placeholder="https://app.example.com&#10;api.example.com/v1&#10;203.0.113.0/28"></textarea></label>
+                      <label>Out-of-scope targets <small>One rule per line</small><textarea data-project-field="scope.outOfScopeTargets" data-project-kind="array" rows="8"></textarea></label>
+                      <label>Wildcard rules <small>Use *.example.com</small><textarea data-project-field="scope.wildcardRules" data-project-kind="array" rows="5"></textarea></label>
+                      <label>Third-party assets <small>One dependency per line</small><textarea data-project-field="scope.thirdPartyAssets" data-project-kind="array" rows="5"></textarea></label>
+                      <label>Authentication dependencies <small>Login-only hosts; never added to normal assessment scope</small><textarea data-project-field="scope.authenticationDependencies" data-project-kind="array" rows="5" placeholder="login.example.com&#10;https://idp.example.com/oauth"></textarea></label>
+                      <label class="wide">Scope notes<textarea data-project-field="scope.notes" rows="4"></textarea></label>
+                    </div>
+                  </div>
+                  <div class="project-settings-card">
+                    <h3>Operating limits</h3>
+                    <div class="project-field-grid compact">
+                      <label>Maximum concurrency<input type="number" min="1" max="100" data-project-field="rulesOfEngagement.maximumConcurrency" data-project-kind="number"></label>
+                      <label>Requests / second<input type="number" min="0.1" max="1000" step="0.1" data-project-field="rulesOfEngagement.requestsPerSecond" data-project-kind="number"></label>
+                      <label>Request timeout (seconds)<input type="number" min="1" max="300" data-project-field="rulesOfEngagement.requestTimeoutSeconds" data-project-kind="number"></label>
+                      <label>Approved source IPs <small>One per line</small><textarea data-project-field="rulesOfEngagement.sourceIpAddresses" data-project-kind="array" rows="4"></textarea></label>
+                      <label>Testing windows <small>One per line: Mon,Tue | 09:00-17:00</small><textarea data-project-field="rulesOfEngagement.testingWindows" data-project-kind="array" rows="4"></textarea></label>
+                      <label>Emergency stop contact<input data-project-field="rulesOfEngagement.emergencyStopContact"></label>
+                    </div>
+                    <div class="project-toggle-grid project-capability-grid">
+                    </div>
+                  </div>
+                  <div class="project-settings-card">
+                    <h3>Technique boundaries</h3>
+                    <div class="project-field-grid">
+                      <label>Allowed technique IDs <small>One adapter or technique ID per line</small><textarea data-project-field="rulesOfEngagement.allowedTechniques" data-project-kind="array" rows="6" placeholder="httpx&#10;nmap&#10;T1595"></textarea></label>
+                      <label>Restricted techniques <small>One per line</small><textarea data-project-field="rulesOfEngagement.restrictedTechniques" data-project-kind="array" rows="6"></textarea></label>
+                      <label>Prohibited actions <small>One per line</small><textarea data-project-field="rulesOfEngagement.prohibitedActions" data-project-kind="array" rows="7"></textarea></label>
+                      <label>Stop conditions <small>One per line</small><textarea data-project-field="rulesOfEngagement.stopConditions" data-project-kind="array" rows="7"></textarea></label>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="project-settings-context" class="project-settings-section">
+                  <header><div><span class="codicon codicon-book"></span><div><h2>Application &amp; Engagement Context</h2><p>Keep app and engagement context in app-managed Project Settings.</p></div></div></header>
+                  <div class="project-settings-card">
+                    <div class="project-field-grid">
+                      <label class="wide">Background<textarea data-project-field="context.background" rows="4" placeholder="Business purpose, history, and why this assessment is happening"></textarea></label>
+                      <label class="wide">Application overview<textarea data-project-field="context.applicationOverview" rows="5" placeholder="Primary workflows, trust boundaries, sensitive operations, and data"></textarea></label>
+                      <label class="wide">Architecture<textarea data-project-field="context.architecture" rows="5" placeholder="Components, hosting, networks, APIs, integrations, and data flows"></textarea></label>
+                      <label>Technology stack <small>One item per line</small><textarea data-project-field="context.technologyStack" data-project-kind="array" rows="5"></textarea></label>
+                      <label>Known user roles <small>One role per line</small><textarea data-project-field="context.userRoles" data-project-kind="array" rows="5"></textarea></label>
+                      <label class="wide">Authentication and session model<textarea data-project-field="context.authentication" rows="4"></textarea></label>
+                      <label class="wide">Test account reference <small>Reference a secure vault entry; do not paste secrets</small><input data-project-field="context.testAccountReference" placeholder="Vault path, ticket, or handoff reference"></label>
+                      <label>Known constraints <small>One per line</small><textarea data-project-field="context.knownConstraints" data-project-kind="array" rows="5"></textarea></label>
+                      <label>Repositories <small>One path or URL per line</small><textarea data-project-field="context.repositories" data-project-kind="array" rows="5"></textarea></label>
+                      <label class="wide">Documentation references <small>One path, URL, or document ID per line</small><textarea data-project-field="context.documentation" data-project-kind="array" rows="4"></textarea></label>
+                      <label class="wide">Operator notes<textarea data-project-field="context.notes" rows="5"></textarea></label>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="project-settings-data" class="project-settings-section">
+                  <header><div><span class="codicon codicon-lock"></span><div><h2>Evidence &amp; Data Handling</h2><p>Document how sensitive assessment material must be collected, stored, retained, and removed.</p></div></div></header>
+                  <div class="project-settings-card">
+                    <div class="project-toggle-grid">
+                      <label><input type="checkbox" data-project-field="dataHandling.collectMinimumNecessary" data-project-kind="boolean"><span><strong>Collect minimum necessary data</strong><small>Avoid retaining unrelated client or personal data.</small></span></label>
+                      <label><input type="checkbox" data-project-field="dataHandling.redactSecrets" data-project-kind="boolean"><span><strong>Redact secrets</strong><small>Mask credentials, tokens, and session material in evidence.</small></span></label>
+                      <label><input type="checkbox" data-project-field="dataHandling.encryptAtRest" data-project-kind="boolean"><span><strong>Encrypt at rest</strong><small>Use approved encrypted storage for sensitive evidence.</small></span></label>
+                    </div>
+                    <div class="project-field-grid">
+                      <label>Retention days<input type="number" min="0" max="3650" data-project-field="dataHandling.retentionDays" data-project-kind="number"></label>
+                      <label>Evidence classification<select data-project-field="dataHandling.classification"><option value="public">Public</option><option value="internal">Internal</option><option value="confidential">Confidential</option><option value="restricted">Restricted</option></select></label>
+                      <label class="wide">Deletion and handoff procedure<textarea data-project-field="dataHandling.deletionProcedure" rows="5" placeholder="Approved handoff, retention expiry, secure deletion, and confirmation steps"></textarea></label>
+                    </div>
+                  </div>
+                </section>
+              </main>
+            </div>
+          </section>
+          <section id="app-settings-commands-panel" class="app-settings-panel guidance-settings-panel" hidden>
+            <div class="guidance-customize-page tools-settings-page">
+              <header class="guidance-page-header">
+                <div class="guidance-page-heading">
+                  <span class="codicon codicon-tools" aria-hidden="true"></span>
+                  <div><h2>Tools &amp; MCPs</h2><p>Manage MCP servers and the tools they expose to the agent</p></div>
+                </div>
+                <div id="mcp-settings-tabs" class="guidance-scope-tabs" role="tablist" aria-label="MCP scope">
+                  <button type="button" role="tab" data-mcp-scope="all" aria-selected="true">All</button>
+                  <button type="button" role="tab" data-mcp-scope="project" aria-selected="false">Project</button>
+                  <button type="button" role="tab" data-mcp-scope="global" aria-selected="false">Global</button>
+                </div>
+              </header>
+              <div id="mcp-settings-list" class="guidance-settings-list"></div>
+              <section id="kali-access-panel" class="mcp-connection-editor kali-access-panel">
+                <header>
+                  <div>
+                    <h3>Local Kali access</h3>
+                    <p>Reuse one SSH connection for MCP servers running inside your local Kali VM.</p>
+                  </div>
+                  <label class="kali-access-switch"><input id="kali-access-enabled" type="checkbox"><span aria-hidden="true"></span><strong>Enable</strong></label>
+                </header>
+                <form id="kali-access-form" autocomplete="off">
+                  <div id="kali-access-fields" hidden>
+                    <div class="mcp-form-grid">
+                      <label>Kali host or IP<input id="kali-access-host" maxlength="253" spellcheck="false" placeholder="192.168.56.20"></label>
+                      <label>SSH port<input id="kali-access-port" type="number" min="1" max="65535" value="22"></label>
+                      <label>SSH username<input id="kali-access-username" maxlength="64" spellcheck="false" value="kali" placeholder="kali"></label>
+                      <label>Connection type<input value="SSH key or Windows SSH agent" disabled></label>
+                      <label class="wide">SSH private key<div class="mcp-key-row"><input id="kali-access-key" maxlength="32768" spellcheck="false" placeholder="Optional when your SSH agent already has the key"><button type="button" id="kali-access-key-browse">Browse…</button></div></label>
+                    </div>
+                    <div class="mcp-form-options">
+                      <label><input id="kali-access-accept-host-key" type="checkbox" checked><span><strong>Trust a new SSH host key</strong><small>Accepts the first key but still rejects a changed key.</small></span></label>
+                    </div>
+                    <div class="mcp-form-note"><span class="codicon codicon-shield"></span><p>Password login is intentionally unsupported. Credentials and remote tool output are not stored in the MCP configuration.</p></div>
+                    <details class="mcp-setup-help">
+                      <summary>Using Kali-hosted MCP servers</summary>
+                      <ol>
+                        <li>Start the Kali VM and run <code>sudo systemctl enable --now ssh</code>.</li>
+                        <li>Connect from Windows once with <code>ssh kali@KALI_IP</code>, then configure key authentication or your SSH agent.</li>
+                        <li>Add each server normally in <code>mcp.json</code>. Set <code>xekute.transport</code> to <code>kali</code>; its command and arguments then run through this connection.</li>
+                        <li>Allowlist the server's exact tool names in the relevant skill Markdown so XEKUTE can lease them to the agent.</li>
+                        <li>The remote command must start an MCP server. A CLI such as SQLMap requires an MCP wrapper; enabling Kali access does not expose arbitrary shell commands.</li>
+                      </ol>
+                      <pre><code>{
+  "mcpServers": {
+    "sqlmap": {
+      "command": "python3",
+      "args": ["server.py"],
+      "xekute": {
+        "transport": "kali",
+        "remoteCwd": "/opt/sqlmap-mcp"
+      }
+    }
+  }
+}</code></pre>
+                    </details>
+                    <div id="kali-access-status" class="mcp-connection-status">Enter the Kali SSH connection details.</div>
+                    <footer>
+                      <button type="button" id="kali-access-open-mcp">Open MCP JSON</button>
+                      <span></span>
+                      <button type="button" id="kali-access-test">Test SSH access</button>
+                    </footer>
+                  </div>
+                </form>
+              </section>
+            </div>
+          </section>
+          <section id="app-settings-authority-panel" class="app-settings-panel authority-settings-panel" hidden>
+            <section class="agent-subagent-settings" aria-label="Sub-agent model">
+              <h2>Sub-agent model</h2>
+              <select id="models-explore-subagent" class="models-select" aria-label="Sub-agent model"></select>
+            </section>
+          </section>
+          <section id="app-settings-prompts-panel" class="app-settings-panel guidance-settings-panel" hidden>
+            <div class="guidance-customize-page rules-settings-page">
+              <header class="guidance-page-header">
+                <div class="guidance-page-heading">
+                  <span class="codicon codicon-symbol-keyword" aria-hidden="true"></span>
+                  <div><h2>Rules, Skills, Subagents</h2><p>Provide domain-specific knowledge and workflows for the agent</p></div>
+                </div>
+                <div id="guidance-scope-tabs" class="guidance-scope-tabs" role="tablist" aria-label="Guidance scope">
+                  <button type="button" role="tab" data-guidance-scope="all" aria-selected="true">All</button>
+                  <button type="button" role="tab" data-guidance-scope="project" aria-selected="false">Project</button>
+                  <button type="button" role="tab" data-guidance-scope="global" aria-selected="false">Global</button>
+                </div>
+              </header>
+              <div id="guidance-settings-list" class="guidance-settings-list"></div>
+            </div>
+          </section>
+          <section id="app-settings-llm-panel" class="app-settings-panel models-settings-panel" hidden>
+            <div class="models-customize-page">
+              <section class="models-catalog-section" aria-labelledby="models-catalog-title">
+                <header class="settings-redesign-section-heading">
+                  <div><h3 id="models-catalog-title">Available models</h3><p>Choose the models shown in chat and agent model selectors.</p></div>
+                </header>
+                <div class="models-search-row">
+                  <input id="models-settings-search" type="text" spellcheck="false" placeholder="Add or search model" aria-label="Add or search model">
+                  <button type="button" id="models-settings-refresh" class="models-refresh-btn" title="Refresh models" aria-label="Refresh models"><span class="codicon codicon-refresh"></span></button>
+                </div>
+                <div id="models-settings-list" class="models-settings-list" aria-live="polite"></div>
+                <button type="button" id="models-view-all" class="models-view-all" hidden>View more</button>
+              </section>
+
+              <details id="models-api-keys" class="models-api-keys" open>
+                <summary class="models-api-keys-summary"><span><strong>Providers &amp; API keys</strong><small>Configure the active inference provider and its connection details.</small></span><span class="codicon codicon-chevron-down" aria-hidden="true"></span></summary>
+                <div class="models-api-keys-body">
+                  <div class="models-api-row">
+                    <div>
+                      <strong>Active provider</strong>
+                      <p>Only one provider is used for chat, agents, model listing, and verification.</p>
+                    </div>
+                    <select id="llm-provider" class="models-select" aria-label="Active LLM provider">
+                      <option value="ollama">Ollama</option>
+                      <option value="openrouter">OpenRouter</option>
+                    </select>
+                  </div>
+                  <input type="radio" name="llm-provider" id="llm-provider-ollama" value="ollama" hidden aria-hidden="true">
+                  <input type="radio" name="llm-provider" id="llm-provider-openrouter" value="openrouter" hidden aria-hidden="true">
+
+                  <div id="llm-openrouter-config" class="models-api-provider-block" hidden>
+                    <div class="models-api-row models-api-row-toggle">
+                      <div>
+                        <strong>OpenRouter API Key</strong>
+                        <p>You can put in your OpenRouter key to use hosted models at cost.</p>
+                        <span id="llm-openrouter-key-status" class="models-secret-status" hidden>Secret saved</span>
+                      </div>
+                      <label class="general-toggle" aria-label="Use OpenRouter API key"><input id="llm-openrouter-key-toggle" type="checkbox"><span aria-hidden="true"></span></label>
+                    </div>
+                    <div id="llm-openrouter-key-fields" class="models-api-fields" hidden>
+                      <input id="openrouter-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Secret saved. Enter a new key to replace it" aria-label="OpenRouter API key">
+                    </div>
+                    <div class="models-api-row models-api-row-toggle">
+                      <div>
+                        <strong>Override OpenRouter Base URL</strong>
+                        <p>Change the base URL for OpenRouter API requests.</p>
+                      </div>
+                      <label class="general-toggle" aria-label="Override OpenRouter base URL"><input id="llm-openrouter-base-toggle" type="checkbox"><span aria-hidden="true"></span></label>
+                    </div>
+                    <div id="llm-openrouter-base-fields" class="models-api-fields" hidden>
+                      <input id="openrouter-base-url" type="url" spellcheck="false" placeholder="https://openrouter.ai/api/v1" aria-label="OpenRouter base URL">
+                    </div>
+                    <input id="openrouter-model" type="hidden" aria-hidden="true">
+                  </div>
+
+                  <div id="llm-ollama-config" class="models-api-provider-block">
+                    <div class="models-api-row models-api-row-toggle">
+                      <div>
+                        <strong>Enable Ollama</strong>
+                        <p>Use your local or remote Ollama server for chat, agents, and model listing.</p>
+                      </div>
+                      <label class="general-toggle" aria-label="Enable Ollama"><input id="llm-ollama-enable-toggle" type="checkbox" checked><span aria-hidden="true"></span></label>
+                    </div>
+                    <div class="models-api-row models-api-row-toggle">
+                      <div>
+                        <strong>Custom Ollama endpoint</strong>
+                        <p>Override the default <code>http://127.0.0.1:11435</code> endpoint.</p>
+                        <span id="llm-ollama-endpoint-status" class="models-secret-status" hidden>Endpoint saved</span>
+                      </div>
+                      <label class="general-toggle" aria-label="Use custom Ollama endpoint"><input id="llm-ollama-endpoint-toggle" type="checkbox"><span aria-hidden="true"></span></label>
+                    </div>
+                    <div id="llm-ollama-endpoint-fields" class="models-api-fields" hidden>
+                      <input id="ollama-host-input" type="url" spellcheck="false" placeholder="http://127.0.0.1:11435" aria-label="Ollama API base URL">
+                    </div>
+                    <div class="models-api-actions">
+                      <button type="button" id="ollama-host-test" class="secondary-button"><span class="codicon codicon-pulse"></span>Test Ollama</button>
+                      <button type="button" id="ollama-host-reset" class="secondary-button">Use local default</button>
+                    </div>
+                    <div class="models-api-status-grid">
+                      <div><strong>Active endpoint</strong><code id="ollama-active-endpoint">http://127.0.0.1:11435</code> <span id="ollama-location-badge" class="models-location-badge">Default</span></div>
+                      <div><strong>Connection status</strong><span id="ollama-connection-status">Not tested</span></div>
+                    </div>
+                  </div>
+
+                  <div class="models-api-actions models-api-actions-footer llm-provider-actions">
+                    <button type="button" id="llm-settings-test" class="secondary-button">Test provider</button>
+                  </div>
+                  <p id="llm-settings-status" class="models-api-status">Ready</p>
+                </div>
+              </details>
+            </div>
+          </section>
+          <section id="app-settings-certificates-panel" class="app-settings-panel certificate-settings-panel" hidden>
+            <div class="certificate-settings-content browser-network-page">
+              <header class="settings-redesign-section-heading"><div><h3>Proxy certificate</h3></div></header>
+              <section class="certificate-settings-card">
+                <div class="certificate-setting-heading"><div><strong>Central CA storage folder</strong><small>All assessment proxy listeners use this location. The private key is never copied into an assessment.</small></div><span id="certificate-location-badge" class="certificate-location-badge">Default</span></div>
+                <div class="certificate-location-row"><input id="certificate-directory" type="text" readonly aria-label="Central CA storage folder"><button type="button" id="certificate-browse" class="secondary-button"><span class="codicon codicon-folder-opened"></span>Choose folder</button></div>
+                <div class="certificate-setting-actions"><button type="button" id="certificate-open-folder" class="secondary-button"><span class="codicon codicon-folder"></span>Open folder</button><button type="button" id="certificate-reset" class="secondary-button">Use default location</button></div>
+              </section>
+            </div>
+          </section>
+            </div>
+          </div>
+        </section>
+        <section id="security-workspace" class="security-workspace" aria-label="Security workspace" hidden>
+          <header class="security-workspace-header">
+            <div class="security-workspace-heading">
+              <span class="codicon codicon-shield" aria-hidden="true"></span>
+              <div>
+                <strong>Security Workbench</strong>
+              </div>
+            </div>
+            <div id="security-workspace-tools" class="security-workspace-tools">
+              <div id="security-proxy-browser-wrap" class="security-proxy-browser-wrap">
+                <button type="button" id="security-proxy-browser" class="security-proxy-browser" aria-label="Open browser through XEKUTE proxy" title="Open browser through XEKUTE proxy" aria-haspopup="menu" aria-expanded="false">
+                  <span class="codicon codicon-globe" aria-hidden="true"></span>
+                  <span>Browser</span>
+                </button>
+                <div id="security-proxy-browser-menu" class="security-proxy-browser-menu" role="menu" hidden></div>
+              </div>
+              <button type="button" id="security-history-toggle" class="security-history-toggle" aria-pressed="false" title="Show Traffic/Raw history">
+                <span class="codicon codicon-history" aria-hidden="true"></span>
+                <span>History</span>
+              </button>
+            </div>
+          </header>
+          <div id="security-workspace-body" class="security-workspace-body">
+            <section id="security-history-panel" class="security-history-panel" aria-label="HTTP history" hidden>
+              <header class="security-history-header">
+                <div>
+                  <strong>HTTP History</strong>
+                  <span id="security-history-summary">Traffic/Raw</span>
+                </div>
+                <button type="button" id="security-history-refresh" class="security-workbench-icon" title="Refresh history" aria-label="Refresh history">
+                  <span class="codicon codicon-refresh"></span>
+                </button>
+              </header>
+              <div class="security-history-table-wrap">
+                <table class="security-history-table">
+                  <thead>
+                    <tr>
+                      <th scope="col" data-history-sort="number" aria-sort="none"><button type="button"><span>#</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="host" aria-sort="none"><button type="button"><span>Host</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="method" aria-sort="none"><button type="button"><span>Method</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="path" aria-sort="none"><button type="button"><span>URL</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="params" aria-sort="none"><button type="button"><span>Params</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="status" aria-sort="none"><button type="button"><span>Status</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="length" aria-sort="none"><button type="button"><span>Length</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="mime" aria-sort="none"><button type="button"><span>MIME type</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="tool" aria-sort="none"><button type="button"><span>Tool</span><i class="codicon codicon-chevron-down"></i></button></th>
+                      <th scope="col" data-history-sort="time" aria-sort="descending"><button type="button"><span>Time</span><i class="codicon codicon-chevron-down"></i></button></th>
+                    </tr>
+                  </thead>
+                  <tbody id="security-history-rows"></tbody>
+                </table>
+                <div id="security-history-empty" class="security-history-empty">Open an assessment to load Traffic/Raw history.</div>
+              </div>
+            </section>
+            <div id="security-workbench-resize" class="sash-h security-workbench-resize" role="separator" tabindex="0" aria-label="Resize HTTP history" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="800" aria-valuenow="280" title="Drag or use arrow keys to resize"></div>
+          </div>
+        </section>
+        <section id="webclone-workspace" class="webclone-workspace" aria-label="WebClone workspace" hidden>
+          <header class="webclone-workspace-header">
+            <div class="webclone-heading"><span class="codicon codicon-globe"></span><div><strong>WebClone</strong><small>Build a local, reviewable copy of authorized public pages and their text assets.</small></div></div>
+            <div class="webclone-actions"><input id="webclone-target" class="webclone-target" type="url" placeholder="https://authorized-target" aria-label="Authorized WebClone target"><span id="webclone-status" class="webclone-status">No clone built</span><button type="button" id="webclone-build-action" class="primary-button"><span class="codicon codicon-cloud-download"></span>Build</button><button type="button" id="webclone-preview-action" class="secondary-button" disabled><span class="codicon codicon-play"></span>Preview</button></div>
+          </header>
+          <div id="webclone-empty" class="webclone-empty"><span class="codicon codicon-globe"></span><strong>No WebClone yet</strong><p>Build from an in-scope HTTPS target. XEKUTE downloads bounded text assets for review and keeps the original assessment untouched.</p></div>
+          <div id="webclone-content" class="webclone-content" hidden>
+            <section class="webclone-editor-pane"><header><span id="webclone-file-title">index.html</span><span id="webclone-file-meta"></span></header><pre id="webclone-file-content" tabindex="0" aria-label="WebClone file contents"></pre></section>
+            <section class="webclone-preview-pane" hidden><header><strong>Website preview</strong><button type="button" id="webclone-preview-close" class="icon-btn" title="Show file" aria-label="Show file"><span class="codicon codicon-close"></span></button></header><div id="webclone-preview-frame" class="webclone-preview-surface" aria-label="WebClone preview"></div></section>
+            <aside class="webclone-files"><header><strong>Files</strong><span><span id="webclone-file-count">0</span><button type="button" id="webclone-files-toggle" class="icon-btn" title="Collapse files" aria-label="Collapse files"><span class="codicon codicon-chevron-right"></span></button></span></header><div id="webclone-file-list" role="tree" aria-label="WebClone files"></div></aside>
+          </div>
+        </section>
+        <div id="editor-tab-bar" hidden></div>
+        <div id="editor-path-bar" class="editor-path-bar" hidden><span id="editor-path-label" class="editor-path-label"></span></div>
+        <div id="editor-body" hidden>
+          <div id="editor-empty">
+            <img src="../../xekute_icon.png" alt="" class="resource-viewer-empty-logo">
+          </div>
+          <div id="editor-view" hidden>
+            <div id="settings-editor-toolbar" class="settings-editor-toolbar" hidden>
+              <div class="settings-editor-title"><span class="codicon codicon-settings-gear"></span><span>Assessment Settings</span></div>
+              <div class="settings-view-switch" role="group" aria-label="Settings editor view">
+                <button type="button" id="settings-view-json" class="active" aria-pressed="true">JSON</button>
+                <button type="button" id="settings-view-ui" aria-pressed="false">UI</button>
+              </div>
+            </div>
+            <div id="monaco-container"></div>
+            <div id="markdown-preview" class="markdown-file-preview assistant-reply" hidden aria-label="Rendered Markdown preview"></div>
+            <div id="settings-ui-view" class="settings-ui-view" hidden>
+              <div class="settings-ui-content">
+                <section class="settings-group">
+                  <div class="settings-group-heading"><span class="codicon codicon-radio-tower"></span><div><h2>Proxy Listener</h2><p>Local interface used by the assessment interception workbench.</p></div></div>
+                  <div class="settings-row"><label for="setting-listener-enabled">Listener enabled</label><input id="setting-listener-enabled" type="checkbox" data-setting-path="listener.enabled" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-bind-address">Bind address</label><input id="setting-bind-address" type="text" data-setting-path="listener.bindAddress"></div>
+                  <div class="settings-row"><label for="setting-listener-port">Port</label><input id="setting-listener-port" type="number" min="1" max="65535" step="1" data-setting-path="listener.port" data-setting-type="number"></div>
+                  <div class="settings-row"><label for="setting-http2">HTTP/2 support</label><input id="setting-http2" type="checkbox" data-setting-path="listener.supportHttp2" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label>Listener status</label><output id="proxy-listener-status" class="proxy-listener-status">Stopped</output></div>
+                </section>
+                <section class="settings-group">
+                  <div class="settings-group-heading"><span class="codicon codicon-lock"></span><div><h2>TLS</h2><p>Certificate and upstream verification behavior.</p></div></div>
+                  <div class="settings-row"><label for="setting-tls-enabled">TLS interception</label><input id="setting-tls-enabled" type="checkbox" data-setting-path="tls.enabled" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-certificate-mode">Certificate mode</label><select id="setting-certificate-mode" data-setting-path="tls.certificateMode"><option value="project-ca">Project CA</option><option value="custom">Custom certificate</option><option value="passthrough">Passthrough</option></select></div>
+                  <div class="settings-row"><label for="setting-min-tls">Minimum TLS version</label><select id="setting-min-tls" data-setting-path="tls.minimumVersion"><option>TLSv1.2</option><option>TLSv1.3</option></select></div>
+                  <div class="settings-row"><label for="setting-verify-upstream">Verify upstream certificates</label><input id="setting-verify-upstream" type="checkbox" data-setting-path="tls.verifyUpstreamCertificates" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label>Project CA certificate</label><div class="settings-inline-action"><input id="proxy-ca-path" type="text" readonly value="Generated when the listener starts"><button type="button" id="btn-show-proxy-ca" title="Show CA certificate"><span class="codicon codicon-folder-opened"></span></button></div></div>
+                </section>
+                <section class="settings-group">
+                  <div class="settings-group-heading"><span class="codicon codicon-shield"></span><div><h2>Authorization</h2><p>Confirm written permission before sending traffic from Repeater, Intruder, or Interceptor.</p></div></div>
+                  <div class="settings-row"><label for="setting-auth-confirmed">Authorization confirmed</label><input id="setting-auth-confirmed" type="checkbox" data-setting-path="authorization.confirmed" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-authorized-by">Authorized by</label><input id="setting-authorized-by" type="text" data-setting-path="authorization.authorizedBy" placeholder="Program owner or approver"></div>
+                  <div class="settings-row"><label for="setting-auth-reference">Authorization reference</label><input id="setting-auth-reference" type="text" data-setting-path="authorization.authorizationReference" placeholder="Ticket, email, or program URL"></div>
+                  <div class="settings-row"><label for="setting-auth-signed-at">Signed at</label><input id="setting-auth-signed-at" type="text" data-setting-path="authorization.signedAt" placeholder="YYYY-MM-DD"></div>
+                </section>
+                <section class="settings-group">
+                  <div class="settings-group-heading"><span class="codicon codicon-debug-disconnect"></span><div><h2>Interception</h2><p>Control which HTTP messages stop in the Interceptor.</p></div></div>
+                  <div class="settings-row"><label for="setting-interception-enabled">Intercept traffic</label><input id="setting-interception-enabled" type="checkbox" data-setting-path="interception.enabled" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-intercept-requests">Intercept requests</label><input id="setting-intercept-requests" type="checkbox" data-setting-path="interception.interceptRequests" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-intercept-responses">Intercept responses</label><input id="setting-intercept-responses" type="checkbox" data-setting-path="interception.interceptResponses" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-only-scope">Only intercept in-scope targets</label><input id="setting-only-scope" type="checkbox" data-setting-path="interception.onlyInScope" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-content-length">Update Content-Length</label><input id="setting-content-length" type="checkbox" data-setting-path="interception.automaticallyUpdateContentLength" data-setting-type="boolean"></div>
+                </section>
+                <section class="settings-group">
+                  <div class="settings-group-heading"><span class="codicon codicon-globe"></span><div><h2>Requests and Upstream Proxy</h2><p>Network limits used by Repeater and Intruder.</p></div></div>
+                  <div class="settings-row"><label for="setting-request-timeout">Request timeout (seconds)</label><input id="setting-request-timeout" type="number" min="1" max="30" data-setting-path="requests.timeoutSeconds" data-setting-type="number"></div>
+                  <div class="settings-row"><label for="setting-max-response">Maximum response bytes</label><input id="setting-max-response" type="number" min="1024" max="1000000" data-setting-path="requests.maximumResponseBytes" data-setting-type="number"></div>
+                  <div class="settings-row"><label for="setting-upstream-enabled">Use upstream proxy</label><input id="setting-upstream-enabled" type="checkbox" data-setting-path="upstreamProxy.enabled" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-upstream-url">Upstream proxy URL</label><input id="setting-upstream-url" type="url" data-setting-path="upstreamProxy.url" placeholder="http://127.0.0.1:8081"></div>
+                </section>
+                <section class="settings-group">
+                  <div class="settings-group-heading"><span class="codicon codicon-symbol-event"></span><div><h2>Intruder</h2><p>Bounded automated request behavior.</p></div></div>
+                  <div class="settings-row"><label for="setting-intruder-limit">Maximum requests per run</label><input id="setting-intruder-limit" type="number" min="1" max="25" data-setting-path="intruder.maximumRequestsPerRun" data-setting-type="number"></div>
+                  <div class="settings-row"><label for="setting-intruder-delay">Delay between requests (ms)</label><input id="setting-intruder-delay" type="number" min="500" max="60000" data-setting-path="intruder.delayBetweenRequestsMs" data-setting-type="number"></div>
+                  <div class="settings-row"><label for="setting-stop-error">Stop on error</label><input id="setting-stop-error" type="checkbox" data-setting-path="intruder.stopOnError" data-setting-type="boolean"></div>
+                </section>
+                <section class="settings-group">
+                  <div class="settings-group-heading"><span class="codicon codicon-output"></span><div><h2>Traffic Logging</h2><p>Evidence retained in Traffic/Raw and Traffic/Filtered.</p></div></div>
+                  <div class="settings-row"><label for="setting-log-raw">Log raw traffic</label><input id="setting-log-raw" type="checkbox" data-setting-path="logging.logRawTraffic" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-log-filtered">Log filtered traffic</label><input id="setting-log-filtered" type="checkbox" data-setting-path="logging.logFilteredTraffic" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-log-bodies">Include message bodies</label><input id="setting-log-bodies" type="checkbox" data-setting-path="logging.includeBodies" data-setting-type="boolean"></div>
+                  <div class="settings-row"><label for="setting-redact-auth">Redact Authorization headers</label><input id="setting-redact-auth" type="checkbox" data-setting-path="logging.redactAuthorizationHeaders" data-setting-type="boolean"></div>
+                </section>
+              </div>
+            </div>
+            <div id="editor-error" hidden></div>
+          </div>
+        </div>
+      </main>
+
+      <div id="terminal-resize" class="sash-h" role="separator" tabindex="0" aria-label="Resize terminal panel" aria-orientation="horizontal" aria-valuemin="96" aria-valuemax="800" aria-valuenow="240"></div>
+
+      <section id="terminal-pane">
+        <div id="terminal-header">
+          <div class="terminal-panel-tabs" role="tablist" aria-label="Panel views">
+            <button type="button" id="terminal-shell-tab" class="terminal-panel-tab active" role="tab" aria-selected="true">Terminal</button>
+          </div>
+          <div id="security-tool-switcher" class="security-tool-switcher" hidden>
+            <button type="button" id="security-tool-button" class="security-tool-button" aria-haspopup="menu" aria-expanded="false" title="Security tool">
+              <span id="security-tool-icon" class="codicon codicon-shield" aria-hidden="true"></span>
+              <span id="security-tool-label">Security Tools</span>
+              <span class="codicon codicon-chevron-down security-tool-chevron" aria-hidden="true"></span>
+            </button>
+            <div id="security-tool-menu" class="security-tool-menu" role="menu" hidden>
+              <button type="button" class="security-tool-option" data-security-tool="interceptor" role="menuitemradio" aria-checked="false">
+                <span class="codicon codicon-debug-disconnect"></span><span><strong>Interceptor</strong><small>Capture, modify, then forward</small></span><span class="codicon codicon-check"></span>
+              </button>
+              <button type="button" class="security-tool-option" data-security-tool="repeater" role="menuitemradio" aria-checked="false">
+                <span class="codicon codicon-sync"></span><span><strong>Repeater</strong><small>Edit and resend requests</small></span><span class="codicon codicon-check"></span>
+              </button>
+              <button type="button" class="security-tool-option" data-security-tool="intruder" role="menuitemradio" aria-checked="false">
+                <span class="codicon codicon-symbol-event"></span><span><strong>Intruder</strong><small>Payload-position testing</small></span><span class="codicon codicon-check"></span>
+              </button>
+            </div>
+            <button type="button" id="security-analyze-button" class="security-analyze-button" title="Analyze request and response with AI" aria-label="Analyze exchange with AI" hidden>
+              <span class="codicon codicon-copilot security-analyze-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div class="terminal-actions">
+            <button type="button" id="terminal-active-session" class="terminal-session-button terminal-shell-action" title="Select terminal or shell" aria-haspopup="menu" aria-expanded="false" disabled>
+              <span class="codicon codicon-terminal"></span>
+              <span id="terminal-active-name">Terminal</span>
+              <span class="codicon codicon-chevron-down terminal-session-chevron"></span>
+            </button>
+            <button type="button" id="btn-terminal-new" class="icon-btn terminal-action terminal-shell-action" title="New Terminal">
+              <span class="codicon codicon-add"></span>
+            </button>
+            <button type="button" id="btn-terminal-new-menu" class="icon-btn terminal-action terminal-shell-action" title="New terminal with profile" aria-haspopup="menu" aria-expanded="false">
+              <span class="codicon codicon-chevron-down"></span>
+            </button>
+            <button id="btn-terminal-split" class="icon-btn terminal-action terminal-shell-action" title="Split Terminal" disabled>
+              <span class="codicon codicon-split-horizontal"></span>
+            </button>
+            <button id="btn-terminal-clear" class="icon-btn terminal-action terminal-shell-action" title="Clear Terminal" disabled>
+              <span class="codicon codicon-clear-all"></span>
+            </button>
+            <button id="btn-terminal-kill" class="icon-btn terminal-action terminal-shell-action" title="Kill Terminal" disabled>
+              <span class="codicon codicon-trash"></span>
+            </button>
+            <button id="btn-terminal-more" class="icon-btn terminal-action" title="More terminal actions" aria-haspopup="menu" aria-expanded="false">
+              <span class="codicon codicon-ellipsis"></span>
+            </button>
+            <button id="btn-terminal-maximize" class="icon-btn terminal-action" title="Maximize Panel">
+              <span class="codicon codicon-chevron-up"></span>
+            </button>
+            <button id="btn-terminal-close" class="icon-btn terminal-action" title="Close Panel">
+              <span class="codicon codicon-close"></span>
+            </button>
+          </div>
+          <div id="terminal-session-menu" class="terminal-session-menu" role="menu" hidden></div>
+          <div id="terminal-more-menu" class="terminal-more-menu" role="menu" hidden>
+            <button type="button" data-terminal-more-action="split" role="menuitem">Split Terminal</button>
+            <button type="button" data-terminal-more-action="clear" role="menuitem">Clear Terminal</button>
+            <button type="button" data-terminal-more-action="kill" role="menuitem">Kill Terminal</button>
+          </div>
+        </div>
+        <div id="terminal-body">
+          <div id="terminal-viewport">
+            <div id="terminal-empty" hidden></div>
+          </div>
+          <div id="security-workbench" class="security-workbench" hidden>
+            <div class="security-workbench-toolbar">
+              <div class="security-workbench-state">
+                <span id="security-workbench-mode" class="security-workbench-mode">Interceptor</span>
+                <span id="security-workbench-status" class="security-workbench-status">Ready</span>
+              </div>
+              <div id="security-repeater-history" class="security-repeater-history" hidden>
+                <button type="button" id="security-repeater-prev" class="security-workbench-icon" title="Previous response" aria-label="Previous response"><span class="codicon codicon-chevron-left"></span></button>
+                <span id="security-repeater-position" class="security-repeater-position">0 / 0</span>
+                <button type="button" id="security-repeater-next" class="security-workbench-icon" title="Next response" aria-label="Next response"><span class="codicon codicon-chevron-right"></span></button>
+              </div>
+              <button type="button" id="security-intercept-toggle" class="security-intercept-toggle" title="Pause or resume request interception" hidden>
+                <span id="security-intercept-toggle-icon" class="codicon codicon-debug-pause" aria-hidden="true"></span>
+                <span id="security-intercept-toggle-label">Intercept Off</span>
+              </button>
+              <button type="button" id="security-run-button" class="security-run-button"><span class="codicon codicon-play"></span><span id="security-run-label">Forward</span></button>
+              <button type="button" id="security-clear-button" class="security-workbench-icon" title="Clear exchange" aria-label="Clear exchange"><span class="codicon codicon-clear-all"></span></button>
+              <button type="button" id="security-drop-button" class="security-drop-button" title="Drop intercepted request" hidden><span class="codicon codicon-circle-slash"></span><span>Drop</span></button>
+            </div>
+            <div class="security-workbench-main">
+              <div class="security-workbench-center">
+                <div id="security-repeater-tabs" class="security-repeater-tabs" hidden>
+                  <div id="security-repeater-tab-list" class="security-repeater-tab-list" role="tablist" aria-label="Workbench tabs"></div>
+                  <button type="button" id="security-repeater-add" class="security-repeater-add" title="New tab" aria-label="New tab"><span class="codicon codicon-add"></span></button>
+                </div>
+                <div id="security-intruder-panel" class="security-intruder-panel" hidden>
+                  <nav class="security-subtabs" role="tablist" aria-label="Intruder sections">
+                    <button type="button" class="active" data-intruder-tab="positions" role="tab" aria-selected="true"><span>Positions</span><span id="security-positions-count" class="security-subtab-badge">0</span></button>
+                    <button type="button" data-intruder-tab="payloads" role="tab" aria-selected="false"><span>Payloads</span><span id="security-payloads-count" class="security-subtab-badge">0</span></button>
+                    <button type="button" data-intruder-tab="results" role="tab" aria-selected="false"><span>Results</span><span id="security-results-count" class="security-subtab-badge">0</span></button>
+                  </nav>
+                  <section class="security-intruder-section" data-intruder-panel="positions">
+                    <div class="security-attack-picker" role="radiogroup" aria-label="Attack type">
+                      <button type="button" class="active" data-attack-type="sniper" role="radio" aria-checked="true"><strong>Sniper</strong><small>One position at a time</small></button>
+                      <button type="button" data-attack-type="battering-ram" role="radio" aria-checked="false"><strong>Battering Ram</strong><small>Same payload everywhere</small></button>
+                      <button type="button" data-attack-type="pitchfork" role="radio" aria-checked="false"><strong>Pitchfork</strong><small>Sets advance together</small></button>
+                      <button type="button" data-attack-type="cluster-bomb" role="radio" aria-checked="false"><strong>Cluster Bomb</strong><small>Every combination</small></button>
+                    </div>
+                    <div class="security-position-bar">
+                      <div class="security-position-actions">
+                        <button type="button" id="security-position-mark" class="security-mini-button"><span class="codicon codicon-symbol-variable"></span>Mark selection</button>
+                        <button type="button" id="security-position-auto" class="security-mini-button"><span class="codicon codicon-lightbulb"></span>Auto-detect</button>
+                        <button type="button" id="security-position-clear" class="security-mini-button"><span class="codicon codicon-clear-all"></span>Clear all</button>
+                      </div>
+                      <div id="security-position-chips" class="security-position-chips" aria-live="polite"></div>
+                    </div>
+                  </section>
+                  <section class="security-intruder-section" data-intruder-panel="payloads" hidden>
+                    <div class="security-payload-toolbar">
+                      <span id="security-payload-hint" class="security-payload-hint">Mark a payload position first.</span>
+                      <button type="button" id="security-payload-json-toggle" class="security-mini-button" aria-pressed="false"><span class="codicon codicon-json"></span>Raw JSON</button>
+                    </div>
+                    <div id="security-payload-sets" class="security-payload-sets"></div>
+                    <div id="security-payload-panel" class="security-payload-panel" hidden>
+                      <label for="security-payload-editor">Payload sets (JSON)</label>
+                      <textarea id="security-payload-editor" spellcheck="false" aria-label="Intruder payload sets">{"value":["test"]}</textarea>
+                    </div>
+                  </section>
+                  <section class="security-intruder-section security-results-section" data-intruder-panel="results" hidden>
+                    <div class="security-results-wrap">
+                      <table class="security-results-table">
+                        <thead><tr><th>#</th><th>Payload</th><th>Status</th><th>Length</th><th>Time</th></tr></thead>
+                        <tbody id="security-results-rows"></tbody>
+                      </table>
+                      <div id="security-results-empty" class="security-results-empty">Run an attack to collect results.</div>
+                    </div>
+                  </section>
+                </div>
+                <div class="security-exchange" id="security-exchange">
+                  <section class="security-message-pane security-request-pane">
+                    <header><span>Request</span><span id="security-request-size">0 B</span></header>
+                    <textarea id="security-request-editor" spellcheck="false" aria-label="Raw HTTP request" placeholder="GET / HTTP/1.1&#10;Host: authorized.example&#10;Accept: */*"></textarea>
+                  </section>
+                  <div id="security-exchange-sash" class="security-exchange-sash sash-v" role="separator" aria-label="Resize request and response panels" aria-orientation="vertical" tabindex="0"></div>
+                  <section class="security-message-pane security-response-pane">
+                    <header><span>Response</span><span id="security-response-size">0 B</span></header>
+                    <textarea id="security-response-editor" spellcheck="false" aria-label="Raw HTTP response" readonly placeholder="Response appears here"></textarea>
+                  </section>
+                </div>
+              </div>
+              <aside id="security-inspector" class="security-inspector collapsed" aria-label="Inspector utilities">
+                <button type="button" id="security-inspector-toggle" class="security-inspector-toggle" aria-expanded="false" title="Open Inspector"><span class="codicon codicon-inspect"></span><span>Inspector</span></button>
+                <div id="security-inspector-panel" class="security-inspector-panel" hidden>
+                  <header class="security-inspector-header"><div><strong>Inspector</strong><small id="security-inspector-context">Local decode and analysis tools</small></div><button type="button" id="security-inspector-close" class="icon-btn" title="Close Inspector"><span class="codicon codicon-close"></span></button></header>
+                  <nav class="security-inspector-tabs" aria-label="Inspector tools">
+                    <button type="button" class="active" data-inspector-tab="decoder" aria-pressed="true">Decoder</button>
+                    <button type="button" data-inspector-tab="jwt" aria-pressed="false">JWT</button>
+                    <button type="button" data-inspector-tab="cookies" aria-pressed="false">Cookies</button>
+                  </nav>
+                  <div class="security-inspector-content">
+                    <section class="security-inspector-tool" data-inspector-panel="decoder">
+                      <div class="inspector-source-actions"><button type="button" data-inspector-source="selection">Selection</button><button type="button" data-inspector-source="request">Request</button><button type="button" data-inspector-source="response">Response</button></div>
+                      <label>Transform<select id="inspector-decoder-format"><option value="url-component">URL component</option><option value="url">Full URL</option><option value="base64">Base64</option><option value="base64url">Base64URL</option><option value="html">HTML entities</option><option value="hex">Hex</option><option value="json">JSON</option></select></label>
+                      <label>Input<textarea id="inspector-decoder-input" spellcheck="false" placeholder="Paste or load a value"></textarea></label>
+                      <div class="inspector-action-row"><button type="button" id="inspector-decode">Decode / Format</button><button type="button" id="inspector-encode">Encode / Minify</button><button type="button" id="inspector-swap">Swap</button></div>
+                      <label>Output<textarea id="inspector-decoder-output" spellcheck="false" readonly></textarea></label>
+                      <button type="button" id="inspector-copy-output" class="inspector-wide-action"><span class="codicon codicon-copy"></span>Copy output</button>
+                    </section>
+                    <section class="security-inspector-tool" data-inspector-panel="jwt" hidden>
+                      <div class="inspector-source-actions"><button type="button" data-jwt-source="request">Find in request</button><button type="button" data-jwt-source="response">Find in response</button></div>
+                      <label>JWT<textarea id="inspector-jwt-token" spellcheck="false" placeholder="eyJhbGciOi..."></textarea></label>
+                      <div class="inspector-action-row"><button type="button" id="inspector-jwt-decode">Decode &amp; analyze</button><button type="button" id="inspector-jwt-copy">Copy token</button></div>
+                      <div id="inspector-jwt-analysis" class="inspector-analysis-empty">Load a JWT to inspect its algorithm, claims, lifetime, and signature state.</div>
+                      <label>Header JSON<textarea id="inspector-jwt-header" spellcheck="false">{"alg":"HS256","typ":"JWT"}</textarea></label>
+                      <label>Payload JSON<textarea id="inspector-jwt-payload" spellcheck="false">{}</textarea></label>
+                      <div class="inspector-two-column"><label>Algorithm<select id="inspector-jwt-alg"><option>HS256</option><option>HS384</option><option>HS512</option><option value="none">none</option></select></label><label>HMAC secret<input id="inspector-jwt-secret" type="password" autocomplete="off" placeholder="Local only"></label></div>
+                      <div class="inspector-action-row"><button type="button" id="inspector-jwt-sign">Encode / Sign</button><button type="button" id="inspector-jwt-verify">Verify signature</button></div>
+                    </section>
+                    <section class="security-inspector-tool" data-inspector-panel="cookies" hidden>
+                      <div class="inspector-source-actions"><button type="button" data-cookie-source="request">Request Cookie</button><button type="button" data-cookie-source="response">Response Set-Cookie</button></div>
+                      <label>Cookie data<textarea id="inspector-cookie-input" spellcheck="false" placeholder="session=...; theme=dark"></textarea></label>
+                      <div class="inspector-action-row"><button type="button" id="inspector-cookie-analyze">Analyze</button><button type="button" id="inspector-cookie-decode">Decode values</button><button type="button" id="inspector-cookie-encode">Encode values</button></div>
+                      <div id="inspector-cookie-results" class="inspector-analysis-empty">Load a Cookie or Set-Cookie header to inspect values and security attributes.</div>
+                      <label>Output<textarea id="inspector-cookie-output" spellcheck="false" readonly></textarea></label>
+                      <button type="button" id="inspector-cookie-copy" class="inspector-wide-action"><span class="codicon codicon-copy"></span>Copy output</button>
+                    </section>
+                  </div>
+                  <footer id="security-inspector-status">Transforms run locally. JWT HMAC secrets are never saved.</footer>
+                </div>
+              </aside>
+            </div>
+          </div>
+          <div id="terminal-tabs-resize" class="sash-v" role="separator" tabindex="0" aria-label="Resize terminal session list" aria-orientation="vertical" hidden></div>
+          <div id="terminal-tabs-list" hidden></div>
+        </div>
+      </section>
+    </div>
+
+    <div id="chat-resize" class="sash-v" role="separator" tabindex="0" aria-label="Resize chat panel" aria-orientation="vertical" aria-valuemin="384" aria-valuemax="960" aria-valuenow="513"></div>
+
+    <aside id="chat-pane">
+      <div id="chat-header">
+        <div id="chat-session-select" class="chat-session-tabs" title="Chat sessions"></div>
+        <div class="chat-session-controls">
+          <button type="button" id="btn-chat-new" class="icon-btn chat-session-action" title="New chat">
+            <span class="codicon codicon-add"></span>
+          </button>
+          <button type="button" id="btn-chat-history" class="icon-btn chat-session-action" title="Chat history">
+            <span class="codicon codicon-history"></span>
+          </button>
+          <button type="button" id="btn-chat-more" class="icon-btn chat-session-action" title="Chat options">
+            <span class="codicon codicon-ellipsis"></span>
+          </button>
+          <button type="button" id="btn-chat-collapse" class="icon-btn chat-session-action" title="Collapse chat">
+            <img class="chrome-icon" src="assets/icons/chat_collapse_expand_icon.svg" alt="" aria-hidden="true">
+          </button>
+        </div>
+      </div>
+
+      <div id="messages"></div>
+
+      <div id="input-bar">
+        <div id="chat-history-security-warning" class="chat-history-security-warning" role="status" aria-live="polite" hidden></div>
+        <div id="composer-questions" class="composer-questions" hidden aria-live="polite"></div>
+        <div id="composer-task-list" class="composer-task-list" hidden aria-live="polite"></div>
+        <div id="chat-error-toast" class="chat-error-toast" role="status" aria-live="polite" hidden>
+          <p class="chat-error-toast-text"></p>
+          <button type="button" class="chat-error-toast-close" title="Dismiss" aria-label="Dismiss">
+            <span class="codicon codicon-close" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="composer">
+          <div id="slash-command-suggestions" class="slash-command-suggestions" role="listbox" aria-label="Available slash commands" hidden></div>
+          <div class="composer-input-row">
+            <div id="chat-input" contenteditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Chat message" data-placeholder="Ask, investigate, run, or search" class="chat-input-empty"><span id="selected-slash-command" class="selected-slash-command" hidden></span></div>
+          </div>
+          <div id="chat-input-measure" aria-hidden="true"></div>
+          <div class="composer-toolbar">
+            <div class="composer-meta">
+              <div id="chat-mode-toggle" class="chat-mode-toggle">
+                <button type="button" id="chat-mode-button" class="chat-mode-button mode-agent" aria-haspopup="menu" aria-expanded="false" title="Chat mode">
+                  <span id="chat-mode-icon" class="codicon codicon-copilot chat-mode-icon" aria-hidden="true"></span>
+                  <span id="chat-mode-button-label">Agent</span>
+                  <span class="codicon codicon-chevron-down chat-mode-chevron"></span>
+                </button>
+              </div>
+              <button type="button" id="model-picker" class="model-pill composer-pill" title="Select model">
+                <span id="model-label">Select model</span>
+                <span class="codicon codicon-chevron-down model-chevron"></span>
+              </button>
+              <button type="button" id="authority-picker" class="authority-pill composer-pill" title="Agent authority" aria-haspopup="menu" aria-expanded="false">
+                <span class="codicon codicon-shield authority-pill-icon" aria-hidden="true"></span>
+                <span id="authority-label">Ask Approval</span>
+                <span class="codicon codicon-chevron-down authority-chevron"></span>
+              </button>
+            </div>
+            <div class="composer-actions">
+              <button type="button" id="context-usage-btn" class="context-ring-btn" title="Context usage" aria-label="View context usage" aria-expanded="false">
+                <svg class="context-ring" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle class="context-ring-bg" cx="10" cy="10" r="8"></circle>
+                  <circle id="context-ring-fill" class="context-ring-fill" cx="10" cy="10" r="8"></circle>
+                </svg>
+              </button>
+              <button type="button" id="send-btn" class="send-btn" title="Send message" aria-label="Send message" disabled>
+                <span class="codicon codicon-arrow-up"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <div id="app-settings-overlay" class="tool-config-overlay" hidden>
+    <form id="app-settings-dialog" class="tool-config-dialog app-settings-dialog"><header><div><span class="codicon codicon-settings-gear"></span><div><strong>XEKUTE Settings</strong><small>User-authored slash guidance is separate from Xekute's read-only system skills.</small></div></div><button type="button" id="app-settings-close" class="icon-btn"><span class="codicon codicon-close"></span></button></header><div class="app-settings-body"><label>Custom slash commands <small>One per line: /name = prompt guidance for the Agent</small></label><textarea id="custom-commands-input" placeholder="/myrecon = Perform my recon workflow"></textarea><label>Command registry JSON <small>Optional metadata for user-authored AI prompts. System skills appear in the picker but cannot be edited or overridden here.</small></label><textarea id="command-registry-input" class="command-registry-input" spellcheck="false" placeholder='{"/myrecon":{"role":"ai","prompt":"Perform my recon workflow."}}'></textarea></div><footer><button type="submit" class="primary-button">Save Settings</button></footer></form>
+  </div>
+  <div id="help-guide-overlay" class="help-guide-overlay" hidden>
+    <section class="help-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="help-guide-title">
+      <header><div><span class="codicon codicon-book"></span><div><strong id="help-guide-title">XEKUTE Guide</strong><small>Quick orientation for the local-first pentesting workspace.</small></div></div><button type="button" id="help-guide-close" class="icon-btn" title="Close guide" aria-label="Close guide"><span class="codicon codicon-close"></span></button></header>
+      <div class="help-guide-body">
+        <section><h3>Start with a project</h3><p>Use <strong>Files → Create New Project</strong> to create a workspace, or <strong>Open Project</strong> to open an existing folder. The Target sidebar holds assessment files and custom files.</p></section>
+        <section><h3>Workspaces</h3><p><strong>Search</strong> finds evidence, <strong>Target</strong> organizes project scope and investigation state, and <strong>Security Tools</strong> handles request/response work.</p></section>
+        <section><h3>Chat guidance</h3><p>Type <code>/</code> to choose a read-only <strong>System Skill</strong> or one of your <strong>Custom Skills</strong>. System skills can also be selected automatically from an ordinary request; their Markdown instructions remain internal.</p></section>
+        <section><h3>Authority and modes</h3><p><strong>Modes</strong> (Agent, Ask) set which tools the model can call. <strong>Authority</strong> (Full Authority, Ask for Approval, Approve for me) controls scope and whether sensitive actions auto-run or need your approval. Switch both from the Chat composer.</p></section>
+        <section><h3>Terminal and safety</h3><p>Use Terminal for local commands and keep testing within the authorization and scope recorded in the assessment. Tool configurations and results stay inside the current project.</p></section>
+        <section><h3>Useful shortcuts</h3><p><code>Ctrl+F</code> Search · <code>Ctrl+P</code> Quick Open · <code>Ctrl+S</code> Save · <code>Ctrl+`</code> Toggle Terminal · <code>Ctrl+=</code>/<code>Ctrl+-</code> Zoom.</p></section>
+      </div>
+    </section>
+  </div>
+  <div id="custom-context-menu" class="custom-context-menu" role="menu" hidden>
+    <button type="button" id="custom-context-delete" role="menuitem"><span class="codicon codicon-trash"></span><span id="custom-context-delete-label">Delete</span></button>
+  </div>
+  <div id="workspace-context-menu" class="custom-context-menu workspace-context-menu" role="menu" hidden>
+    <button type="button" data-workspace-context-action="open" role="menuitem">
+      <span>Open</span>
+    </button>
+    <button type="button" data-workspace-context-action="analyze" role="menuitem">
+      <span>Analyze</span>
+    </button>
+    <div class="context-menu-separator" data-workspace-context-separator="clipboard" aria-hidden="true"></div>
+    <button type="button" data-workspace-context-action="cut" role="menuitem">
+      <span>Cut</span>
+    </button>
+    <button type="button" data-workspace-context-action="copy" role="menuitem">
+      <span>Copy</span>
+    </button>
+    <button type="button" data-workspace-context-action="paste" role="menuitem" hidden>
+      <span>Paste</span>
+    </button>
+    <div class="context-menu-separator" data-workspace-context-separator="create" aria-hidden="true"></div>
+    <button type="button" data-workspace-context-action="new-file" role="menuitem">
+      <span>New File</span>
+    </button>
+    <button type="button" data-workspace-context-action="new-folder" role="menuitem">
+      <span>New Folder</span>
+    </button>
+    <button type="button" data-workspace-context-action="terminal" role="menuitem">
+      <span>Run in Integrated Terminal</span>
+    </button>
+    <div class="context-menu-separator" data-workspace-context-separator="delete" aria-hidden="true"></div>
+    <button type="button" data-workspace-context-action="rename" role="menuitem">
+      <span>Rename</span>
+    </button>
+    <button type="button" data-workspace-context-action="delete" role="menuitem">
+      <span id="workspace-context-delete-label">Delete</span>
+    </button>
+  </div>
+
+  <div id="editor-tab-context-menu" class="custom-context-menu editor-tab-context-menu" role="menu" hidden>
+    <button type="button" data-editor-tab-action="close-all" role="menuitem">Close All</button>
+    <button type="button" data-editor-tab-action="close-right" role="menuitem">Close to the right</button>
+    <button type="button" data-editor-tab-action="close" role="menuitem">Close</button>
+    <div class="context-menu-separator" aria-hidden="true"></div>
+    <button type="button" data-editor-tab-action="toggle-pin" role="menuitem">Pin</button>
+    <div class="context-menu-separator" data-editor-tab-separator="explorer" aria-hidden="true"></div>
+    <button type="button" data-editor-tab-action="reveal-explorer" role="menuitem">Reveal in File Explorer</button>
+    <div class="context-menu-separator" data-editor-tab-separator="copy" aria-hidden="true"></div>
+    <button type="button" data-editor-tab-action="copy-path" role="menuitem">Copy path</button>
+    <button type="button" data-editor-tab-action="copy-relative-path" role="menuitem">Copy Relative Path</button>
+  </div>
+
+  <div id="update-toast" class="update-toast" role="status" aria-label="Update available" hidden>
+    <div class="update-toast-body">
+      <img class="update-toast-icon" src="assets/icons/gift_update_icon.svg" alt="" aria-hidden="true">
+      <div class="update-toast-text">
+        <strong class="update-toast-title">New version is available</strong>
+        <p class="update-toast-version"></p>
+        <span id="update-toast-version" hidden></span>
+      </div>
+    </div>
+    <div class="update-toast-actions">
+      <button type="button" id="update-toast-ignore" class="update-toast-btn update-toast-ignore">Ignore</button>
+      <button type="button" id="update-toast-install" class="update-toast-btn update-toast-install">Install</button>
+    </div>
+  </div>
+
+  <footer id="statusbar">
+    <div class="statusbar-left">
+      <span id="status-workspace" class="statusbar-item">No project</span>
+      <span id="status-agent" class="statusbar-item">Agent ready</span>
+    </div>
+    <div class="statusbar-right">
+      <span id="status-ln-col" class="statusbar-item">Ln 1, Col 1</span>
+      <span id="status-ollama-port" class="statusbar-item">Ollama :11435</span>
+    </div>
+  </footer>
+  </div>
+
+  <div id="quick-overlay" class="quick-overlay" hidden>
+    <div id="quick-panel" class="quick-panel" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div class="quick-input-row">
+        <span id="quick-icon" class="codicon codicon-chevron-right"></span>
+        <input id="quick-input" type="text" autocomplete="off" spellcheck="false" />
+        <button id="quick-search-help" class="quick-search-help" type="button" title="Workspace search" aria-label="Workspace search" aria-expanded="false">
+          <span class="codicon codicon-copilot"></span>
+        </button>
+      </div>
+      <div id="quick-search-suggestions" class="quick-search-suggestions" role="listbox" aria-label="Advanced search suggestions" hidden></div>
+      <div id="quick-search-assist" class="quick-search-assist" hidden>
+        <div class="quick-search-assist-heading">
+          <span>VAPT search presets</span>
+          <span class="quick-search-assist-hint">AND · OR · NOT · quotes · Ctrl+Space autocomplete</span>
+        </div>
+        <div id="quick-search-presets" class="quick-search-presets"></div>
+        <div id="quick-search-reference" class="quick-search-reference"></div>
+      </div>
+      <div id="quick-search-chips" class="quick-search-chips" hidden></div>
+      <div id="quick-meta" class="quick-meta" aria-live="polite"></div>
+      <div id="quick-results" class="quick-results"></div>
+    </div>
+  </div>
+
+  <div id="context-usage-popover" class="context-usage-popover" hidden>
+    <div class="context-usage-header">
+      <div class="context-usage-heading-group">
+        <div class="context-usage-heading">Context Usage</div>
+      </div>
+      <button type="button" id="context-usage-close" class="context-usage-close" title="Close context usage">
+        <span class="codicon codicon-close"></span>
+      </button>
+    </div>
+    <div class="context-usage-summary">
+      <span id="context-usage-heading-value" class="context-usage-summary-left">0 / 0</span>
+      <span id="context-usage-used" class="context-usage-summary-left">0%</span>
+    </div>
+    <div class="context-usage-track">
+      <div id="context-usage-fill" class="context-usage-fill"></div>
+      <div id="context-usage-segments" class="context-usage-segments"></div>
+    </div>
+    <div id="context-usage-breakdown" class="context-usage-list"></div>
+  </div>
+
+  <div id="chat-history-popover" class="chat-history-popover" hidden>
+    <div class="chat-history-header">
+      <label class="chat-history-search-wrap" for="chat-history-search">
+        <span class="codicon codicon-search" aria-hidden="true"></span>
+        <input type="search" id="chat-history-search" class="chat-history-search" placeholder="Search Agents..." autocomplete="off" spellcheck="false" aria-label="Search chat history" />
+      </label>
+    </div>
+    <div id="chat-history-body" class="chat-history-body"></div>
+    <div id="chat-history-empty" class="chat-history-empty" hidden>No chat sessions yet.</div>
+  </div>
+
+  <div id="security-history-menu" class="security-history-menu" role="menu" hidden>
+    <button type="button" class="security-history-menu-item" data-action="send-repeater" role="menuitem">
+      <span class="codicon codicon-sync"></span>
+      <span id="security-history-repeater-label">Send to Repeater</span>
+    </button>
+    <button type="button" class="security-history-menu-item" data-action="send-intruder" role="menuitem">
+      <span class="codicon codicon-symbol-event"></span>
+      <span id="security-history-intruder-label">Send to Intruder</span>
+    </button>
+    <div class="security-tool-menu-separator" role="separator"></div>
+    <button type="button" class="security-history-menu-item" data-action="delete" role="menuitem">
+      <span class="codicon codicon-trash"></span>
+      <span id="security-history-delete-label">Delete</span>
+    </button>
+  </div>
+
+  <div id="chat-mode-menu" class="chat-mode-menu" role="menu" aria-label="Chat modes" hidden>
+    <div class="chat-mode-group">
+      <button type="button" class="chat-mode-option mode-agent" data-chat-mode="agent" role="menuitemradio" aria-checked="true" title="Execute the user's request with tools, then observe, verify, and report">
+        <span class="codicon codicon-copilot chat-mode-option-icon" aria-hidden="true"></span><span class="chat-mode-option-copy"><span class="chat-mode-option-label">Agent</span><span class="chat-mode-option-desc">Execute, observe, and verify</span></span><span class="codicon codicon-check chat-mode-option-check" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="chat-mode-option mode-ask" data-chat-mode="ask" role="menuitemradio" aria-checked="false" title="Read-only questions and analysis over available evidence">
+        <span class="codicon codicon-comment-discussion chat-mode-option-icon" aria-hidden="true"></span><span class="chat-mode-option-copy"><span class="chat-mode-option-label">Ask</span><span class="chat-mode-option-desc">Read-only questions and analysis</span></span><span class="codicon codicon-check chat-mode-option-check" aria-hidden="true"></span>
+      </button>
+    </div>
+  </div>
+
+  <div id="authority-menu" class="authority-menu" hidden>
+    <div id="authority-menu-options">
+      <button type="button" class="authority-menu-option" data-authority-mode="full" role="menuitemradio" aria-checked="false">
+        <span class="codicon codicon-shield authority-menu-option-icon" aria-hidden="true"></span>
+        <span class="authority-menu-option-copy"><span class="authority-menu-option-label">Full Authority</span></span>
+        <span class="codicon codicon-check authority-menu-option-check" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="authority-menu-option" data-authority-mode="ask" role="menuitemradio" aria-checked="true">
+        <span class="codicon codicon-shield authority-menu-option-icon" aria-hidden="true"></span>
+        <span class="authority-menu-option-copy"><span class="authority-menu-option-label">Ask for Approval</span></span>
+        <span class="codicon codicon-check authority-menu-option-check" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="authority-menu-option" data-authority-mode="approve" role="menuitemradio" aria-checked="false">
+        <span class="codicon codicon-shield authority-menu-option-icon" aria-hidden="true"></span>
+        <span class="authority-menu-option-copy"><span class="authority-menu-option-label">Approve for me</span></span>
+        <span class="codicon codicon-check authority-menu-option-check" aria-hidden="true"></span>
+      </button>
+    </div>
+  </div>
+
+  <div id="model-menu" class="model-menu" hidden>
+    <input id="model-search" type="text" placeholder="Search models" spellcheck="false" />
+    <div id="model-list" class="model-list"></div>
+    <div class="model-menu-divider"></div>
+    <button type="button" id="model-add-btn" class="model-add-btn">
+      <span class="codicon codicon-add"></span>
+      Add Models
+    </button>
+    <div id="model-add-form" class="model-add-form" hidden>
+      <input id="model-custom" type="text" placeholder="model-name:tag" spellcheck="false" />
+      <button type="button" id="model-custom-add" class="model-custom-add">Add</button>
+    </div>
+  </div>
+
+  <div id="model-edit-menu" class="model-edit-menu" hidden>
+    <div id="openrouter-reasoning-row" class="model-edit-section model-reasoning-section" hidden>
+      <div class="model-edit-label">Effort</div>
+      <div id="reasoning-options" class="reasoning-options" role="radiogroup" aria-label="Reasoning effort"></div>
+    </div>
+    <div id="ollama-thinking-section" class="model-edit-section">
+      <div class="model-edit-label">Options</div>
+      <div id="ollama-thinking-row" class="model-edit-row">
+        <span class="model-edit-row-name">Thinking</span>
+        <button type="button" id="thinking-toggle" class="toggle-switch" aria-pressed="false" title="Enable thinking">
+          <span class="toggle-thumb"></span>
+        </button>
+      </div>
+    </div>
+    <div class="model-edit-divider"></div>
+    <div id="model-context-section" class="model-edit-section">
+      <div class="model-edit-label">Context</div>
+      <div id="context-options" class="context-options"></div>
+    </div>
+  </div>
+
+  <div id="app-dialog-overlay" class="app-dialog-overlay" hidden>
+    <section id="app-dialog" class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+      <header>
+        <div class="app-dialog-heading">
+          <span id="app-dialog-icon" class="codicon codicon-question" aria-hidden="true"></span>
+          <div>
+            <strong id="app-dialog-title">Confirm</strong>
+            <small id="app-dialog-subtitle" hidden></small>
+          </div>
+        </div>
+      </header>
+      <div class="app-dialog-body">
+        <p id="app-dialog-message"></p>
+        <input id="app-dialog-input" type="text" hidden spellcheck="false" />
+      </div>
+      <footer>
+        <button type="button" id="app-dialog-cancel" class="secondary-button">Cancel</button>
+        <button type="button" id="app-dialog-confirm" class="primary-button">OK</button>
+      </footer>
+    </section>
+  </div>
+
+  <div id="assessment-repair-overlay" class="assessment-repair-overlay" hidden>
+    <section class="assessment-repair-dialog" role="dialog" aria-modal="false" aria-labelledby="assessment-repair-title">
+      <header>
+        <div class="assessment-repair-heading">
+          <span class="codicon codicon-warning" aria-hidden="true"></span>
+          <div>
+            <strong id="assessment-repair-title">Assessment template notice</strong>
+            <small id="assessment-repair-subtitle">Your workspace remains fully usable.</small>
+          </div>
+        </div>
+        <button type="button" id="assessment-repair-close" class="icon-btn" title="Close" aria-label="Close repair dialog">
+          <span class="codicon codicon-close"></span>
+        </button>
+      </header>
+      <div class="assessment-repair-body">
+        <p id="assessment-repair-description">XEKUTE found missing or incomplete assessment items. Existing files are never overwritten.</p>
+        <div id="assessment-repair-summary" class="assessment-repair-summary"></div>
+        <div id="assessment-repair-list" class="assessment-repair-list" role="list"></div>
+      </div>
+      <footer>
+        <button type="button" id="assessment-repair-cancel" class="secondary-button">Cancel</button>
+        <button type="button" id="assessment-repair-confirm" class="primary-button">Create missing items</button>
+      </footer>
+    </section>
+  </div>
+
+  <script src="../../node_modules/marked/lib/marked.umd.js"></script>
+  <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
+  <script src="../../node_modules/mermaid/dist/mermaid.min.js"></script>
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script type="module" src="bootstrap.js"></script>
+</body>
+</html>

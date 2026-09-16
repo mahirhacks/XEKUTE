@@ -30,7 +30,7 @@ const ToolParser = (() => {
   const PATCH_FENCE_RE = /```patch:([^\n`]+)\s*\n<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE\s*\n```/gi;
 
   const LOOSE_PATCH_RE = /(?:^|\n)patch:[^\n]+\n<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE/g;
-const TOOL_NAME_PATTERN = "update_task_list|exec_command|read_file|search_workspace|apply_patch|inspect_environment|update_project_artifacts|manage_state|ingest_traffic|manage_identity|replay_request|run_test_case|browser_action|compare_responses|verify_finding|attack_graph|delegate_agent|query_assessment|expand_evidence";
+const TOOL_NAME_PATTERN = "ask_questions|exec_command|view_active_terminal|read_file|search_workspace|apply_patch|manage_identity|replay_request|browser_action|delegate_agent|web_research";
   const PSEUDO_TOOL_RE = new RegExp(`(?:"[^"\\n{}]*"\\s*}?\\s*)?(?:${TOOL_NAME_PATTERN})\\s*\\{[^}\\n]*(?:\\}|\\n|$)`, "gi");
   const PSEUDO_TOOL_CALL_RE = /(?:^|[\s"'`}>])([a-z_][a-z0-9_]*)\s*\{\s*([^}\n]*)/gi;
 
@@ -299,8 +299,6 @@ const TOOL_NAME_PATTERN = "update_task_list|exec_command|read_file|search_worksp
         tools.push({ action: "read_file", toolName: "read_file", file: path, source: "pseudo_tool" });
       } else if (rawName === "search_workspace" && args.query) {
         tools.push({ action: "search_workspace", toolName: "search_workspace", query: args.query, mode: args.mode || "text", source: "pseudo_tool" });
-      } else if (rawName === "inspect_environment") {
-        tools.push({ action: "inspect_environment", toolName: "inspect_environment", source: "pseudo_tool" });
       } else if (rawName === "exec_command" && args.command) {
         tools.push({ action: "exec_command", toolName: "exec_command", command: args.command, timeoutMs: Number(args.timeout_ms) || 20000, source: "pseudo_tool" });
       }
@@ -427,14 +425,15 @@ const TOOL_NAME_PATTERN = "update_task_list|exec_command|read_file|search_worksp
 
   function cleanReplyForDisplay(text, { streaming = false, stripCodeBlocks = false } = {}) {
     if (!text) return "";
-    const cleaned = stripFenceEdits(text, {
+    const withoutIntent = globalThis.XekuteContinueIntent?.strip(text, { streaming }) ?? text;
+    const cleaned = stripFenceEdits(withoutIntent, {
       streaming,
       stripCodeBlocks,
       // Boilerplate stripping during live streaming removes normal agent lines
       // ("I will…", "Then I…") and freezes the UI on the first few characters.
       stripBoilerplateText: !streaming,
     });
-    const raw = String(text || "").trim();
+    const raw = String(withoutIntent || "").trim();
     if (!cleaned && raw && !isOnlyToolSyntax(raw)) return raw;
     if (streaming && cleaned && raw && cleaned.length < Math.min(24, Math.floor(raw.length * 0.35))) {
       return raw;
@@ -692,7 +691,7 @@ const TOOL_NAME_PATTERN = "update_task_list|exec_command|read_file|search_worksp
     for (let i = 0; i < tools.length; i += 1) {
       const tool = tools[i];
       const result = results[i];
-      if (["read_file", "search_workspace", "inspect_environment", "run_test_case", "browser_action", "compare_responses", "verify_finding", "delegate_agent", "ingest_traffic", "replay_request"].includes(tool.action)) continue;
+      if (["read_file", "search_workspace", "browser_action", "delegate_agent", "replay_request", "web_research", "ask_questions"].includes(tool.action)) continue;
       if (result?.error) {
         parts.push(`Failed ${tool.action}: ${result.error}`);
       } else if (result?.mode === "command") {

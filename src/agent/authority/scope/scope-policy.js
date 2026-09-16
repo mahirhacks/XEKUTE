@@ -1,24 +1,27 @@
 "use strict";
 
+const net = require("node:net");
 const { validateWorkspacePaths, isInside, pathCandidates } = require("./workspace-scope");
 const { loadScopePolicy, targetFromArgs, evaluateNetworkTarget, evaluateRedirectTarget } = require("./network-scope");
-const { resolveTargetAddresses } = require("../../../domain/scope/scope-engine");
+const { inspectExecCommand } = require("./command-intent");
+const { canonicalTarget, resolveTargetAddresses } = require("../../../domain/scope/scope-engine");
+
+function isLiteralIpTarget(rawTarget) {
+  if (typeof rawTarget === "object" && rawTarget?.isIp) return true;
+  const parsed = typeof rawTarget === "object" && rawTarget?.hostname ? rawTarget : canonicalTarget(rawTarget);
+  if (parsed?.isIp) return true;
+  return net.isIP(String(rawTarget || "").trim()) > 0;
+}
 
 const WORKSPACE_TOOLS = new Set([
   "read_file",
   "search_workspace",
   "apply_patch",
-  "inspect_environment",
-  "update_project_artifacts",
-  "manage_state",
-  "attack_graph",
   "exec_command",
 ]);
 
 const NETWORK_TOOLS = new Set([
-  "ingest_traffic",
   "replay_request",
-  "run_test_case",
   "browser_action",
 ]);
 
@@ -45,6 +48,18 @@ function evaluateToolScope({ workspace, toolName, args = {}, normalizedTargets =
     const workspaceDecision = validateWorkspacePaths(toolName, workspaceArgs, policy.workspaceRoot);
     if (!workspaceDecision.ok) return workspaceDecision;
   }
+  if (toolName === "exec_command") {
+    const intent = inspectExecCommand(args);
+    if (intent.requiresNetworkScope) {
+      const targets = intent.networkTargets;
+      if (!targets.length) {
+        return { ...evaluateNetworkTarget("", policy), workspaceRoot: policy.workspaceRoot };
+      }
+      const decisions = targets.map((target) => evaluateNetworkTarget(target, policy));
+      const denied = decisions.find((decision) => !decision.ok);
+      if (denied) return { ...denied, workspaceRoot: policy.workspaceRoot };
+    }
+  }
   if (NETWORK_TOOLS.has(toolName) || dynamicNetwork) {
     const normalizedNetworkTargets = (Array.isArray(normalizedTargets) ? normalizedTargets : []).filter((target) => target?.kind === "network").map((target) => target.value);
     const targets = normalizedNetworkTargets.length ? [...new Set(normalizedNetworkTargets)] : targetsFromArgsWithMetadata(args, toolMetadata);
@@ -69,15 +84,26 @@ async function evaluateToolScopeAsync({ workspace, toolName, args = {}, normaliz
   if (!decision.ok) return decision;
   const dynamicNetwork = String(toolName || "").startsWith("mcp__")
     && (Array.isArray(toolMetadata?.targetTypes) ? toolMetadata.targetTypes : []).some((type) => ["network", "domain", "host", "url"].includes(String(type)));
-  if (!NETWORK_TOOLS.has(toolName) && !dynamicNetwork) return decision;
+  const execIntent = toolName === "exec_command" ? inspectExecCommand(scopedArgs) : null;
+  const execNetwork = Boolean(execIntent?.requiresNetworkScope);
+  if (!NETWORK_TOOLS.has(toolName) && !dynamicNetwork && !execNetwork) return decision;
   const normalizedNetworkTargets = (Array.isArray(normalizedTargets) ? normalizedTargets : []).filter((target) => target?.kind === "network").map((target) => target.value);
-  const targets = normalizedNetworkTargets.length ? [...new Set(normalizedNetworkTargets)] : targetsFromArgsWithMetadata(scopedArgs, toolMetadata);
+  const targets = normalizedNetworkTargets.length
+    ? [...new Set(normalizedNetworkTargets)]
+    : execNetwork
+      ? execIntent.networkTargets
+      : targetsFromArgsWithMetadata(scopedArgs, toolMetadata);
   const resolvedAddresses = [];
   for (const target of targets) {
     let resolution;
     try { resolution = await resolveAddresses(target); }
     catch (error) { resolution = { ok: false, code: "DNS_RESOLUTION_FAILED", reason: `DNS resolution failed: ${error.message}` }; }
     if (!resolution?.ok) {
+      const inScopeLiteralIp = resolution?.code === "DNS_PRIVATE_OR_RESERVED" && isLiteralIpTarget(target);
+      if (inScopeLiteralIp) {
+        resolvedAddresses.push(...(resolution.addresses || []));
+        continue;
+      }
       return {
         ...decision,
         ok: false,

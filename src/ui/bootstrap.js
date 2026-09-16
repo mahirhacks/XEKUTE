@@ -7,8 +7,31 @@ import {
   paginateRecentHistory,
   sortHistorySessions,
 } from "./features/history/history-model.js";
+import { ensureChatMemorySessionId } from "./features/history/chat-memory-session.js";
+import {
+  captureChatTranscript,
+  hasStructuredTranscript,
+  normalizeUiTranscript,
+  thinkingElapsedMs,
+} from "./features/chat/chat-transcript.js";
+import {
+  createWorkFold,
+  ensureTurnWorkFold,
+  hasWorkNode,
+  isFinishedWorkFold,
+  isWorkNode,
+  promoteFinalAnswer,
+  setWorkFoldExpanded,
+  syncWorkHeaderAffordance,
+  toggleWorkFold,
+  turnWorkFold,
+  unwrapWorkFold,
+  workFoldBody,
+  workFoldHeader,
+} from "./features/chat/chat-work-fold.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
+const SetiIconTheme = globalThis.XekuteSetiIconTheme;
 const MessageIdentity = globalThis.XekuteMessageIdentity;
 
 const $ = (id) => globalThis.XekuteDom?.getById(id) || document.getElementById(id);
@@ -17,12 +40,10 @@ const appController = new globalThis.XekuteCore.AppController(xekuteStore);
 const appLifecycle = new globalThis.XekuteCore.LifecycleCollection();
 const ToolMap = globalThis.ToolMap || (() => {
   const MODE_TOOL_GROUPS = globalThis.XekuteOperatingModes?.MODE_TOOL_GROUPS || {
-    ask: ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge"],
-    hypothesis: ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge", "update_project_artifacts"],
-    plan: ["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge", "update_project_artifacts"],
+    ask: ["ask_questions", "read_file", "search_workspace", "view_active_terminal"],
     agent: null,
   };
-  const MUTATING = new Set(["apply_patch", "update_project_artifacts", "manage_state", "manage_identity", "attack_graph"]);
+  const MUTATING = new Set(["apply_patch", "manage_identity"]);
   let catalog = []; // [{name, description, inputSchema, metadata}]
   const TOOL_META = {}; // populated by ensureCatalog; consumed as ToolMap.TOOL_META[tool]
 
@@ -104,7 +125,6 @@ const explorerTitle    = $("explorer-title");
 const explorerRootToggle = $("explorer-root-toggle");
 const explorerRootChevron = $("explorer-root-chevron");
 const btnOpenFolder    = $("btn-open-folder");
-const btnProjectSettings = $("btn-project-settings");
 const fileTree         = $("file-tree");
 const activityExplorer = $("activity-explorer");
 const activitySearch   = $("activity-search");
@@ -235,10 +255,10 @@ const CONTEXT_USAGE_SECTIONS = Object.freeze([
   Object.freeze({ key: "rules", label: "Rules", color: "#67b7a5" }),
   Object.freeze({ key: "skills", label: "Skills", color: "#d58dbc" }),
   Object.freeze({ key: "subagents", label: "Subagents", color: "#b58de8" }),
+  Object.freeze({ key: "mcp", label: "MCP", color: "#e0a15d" }),
   Object.freeze({ key: "summarized_conversation", label: "Summarized Conversation", color: "#8ca6e8" }),
   Object.freeze({ key: "active_conversation", label: "Active Conversation", color: "#5d9ee8" }),
   Object.freeze({ key: "current_workflow", label: "Current Workflow", color: "#67b7a5" }),
-  Object.freeze({ key: "working_references", label: "Working References", color: "#e1a85b" }),
 ]);
 const CONTEXT_USAGE_ROW_LABELS = Object.freeze(Object.fromEntries(
   CONTEXT_USAGE_SECTIONS.map((section) => [section.key, section.label]),
@@ -248,18 +268,13 @@ const CONTEXT_USAGE_SECTION_ALIASES = Object.freeze({
   system_prompt: "system_prompt",
   tool_definitions: "tool_definitions",
   tools: "tool_definitions",
-  project: "working_references",
-  project_memory: "working_references",
-  project_intelligence: "working_references",
-  graph: "working_references",
-  investigation: "working_references",
-  evidence: "working_references",
+  mcp: "mcp",
+  mcp_definitions: "mcp",
   conversation: "active_conversation",
   active_conversation: "active_conversation",
   summarized_conversation: "summarized_conversation",
   active_workflow: "current_workflow",
   current_workflow: "current_workflow",
-  recent_working_set: "working_references",
   checkpoint: "summarized_conversation",
   rules: "rules",
   authority: "rules",
@@ -267,7 +282,6 @@ const CONTEXT_USAGE_SECTION_ALIASES = Object.freeze({
   subagents: "subagents",
   knowledge: "skills",
   knowledge_lease: "skills",
-  working_references: "working_references",
 });
 const modelPicker      = $("model-picker");
 const modelLabel       = $("model-label");
@@ -430,7 +444,6 @@ const APP_SETTINGS_SECTION_META = Object.freeze({
   prompts: { title: "Rules, Skills, Subagents", subtitle: "Add project guidance files without changing protected system instructions" },
   llm: { title: "Models", subtitle: "" },
   certificates: { title: "Browser & Network", subtitle: "Manage certificates and isolated authorized identities" },
-  knowledge: { title: "Knowledge Library", subtitle: "Installed methodology releases, integrity, model, and index state" },
 });
 const checklistUIView = $("checklist-ui-view");
 const checklistFrameworkName = $("checklist-framework-name");
@@ -454,41 +467,6 @@ const assessmentRunProfile = $("assessment-run-profile");
 const assessmentRunStart = $("assessment-run-start");
 const assessmentRunStop = $("assessment-run-stop");
 const securityWorkspace = $("security-workspace");
-const mapWorkspace = $("map-workspace");
-const mapWorkspaceSubtitle = $("map-workspace-subtitle");
-const mapBuildAction = $("map-build-action");
-const mapDeepCollectAction = $("map-deep-collect-action");
-const mapBuiltAt = $("map-built-at");
-const mapIntelligenceStatus = $("map-intelligence-status");
-const mapIntelligenceStartAction = $("map-intelligence-start-action");
-const mapIntelligencePause = $("map-intelligence-pause");
-const mapIntelligenceResume = $("map-intelligence-resume");
-const mapIntelligenceRebuild = $("map-intelligence-rebuild");
-const mapIntelligencePrompt = $("map-intelligence-prompt");
-const mapIntelligencePromptDetail = $("map-intelligence-prompt-detail");
-const mapIntelligenceStart = $("map-intelligence-start");
-const mapIntelligenceDefer = $("map-intelligence-defer");
-const mapLoading = $("map-loading");
-const mapEmpty = $("map-empty");
-const mapContent = $("map-content");
-const mapSearch = $("map-search");
-const mapHostFilter = $("map-host-filter");
-const mapHostFilterToggle = $("map-host-filter-toggle");
-const mapHostFilterLabel = $("map-host-filter-label");
-const mapHostFilterMenu = $("map-host-filter-menu");
-const mapHostFilterAll = $("map-host-filter-all");
-const mapHostFilterOptions = $("map-host-filter-options");
-let selectedMapHosts = new Set();
-const mapMethodFilter = $("map-method-filter");
-const mapVisibilityFilter = $("map-visibility-filter");
-const mapGraph = $("map-graph");
-const mapViewport = $("map-viewport");
-const mapNoResults = $("map-no-results");
-const mapMain = document.querySelector(".map-main");
-const mapDetailToggle = $("map-detail-toggle");
-const mapDetailBody = $("map-detail-body");
-const mapDetailEmpty = $("map-detail-empty");
-const mapDetailContent = $("map-detail-content");
 const webcloneWorkspace = $("webclone-workspace");
 const webcloneBuildAction = $("webclone-build-action");
 const webclonePreviewAction = $("webclone-preview-action");
@@ -533,7 +511,7 @@ const securityWorkbenchStatus = $("security-workbench-status");
 const securityProxyBrowser = $("security-proxy-browser");
 const securityProxyBrowserWrap = $("security-proxy-browser-wrap");
 const securityProxyBrowserMenu = $("security-proxy-browser-menu");
-const securityGraphButton = $("security-graph-button");
+let proxyBrowserMenuHome = securityProxyBrowserMenu?.parentElement || null;
 const securityHistoryToggle = $("security-history-toggle");
 const securityHistoryPanel = $("security-history-panel");
 const securityHistoryRefresh = $("security-history-refresh");
@@ -641,18 +619,6 @@ let resourceScopeActive = false;
 let resourceScopeData = null;
 let resourceScopeRelativePath = "";
 let resourceScopeSaveTimer = null;
-let applicationMap = null;
-let applicationMapMode = "route";
-let selectedMapNodeId = "";
-let mapZoom = 1;
-let mapPanX = 0;
-let mapPanY = 0;
-let mapPointerState = null;
-let mapNodeDragState = null;
-let mapNodeClickSuppressed = false;
-let currentMapPositions = new Map();
-const mapNodePositionsByMode = new Map(["route", "workflow", "state", "risk"].map((mode) => [mode, new Map()]));
-let mapLoadSequence = 0;
 let webcloneManifest = null;
 let webcloneSelectedFile = "";
 let webcloneFilesCollapsed = false;
@@ -680,16 +646,9 @@ let deletingExplorerItem = false;
 let deletingCustomEntries = false;
 let chatHistory  = [];
 const activeChatRuns = new Map();
+const chatSessionsStoppedByOperator = new Set();
 const chatSendInFlight = new Set();
-const pentestContinuationTimers = new Map();
 const hiddenAgentRuntimeQueues = new Map();
-const TIER2_MEMORY_MODES = new Set(["agent", "hypothesis", "plan"]);
-const TIER2_MEMORY_MAINTENANCE_PROMPT = [
-  "Perform hidden Tier 2 memory maintenance for the immediately preceding completed user-facing turn.",
-  "Use the completed transcript and canonical artifact context to persist every grounded change owned by the current mode: project information, hypotheses, checklist state, and evidence as applicable.",
-  "Call update_project_artifacts exactly once as the sole tool call. Use typed sourced operations when durable state changed; otherwise provide a specific no_op_reason.",
-  "Do not continue the user conversation, repeat the visible answer, execute target actions, ask questions, or call any other tool.",
-].join(" ");
 const chatSessionsNeedingAttention = new Set();
   let subagentCompletionPending = false;
   let pendingBackgroundWaitEvents = [];
@@ -717,6 +676,9 @@ let chatHistoryWarning = "";
 let contextCheckpointing = false;
 let contextCheckpointingSessionId = "";
 let contextCheckpointNotice = null;
+let tier1PreviewTimer = 0;
+let tier1PreviewSignatureValue = "";
+let tier1PreviewInFlight = false;
 
 const CONTEXT_RING_R = 8;
 const CONTEXT_RING_C = 2 * Math.PI * CONTEXT_RING_R;
@@ -728,8 +690,6 @@ const LEGACY_DEFAULT_CONTEXT = "8K";
 
 const SETTINGS_TAB_PATH = "xekute:settings";
 const INTERCEPTOR_TAB_PATH = "xekute:interceptor";
-const APPLICATION_GRAPH_TAB_PATH = "xekute:application-graph";
-
 /** @type {Map<string, { path: string, diskPath: string, name: string, content: string | null, savedContent: string, dirty: boolean, error: string | null, preview?: boolean, special?: string, securityTool?: string }>} */
 const openTabs      = new Map();
 let activeTabPath   = null;
@@ -807,8 +767,7 @@ const MARKDOWN_VIEW_MODE_KEY = "pointer:markdownViewMode";
 const CUSTOM_COMMANDS_KEY = "pointer:customSlashCommands";
 const COMMAND_REGISTRY_KEY = "pointer:commandRegistry";
 const AUTHORITY_SETTINGS_KEY = "pointer:authoritySettings:v1";
-const MAP_INSPECT_COLLAPSED_KEY = "pointer:mapInspectCollapsed";
-const CHAT_ROLES = new Set(["hypothesis", "plan", "agent", "ask"]);
+const CHAT_ROLES = new Set(["agent", "ask"]);
 const CHAT_FAMILIES = new Set(["testing", "assist", "xekute"]);
 const CHAT_PROFILE_DEFS = ToolParser.MODE_PROFILES || {};
 const CHAT_PROFILE_KEYS = new Set(Object.keys(CHAT_PROFILE_DEFS));
@@ -821,17 +780,17 @@ const CHAT_ROLE_ALIASES = Object.freeze({
   "assist:verifier": "ask",
   "assist:reporter": "ask",
   "assist:ask": "ask",
-  "assist:hypothesis": "hypothesis",
-  "assist:planner": "plan",
+  "assist:hypothesis": "ask",
+  "assist:planner": "ask",
   "assist:agent": "agent",
   "testing:ask": "ask",
-  "testing:hypothesis": "hypothesis",
-  "testing:planner": "plan",
+  "testing:hypothesis": "ask",
+  "testing:planner": "ask",
   "testing:agent": "agent",
   ask: "ask",
-  hypothesis: "hypothesis",
-  plan: "plan",
-  planner: "plan",
+  hypothesis: "ask",
+  plan: "ask",
+  planner: "ask",
   agent: "agent",
 });
 let selectedModel = localStorage.getItem("pointer:model") || "";
@@ -839,6 +798,7 @@ let allModels     = [];
 let activeLlmProvider = "ollama";
 let openRouterModelMeta = {};
 const openRouterContextLengthsCache = new Map();
+const ollamaRuntimeContext = {};
 let resolvedContextCapacity = {
   tokens: AUTO_CONTEXT_ESTIMATE,
   source: "fallback",
@@ -949,12 +909,15 @@ function createChatSession(title = "New Agent") {
       version: 3,
       checkpointId: null,
       checkpointRevision: 0,
+      checkpointTokens: 0,
       status: "empty",
       updatedAt: null,
       warning: "",
     },
     lastContextUsage: null,
+    currentWorkflow: null,
     messagesHtml: "",
+    transcript: { version: 1, runs: [] },
     activeStreamContent: "",
     chatMode,
     chatFamily,
@@ -971,13 +934,34 @@ function memoryRecord(session) {
       version: 3,
       checkpointId: null,
       checkpointRevision: 0,
+      checkpointTokens: 0,
       status: "empty",
       updatedAt: null,
       warning: "",
     };
   }
   session.memory.version = 3;
+  if (!Number.isFinite(Number(session.memory.checkpointTokens))) session.memory.checkpointTokens = 0;
   return session.memory;
+}
+
+function applyCheckpointToSession(session, payload = {}) {
+  if (!session) return;
+  const memory = memoryRecord(session);
+  const status = String(payload.status || "").toLowerCase();
+  if (status === "completed") {
+    memory.status = "ready";
+    memory.checkpointId = String(payload.checkpointId || payload.checkpointRevision || memory.checkpointId || "") || null;
+    memory.updatedAt = new Date().toISOString();
+    const summarized = Number(payload.summarizedConversationTokens);
+    if (Number.isFinite(summarized) && summarized >= 0) memory.checkpointTokens = summarized;
+    if (payload.currentWorkflow && typeof payload.currentWorkflow === "object") {
+      session.currentWorkflow = payload.currentWorkflow;
+    }
+  } else if (status === "failed") {
+    memory.status = "error";
+    memory.warning = String(payload.code || "Checkpoint failed");
+  }
 }
 
 function buildProjectContextMessage({
@@ -1034,6 +1018,7 @@ function clearChatSessionState(session) {
   };
   session.lastContextUsage = null;
   session.messagesHtml = "";
+  session.transcript = { version: 1, runs: [] };
   session.activeStreamContent = "";
   session.draftText = "";
   session.draftSlashCommand = "";
@@ -1057,12 +1042,148 @@ function redactThinkingDisclosures(root) {
   });
 }
 
+function isPlaceholderToolCardLabel(label = "") {
+  return /^(Working|Queued)(?:\.{0,3}|\u2026)?$/i.test(String(label || "").trim());
+}
+
+function isTransientToolCardLabel(label = "") {
+  return /^(Completed|Done|Failed)\.?$/i.test(String(label || "").trim());
+}
+
+function isStubToolStatusLabel(label = "") {
+  return /^(Working|Queued|Completed|Done)(?:\.{0,3}|\u2026)?$/i.test(String(label || "").trim());
+}
+
+const KEEPABLE_TOOL_LABEL = /^(Reading page|Read page|Searching web|Searched web|Creating folder|Created folder|Updating identity|Updated identity|Running Command|Ran Command|Viewing terminal|Viewed terminal|Reading|Read|Editing|Edited|Searching|Searched|Deleting|Deleted|Creating|Created|Moving|Moved|Browsing|Browsed|Replaying|Replayed|Delegating|Delegated)\b/i;
+
+const KEEPABLE_TOOL_ACTIONS = new Set([
+  "read_file",
+  "apply_patch",
+  "exec_command",
+  "view_active_terminal",
+  "search_workspace",
+  "web_research",
+  "browser_action",
+  "replay_request",
+  "manage_identity",
+  "delegate_agent",
+  "create_guidance",
+]);
+
+const RUNNING_TOOL_VERBS = [
+  ["Running Command", "Ran Command"],
+  ["Viewing terminal", "Viewed terminal"],
+  ["Updating identity", "Updated identity"],
+  ["Creating folder", "Created folder"],
+  ["Searching web", "Searched web"],
+  ["Reading page", "Read page"],
+  ["Delegating", "Delegated"],
+  ["Replaying", "Replayed"],
+  ["Browsing", "Browsed"],
+  ["Searching", "Searched"],
+  ["Reading", "Read"],
+  ["Deleting", "Deleted"],
+  ["Editing", "Edited"],
+  ["Creating", "Created"],
+  ["Moving", "Moved"],
+];
+
+function completedToolLabelFromRunning(runningLabel = "") {
+  const value = String(runningLabel || "").trim();
+  for (const [from, to] of RUNNING_TOOL_VERBS) {
+    if (value === from || value.startsWith(`${from} `)) return `${to}${value.slice(from.length)}`;
+  }
+  return "";
+}
+
+function toolCardLabelText(card) {
+  return String(card?.querySelector?.(".tool-card-file")?.textContent || card?.dataset?.runningLabel || "").trim();
+}
+
+function keepableToolCardLabel(label = "") {
+  const value = String(label || "").trim();
+  return KEEPABLE_TOOL_LABEL.test(value) && !isBareToolVerbLabel(value) && !isStubToolStatusLabel(value);
+}
+
+function isKeepableToolCard(card) {
+  if (!card) return false;
+  const text = decorateBareToolLabel(card, toolCardLabelText(card));
+  if (keepableToolCardLabel(text)
+    || keepableToolCardLabel(decorateBareToolLabel(card, card.dataset?.runningLabel))
+    || keepableToolCardLabel(decorateBareToolLabel(card, card.dataset?.completedLabel))) {
+    return true;
+  }
+  if (isTransientToolCardLabel(text) || isPlaceholderToolCardLabel(text) || isBareToolVerbLabel(text)) return false;
+  if (card.dataset?.fileActionKind || card.classList?.contains("file-action")) return true;
+  const action = String(card.dataset?.toolAction || "");
+  return KEEPABLE_TOOL_ACTIONS.has(action);
+}
+
+function syncToolCardPlaceholderVisibility(card) {
+  if (!card) return card;
+  const text = toolCardLabelText(card);
+  const resolved = decorateBareToolLabel(card, text);
+  if (keepableToolCardLabel(resolved)) {
+    if (resolved !== text) {
+      const fileEl = card.querySelector(".tool-card-file");
+      if (fileEl) renderToolStatusLabelFromText(fileEl, resolved);
+    }
+    card.hidden = false;
+    return card;
+  }
+  if (isStubToolStatusLabel(text) || isTransientToolCardLabel(text) || isBareToolVerbLabel(text) || !String(text || "").trim()) {
+    const recovered = [card.dataset?.completedLabel, card.dataset?.runningLabel]
+      .map((value) => decorateBareToolLabel(card, value))
+      .find((value) => keepableToolCardLabel(value));
+    if (recovered) {
+      const fileEl = card.querySelector(".tool-card-file");
+      if (fileEl) renderToolStatusLabelFromText(fileEl, recovered);
+      card.hidden = false;
+      return card;
+    }
+    card.hidden = true;
+    return card;
+  }
+  card.hidden = false;
+  return card;
+}
+
+function stripFailedToolCardStubs(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".tool-card[data-state='error']").forEach((node) => node.remove());
+  root.querySelectorAll(".tool-card").forEach((node) => {
+    const text = toolCardLabelText(node);
+    if (keepableToolCardLabel(decorateBareToolLabel(node, text))) return;
+    const recovered = [node.dataset?.completedLabel, node.dataset?.runningLabel]
+      .map((value) => decorateBareToolLabel(node, value))
+      .find((value) => keepableToolCardLabel(value));
+    if (recovered) {
+      const fileEl = node.querySelector(".tool-card-file");
+      if (fileEl) renderToolStatusLabelFromText(fileEl, recovered);
+      node.hidden = false;
+      return;
+    }
+    if (isStubToolStatusLabel(text) || isTransientToolCardLabel(text) || isBareToolVerbLabel(text) || !String(text || "").trim()) {
+      node.remove();
+    }
+  });
+}
+
+// A run that produced no tool work has nothing to fold, so its replies go back
+// to the turn rather than hiding behind a header that summarises nothing.
+function pruneEmptyWorkFolds(root) {
+  if (!root?.querySelectorAll) return;
+  for (const fold of [...root.querySelectorAll(".agent-work-fold")]) {
+    if (!hasWorkNode(workFoldBody(fold))) unwrapWorkFold(fold);
+  }
+}
+
 function sanitizePersistedChatHtml(html) {
   const raw = String(html || "");
   const clean = globalThis.DOMPurify
     ? globalThis.DOMPurify.sanitize(raw, {
-      ADD_TAGS: ["button"],
-       ADD_ATTR: ["class", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
+      ADD_TAGS: ["button", "img"],
+       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "data-expanded", "data-file", "data-file-action-kind", "data-file-verb", "data-tool-action", "data-tool-key", "data-call-id", "data-running-label", "data-completed-label", "data-work-verdict", "data-sealed", "data-started-at", "data-ended-at", "data-duration-ms", "data-worked-for-ms", "data-command-text", "data-cwd", "data-exit-code", "data-stdout", "data-lane", "data-path", "data-verb", "data-foldable", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
     })
     : "";
   const template = document.createElement("template");
@@ -1074,16 +1195,22 @@ function sanitizePersistedChatHtml(html) {
   // Progress checklists were redundant with the durable tool and command rows.
   // Strip them from older snapshots as well as preventing new ones below.
   template.content.querySelectorAll(".agent-progress-feed").forEach((node) => node.remove());
-  template.content.querySelectorAll('.agent-status-line[data-final="true"] .agent-status-icon').forEach((node) => node.remove());
+  template.content.querySelectorAll(".harness-wait-line").forEach((node) => node.remove());
+  template.content.querySelectorAll(".agent-status-icon").forEach((node) => node.remove());
+  template.content.querySelectorAll(".context-checkpoint-icon").forEach((node) => node.remove());
+  template.content.querySelectorAll(".agent-status-line:not([data-final='true'])").forEach((node) => node.remove());
   template.content.querySelectorAll(".agent-status-line").forEach((node) => {
     const text = String(node.querySelector(".agent-status-text")?.textContent || "").trim();
-    if (/^Stopped after /i.test(text)) node.remove();
+    if (/^Stopped after /i.test(text) || /^(Failed|Action failed)\.?$/i.test(text)) node.remove();
   });
-  template.content.querySelectorAll(".chat-turn.error").forEach((node) => {
-    const text = String(node.querySelector(".chat-box-content")?.textContent || "").trim();
-    if (/^The agent turn was stopped\.?$/i.test(text) || /^Stopped\.?$/i.test(text)) node.remove();
+  stripFailedToolCardStubs(template.content);
+  pruneEmptyWorkFolds(template.content);
+  template.content.querySelectorAll(".chat-turn.error").forEach((node) => node.remove());
+  template.content.querySelectorAll(".context-checkpoint-notice").forEach((node) => {
+    const state = String(node.getAttribute("data-state") || "").toLowerCase();
+    if (state === "complete" || state === "error") return;
+    node.remove();
   });
-  template.content.querySelectorAll(".context-checkpoint-notice").forEach((node) => node.remove());
   redactThinkingDisclosures(template.content);
   return template.innerHTML;
 }
@@ -1104,6 +1231,7 @@ function normalizePersistedChatSession(value) {
     version: 3,
     checkpointId: String(storedMemory?.checkpointId || "") || null,
     checkpointRevision: Math.max(0, Number(storedMemory?.checkpointRevision) || 0),
+    checkpointTokens: Math.max(0, Number(storedMemory?.checkpointTokens) || 0),
     status: ["empty", "ready", "error"].includes(String(storedMemory?.status || ""))
       ? String(storedMemory?.status)
       : "empty",
@@ -1121,7 +1249,9 @@ function normalizePersistedChatSession(value) {
     contextFilesCache: [],
     memory,
     lastContextUsage: normalizeContextUsageSnapshot(value.lastContextUsage),
+    currentWorkflow: value.currentWorkflow && typeof value.currentWorkflow === "object" ? value.currentWorkflow : null,
     messagesHtml: sanitizePersistedChatHtml(value.messagesHtml),
+    transcript: normalizeUiTranscript(value.transcript || value.ui_transcript || value.uiTranscript),
     activeStreamContent: "",
     chatFamily: family,
     chatMode: canonicalChatMode(value.mode || value.chatMode),
@@ -1131,8 +1261,8 @@ function normalizePersistedChatSession(value) {
     childInvocationId: String(value.childInvocationId || "").slice(0, 240),
     draftText: "",
     draftSlashCommand: "",
-    createdAt: value.createdAt || null,
-    updatedAt: value.updatedAt || value.createdAt || null,
+    createdAt: value.createdAt || value.created_at || null,
+    updatedAt: value.updatedAt || value.updated_at || value.createdAt || value.created_at || null,
     status: ["complete", "stopped", "interrupted"].includes(value.status) ? value.status : "complete",
   };
 }
@@ -1143,6 +1273,7 @@ function serializeChatSession(session) {
     title: session.title,
     memory: memoryRecord(session),
     lastContextUsage: session.lastContextUsage,
+    currentWorkflow: session.currentWorkflow || null,
     mode: session.chatMode || chatMode,
     safetyFamily: session.chatFamily || chatFamily,
     model: session.selectedModel || selectedModel,
@@ -1153,6 +1284,7 @@ function serializeChatSession(session) {
     updatedAt: session.updatedAt || null,
     status: isChatSessionRunning(session.id) ? "interrupted" : "complete",
     messagesHtml: session.messagesHtml || "",
+    transcript: normalizeUiTranscript(session.transcript),
   };
 }
 
@@ -1213,6 +1345,7 @@ function chatHistoryMeta(session) {
     family: session.chatFamily || chatFamily,
     memory: memoryRecord(session),
     lastContextUsage: session.lastContextUsage,
+    currentWorkflow: session.currentWorkflow || null,
     status: archivedChatSessions.includes(session)
       ? "archived"
       : closedChatSessions.includes(session)
@@ -1263,6 +1396,7 @@ function persistChatHistorySnapshot(scope = activeChatPersistenceScope, session 
     session: chatHistoryMeta(session),
     transcript: activeChatHistoryTranscript(session),
     displayHtml: session.messagesHtml || "",
+    uiTranscript: normalizeUiTranscript(session.transcript),
     blockId: session.memoryBlockId,
     outcome: isChatSessionRunning(session.id) ? "pending" : undefined,
   }, { session });
@@ -1312,6 +1446,7 @@ function finishChatHistoryBlock({ session = activeChatSession(), assistant = nul
     outcome,
     transcript: activeChatHistoryTranscript(session),
     displayHtml: session.messagesHtml || "",
+    uiTranscript: normalizeUiTranscript(session.transcript),
   };
   const persisted = queueChatHistoryEvent(event, { session });
   return persisted;
@@ -1361,6 +1496,7 @@ function flushChatSessionsBeforeClose() {
         session: chatHistoryMeta(session),
         transcript: activeChatHistoryTranscript(session),
         displayHtml: session.messagesHtml || "",
+        uiTranscript: normalizeUiTranscript(session.transcript),
         outcome: isChatSessionRunning(session.id) ? "stopped" : undefined,
       });
     } catch (error) {
@@ -1417,11 +1553,510 @@ function collapseExpandedUserPrompts(except = null) {
   });
 }
 
+// Streaming appends land in the work body once a fold exists, so ordering
+// questions are answered against whichever container currently holds the run.
+function assistantStreamHost(turn) {
+  return workFoldBody(turnWorkFold(turn)) || turn || null;
+}
+
+function isAgentResponseChild(node) {
+  return Boolean(node?.classList)
+    && (node.classList.contains("agent-run-chunk")
+      || node.classList.contains("context-checkpoint-notice")
+      || node.classList.contains("assistant-reply-footer")
+      || (node.classList.contains("chat-turn") && node.classList.contains("assistant")));
+}
+
+function ensureAgentResponseHost(root) {
+  const exchange = root?.classList?.contains("chat-exchange")
+    ? root
+    : root?.closest?.(".chat-exchange");
+  const body = exchange ? chatExchangeBody(exchange) : root;
+  if (!body?.appendChild) return null;
+  let host = body.querySelector(":scope > .agent-response-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.className = "agent-response-host agent-stream";
+    const user = [...body.children].find((child) => child.classList.contains("chat-turn") && child.classList.contains("user"));
+    if (user) user.after(host);
+    else body.appendChild(host);
+  } else {
+    host.classList.add("agent-stream");
+  }
+  [...body.children].forEach((child) => {
+    if (child !== host && isAgentResponseChild(child)) host.appendChild(child);
+  });
+  return host;
+}
+
+function markActivityNode(node) {
+  if (node?.dataset) node.dataset.lane = "activity";
+  return node;
+}
+
+function boxHasToolUsage(root) {
+  return Boolean(root?.querySelector?.(".tool-card:not([hidden]), .agent-file-row, .agent-file-stack, .agent-command-event, .subagent-run-card, .agent-thinking-fold"));
+}
+
+// Last sibling after `reply` that carries tool work or visible model text.
+// Status lines, timers, and empty placeholders never count: streamed text must
+// keep flowing into the same block across them.
+function workFollowingReply(reply) {
+  let found = null;
+  for (let node = reply?.nextElementSibling; node; node = node.nextElementSibling) {
+    if (node.classList.contains("assistant-reply-footer")) break;
+    if (isWorkNode(node) || node.classList.contains("agent-work-fold") || (node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node))) {
+      found = node;
+    }
+  }
+  return found;
+}
+
+function consecutiveAssistantRepliesAfter(startNode) {
+  const replies = [];
+  let node = startNode;
+  while (node) {
+    const next = node.nextSibling;
+    if (isEmptyAssistantReply(node)) {
+      node = next;
+      continue;
+    }
+    if (node.classList?.contains("assistant-reply")) {
+      replies.push(node);
+      node = next;
+      continue;
+    }
+    break;
+  }
+  return replies;
+}
+
+function coalesceAdjacentAssistantReplies(replies) {
+  if (!Array.isArray(replies) || replies.length < 2) return replies?.[0] || null;
+  const first = replies[0];
+  const markdown = replies.map((el) => String(el.dataset?.rawMd || el.textContent || "")).join("");
+  replies.slice(1).forEach((el) => el.remove());
+  if (markdown.trim()) {
+    first.hidden = false;
+    renderMarkdown(first, markdown);
+  }
+  return first;
+}
+
+// Merge every run of back-to-back reply blocks under `host` into one block.
+// Adjacent replies with no tool work between them are always fragments of a
+// single answer (older snapshots split them per streamed frame).
+function coalesceAdjacentReplyRuns(host) {
+  if (!host?.children) return;
+  let node = host.firstElementChild;
+  while (node) {
+    if (!node.classList.contains("assistant-reply")) {
+      node = node.nextElementSibling;
+      continue;
+    }
+    const run = consecutiveAssistantRepliesAfter(node);
+    const first = coalesceAdjacentAssistantReplies(run);
+    let next = (first || node).nextElementSibling;
+    while (next && isEmptyAssistantReply(next)) next = next.nextElementSibling;
+    node = next;
+  }
+}
+
+// Settle a finished turn into the shape a finished turn always has: one work
+// fold holding everything the run did, and the closing answer beside it. Both
+// the live stream and a restored snapshot land here, so reopening a session
+// cannot drift from what was on screen.
+function normalizeAssistantTurns(root) {
+  if (!root?.querySelectorAll) return;
+  const turns = root.classList?.contains("chat-turn") && root.classList.contains("assistant")
+    ? [root]
+    : [...root.querySelectorAll(".chat-turn.assistant")];
+  for (const turn of turns) {
+    if (turn.getAttribute("aria-busy") === "true") continue;
+    if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) {
+      coalesceAdjacentReplyRuns(turn);
+      continue;
+    }
+    if (!hasWorkNode(turn)) {
+      pruneEmptyWorkFolds(turn);
+      coalesceAdjacentReplyRuns(turn);
+      continue;
+    }
+    const fold = ensureTurnWorkFold(turn);
+    restackFileRows(turn);
+    coalesceAdjacentReplyRuns(workFoldBody(fold));
+    const answer = promoteFinalAnswer(turn);
+    if (answer) answer.dataset.workVerdict = "true";
+    if (isFinishedWorkFold(fold)) setWorkFoldExpanded(fold, false);
+  }
+}
+
+function createFoldCaret() {
+  const caret = document.createElement("img");
+  caret.className = "agent-work-caret";
+  caret.src = "assets/icons/chat_fold_caret.svg";
+  caret.alt = "";
+  caret.setAttribute("aria-hidden", "true");
+  return caret;
+}
+
+function setCollapsibleFoldExpanded(fold, expanded) {
+  if (!fold) return;
+  const next = Boolean(expanded);
+  fold.dataset.expanded = String(next);
+  fold.querySelector(":scope > .agent-status-line, :scope > .agent-explored-toggle, :scope > .agent-thinking-toggle, :scope > .agent-file-stack-toggle")?.setAttribute("aria-expanded", String(next));
+}
+
+function toggleCollapsibleFold(fold) {
+  if (!fold) return;
+  setCollapsibleFoldExpanded(fold, fold.dataset.expanded === "false");
+}
+
+function isEmptyAssistantReply(node) {
+  return Boolean(node?.classList?.contains("assistant-reply")
+    && (node.hidden || !String(node.textContent || "").trim()));
+}
+
+function lastReusableExploredFold(host) {
+  void host;
+  return null;
+}
+
+function createExploredFold() {
+  const fold = document.createElement("div");
+  fold.className = "agent-explored-fold";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "agent-explored-toggle";
+  const text = document.createElement("span");
+  text.className = "agent-explored-text";
+  text.textContent = "Tool Used";
+  toggle.append(text, createFoldCaret());
+  const body = document.createElement("div");
+  body.className = "agent-explored-body";
+  fold.append(toggle, body);
+  setCollapsibleFoldExpanded(fold, true);
+  return fold;
+}
+
+function hydrateExploredFoldLabels(root) {
+  root?.querySelectorAll?.(".agent-explored-text").forEach((el) => {
+    if (/^Explored$/i.test(String(el.textContent || "").trim())) el.textContent = "Tool Used";
+  });
+}
+
+function exploredBodyOf(fold) {
+  return fold?.querySelector?.(":scope > .agent-explored-body") || fold;
+}
+
+function thinkingBodyOf(fold) {
+  return fold?.querySelector?.(":scope > .agent-thinking-body") || fold;
+}
+
+function thinkingContentOf(fold) {
+  return fold?.querySelector?.(".agent-thinking-content") || null;
+}
+
+function lastStandaloneThinkingFold(host) {
+  const last = [...(host?.children || [])].findLast((child) => !isEmptyAssistantReply(child));
+  return last?.classList.contains("agent-thinking-fold") ? last : null;
+}
+
+function createThinkingFold({ startedAt = Date.now() } = {}) {
+  const fold = document.createElement("div");
+  fold.className = "agent-thinking-fold";
+  fold.dataset.lane = "activity";
+  fold.dataset.startedAt = String(startedAt);
+  fold.dataset.final = "false";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "agent-thinking-toggle";
+  const text = document.createElement("span");
+  text.className = "agent-thinking-text";
+  text.textContent = "Thinking";
+  toggle.append(text, createFoldCaret());
+  const body = document.createElement("div");
+  body.className = "agent-thinking-body";
+  const content = document.createElement("div");
+  content.className = "agent-thinking-content streaming";
+  content.hidden = true;
+  body.appendChild(content);
+  fold.append(toggle, body);
+  setCollapsibleFoldExpanded(fold, true);
+  return fold;
+}
+
+function thinkingFoldLabel(startedAt, endedAt = Date.now(), { live = false, durationMs = null } = {}) {
+  if (live) return "Thinking";
+  const elapsedMs = thinkingElapsedMs({ startedAt, endedAt, durationMs });
+  if (elapsedMs < 10_000) return "Thought briefly";
+  const start = Number(startedAt);
+  const end = Number(endedAt);
+  const from = Number.isFinite(start) ? start : (Number.isFinite(end) ? end - elapsedMs : 0);
+  const to = Number.isFinite(end) && end >= from ? end : from + elapsedMs;
+  return `Thought for ${formatAgentWorkDuration(from, to)}`;
+}
+
+function setThinkingFoldLabel(fold, { live = false, endedAt = Date.now(), durationMs = null } = {}) {
+  if (!fold) return;
+  const text = fold.querySelector(":scope > .agent-thinking-toggle > .agent-thinking-text");
+  const stored = durationMs != null ? durationMs : fold.dataset.durationMs;
+  if (text) text.textContent = thinkingFoldLabel(fold.dataset.startedAt, endedAt, { live, durationMs: stored });
+}
+
+function finishThinkingFold(fold, { collapse = true, endedAt = Date.now() } = {}) {
+  if (!fold?.isConnected) return;
+  const start = Number(fold.dataset.startedAt);
+  const durationMs = Number.isFinite(start) ? Math.max(0, endedAt - start) : 0;
+  fold.dataset.final = "true";
+  fold.dataset.durationMs = String(durationMs);
+  fold.dataset.endedAt = String(endedAt);
+  setThinkingFoldLabel(fold, { live: false, endedAt, durationMs });
+  thinkingContentOf(fold)?.classList.remove("streaming");
+  if (collapse) setCollapsibleFoldExpanded(fold, false);
+}
+
+function hydrateThinkingFolds(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".agent-thinking-fold").forEach((fold) => {
+    const stored = Number(fold.dataset.durationMs);
+    const durationMs = Number.isFinite(stored) && stored >= 0 ? stored : 0;
+    const startedAt = Number(fold.dataset.startedAt);
+    const endedAt = Number(fold.dataset.endedAt) || (Number.isFinite(startedAt) ? startedAt + durationMs : startedAt);
+    fold.dataset.final = "true";
+    fold.dataset.durationMs = String(durationMs);
+    if (Number.isFinite(endedAt)) fold.dataset.endedAt = String(endedAt);
+    setThinkingFoldLabel(fold, { live: false, endedAt, durationMs });
+    thinkingContentOf(fold)?.classList.remove("streaming");
+    setCollapsibleFoldExpanded(fold, false);
+  });
+}
+
+function sealExploredFolds(host) {
+  if (!host?.querySelectorAll) return;
+  host.querySelectorAll(":scope > .agent-explored-fold").forEach((fold) => {
+    fold.dataset.sealed = "true";
+  });
+}
+
+function stackVerbForLabel(verb = "") {
+  const value = String(verb || "").trim();
+  const completed = completedToolLabelFromRunning(value);
+  const label = completed || value;
+  return splitToolStatusLabel(label).verb || label;
+}
+
+function fileRowVerb(row) {
+  return stackVerbForLabel(
+    row?.dataset?.fileVerb
+    || row?.querySelector?.(".agent-tool-verb")?.textContent
+    || "",
+  );
+}
+
+function createFileStack(verb) {
+  const stack = document.createElement("div");
+  stack.className = "agent-file-stack";
+  stack.dataset.lane = "activity";
+  stack.dataset.verb = verb;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "agent-file-stack-toggle";
+  const text = document.createElement("span");
+  text.className = "agent-file-stack-text";
+  toggle.append(text, createFoldCaret());
+  const body = document.createElement("div");
+  body.className = "agent-file-stack-body";
+  stack.append(toggle, body);
+  setCollapsibleFoldExpanded(stack, true);
+  return stack;
+}
+
+function syncFileRowPresentation(row) {
+  if (!row) return;
+  const fileEl = row.querySelector(".tool-card-file");
+  if (!fileEl) return;
+  const inStack = Boolean(row.closest(".agent-file-stack-body"));
+  const verb = fileRowVerb(row);
+  const detail = String(
+    row.dataset.file
+    || row.dataset.path
+    || fileEl.querySelector(".agent-tool-detail")?.textContent
+    || "",
+  ).trim();
+  if (inStack) renderToolStatusLabel(fileEl, "", detail || verb);
+  else renderToolStatusLabel(fileEl, verb, detail);
+}
+
+function updateFileStackLabel(stack) {
+  if (!stack) return stack;
+  const rows = [...stack.querySelectorAll(":scope > .agent-file-stack-body > .agent-file-row, :scope > .agent-file-stack-body > .tool-card")];
+  const verb = stack.dataset.verb || "Read";
+  const text = stack.querySelector(".agent-file-stack-text");
+  const n = rows.length;
+  if (text) text.textContent = n === 1 ? `${verb} 1 file` : `${verb} ${n} files`;
+  rows.forEach(syncFileRowPresentation);
+  if (n <= 1) {
+    const parent = stack.parentElement;
+    const row = rows[0];
+    if (parent && row) {
+      parent.insertBefore(row, stack);
+      stack.remove();
+      markActivityNode(row);
+      syncFileRowPresentation(row);
+      return row;
+    }
+    if (!n) stack.remove();
+  }
+  return stack;
+}
+
+function absorbFileRow(row) {
+  if (!row?.isConnected) return row;
+  markActivityNode(row);
+  const verb = fileRowVerb(row);
+  if (!verb) return row;
+  row.dataset.fileVerb = verb;
+  if (row.closest(".agent-file-stack-body")) {
+    return updateFileStackLabel(row.closest(".agent-file-stack"));
+  }
+  const prev = row.previousElementSibling;
+  const bodyOf = (stack) => stack.querySelector(":scope > .agent-file-stack-body") || stack;
+  if (prev?.classList.contains("agent-file-stack") && prev.dataset.verb === verb) {
+    bodyOf(prev).appendChild(row);
+    return updateFileStackLabel(prev);
+  }
+  if ((prev?.classList.contains("agent-file-row") || prev?.classList.contains("tool-card"))
+    && fileRowVerb(prev) === verb) {
+    const stack = createFileStack(verb);
+    prev.before(stack);
+    bodyOf(stack).append(prev, row);
+    markActivityNode(stack);
+    return updateFileStackLabel(stack);
+  }
+  syncFileRowPresentation(row);
+  return row;
+}
+
+function restackFileRows(root) {
+  if (!root?.querySelectorAll) return;
+  const hosts = [...root.querySelectorAll(".agent-work-fold-body")];
+  if (root.classList?.contains("agent-work-fold-body")) hosts.unshift(root);
+  if (root.classList?.contains("chat-turn")) hosts.push(root);
+  else hosts.push(...root.querySelectorAll(".chat-turn.assistant"));
+  for (const host of hosts) {
+    for (const child of [...host.children]) {
+      if (!child.classList.contains("tool-card") && !child.classList.contains("agent-file-row")) continue;
+      if (child.classList.contains("agent-file-stack")) continue;
+      child.classList.add("agent-file-row");
+      markActivityNode(child);
+      if (!child.dataset.fileVerb) child.dataset.fileVerb = fileRowVerb(child);
+      absorbFileRow(child);
+    }
+  }
+}
+
+function isChatStreamPlaceholder(node) {
+  return Boolean(node?.classList)
+    && (node.classList.contains("assistant-reply-footer")
+      || (node.classList.contains("assistant-reply") && isEmptyAssistantReply(node)));
+}
+
+function appendChatStreamNode(host, node) {
+  if (!host || !node) return node;
+  const before = [...host.children].find((child) => child !== node && isChatStreamPlaceholder(child));
+  if (before) host.insertBefore(node, before);
+  else host.appendChild(node);
+  return node;
+}
+
+// The fold owns the turn's work, so a turn that needs one gets it here and
+// every existing row and interim reply is adopted into its body.
+function ensureAssistantWorkFold(turn, { startedAt = 0 } = {}) {
+  if (!turn || turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return null;
+  turn.classList.add("has-agent-run", "agent-stream");
+  const fold = ensureTurnWorkFold(turn, { startedAt });
+  // Keep the section open while the run is live so streamed work is not hidden
+  // behind a click the operator has not made yet.
+  if (fold && turn.getAttribute("aria-busy") === "true") setWorkFoldExpanded(fold, true);
+  return fold;
+}
+
+function wrapAssistantInRunChunk(turn) {
+  if (!turn) return null;
+  if (turn.classList.contains("agent-run-chunk")) return turn;
+  if (turn.parentElement?.classList.contains("agent-run-chunk")) {
+    const existing = turn.parentElement;
+    if (!existing.classList.contains("agent-run-stop")) existing.classList.add("agent-run-working");
+    return existing;
+  }
+  if (!turn.classList.contains("assistant")) return null;
+  const host = turn.closest(".agent-response-host")
+    || ensureAgentResponseHost(turn.closest(".chat-exchange"))
+    || turn.parentElement;
+  if (!host) return null;
+  const chunk = document.createElement("div");
+  chunk.className = turn.classList.contains("agent-run-stop")
+    ? "agent-run-chunk agent-run-stop"
+    : "agent-run-chunk agent-run-working";
+  if (turn.parentElement === host) host.insertBefore(chunk, turn);
+  else host.appendChild(chunk);
+  chunk.appendChild(turn);
+  return chunk;
+}
+
+function promoteCheckpointNotices(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".chat-turn.assistant .context-checkpoint-notice").forEach((notice) => {
+    const turn = notice.closest(".chat-turn.assistant");
+    if (!turn) return;
+    const chunk = wrapAssistantInRunChunk(turn);
+    const trailing = [];
+    let node = notice.nextSibling;
+    while (node) {
+      const next = node.nextSibling;
+      trailing.push(node);
+      node = next;
+    }
+    notice.remove();
+    (chunk || turn).after(notice);
+    if (!trailing.length) return;
+    const nextTurn = document.createElement("div");
+    nextTurn.className = "chat-turn assistant";
+    nextTurn.dataset.createdAt = turn.dataset.createdAt || "";
+    trailing.forEach((item) => nextTurn.appendChild(item));
+    const nextChunk = document.createElement("div");
+    nextChunk.className = "agent-run-chunk agent-run-working";
+    nextChunk.appendChild(nextTurn);
+    notice.after(nextChunk);
+  });
+  root.querySelectorAll(".chat-turn.assistant").forEach((turn) => wrapAssistantInRunChunk(turn));
+}
+
 function createChatExchange(container = messages) {
   const exchange = document.createElement("div");
   exchange.className = "chat-exchange";
+  const body = document.createElement("div");
+  body.className = "chat-exchange-body";
+  exchange.appendChild(body);
   container.appendChild(exchange);
   return exchange;
+}
+
+function chatExchangeBody(exchange) {
+  if (!exchange?.classList?.contains("chat-exchange")) return exchange;
+  let body = exchange.querySelector(":scope > .chat-exchange-body");
+  if (body) return body;
+  body = document.createElement("div");
+  body.className = "chat-exchange-body";
+  const footer = exchange.querySelector(":scope > .assistant-reply-footer");
+  const movable = [...exchange.children].filter(
+    (child) => child !== footer && !child.classList.contains("chat-exchange-body"),
+  );
+  exchange.insertBefore(body, footer || null);
+  movable.forEach((child) => body.appendChild(child));
+  if (footer) body.appendChild(footer);
+  return body;
 }
 
 function currentChatExchange(container = messages) {
@@ -1431,7 +2066,12 @@ function currentChatExchange(container = messages) {
 
 function appendChatTurn(turn, { startsExchange = false, container = messages } = {}) {
   const exchange = startsExchange ? createChatExchange(container) : currentChatExchange(container);
-  exchange.appendChild(turn);
+  if (turn?.classList?.contains("assistant")) {
+    ensureAgentResponseHost(exchange).appendChild(turn);
+    wrapAssistantInRunChunk(turn);
+    return;
+  }
+  chatExchangeBody(exchange).appendChild(turn);
 }
 
 // Older saved chats stored every turn directly under #messages. Group the real
@@ -1439,12 +2079,18 @@ function appendChatTurn(turn, { startsExchange = false, container = messages } =
 // the next prompt to push the previous one away instead of crossing through it.
 function normalizeChatExchanges() {
   if (!messages) return;
+  messages.querySelectorAll(".chat-turn.error").forEach((node) => node.remove());
   const children = [...messages.children];
   let exchange = null;
 
   for (const child of children) {
     if (child.classList.contains("chat-exchange")) {
       exchange = child;
+      continue;
+    }
+
+    if (child.classList.contains("context-checkpoint-notice") || child.classList.contains("agent-run-chunk") || child.classList.contains("agent-response-host")) {
+      if (exchange) chatExchangeBody(exchange).appendChild(child);
       continue;
     }
 
@@ -1463,6 +2109,22 @@ function normalizeChatExchanges() {
     }
     exchange.appendChild(child);
   }
+
+  messages?.querySelectorAll(".chat-exchange").forEach((exchange) => {
+    chatExchangeBody(exchange);
+    ensureAgentResponseHost(exchange);
+  });
+  promoteCheckpointNotices(messages);
+  hydrateExploredFoldLabels(messages);
+  hydrateToolStatusLabels(messages);
+  stripFailedToolCardStubs(messages);
+  normalizeAssistantTurns(messages);
+  messages?.querySelectorAll(".harness-wait-line").forEach((node) => node.remove());
+  messages?.querySelectorAll(".chat-exchange").forEach((exchange) => {
+    const host = ensureAgentResponseHost(exchange);
+    const footer = host?.querySelector?.(".assistant-reply-footer");
+    if (footer) host.appendChild(footer);
+  });
 }
 
 function isInternalRuntimeInputMessage(message = {}) {
@@ -1484,6 +2146,7 @@ function renderCanonicalChatHistory(history = []) {
       if (!content) return;
       const turn = document.createElement("div");
       turn.className = "chat-turn user";
+      if (message.createdAt) turn.dataset.createdAt = message.createdAt;
       const box = createUserPromptBox(content);
       turn.appendChild(box);
       appendChatTurn(turn, { startsExchange: true, container });
@@ -1507,6 +2170,7 @@ function renderCanonicalChatHistory(history = []) {
       for (const tool of commandTools) turn.appendChild(createCommandTimelineRow(tool, { state: "success" }));
       for (const subagent of subagents) createSubagentRunCard({ turn }, subagent);
       appendChatTurn(turn, { container });
+      wrapAssistantInRunChunk(turn);
     }
   };
   let previousUserContent = null;
@@ -1529,6 +2193,215 @@ function renderCanonicalChatHistory(history = []) {
     if (copyAnchor) attachAssistantCopyButton(copyAnchor);
   });
   messages.replaceChildren(fragment);
+  syncChatStickyMask();
+  syncChatEmptyState();
+}
+
+function captureSessionTranscript(session, root) {
+  if (!session || !root) return;
+  session.transcript = captureChatTranscript(root);
+}
+
+function toolFromTranscriptItem(item = {}) {
+  const name = String(item.name || item.toolName || "tool");
+  const args = item.args && typeof item.args === "object" && !Array.isArray(item.args)
+    ? { ...item.args }
+    : {};
+  if (item.target && !args.path) args.path = item.target;
+  if (item.command) args.command = item.command;
+  if (item.cwd) args.cwd = item.cwd;
+  return { toolName: name, action: name, args };
+}
+
+function applyThinkingRecord(fold, item = {}) {
+  const startedAt = Date.parse(item.started_at || "") || Number(fold.dataset.startedAt) || Date.now();
+  const durationMs = thinkingElapsedMs({
+    startedAt,
+    endedAt: Date.parse(item.ended_at || "") || Number(item.endedAt),
+    durationMs: item.duration_ms ?? item.durationMs,
+  });
+  const endedAt = Date.parse(item.ended_at || "") || startedAt + durationMs;
+  fold.dataset.startedAt = String(startedAt);
+  fold.dataset.endedAt = String(endedAt);
+  fold.dataset.durationMs = String(durationMs);
+  fold.dataset.final = "true";
+  const content = thinkingContentOf(fold);
+  const text = String(item.text || "").trim();
+  if (content && text) {
+    content.hidden = false;
+    renderMarkdown(content, text);
+    content.classList.remove("streaming");
+  }
+  setThinkingFoldLabel(fold, { live: false, endedAt, durationMs });
+  setCollapsibleFoldExpanded(fold, false);
+  return fold;
+}
+
+function createRestoredWorkFold(run = {}) {
+  const workedForMs = Number(run.worked_for_ms) || 0;
+  const startedAt = Date.parse(run.started_at || "");
+  const endedAt = Date.parse(run.ended_at || "");
+  const duration = formatAgentWorkDuration(0, workedForMs);
+  const label = run.status === "stopped"
+    ? "Stopped"
+    : run.status === "inconclusive"
+      ? `Finished in ${duration}`
+      : `Worked for ${duration}`;
+  const fold = createWorkFold({
+    label,
+    startedAt: Number.isFinite(startedAt) ? startedAt : Date.now(),
+    final: true,
+    state: run.status === "stopped" ? "stopped" : "complete",
+    expanded: false,
+  });
+  const header = workFoldHeader(fold);
+  header.dataset.workedForMs = String(workedForMs);
+  if (Number.isFinite(endedAt)) header.dataset.endedAt = String(endedAt);
+  return fold;
+}
+
+function createTranscriptChatReply(event = {}) {
+  const el = document.createElement("div");
+  el.className = "assistant-reply";
+  el.dataset.lane = "prose";
+  if (event.verdict) el.dataset.workVerdict = "true";
+  if (event.created_at) el.dataset.createdAt = event.created_at;
+  const text = String(event.text || "").trim();
+  if (!text) {
+    el.hidden = true;
+    return el;
+  }
+  renderMarkdown(el, text);
+  return el;
+}
+
+function createToolCardFromRecord(item) {
+  if (!item || item.status === "error") return null;
+  const card = createToolCard(toolFromTranscriptItem(item), { pending: false });
+  if (item.verb) card.dataset.fileVerb = item.verb;
+  if (item.path) card.dataset.path = item.path;
+  setToolCardStatus(card, "success");
+  markActivityNode(card);
+  return card?.isConnected || card ? card : null;
+}
+
+function createCommandFromRecord(item = {}) {
+  const row = createCommandTimelineRow(toolFromTranscriptItem({
+    name: "exec_command",
+    command: item.command,
+    cwd: item.cwd,
+    args: { command: item.command, cwd: item.cwd || "." },
+  }), { state: item.status === "error" ? "error" : "success" });
+  markActivityNode(row);
+  if (item.exit_code != null) row.dataset.exitCode = String(item.exit_code);
+  if (item.stdout) row.dataset.stdout = String(item.stdout);
+  if (item.cwd) row.dataset.cwd = String(item.cwd);
+  const startedAt = Date.parse(item.started_at || "");
+  const endedAt = Date.parse(item.ended_at || "");
+  if (Number.isFinite(startedAt)) row.dataset.startedAt = String(startedAt);
+  if (Number.isFinite(endedAt)) row.dataset.endedAt = String(endedAt);
+  if (item.duration_ms != null) row.dataset.durationMs = String(item.duration_ms);
+  return row;
+}
+
+function createFileStackFromRecord(event = {}) {
+  const verb = event.verb || "Read";
+  const stack = createFileStack(verb);
+  setCollapsibleFoldExpanded(stack, false);
+  const body = stack.querySelector(":scope > .agent-file-stack-body");
+  for (const file of event.files || []) {
+    const row = createToolCardFromRecord({ ...file, verb: file.verb || verb });
+    if (row) {
+      row.dataset.fileVerb = verb;
+      body.appendChild(row);
+    }
+  }
+  markActivityNode(stack);
+  updateFileStackLabel(stack);
+  return stack.isConnected || (stack.querySelector(".agent-file-row, .tool-card") ? stack : null);
+}
+
+function appendTranscriptEvent(host, event) {
+  if (!host || !event) return;
+  if (event.type === "chat") {
+    const reply = createTranscriptChatReply(event);
+    if (!reply.hidden) host.appendChild(reply);
+    return;
+  }
+  if (event.type === "thinking") {
+    const fold = createThinkingFold({ startedAt: Date.parse(event.started_at || "") || Date.now() });
+    applyThinkingRecord(fold, event);
+    markActivityNode(fold);
+    host.appendChild(fold);
+    return;
+  }
+  if (event.type === "file_stack") {
+    const stack = createFileStackFromRecord(event);
+    if (stack) {
+      host.appendChild(stack);
+      updateFileStackLabel(stack);
+    }
+    return;
+  }
+  if (event.type === "command") {
+    host.appendChild(createCommandFromRecord(event));
+    return;
+  }
+  if (event.type === "tool") {
+    const card = createToolCardFromRecord(event);
+    if (!card) return;
+    host.appendChild(card);
+    absorbFileRow(card);
+    return;
+  }
+  if (event.type !== "tool_group") return;
+  for (const item of event.items || []) appendTranscriptEvent(host, item);
+}
+
+function renderTranscriptRun(run, container) {
+  if (run.user?.message) {
+    const userTurn = document.createElement("div");
+    userTurn.className = "chat-turn user";
+    if (run.user.created_at) userTurn.dataset.createdAt = run.user.created_at;
+    userTurn.appendChild(createUserPromptBox(run.user.message));
+    appendChatTurn(userTurn, { startsExchange: true, container });
+  }
+  const events = Array.isArray(run.events) ? run.events : [];
+  if (!events.length) return;
+  const hasActivity = events.some((event) => event.type !== "chat");
+  const turn = document.createElement("div");
+  turn.className = "chat-turn assistant agent-stream";
+  turn.setAttribute("aria-busy", "false");
+  if (run.ended_at) turn.dataset.createdAt = run.ended_at;
+  else if (run.started_at) turn.dataset.createdAt = run.started_at;
+  let mount = turn;
+  if (hasActivity) {
+    turn.classList.add("has-agent-run");
+    turn.dataset.usedTools = "true";
+    const fold = createRestoredWorkFold(run);
+    turn.appendChild(fold);
+    mount = workFoldBody(fold);
+  }
+  for (const event of events) appendTranscriptEvent(mount, event);
+  if (hasActivity) {
+    restackFileRows(turn);
+    const answer = promoteFinalAnswer(turn);
+    if (answer) answer.dataset.workVerdict = "true";
+  }
+  if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event")) return;
+  appendChatTurn(turn, { container });
+  wrapAssistantInRunChunk(turn);
+}
+
+function renderStructuredChatTranscript(transcript, container = messages) {
+  const fragment = document.createDocumentFragment();
+  for (const run of normalizeUiTranscript(transcript).runs) renderTranscriptRun(run, fragment);
+  fragment.querySelectorAll(".chat-exchange").forEach((exchange) => {
+    const replies = [...exchange.querySelectorAll(".assistant-reply")];
+    const copyAnchor = replies.findLast((reply) => !reply.hidden) || replies.at(-1);
+    if (copyAnchor) attachAssistantCopyButton(copyAnchor);
+  });
+  container.replaceChildren(fragment);
   syncChatStickyMask();
   syncChatEmptyState();
 }
@@ -1583,12 +2456,21 @@ function stashActiveChatRunView(session = activeChatSession()) {
   while (messages.firstChild) host.appendChild(messages.firstChild);
   run.viewHost = host;
   session.messagesHtml = sanitizePersistedChatHtml(host.innerHTML);
+  captureSessionTranscript(session, host);
 }
 
 function hydratePersistedChatTranscript(root = messages) {
   if (!root) return;
+  root.querySelectorAll?.(".chat-turn.error").forEach((node) => node.remove());
+  // A restored snapshot is never live, even if it was captured mid-run.
+  root.querySelectorAll?.(".chat-turn.assistant[aria-busy='true']").forEach((turn) => turn.setAttribute("aria-busy", "false"));
+  stripFailedToolCardStubs(root);
+  normalizeAssistantTurns(root);
   redactThinkingDisclosures(root);
   hydrateSubagentRunCards(root);
+  hydrateContextCheckpointNotices(root);
+  hydrateExploredFoldLabels(root);
+  hydrateThinkingFolds(root);
   for (const row of root.querySelectorAll?.(".agent-command-event") || []) {
     stopCommandTimelineTicker(row);
     if (row.dataset.state === "running" && row.dataset.waiting === "true") {
@@ -1681,11 +2563,16 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
   }
   session.contextFilesCache = run.contextFilesCache || [];
   session.activeStreamContent = run.activeStreamContent || "";
-  session.chatMode = run.mode;
+  // The picker is the next-turn preference. Do not copy the in-flight
+  // run's mode back onto the session, or a mid-reply Agent/Ask change
+  // would snap back when the current turn finishes.
   session.chatFamily = run.family;
   session.selectedModel = run.model;
   const container = run.viewHost || (activeChatSessionId === session.id ? messages : null);
-  if (container) session.messagesHtml = sanitizePersistedChatHtml(container.innerHTML || "");
+  if (container) {
+    captureSessionTranscript(session, container);
+    session.messagesHtml = sanitizePersistedChatHtml(container.innerHTML || "");
+  }
   session.updatedAt = new Date().toISOString();
   if (activeChatSessionId === session.id) {
     chatHistory = session.history;
@@ -1705,6 +2592,7 @@ function prepareActiveChatSessionForSwitch(nextSessionId = "") {
 }
 
 function applyActiveChatSession(session) {
+  hideChatErrorToast();
   prepareActiveChatSessionForSwitch(session?.id || "");
   if (!session) {
     activeChatSessionId = "";
@@ -1738,6 +2626,9 @@ function applyActiveChatSession(session) {
   if (liveRun?.viewHost) {
     messages.replaceChildren(...liveRun.viewHost.childNodes);
     liveRun.viewHost = null;
+  } else if (hasStructuredTranscript(session.transcript)) {
+    renderStructuredChatTranscript(session.transcript, messages);
+    hydratePersistedChatTranscript(messages);
   } else if (session.messagesHtml) {
     messages.innerHTML = session.messagesHtml;
     hydratePersistedChatTranscript(messages);
@@ -1922,7 +2813,6 @@ function showCodeEditorWorkspace() {
   assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = true;
-  if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
   window.api.webCloneHidePreview?.();
@@ -1939,7 +2829,6 @@ function showResourceWorkspace({ focus = false } = {}) {
   assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = false;
   if (securityWorkspace) securityWorkspace.hidden = true;
-  if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
   window.api.webCloneHidePreview?.();
@@ -1962,7 +2851,6 @@ function showSecurityWorkspaceContent(tool = "") {
   assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = false;
-  if (mapWorkspace) mapWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
   window.api.webCloneHidePreview?.();
@@ -2229,6 +3117,9 @@ async function saveGuidanceFile({ autoSave = false } = {}) {
   }
   if (!autoSave) await loadGuidanceSettings({ preserveSelection: true });
   else await refreshCustomSkillCatalog();
+  // Rules and skills are Tier 1 categories, so editing one changes the meter
+  // even though the session, model, and mode are unchanged.
+  scheduleTier1ContextPreview({ force: true });
   return true;
 }
 
@@ -2250,6 +3141,7 @@ async function deleteGuidanceEntry(relativePath, scope = "project") {
   }
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Guidance deleted";
   await loadGuidanceSettings();
+  scheduleTier1ContextPreview({ force: true });
   return true;
 }
 
@@ -2704,9 +3596,6 @@ function setAppSettingsSection(section) {
   }
   if (appSettingsSection === "certificates") {
     loadCertificateSettings();
-  }
-  if (appSettingsSection === "knowledge") {
-    loadKnowledgeLibrarySettings();
   }
 }
 
@@ -3205,133 +4094,6 @@ async function loadCertificateSettings() {
   renderCertificateSettings(result);
 }
 
-function knowledgeLibraryStatusEl() {
-  return $("knowledge-library-status");
-}
-
-function knowledgeLibraryErrorMessage(result, fallback = "Knowledge Library request failed.") {
-  return result?.error?.message || result?.error || result?.code || fallback;
-}
-
-function renderKnowledgeLibrarySettings(payload = {}) {
-  const releasesEl = $("knowledge-library-releases");
-  const modelEl = $("knowledge-library-model");
-  const healthEl = $("knowledge-library-health");
-  const reindexBtn = $("knowledge-library-reindex");
-  const releases = Array.isArray(payload.releases) ? payload.releases : [];
-  if (releasesEl) {
-    const rows = releases.map((release) => {
-      const id = escapeHtml(release.release_id || "");
-      const version = escapeHtml(release.version || "");
-      const procedureCount = escapeHtml(release.procedure_count ?? "");
-      const signed = release.signed === true ? "true" : "false";
-      const bundled = release.bundled === true;
-      const hash = escapeHtml(release.content_hash || "");
-      const remove = bundled
-        ? `<button type="button" class="secondary-button" disabled>Remove</button>`
-        : `<button type="button" class="secondary-button" data-knowledge-remove="${id}">Remove</button>`;
-      return `<tr><td>${id}</td><td>${version}</td><td>${procedureCount}</td><td>${signed}</td><td>${bundled ? "true" : "false"}</td><td>${hash}</td><td>${remove}</td></tr>`;
-    }).join("");
-    releasesEl.innerHTML = `<table class="assessment-module-table"><thead><tr><th>release_id</th><th>version</th><th>procedure_count</th><th>signed</th><th>bundled</th><th>content_hash</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=\"7\">No releases installed.</td></tr>"}</tbody></table>`;
-    releasesEl.querySelectorAll("[data-knowledge-remove]").forEach((button) => {
-      button.addEventListener("click", () => removeKnowledgeLibraryRelease(button.getAttribute("data-knowledge-remove")));
-    });
-  }
-  const health = payload.health || {};
-  if (modelEl) modelEl.textContent = health.model || payload.model?.name || payload.model || "Not loaded";
-  if (healthEl) {
-    const projection = health.projection || {};
-    healthEl.innerHTML = [
-      ["status", health.status || "not_built"],
-      ["chunkCount", health.chunkCount ?? 0],
-      ["vectorCount", health.vectorCount ?? 0],
-      ["recordCount", health.recordCount ?? 0],
-      ["knowledgeFingerprint", health.knowledgeFingerprint || ""],
-      ["scoringVersion", health.scoringVersion || ""],
-      ["projection.format", projection.format || ""],
-    ].map(([label, value]) => `<div><strong>${escapeHtml(label)}</strong> ${escapeHtml(value)}</div>`).join("");
-  }
-  if (reindexBtn) reindexBtn.disabled = !assessmentPath;
-}
-
-async function loadKnowledgeLibrarySettings() {
-  if (!window.api.knowledgeList) return;
-  const [list, status] = await Promise.all([
-    window.api.knowledgeList(),
-    window.api.knowledgeStatus?.({ workspace: assessmentPath }) || Promise.resolve({}),
-  ]);
-  if (list?.ok === false || list?.error) {
-    addErrorMessage(knowledgeLibraryErrorMessage(list));
-    return;
-  }
-  renderKnowledgeLibrarySettings({
-    releases: list?.releases || [],
-    model: status?.model,
-    health: status?.health,
-  });
-}
-
-async function installKnowledgeLibraryPackage() {
-  const statusEl = knowledgeLibraryStatusEl();
-  if (!window.api.openFile || !window.api.knowledgeInstall) return;
-  const filePath = await window.api.openFile();
-  if (!filePath) return;
-  const raw = await window.api.readFile?.(filePath);
-  if (raw?.error) {
-    if (statusEl) statusEl.textContent = knowledgeLibraryErrorMessage(raw);
-    addErrorMessage(knowledgeLibraryErrorMessage(raw));
-    return;
-  }
-  let pkg;
-  try { pkg = JSON.parse(raw?.content || ""); } catch {
-    addErrorMessage("Knowledge package must be JSON.");
-    return;
-  }
-  const preview = await window.api.knowledgePreview?.({ package: pkg });
-  if (preview?.ok === false || preview?.error) {
-    addErrorMessage(knowledgeLibraryErrorMessage(preview));
-    return;
-  }
-  let result = await window.api.knowledgeInstall({ package: pkg });
-  const unsigned = preview?.preview?.signed === false;
-  const confirmationRequired = result?.code === "MEMORY_KNOWLEDGE_CONFIRMATION_REQUIRED";
-  if ((unsigned || confirmationRequired) && result?.ok !== true) {
-    const confirmation = await AppDialog.prompt("This package is unsigned. Enter the content hash to confirm installation.", "", { title: "Unsigned package" });
-    if (confirmation == null || !String(confirmation).trim()) return;
-    result = await window.api.knowledgeInstall({ package: pkg, confirmation: String(confirmation).trim() });
-  }
-  if (result?.ok === false || result?.error) {
-    if (statusEl) statusEl.textContent = knowledgeLibraryErrorMessage(result);
-    addErrorMessage(knowledgeLibraryErrorMessage(result));
-    return;
-  }
-  if (statusEl) statusEl.textContent = "Package installed";
-  await loadKnowledgeLibrarySettings();
-}
-
-async function removeKnowledgeLibraryRelease(releaseId) {
-  if (!releaseId || !window.api.knowledgeRemove) return;
-  const result = await window.api.knowledgeRemove({ releaseId });
-  if (result?.ok === false || result?.error) {
-    addErrorMessage(knowledgeLibraryErrorMessage(result));
-    return;
-  }
-  await loadKnowledgeLibrarySettings();
-}
-
-async function reindexKnowledgeLibrary() {
-  const statusEl = knowledgeLibraryStatusEl();
-  if (!assessmentPath) return;
-  const result = await window.api.knowledgeReindex?.({ workspace: assessmentPath });
-  if (result?.ok === false || result?.error) {
-    if (statusEl) statusEl.textContent = knowledgeLibraryErrorMessage(result);
-    addErrorMessage(knowledgeLibraryErrorMessage(result));
-    return;
-  }
-  if (statusEl) statusEl.textContent = "Index rebuilt";
-  await loadKnowledgeLibrarySettings();
-}
-
 async function chooseCertificateDirectory() {
   const result = await window.api.chooseCertificateDirectory?.({ assessmentPath });
   if (!result || result.canceled) return;
@@ -3481,10 +4243,6 @@ async function saveKaliAccess(event, { quiet = false } = {}) {
   if (result?.ok === false || result?.error) return setKaliAccessStatus(mcpErrorMessage(result, "Kali access could not be saved."), "error");
   renderKaliAccess(result.value || kaliAccessFormValue());
   if (!quiet) setKaliAccessStatus(result.value?.enabled ? "Kali access saved. Add Kali-hosted servers through the normal MCP configuration." : "Local Kali access is disabled.", "success");
-}
-
-function mapIntelligencePromptKey() {
-  return `xekute:intelligence-prompt:${String(assessmentPath || "")}`;
 }
 
 let identitySettingsSnapshot = null;
@@ -3881,512 +4639,6 @@ async function importIdentityStateFromSettings() {
   }
 }
 
-function renderMapIntelligenceStatus(status) {
-  if (!status) return;
-  const counts = status.overview?.counts || {};
-  const estimate = status.estimate || {};
-  const countLabel = status.status === "ready" ? ` · ${Number(counts.evidence || 0)} evidence` : estimate.estimatedRecordCount ? ` · ~${estimate.estimatedRecordCount} records` : "";
-  if (mapIntelligenceStatus) mapIntelligenceStatus.textContent = `Intelligence: ${status.status || "unknown"}${countLabel}`;
-  const running = status.status === "running" || status.status === "queued";
-  const paused = status.status === "paused";
-  if (mapIntelligencePause) mapIntelligencePause.hidden = !running;
-  if (mapIntelligenceResume) mapIntelligenceResume.hidden = !paused;
-  if (mapIntelligenceRebuild) mapIntelligenceRebuild.hidden = !(status.status === "ready" || status.status === "corrupt");
-  const shouldPrompt = status.status === "not_built" && Number(estimate.sourceCount || 0) > 0 && !localStorage.getItem(mapIntelligencePromptKey());
-  if (mapIntelligencePrompt) mapIntelligencePrompt.hidden = !shouldPrompt;
-  if (mapIntelligenceStartAction) mapIntelligenceStartAction.hidden = status.status !== "not_built" || shouldPrompt;
-  if (shouldPrompt) {
-    localStorage.setItem(mapIntelligencePromptKey(), "shown");
-    if (mapIntelligencePromptDetail) mapIntelligencePromptDetail.textContent = `Found ${estimate.sourceCount} source${estimate.sourceCount === 1 ? "" : "s"} (~${estimate.estimatedRecordCount || 0} records). Start a bounded local index now, or defer it.`;
-  }
-}
-
-async function refreshMapIntelligenceStatus() {
-  if (!assessmentPath || !window.api.assessmentIntelligenceStatus) return null;
-  try {
-    const status = await window.api.assessmentIntelligenceStatus({ path: assessmentPath });
-    renderMapIntelligenceStatus(status);
-    return status;
-  } catch (error) {
-    if (mapIntelligenceStatus) mapIntelligenceStatus.textContent = "Intelligence: unavailable";
-    return null;
-  }
-}
-
-async function startMapIntelligenceIndex() {
-  if (!assessmentPath || !window.api.assessmentIntelligenceStart) return;
-  localStorage.setItem(mapIntelligencePromptKey(), "started");
-  renderMapIntelligenceStatus({ status: "running", estimate: {} });
-  await window.api.assessmentIntelligenceStart({ path: assessmentPath });
-  await refreshMapIntelligenceStatus();
-}
-
- function setMapWorkspaceState({ exists = false, busy = false, message = "" } = {}) {
-  if (mapEmpty) mapEmpty.hidden = exists;
-  if (mapContent) mapContent.hidden = !exists;
-  if (mapLoading) mapLoading.hidden = !busy;
-  if (mapBuildAction) {
-    mapBuildAction.disabled = busy || !assessmentPath;
-    mapBuildAction.querySelector("span:last-child").textContent = exists ? "Rebuild" : "Build";
-    mapBuildAction.title = exists ? "Rebuild from Traffic/Raw" : "Build from Traffic/Raw";
-  }
-  if (mapDeepCollectAction) mapDeepCollectAction.disabled = busy || !assessmentPath;
-  if (message && mapWorkspaceSubtitle) mapWorkspaceSubtitle.textContent = message;
-}
-
-function mapDateLabel(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-}
-
-function populateMapFilters(graph) {
-  const routes = graph?.nodes?.filter((node) => node.type === "Route") || [];
-  const replaceOptions = (select, values, label) => {
-    if (!select) return;
-    const selected = select.value;
-    select.innerHTML = "";
-    select.add(new Option(label, ""));
-    values.forEach((value) => select.add(new Option(value, value)));
-    select.value = values.includes(selected) ? selected : "";
-  };
-  const hosts = [...new Set(routes.map((node) => node.host).filter(Boolean))].sort();
-  selectedMapHosts = new Set([...selectedMapHosts].filter((host) => hosts.includes(host)));
-  renderMapHostFilter(hosts);
-  replaceOptions(mapMethodFilter, [...new Set(routes.map((node) => node.method))].sort(), "All methods");
-}
-
-function renderMapHostFilter(hosts = []) {
-  if (!mapHostFilterOptions) return;
-  mapHostFilterOptions.innerHTML = hosts.map((host) => `<label class="map-host-option"><input type="checkbox" value="${escapeHtml(host)}"${selectedMapHosts.has(host) ? " checked" : ""}> <span title="${escapeHtml(host)}">${escapeHtml(host)}</span></label>`).join("") || '<div class="map-host-filter-empty">No route hosts</div>';
-  if (mapHostFilterAll) mapHostFilterAll.checked = selectedMapHosts.size === 0;
-  if (mapHostFilterLabel) {
-    const selected = [...selectedMapHosts].sort();
-    mapHostFilterLabel.textContent = !selected.length ? "All hosts" : selected.length === 1 ? selected[0] : `${selected.length} hosts`;
-  }
-}
-
-function setMapHostFilterOpen(open) {
-  if (!mapHostFilterMenu || !mapHostFilterToggle) return;
-  mapHostFilterMenu.hidden = !open;
-  mapHostFilterToggle.setAttribute("aria-expanded", String(open));
-}
-
-function updateMapMetrics(graph) {
-  const stats = graph?.stats || {};
-  const values = {
-    "map-stat-hosts": stats.hosts,
-    "map-stat-routes": stats.routes,
-    "map-stat-observations": stats.observations,
-    "map-stat-variants": stats.variants,
-    "map-stat-risk": stats.highPriorityRoutes ?? stats.highRiskRoutes,
-  };
-  Object.entries(values).forEach(([id, value]) => { const element = $(id); if (element) element.textContent = Number(value) || 0; });
-  if (mapBuiltAt) {
-    const audit = graph?.verification;
-    const verificationLabel = audit?.verified ? `Verified ${audit.checkedNodes} nodes${audit.sourceComplete === false ? " · source truncated" : ""}${audit.referencesComplete === false ? " · reference limit reached" : ""}` : graph ? "Rebuild to verify" : "";
-    mapBuiltAt.textContent = graph?.builtAt ? `${verificationLabel} · Built ${mapDateLabel(graph.builtAt)}` : verificationLabel;
-    mapBuiltAt.title = [...(graph?.source?.warnings || []), graph?.builderVersion ? `Builder ${graph.builderVersion}` : ""].filter(Boolean).join("\n");
-  }
-}
-
-function filteredMapRoutes() {
-  const allRoutes = applicationMap?.nodes?.filter((node) => node.type === "Route") || [];
-  const query = String(mapSearch?.value || "").trim().toLowerCase();
-  const matchingAuxiliaryIds = new Set((applicationMap?.nodes || []).filter((node) => node.type !== "Route" && node.type !== "Host" && query && `${node.label} ${node.type} ${node.host || ""} ${node.communityLabel || ""} ${(node.riskTags || []).join(" ")}`.toLowerCase().includes(query)).map((node) => node.id));
-  const routesLinkedToQuery = new Set((applicationMap?.edges || []).filter((edge) => matchingAuxiliaryIds.has(edge.source) || matchingAuxiliaryIds.has(edge.target)).flatMap((edge) => [edge.source, edge.target]));
-  const hosts = selectedMapHosts;
-  const method = mapMethodFilter?.value || "";
-  const visibility = mapVisibilityFilter?.value || "relevant";
-  return allRoutes.filter((route) => {
-    if (hosts.size && !hosts.has(route.host)) return false;
-    if (method && route.method !== method) return false;
-    if (query && !routesLinkedToQuery.has(route.id) && !`${route.label} ${route.host} ${route.template} ${(route.riskTags || []).join(" ")}`.toLowerCase().includes(query)) return false;
-    if (visibility === "relevant" && route.visibility === "hidden") return false;
-    if (visibility === "application" && route.filterReason === "third_party_telemetry") return false;
-    return true;
-  }).slice(0, 600);
-}
-
-function mapPositionStorageKey(graph = applicationMap) {
-  const graphKey = graph?.project?.rootHash || graph?.project?.name || "default";
-  return `pointer:mapNodePositions:v2:${graphKey}`;
-}
-
-function activeMapPositionOverrides(mode = applicationMapMode) {
-  return mapNodePositionsByMode.get(mode) || mapNodePositionsByMode.get("route");
-}
-
-function loadMapNodePositions(graph) {
-  mapNodePositionsByMode.forEach((positions) => positions.clear());
-  if (!graph) return;
-  const nodeIds = new Set(graph.nodes?.map((node) => node.id) || []);
-  try {
-    const saved = JSON.parse(localStorage.getItem(mapPositionStorageKey(graph)) || "{}");
-    for (const mode of mapNodePositionsByMode.keys()) {
-      Object.entries(saved?.[mode] || {}).forEach(([id, point]) => {
-        if (nodeIds.has(id) && Number.isFinite(point?.x) && Number.isFinite(point?.y)) mapNodePositionsByMode.get(mode).set(id, { x: point.x, y: point.y });
-      });
-    }
-    const legacyKey = `pointer:mapWorkflowPositions:${graph.project?.rootHash || graph.project?.name || "default"}`;
-    const legacy = JSON.parse(localStorage.getItem(legacyKey) || "{}");
-    Object.entries(legacy).forEach(([id, point]) => {
-      if (nodeIds.has(id) && Number.isFinite(point?.x) && Number.isFinite(point?.y) && !mapNodePositionsByMode.get("workflow").has(id)) mapNodePositionsByMode.get("workflow").set(id, { x: point.x, y: point.y });
-    });
-  } catch { localStorage.removeItem(mapPositionStorageKey(graph)); }
-}
-
-function persistMapNodePositions() {
-  if (!applicationMap) return;
-  const saved = Object.fromEntries([...mapNodePositionsByMode].map(([mode, positions]) => [mode, Object.fromEntries([...positions].map(([id, point]) => [id, { x: Math.round(point.x * 10) / 10, y: Math.round(point.y * 10) / 10 }]))]));
-  try { localStorage.setItem(mapPositionStorageKey(), JSON.stringify(saved)); } catch { /* keep the current in-memory arrangement */ }
-}
-
-function layoutMapNodes(routes, visibleHostNodes = [], auxiliaryNodes = []) {
-  const positions = new Map();
-  const positionAuxiliary = () => {
-    auxiliaryNodes.forEach((node, index) => {
-      const relationship = (applicationMap?.edges || []).find((edge) => (edge.source === node.id && positions.has(edge.target)) || (edge.target === node.id && positions.has(edge.source)));
-      const anchorId = relationship ? (relationship.source === node.id ? relationship.target : relationship.source) : "";
-      const anchor = positions.get(anchorId) || { x: 700, y: 410 };
-      const angle = (index * 2.399963229728653) % (Math.PI * 2);
-      const radius = 34 + (index % 4) * 10;
-      positions.set(node.id, { x: anchor.x + Math.cos(angle) * radius, y: anchor.y + Math.sin(angle) * radius });
-    });
-  };
-  if (["workflow", "state"].includes(applicationMapMode)) {
-    const columns = Math.max(1, Math.ceil(Math.sqrt(routes.length * 1.7)));
-    const rows = Math.max(1, Math.ceil(routes.length / columns));
-    const width = Math.min(1220, Math.max(500, columns * 145));
-    const height = Math.min(700, Math.max(300, rows * 95));
-    routes.forEach((route, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const defaultPoint = { x: 700 - width / 2 + (column + .5) * (width / columns), y: 410 - height / 2 + (row + .5) * (height / rows) };
-      positions.set(route.id, defaultPoint);
-    });
-    positionAuxiliary();
-    for (const [id, point] of activeMapPositionOverrides()) if (positions.has(id)) positions.set(id, point);
-    return positions;
-  }
-
-  const hosts = [...new Set([...routes.map((route) => route.host), ...visibleHostNodes.map((node) => node.host)])];
-  const columns = Math.max(1, Math.ceil(Math.sqrt(hosts.length * 1.6)));
-  const rows = Math.max(1, Math.ceil(hosts.length / columns));
-  const cellWidth = Math.min(600, 1300 / columns);
-  const cellHeight = Math.min(520, 750 / rows);
-  hosts.forEach((host, hostIndex) => {
-    const column = hostIndex % columns;
-    const row = Math.floor(hostIndex / columns);
-    const center = { x: 700 + (column - (columns - 1) / 2) * cellWidth, y: 410 + (row - (rows - 1) / 2) * cellHeight };
-    const hostNode = visibleHostNodes.find((node) => node.host === host) || applicationMap.nodes.find((node) => node.type === "Host" && node.host === host);
-    if (hostNode) positions.set(hostNode.id, center);
-    const hostRoutes = routes.filter((route) => route.host === host);
-    hostRoutes.forEach((route, index) => {
-      const ring = Math.floor(index / 12);
-      const ringStart = ring * 12;
-      const ringCount = Math.min(12, hostRoutes.length - ringStart);
-      const angle = -Math.PI / 2 + ((index - ringStart) / Math.max(1, ringCount)) * Math.PI * 2;
-      const radius = Math.min(Math.max(82, Math.min(cellWidth, cellHeight) * .31) + ring * 58, Math.min(cellWidth, cellHeight) * .46);
-      positions.set(route.id, { x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius });
-    });
-  });
-  for (const [id, point] of activeMapPositionOverrides()) if (positions.has(id)) positions.set(id, point);
-  return positions;
-}
-
-function updateMapViewportTransform() {
-  mapViewport?.setAttribute("transform", `translate(${mapPanX} ${mapPanY}) scale(${mapZoom})`);
-}
-
-function mapClientPoint(clientX, clientY) {
-  if (!mapGraph || !mapViewport) return { x: 0, y: 0 };
-  const point = mapGraph.createSVGPoint();
-  point.x = clientX; point.y = clientY;
-  const matrix = mapViewport.getScreenCTM();
-  if (!matrix) return { x: 0, y: 0 };
-  const transformed = point.matrixTransform(matrix.inverse());
-  return { x: transformed.x, y: transformed.y };
-}
-
-function updateDraggedMapNode(nodeId, point, mode = applicationMapMode) {
-  if (!mapViewport || !nodeId) return;
-  currentMapPositions.set(nodeId, point);
-  activeMapPositionOverrides(mode).set(nodeId, point);
-  mapViewport.querySelector(`[data-map-node-id="${CSS.escape(nodeId)}"]`)?.setAttribute("transform", `translate(${point.x} ${point.y})`);
-  mapViewport.querySelectorAll(`[data-map-edge-source="${CSS.escape(nodeId)}"], [data-map-edge-target="${CSS.escape(nodeId)}"]`).forEach((edge) => {
-    const source = currentMapPositions.get(edge.dataset.mapEdgeSource);
-    const target = currentMapPositions.get(edge.dataset.mapEdgeTarget);
-    if (!source || !target) return;
-    edge.setAttribute("x1", source.x); edge.setAttribute("y1", source.y);
-    edge.setAttribute("x2", target.x); edge.setAttribute("y2", target.y);
-  });
-}
-
-function setMapDetailCollapsed(collapsed, { persist = true } = {}) {
-  const next = Boolean(collapsed);
-  mapMain?.classList.toggle("detail-collapsed", next);
-  mapDetailToggle?.setAttribute("aria-expanded", String(!next));
-  if (mapDetailToggle) mapDetailToggle.title = next ? "Expand node inspector" : "Collapse node inspector";
-  const icon = mapDetailToggle?.querySelector(".codicon");
-  icon?.classList.toggle("codicon-chevron-left", next);
-  icon?.classList.toggle("codicon-chevron-right", !next);
-  if (mapDetailBody) mapDetailBody.setAttribute("aria-hidden", String(next));
-  if (persist) localStorage.setItem(MAP_INSPECT_COLLAPSED_KEY, String(next));
-}
-
-function renderMapDetails(node) {
-  if (!mapDetailContent || !mapDetailEmpty) return;
-  mapDetailEmpty.hidden = Boolean(node);
-  mapDetailContent.hidden = !node;
-  if (!node) { mapDetailContent.innerHTML = ""; return; }
-  const connections = (applicationMap?.edges || []).filter((edge) => edge.source === node.id || edge.target === node.id).slice(0, 30);
-  const nodeById = new Map((applicationMap?.nodes || []).map((item) => [item.id, item]));
-  const connectionMarkup = connections.length ? connections.map((edge) => {
-    const outgoing = edge.source === node.id;
-    const peer = nodeById.get(outgoing ? edge.target : edge.source);
-    const evidence = (edge.evidenceIds || []).slice(0, 3).map((id, index) => `<button type="button" class="map-evidence" data-map-evidence="${escapeHtml(String(id))}">Inspect evidence${index ? ` ${index + 1}` : ""}</button>`).join("");
-    const origin = edge.observationType || "legacy";
-    const support = Number(edge.supportCount) || Number(edge.observedCount) || 0;
-    const extractor = edge.provenanceSamples?.[0]?.extractor || "legacy";
-    return `<div class="map-connection"><strong>${outgoing ? "→" : "←"} ${escapeHtml(edge.type)}</strong><span>${escapeHtml(peer?.label || peer?.host || "Unknown node")} · ${Math.round((Number(edge.confidence) || 0) * 100)}% · ${escapeHtml(origin)} · ${support} support${support === 1 ? "" : "s"} · ${escapeHtml(extractor)}</span>${evidence ? `<div class="map-evidence-list">${evidence}</div>` : ""}</div>`;
-  }).join("") : '<div class="map-tags"><span>No connections</span></div>';
-  if (node.type === "Host") {
-    mapDetailContent.innerHTML = `<div class="map-detail-title"><span>Host</span><h2>${escapeHtml(node.label)}</h2><p>${node.observed ? "Observed traffic host" : "Discovered application host"}</p></div><section class="map-detail-section"><div class="map-detail-grid"><div><span>Routes</span><strong>${Number(node.routeCount) || 0}</strong></div><div><span>Observations</span><strong>${Number(node.observedCount) || 0}</strong></div><div><span>Highest priority</span><strong>${Number(node.priorityScore ?? node.riskScore) || 0}/100</strong></div><div><span>Source</span><strong>${node.observed ? "Observed" : "Derived"}</strong></div></div></section><section class="map-detail-section"><h3>Connections</h3>${connectionMarkup}</section>`;
-    return;
-  }
-  const tags = (items, empty = "None observed") => items?.length ? `<div class="map-tags">${items.map((item) => `<span>${escapeHtml(String(item))}</span>`).join("")}</div>` : `<div class="map-tags"><span>${empty}</span></div>`;
-  const evidenceButtons = (items = []) => items.slice(0, 12).map((id, index) => `<button type="button" class="map-evidence" data-map-evidence="${escapeHtml(String(id))}">Inspect evidence${index ? ` ${index + 1}` : ""}</button>`).join("");
-  if (["ApplicationState", "Action"].includes(node.type)) {
-    const relatedAnomalies = (applicationMap?.stateModel?.anomalies || []).filter((item) => [...(item.stateIds || []), ...(item.actionIds || [])].includes(node.id));
-    const anomalyMarkup = relatedAnomalies.length ? relatedAnomalies.map((item) => `<article class="map-hypothesis"><strong>${escapeHtml(item.title || item.kind)}</strong><span>${escapeHtml(item.basis || "")}</span><em>candidate · ${Math.round((Number(item.confidence) || 0) * 100)}% confidence</em>${item.candidateTest ? `<p>${escapeHtml(item.candidateTest)}</p>` : ""}</article>`).join("") : '<div class="map-tags"><span>No candidate anomalies</span></div>';
-    const evidence = evidenceButtons(node.evidenceRefs || []);
-    if (node.type === "ApplicationState") {
-      mapDetailContent.innerHTML = `<div class="map-detail-title"><span>Application state</span><h2>${escapeHtml(node.label)}</h2><p>${escapeHtml(node.aiSummary || "Deterministic state projection from captured traffic.")}</p></div><section class="map-detail-section"><div class="map-detail-grid"><div><span>Kind</span><strong>${escapeHtml(node.stateKind || "application")}</strong></div><div><span>Lifecycle</span><strong>${escapeHtml(node.lifecycle || "unknown")}</strong></div><div><span>Identity</span><strong>${escapeHtml(node.identityLabel || "Unresolved")}</strong></div><div><span>Role</span><strong>${escapeHtml(node.role || "unknown")}</strong></div><div><span>Confidence</span><strong>${Math.round((Number(node.confidence) || 0) * 100)}%</strong></div><div><span>Evidence</span><strong>${node.evidenceRefs?.length || 0}</strong></div></div></section><section class="map-detail-section"><h3>Candidate tests</h3>${tags(node.candidateTests, "No candidate tests")}</section><section class="map-detail-section"><div class="map-section-heading"><h3>State anomalies</h3><span class="map-section-count">${relatedAnomalies.length}</span></div>${anomalyMarkup}</section>${evidence ? `<section class="map-detail-section"><h3>Evidence</h3><div class="map-evidence-list">${evidence}</div></section>` : ""}<section class="map-detail-section"><h3>State relationships</h3>${connectionMarkup}</section>`;
-      return;
-    }
-    mapDetailContent.innerHTML = `<div class="map-detail-title"><span>Application action</span><h2>${escapeHtml(node.label)}</h2><p>${escapeHtml(node.aiSummary || "Deterministic action projection from captured traffic.")}</p></div><section class="map-detail-section"><div class="map-detail-grid"><div><span>Kind</span><strong>${escapeHtml(node.actionKind || "action")}</strong></div><div><span>Method</span><strong>${escapeHtml(node.method || "HTTP")}</strong></div><div><span>Resource</span><strong>${escapeHtml(node.resource || "application")}</strong></div><div><span>Mutating</span><strong>${node.mutating ? "yes" : "no"}</strong></div><div><span>Observed</span><strong>${Number(node.observedCount) || 0}</strong></div><div><span>Success / rejected</span><strong>${Number(node.successfulCount) || 0} / ${Number(node.rejectedCount) || 0}</strong></div><div><span>Preconditions</span><strong>${node.preconditionStateIds?.length || 0}</strong></div><div><span>Resulting states</span><strong>${node.resultingStateIds?.length || 0}</strong></div></div></section><section class="map-detail-section"><h3>Candidate tests</h3>${tags(node.candidateTests, "No candidate tests")}</section><section class="map-detail-section"><div class="map-section-heading"><h3>Action anomalies</h3><span class="map-section-count">${relatedAnomalies.length}</span></div>${anomalyMarkup}</section>${evidence ? `<section class="map-detail-section"><h3>Evidence</h3><div class="map-evidence-list">${evidence}</div></section>` : ""}<section class="map-detail-section"><h3>Action relationships</h3>${connectionMarkup}</section>`;
-    return;
-  }
-  if (node.type !== "Route") {
-    const safeRows = [
-      ["Type", node.type], ["Role", node.role || node.actorRole], ["Host", node.host],
-      ["Observed", node.observedCount ?? node.occurrenceCount], ["Routes", node.routeCount],
-      ["Size", node.byteLength ? `${Number(node.byteLength).toLocaleString()} bytes` : ""],
-      ["Endpoints", node.endpointCount], ["Imports", node.importCount], ["Status", node.statusCode],
-      ["Location", node.location], ["Category", node.category], ["Priority", `${Number(node.priorityScore ?? node.riskScore) || 0}/100 · ${node.priorityTier || "legacy"}`], ["Community", node.communityLabel],
-    ].filter(([, value]) => value !== undefined && value !== null && value !== "");
-    const signalTags = Object.entries(node.signals || {}).filter(([, count]) => Number(count) > 0).map(([name, count]) => `${name}: ${count}`);
-    const priorityFactors = (node.priorityFactors || []).map((factor) => `${factor.label} +${Number(factor.points) || 0}`);
-    mapDetailContent.innerHTML = `<div class="map-detail-title"><span>${escapeHtml(node.type)}</span><h2>${escapeHtml(node.label || node.type)}</h2><p>Deterministic graph projection · internal source identifiers hidden</p></div><section class="map-detail-section"><div class="map-detail-grid">${safeRows.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("")}</div></section>${signalTags.length ? `<section class="map-detail-section"><h3>Signals</h3>${tags(signalTags)}</section>` : ""}<section class="map-detail-section"><h3>Priority factors</h3>${tags(priorityFactors, "No scored evidence factors")}</section><section class="map-detail-section"><h3>Connections</h3>${connectionMarkup}</section>`;
-    return;
-  }
-  const parameterLabels = (node.parameters || []).map((item) => `${item.location}: ${item.name}`);
-  const relatedHypotheses = (applicationMap?.hypotheses || []).filter((item) => (item.routes || []).includes(node.id));
-  const priorityFactorLabels = (node.priorityFactors || []).map((factor) => `${factor.label} +${Number(factor.points) || 0}`);
-  const hypothesisMarkup = relatedHypotheses.length
-    ? relatedHypotheses.map((item) => `<div class="map-hypothesis"><strong>${escapeHtml(item.hypothesis || "candidate hypothesis")}</strong><span>${escapeHtml(item.basis || "")}</span><em>${escapeHtml(item.status || "untested")} · ${Math.round((Number(item.confidence) || 0) * 100)}% confidence</em></div>`).join("")
-    : '<div class="map-tags"><span>No candidate hypotheses</span></div>';
-  const variantItems = Array.isArray(node.variants) ? [...node.variants].sort((a, b) => Number(b.occurrenceCount) - Number(a.occurrenceCount)) : [];
-  const variants = variantItems.map((variant, index) => {
-    const evidenceIds = Array.isArray(variant.evidenceIds) ? variant.evidenceIds : (Array.isArray(variant.evidenceRefs) ? variant.evidenceRefs : []);
-    const evidence = evidenceIds.slice(0, 8).map((id, index) => `<button type="button" class="map-evidence" data-map-evidence="${escapeHtml(String(id))}">Inspect${index ? ` ${index + 1}` : ""}</button>`).join("");
-    const auth = variant.authenticationState || variant.authState || variant.authType || "unknown";
-    const status = variant.statusCode == null ? "—" : String(variant.statusCode);
-    const requestShape = String(variant.requestShapeHash || "unknown").slice(0, 12);
-    const responseSchema = String(variant.responseSchemaHash || "unknown").slice(0, 12);
-    return `<article class="map-variant" data-variant-index="${index}"><div class="map-variant-header"><strong>Variant ${index + 1}</strong><b>${escapeHtml(auth)}</b><em>${Number(variant.occurrenceCount) || 0} observation${Number(variant.occurrenceCount) === 1 ? "" : "s"}</em></div><div class="map-variant-meta"><span><label>Status</label><strong>HTTP ${escapeHtml(status)}</strong></span><span><label>Request shape</label><strong title="${escapeHtml(requestShape)}">${escapeHtml(requestShape)}</strong></span><span><label>Response schema</label><strong title="${escapeHtml(responseSchema)}">${escapeHtml(responseSchema)}</strong></span></div>${evidence ? `<div class="map-variant-evidence"><label>Evidence</label><div class="map-evidence-list">${evidence}</div></div>` : ""}</article>`;
-  }).join("");
-  mapDetailContent.innerHTML = `
-    <div class="map-detail-title"><span>Route</span><h2>${escapeHtml(node.label)}</h2><p>${escapeHtml(node.host)} · ${escapeHtml(node.routeFingerprint?.slice(0, 12) || "")}</p><div class="map-ai-summary">${escapeHtml(node.aiSummary || "No AI summary available for this route.")}</div></div>
-    <div class="map-detail-score"><strong>${Number(node.priorityScore ?? node.riskScore) || 0}</strong><div><i style="width:${Math.max(0, Math.min(100, Number(node.priorityScore ?? node.riskScore) || 0))}%"></i></div><span>priority · ${escapeHtml(node.priorityTier || "legacy")}</span></div>
-    <section class="map-detail-section"><div class="map-detail-grid"><div><span>Observed</span><strong>${Number(node.observedCount) || 0}×</strong></div><div><span>Variants</span><strong>${node.variants?.length || 0}</strong></div><div><span>Origin</span><strong>${escapeHtml(node.observationType || "legacy")}</strong></div><div><span>Method confidence</span><strong>${Math.round((Number(node.methodConfidence) || 0) * 100)}%</strong></div><div><span>Status codes</span><strong>${escapeHtml((node.statusCodes || []).join(", ") || "—")}</strong></div><div><span>Auth</span><strong>${escapeHtml((node.authTypes || []).join(", ") || "none")}</strong></div><div><span>First seen</span><strong>${escapeHtml(mapDateLabel(node.firstSeen) || "—")}</strong></div><div><span>Last seen</span><strong>${escapeHtml(mapDateLabel(node.lastSeen) || "—")}</strong></div></div></section>
-    <section class="map-detail-section"><h3>Entry-point evidence</h3>${tags((node.entryPointReasons || []).map((reason) => `${reason.type} · ${Math.round((Number(reason.confidence) || 0) * 100)}%`))}</section>
-    <section class="map-detail-section"><h3>Investigation signals</h3>${tags(node.riskTags)}</section>
-    <section class="map-detail-section"><h3>Priority factors</h3>${tags(priorityFactorLabels, "No scored evidence factors")}</section>
-    <section class="map-detail-section"><h3>Parameters</h3>${tags(parameterLabels)}</section>
-    <section class="map-detail-section"><h3>Sensitive response fields</h3>${tags(node.sensitiveFields)}</section>
-    <section class="map-detail-section"><div class="map-section-heading"><h3>Candidate hypotheses</h3><span class="map-section-count">${relatedHypotheses.length}</span></div>${hypothesisMarkup}</section>
-    <section class="map-detail-section"><h3>Connections</h3>${connectionMarkup}</section>
-    <section class="map-detail-section map-variants-section"><div class="map-section-heading"><h3>Behavior variants</h3><span class="map-section-count">${variantItems.length}</span></div>${variants || '<div class="map-variants-empty">No behavior variants were recorded for this route.</div>'}</section>`;
-}
-
-function renderApplicationMap() {
-  if (!applicationMap || !mapViewport) return;
-  const routes = filteredMapRoutes();
-  const routeIds = new Set(routes.map((route) => route.id));
-  const query = String(mapSearch?.value || "").trim().toLowerCase();
-  const stateNodeTypes = new Set(["ApplicationState", "Action", "Identity", "BusinessObject", "Workflow"]);
-  const stateEdgeTypes = new Set(["IMPLEMENTS_ACTION", "HAS_STATE", "REQUIRES_STATE", "PRODUCES_STATE", "PRESERVES_STATE", "TRANSITIONS_TO", "READS_ENTITY", "MUTATES_ENTITY", "ACTED_ON_ENTITY", "CONTAINS_ACTION", "STARTS_IN", "ENDS_IN"]);
-  const mapNodeById = new Map(applicationMap.nodes.map((node) => [node.id, node]));
-  let nodes;
-  let positions;
-  let edgeTypes;
-  if (applicationMapMode === "state") {
-    const allowedActionIds = new Set(applicationMap.nodes.filter((node) => node.type === "Action" && routeIds.has(node.routeId)).map((node) => node.id));
-    const visibleIds = new Set(allowedActionIds);
-    for (let pass = 0; pass < 3; pass += 1) {
-      for (const edge of applicationMap.edges || []) {
-        if (!stateEdgeTypes.has(edge.type)) continue;
-        const sourceNode = mapNodeById.get(edge.source);
-        const targetNode = mapNodeById.get(edge.target);
-        if (sourceNode?.type === "Action" && !allowedActionIds.has(sourceNode.id)) continue;
-        if (targetNode?.type === "Action" && !allowedActionIds.has(targetNode.id)) continue;
-        if (visibleIds.has(edge.source)) visibleIds.add(edge.target);
-        if (visibleIds.has(edge.target)) visibleIds.add(edge.source);
-      }
-    }
-    let candidates = applicationMap.nodes.filter((node) => stateNodeTypes.has(node.type) && visibleIds.has(node.id));
-    if (query) {
-      const matchingIds = new Set(candidates.filter((node) => `${node.label} ${node.type} ${node.host || ""} ${node.stateKind || ""} ${node.lifecycle || ""} ${node.actionKind || ""} ${node.resource || ""}`.toLowerCase().includes(query)).map((node) => node.id));
-      const relatedIds = new Set(matchingIds);
-      for (const edge of applicationMap.edges || []) {
-        if (!stateEdgeTypes.has(edge.type)) continue;
-        if (matchingIds.has(edge.source)) relatedIds.add(edge.target);
-        if (matchingIds.has(edge.target)) relatedIds.add(edge.source);
-      }
-      candidates = candidates.filter((node) => relatedIds.has(node.id));
-    }
-    nodes = candidates.slice(0, 700);
-    positions = layoutMapNodes(nodes, [], []);
-    edgeTypes = stateEdgeTypes;
-  } else {
-    const hostNames = new Set(routes.map((route) => route.host));
-    const allHosts = applicationMap.nodes.filter((node) => node.type === "Host");
-    const visibleHostIds = new Set(allHosts.filter((node) => hostNames.has(node.host)).map((node) => node.id));
-    if (applicationMapMode !== "workflow") {
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const edge of applicationMap.edges || []) {
-          if (!["SUBDOMAIN_OF", "REFERENCES_HOST"].includes(edge.type)) continue;
-          if (visibleHostIds.has(edge.source) && !visibleHostIds.has(edge.target)) { visibleHostIds.add(edge.target); changed = true; }
-          if (visibleHostIds.has(edge.target) && !visibleHostIds.has(edge.source)) { visibleHostIds.add(edge.source); changed = true; }
-        }
-      }
-    }
-    const hostNodes = applicationMapMode === "workflow" ? [] : allHosts.filter((node) => visibleHostIds.has(node.id));
-    const auxiliaryIds = new Set((applicationMap.edges || []).filter((edge) => routeIds.has(edge.source) || routeIds.has(edge.target)).flatMap((edge) => [edge.source, edge.target]));
-    const auxiliaryNodes = applicationMap.nodes.filter((node) => node.type !== "Route" && node.type !== "Host" && !stateNodeTypes.has(node.type) && (auxiliaryIds.has(node.id) || hostNames.has(node.host) || (query && `${node.label} ${node.type} ${node.communityLabel || ""}`.toLowerCase().includes(query)))).slice(0, 500);
-    nodes = [...hostNodes, ...routes, ...auxiliaryNodes];
-    positions = layoutMapNodes(routes, hostNodes, auxiliaryNodes);
-    edgeTypes = applicationMapMode === "workflow"
-      ? new Set(["FOLLOWED_BY", "REDIRECTS_TO", "ACCESSED_AS", "RETURNS_VARIANT"])
-      : new Set(["EXPOSES", "LINKS_TO", "REDIRECTS_TO", "REFERRED_TO", "REFERENCES", "SHARES_OBJECT", "SUBDOMAIN_OF", "REFERENCES_HOST", "SERVES_SCRIPT", "DECLARES_ENDPOINT", "IMPORTS_SCRIPT", "IMPORTS_SCRIPT_RESOURCE", "REFERENCES_SOURCE_MAP", "ACCESSED_AS", "ACCEPTS_PARAMETER", "RETURNS_VARIANT", "PRODUCES_OBJECT", "CONSUMES_OBJECT", "TARGETS_OBJECT"]);
-  }
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  currentMapPositions = positions;
-  const edges = (applicationMap.edges || []).filter((edge) => edgeTypes.has(edge.type) && nodeIds.has(edge.source) && nodeIds.has(edge.target));
-  const selectedVisible = selectedMapNodeId && nodeIds.has(selectedMapNodeId);
-  if (!selectedVisible) selectedMapNodeId = "";
-  const selectedNode = nodes.find((node) => node.id === selectedMapNodeId);
-  const adjacent = new Set();
-  // Use every graph relationship for highlighting, even when the active view
-  // renders only a subset of edge types.
-  if (selectedNode) (applicationMap.edges || []).forEach((edge) => {
-    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
-    if (edge.source === selectedNode.id) adjacent.add(edge.target);
-    if (edge.target === selectedNode.id) adjacent.add(edge.source);
-  });
-  const edgeMarkup = edges.map((edge) => {
-    const source = positions.get(edge.source); const target = positions.get(edge.target);
-    if (!source || !target) return "";
-    const dimmed = selectedNode && edge.source !== selectedNode.id && edge.target !== selectedNode.id;
-    const relationshipClass = edge.type === "FOLLOWED_BY" ? "workflow" : edge.type === "SUBDOMAIN_OF" || edge.type === "REFERENCES_HOST" ? "subdomain" : edge.semantic === false ? "inferred" : edge.type === "EXPOSES" ? "exposes" : "semantic";
-    return `<line class="map-edge ${relationshipClass} ${dimmed ? "dimmed" : ""}" data-map-edge-source="${edge.source}" data-map-edge-target="${edge.target}" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"><title>${escapeHtml(edge.type)} · ${Number(edge.observedCount) || 0} observation(s) · ${Math.round((Number(edge.confidence) || 0) * 100)}% confidence</title></line>`;
-  }).join("");
-  const nodeMarkup = nodes.map((node) => {
-    const point = positions.get(node.id); if (!point) return "";
-    const risk = Number(node.priorityScore ?? node.riskScore) || 0;
-    const radius = node.type === "Host" ? 16 : applicationMapMode === "risk" ? 7 + risk * .09 : 8 + Math.min(6, Math.log2((Number(node.observedCount) || 1) + 1) * 1.5);
-    const classes = ["map-node", "draggable", node.type.toLowerCase(), `origin-${node.observationType || "legacy"}`, risk >= 70 ? "high-risk" : risk >= 40 ? "medium-risk" : "", node.visibility === "hidden" ? "hidden-traffic" : "", node.id === selectedMapNodeId ? "selected" : "", selectedNode && node.id !== selectedNode.id && !adjacent.has(node.id) ? "dimmed" : ""].filter(Boolean).join(" ");
-    const label = String(node.label || "");
-    const shortLabel = label.length > 36 ? `${label.slice(0, 35)}…` : label;
-    const badge = node.type === "Route" && risk >= 70 ? `<text class="map-node-badge" x="0" y=".5">!</text>` : "";
-    return `<g class="${classes}" transform="translate(${point.x} ${point.y})" data-map-node-id="${node.id}" tabindex="0" role="button"><circle r="${radius}"></circle>${badge}<text x="${radius + 6}" y="3">${escapeHtml(shortLabel)}</text><title>${escapeHtml(label)} · ${Number(node.observedCount) || 0} observation(s)</title></g>`;
-  }).join("");
-  mapViewport.innerHTML = `<defs><marker id="map-arrow" markerWidth="7" markerHeight="7" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#547e98"></path></marker></defs>${edgeMarkup}${nodeMarkup}`;
-  updateMapViewportTransform();
-  if (mapNoResults) mapNoResults.hidden = nodes.length > 0;
-  if (mapWorkspaceSubtitle) {
-    const total = applicationMap.nodes.filter((node) => node.type === "Route").length;
-    const verification = applicationMap.verification?.verified
-      ? `connectivity verified · ${applicationMap.verification.components} component${applicationMap.verification.components === 1 ? "" : "s"}${applicationMap.verification.sourceComplete === false ? " · source truncated" : ""}${applicationMap.verification.referencesComplete === false ? " · reference limit reached" : ""}`
-      : "legacy graph · rebuild to verify";
-    mapWorkspaceSubtitle.textContent = routes.length === total ? `${total} deduplicated route${total === 1 ? "" : "s"} · ${verification}` : `Showing ${routes.length} of ${total} routes · ${verification}`;
-  }
-  if (mapWorkspaceSubtitle) {
-    if (applicationMapMode === "state") {
-      const stats = applicationMap.stats || {};
-      mapWorkspaceSubtitle.textContent = `${stats.states || 0} states · ${stats.actions || 0} actions · ${stats.stateWorkflows || 0} workflows · ${stats.stateAnomalies || 0} candidate anomalies · deterministic projection`;
-    } else {
-      const totalRoutes = applicationMap.nodes.filter((node) => node.type === "Route").length;
-      const richSummary = `${applicationMap.stats?.javascriptArtifacts || 0} scripts · ${applicationMap.stats?.identities || 0} identities · ${applicationMap.communities?.length || 0} communities`;
-      const filterSummary = routes.length === totalRoutes ? `${totalRoutes} deduplicated route${totalRoutes === 1 ? "" : "s"}` : `Showing ${routes.length} of ${totalRoutes} routes`;
-      mapWorkspaceSubtitle.textContent = `${filterSummary} · ${richSummary} · ${applicationMap.verification?.verified ? "connectivity verified" : "rebuild to verify"}`;
-    }
-  }
-  renderMapDetails(selectedNode || null);
-}
-
-async function loadApplicationMap({ build = false } = {}) {
-  const sequence = ++mapLoadSequence;
-  setMapWorkspaceState({ exists: Boolean(applicationMap), busy: true, message: build ? "Normalizing traffic, classifying variants, and building graph edges…" : "Loading application behavior graph…" });
-  if (!assessmentPath) {
-    applicationMap = null;
-    setMapWorkspaceState({ exists: false, busy: false, message: "Open or create an assessment before building its application Map." });
-    renderMapIntelligenceStatus({ status: "not_built", estimate: { sourceCount: 0, estimatedRecordCount: 0 } });
-    return;
-  }
-  await refreshMapIntelligenceStatus();
-  let result;
-  try {
-    result = build ? await window.api.assessmentBuildMap({ path: assessmentPath }) : await window.api.assessmentMap({ path: assessmentPath });
-  } catch (error) { result = { error: error?.message || "The application Map could not be loaded." }; }
-  if (sequence !== mapLoadSequence) return;
-  if (result?.error) {
-    applicationMap = null;
-    setMapWorkspaceState({ exists: false, busy: false, message: result.error });
-    addErrorMessage(result.error);
-    return;
-  }
-  applicationMap = result?.graph || null;
-  selectedMapNodeId = "";
-  loadMapNodePositions(applicationMap);
-  setMapWorkspaceState({ exists: Boolean(result?.exists && applicationMap), busy: false, message: result?.exists ? "Application behavior graph ready." : "No graph exists yet. Build it from Traffic/Raw." });
-  if (applicationMap) {
-    populateMapFilters(applicationMap);
-    updateMapMetrics(applicationMap);
-    renderApplicationMap();
-  } else {
-    updateMapMetrics(null);
-    if (mapBuiltAt) mapBuiltAt.textContent = "";
-  }
-}
-
-async function showMapWorkspace({ build = false } = {}) {
-  if (terminalMaximized) setTerminalMaximized(false);
-  currentWorkspaceMode = "map";
-  // The graph is a special editor tab. Keep the editor chrome visible and
-  // replace only the normal document body, just like Interceptor and
-  // Settings. Hiding the tab bar here made the graph look like a full-screen
-  // workspace and made it difficult to switch back to another document.
-  if (editorTabBar) editorTabBar.hidden = false;
-  if (editorBody) editorBody.hidden = true;
-  updateEditorPathBar();
-  if (assessmentModuleView) assessmentModuleView.hidden = true;
-  assessmentModuleActive = false;
-  resourceViewer.hidden = true;
-  securityWorkspace.hidden = true;
-  mapWorkspace.hidden = false;
-  appSettingsWorkspace.hidden = true;
-  webcloneWorkspace.hidden = true;
-  window.api.webCloneHidePreview?.();
-  editorPane?.setAttribute("aria-label", "Application behavior map");
-  syncWorkspaceActivity();
-  await loadApplicationMap({ build });
-}
-
 function webcloneTargetFromScope() {
   try {
     const raw = resourcePreviewText || "";
@@ -4546,21 +4798,12 @@ async function showWebCloneWorkspace() {
   if (terminalMaximized) setTerminalMaximized(false);
   currentWorkspaceMode = "webclone";
   setCodeEditorVisible(false);
-  resourceViewer.hidden = true; securityWorkspace.hidden = true; mapWorkspace.hidden = true; appSettingsWorkspace.hidden = true; webcloneWorkspace.hidden = false;
+  resourceViewer.hidden = true; securityWorkspace.hidden = true; appSettingsWorkspace.hidden = true; webcloneWorkspace.hidden = false;
   editorPane?.setAttribute("aria-label", "WebClone workspace");
   toggleWebClonePreview(false);
   setWebCloneFilesCollapsed(false);
   syncWorkspaceActivity();
   await loadWebCloneManifest();
-}
-
-async function openMapEvidence(evidenceId) {
-  if (!evidenceId) return;
-  showSecurityWorkspace("repeater");
-  await loadSecurityHistory();
-  const record = securityHistoryRecords.find((entry) => String(entry.requestId) === String(evidenceId));
-  if (record) await sendHistoryRecordsToRepeater([record]);
-  else setSecurityStatus(`Evidence ${evidenceId} is outside the latest 500 history records`, "error");
 }
 
 function modeLabel(mode = chatMode) {
@@ -5110,7 +5353,6 @@ async function createAssessmentFolder() {
     setAssessmentUiState("error", { title: "Creation Failed", message: result.error });
     return;
   }
-  applicationMap = null;
   assessmentPath = result.path || result.root;
   selectedCustomFolder = "";
   selectedCustomEntries.clear();
@@ -5122,7 +5364,6 @@ async function createAssessmentFolder() {
 
 function resetProjectWorkspaceState() {
   assessmentPath = "";
-  applicationMap = null;
   selectedCustomFolder = "";
   selectedCustomEntries.clear();
   assessmentVerification = null;
@@ -5227,7 +5468,6 @@ async function openAssessmentFolder() {
     return;
   }
   assessmentPath = result.path;
-  applicationMap = null;
   selectedCustomFolder = "";
   selectedCustomEntries.clear();
   localStorage.setItem(BUG_BOUNTY_PATH_KEY, assessmentPath);
@@ -5705,14 +5945,8 @@ async function showScopeResource(filePath, relativePath) {
 }
 
 const ASSESSMENT_MODULE_META = {
-  "runs/runs.json": ["Run Manager", "Every assessment run has a profile, scope/configuration snapshot, outcome, and stop reason.", "codicon-history"],
-  "enumeration/assets.json": ["Asset Inventory", "Reconciled hosts, subdomains, services, ownership, scope state, provenance, and freshness.", "codicon-globe"],
   "traffic/raw.jsonl": ["Raw Traffic", "Captured HTTP exchanges with request and response evidence, provenance, and capture integrity.", "codicon-arrow-swap"],
   "traffic/filtered.jsonl": ["Filtered Traffic", "Curated HTTP exchanges linked to parameters, notes, and evidence.", "codicon-filter"],
-  "report/report.md": ["Assessment Report", "Evidence-linked reporting with executive summary, remediation, retest state, and limitations.", "codicon-file-text"],
-  ".xekute/logs/agent-runs.jsonl": ["Agent Runs", "Transparent run lifecycle records generated by the autonomous agent loop.", "codicon-history"],
-  ".xekute/logs/agent-actions.jsonl": ["Agent Actions", "Every proposed and completed tool action with scope result and outcome.", "codicon-list-tree"],
-  ".xekute/logs/tool-output.jsonl": ["Tool Output", "Normalized tool-output provenance, hashes, truncation state, and saved artifact paths.", "codicon-terminal"],
 };
 
 function moduleValue(value) {
@@ -7620,24 +7854,18 @@ globalThis.XekuteSecurity = {
 
 function modeButtonClass(mode = chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
-  if (profile?.key === "hypothesis") return "mode-hypothesis";
-  if (profile?.key === "plan") return "mode-plan";
   if (profile?.key === "agent" || profile?.key === "executor" || profile?.key === "execution" || profile?.key === "exploit") return "mode-agent";
   return "mode-ask";
 }
 
 function modeIconClass(mode = chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
-  if (profile?.key === "hypothesis") return "codicon-bug";
-  if (profile?.key === "plan") return "codicon-checklist";
   if (profile?.key === "agent" || profile?.key === "executor") return "codicon-copilot";
   return "codicon-comment-discussion";
 }
 
 function modePlaceholder(mode = chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
-  if (profile?.key === "hypothesis") return "Form hypotheses or request any action";
-  if (profile?.key === "plan") return "Build or revise a plan document";
   if (profile?.key === "ask") return "Ask, analyze, observe, or explain";
   if (profile?.key === "agent") return "Describe the investigation or workspace action";
   return "Ask, investigate, run, or search";
@@ -7654,7 +7882,7 @@ function modeTools(mode = chatMode) {
 
 function syncChatModeUi() {
   if (chatModeButton) {
-    chatModeButton.classList.remove("mode-ask", "mode-plan", "mode-hypothesis", "mode-agent", "mode-exploit");
+    chatModeButton.classList.remove("mode-ask", "mode-agent", "mode-exploit");
     chatModeButton.classList.add(modeButtonClass());
   }
   if (chatModeButtonLabel) {
@@ -7662,7 +7890,7 @@ function syncChatModeUi() {
   }
   if (chatModeButton) chatModeButton.title = `${modeLabel()} mode`;
   if (chatModeIcon) {
-    chatModeIcon.classList.remove("codicon-copilot", "codicon-checklist", "codicon-bug", "codicon-comment-discussion", "codicon-play", "codicon-warning", "codicon-shield", "codicon-search", "codicon-eye", "codicon-verified", "codicon-file-text");
+    chatModeIcon.classList.remove("codicon-copilot", "codicon-comment-discussion", "codicon-play", "codicon-warning", "codicon-shield", "codicon-search", "codicon-eye", "codicon-verified", "codicon-file-text");
     chatModeIcon.classList.add(modeIconClass());
   }
   chatModeMenu?.querySelectorAll("[data-chat-mode]").forEach((button) => {
@@ -7671,7 +7899,10 @@ function syncChatModeUi() {
     button.setAttribute("aria-checked", String(active));
   });
   syncChatInputPlaceholder();
-  setAgentStatus(isRunningChatActive() ? `${modeLabel()} working` : `${modeLabel()} ready`);
+  const liveRun = activeSessionRun();
+  setAgentStatus(isRunningChatActive()
+    ? `${modeLabel(liveRun?.mode || chatMode)} working`
+    : `${modeLabel()} ready`);
   updateContextUsage();
   if (chatModeMenu && !chatModeMenu.hidden) {
     requestAnimationFrame(() => positionChatModeMenu());
@@ -7679,7 +7910,7 @@ function syncChatModeUi() {
 }
 
 function openChatModeMenu() {
-  if (!chatModeMenu || !chatModeButton || isRunningChatActive()) return;
+  if (!chatModeMenu || !chatModeButton) return;
   closeModelMenu();
   closeAuthorityMenu();
   chatModeMenu.hidden = false;
@@ -7694,7 +7925,7 @@ function closeChatModeMenu() {
 }
 
 function toggleChatModeMenu() {
-  if (!chatModeMenu || !chatModeButton || isRunningChatActive()) return;
+  if (!chatModeMenu || !chatModeButton) return;
   if (chatModeMenu.hidden) openChatModeMenu();
   else closeChatModeMenu();
 }
@@ -7718,7 +7949,6 @@ function positionChatModeMenu() {
 }
 
 function setChatMode(mode) {
-  if (isRunningChatActive()) return;
   const canonical = canonicalChatMode(mode);
   if (!CHAT_ROLES.has(canonical) && !CHAT_PROFILE_KEYS.has(canonical)) return;
   chatMode = canonical;
@@ -7748,6 +7978,7 @@ function syncActiveChatSession({ persist = true } = {}) {
   session.contextFilesCache = contextFilesCache;
   session.activeStreamContent = activeStreamContent;
   session.messagesHtml = sanitizePersistedChatHtml(messages?.innerHTML || "");
+  captureSessionTranscript(session, messages);
   session.chatMode = chatMode;
   session.chatFamily = chatFamily;
   session.selectedModel = selectedModel;
@@ -8227,7 +8458,9 @@ function loadModelSettings() {
     const normalized = {};
     for (const [name, settings] of Object.entries(parsed)) {
       if (!settings || typeof settings !== "object") continue;
-      const rawContext = typeof settings.context === "string" ? settings.context : AUTO_CONTEXT;
+      const rawContext = typeof settings.context === "string"
+        ? settings.context
+        : (ContextBudget?.positiveInteger(settings.context) ? String(settings.context) : AUTO_CONTEXT);
       const rawContextTokens = ContextBudget?.positiveInteger(settings.contextLimitTokens || ContextBudget.legacyContextLabelToTokens(rawContext));
       const explicitManualContext =
         settings.contextLocked === true
@@ -8261,8 +8494,6 @@ function loadModelSettings() {
 }
 
 let modelSettings = loadModelSettings();
-let contextUsageSeq = 0;
-let contextUsageTimer = null;
 // Model settings and context counters are initialized before the initial mode
 // sync because the context indicator reads both of them.
 syncChatModeUi();
@@ -8399,6 +8630,7 @@ async function refreshModelContextCapacity() {
   try {
     const runtime = await window.api.runtimeModel({ model: selectedModel });
     if (seq !== contextCapacitySeq) return;
+    if (runtime?.ok && runtime.contextLength) ollamaRuntimeContext[selectedModel] = runtime.contextLength;
     const plan = resolveModelContextPlan(selectedModel, {}, runtime?.ok ? runtime : null);
     resolvedContextCapacity = { tokens: plan.effectiveLimitTokens, source: plan.source, approximate: plan.approximate, plan };
     updateContextUsage();
@@ -8441,6 +8673,10 @@ function formatTokenCount(n) {
     return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}K`;
   }
   return String(n);
+}
+
+function formatContextWindowLabel(tokens) {
+  return ContextBudget?.formatContextWindowLabel(tokens) || formatTokenCount(tokens);
 }
 
 function contextPreviewRoute(requestText = "") {
@@ -8527,162 +8763,147 @@ function normalizeContextUsageSections(sections = [], { legacyToolTokens = 0 } =
   return CONTEXT_USAGE_SECTIONS.map((section) => ({ ...section, tokens: totals.get(section.key) || 0 }));
 }
 
-function getContextBreakdown(requestText = chatInput.value.trim()) {
-  const activeFile = getActiveFileContext();
-  const contextPlan = resolvedWorkingContextPlan();
-  const contextBudget = contextPlan.promptBudgetTokens || contextPlan.effectiveLimitTokens || AUTO_CONTEXT_ESTIMATE;
-  const workingHistory = workingHistoryMessages();
-  const latestUserText = [...workingHistory].reverse().find((message) => message?.role === "user")?.content || "";
-  const routedText = requestText || latestUserText;
-  const route = contextPreviewRoute(routedText);
-  // Context meter mirrors the V3 three-block Tier 1 contract.  Tier 2 data is
-  // represented only by the bounded Working References row; Project,
-  // Investigation, and Evidence are never rendered as separate rows.
-  const previewTools = (() => {
-    const modeList = modeTools();
-    if (String(chatMode || "").toLowerCase() !== "agent" && !/:agent$/i.test(String(chatMode || ""))) {
-      return ToolMap.compactTools(modeList);
-    }
-    const hot = new Set(ToolMap.hotToolNamesForProfile(chatMode || "agent"));
-    return ToolMap.compactTools(modeList.filter((tool) => hot.has(tool?.function?.name)));
-  })();
-  const routedTools = previewTools;
-  const compiledPrompt = globalThis.XekutePromptCompiler?.compile({
-    family: chatFamily,
-    mode: chatMode,
-    depth: route.promptDepth,
-  }) || ToolParser.SYSTEM_PROMPT || "";
-  const toolMenu = globalThis.XekuteInitialPrompts?.noToolsSurface?.()
-    || globalThis.XekuteInitialPrompts?.toolCatalog?.([], { packs: [] })
-    || "";
-  const guidanceUsage = splitGuidanceContextForUsage(guidanceContext);
-  const baseSystemPrompt = [compiledPrompt, guidanceUsage.system].filter(Boolean).join("\n\n").trim();
-  const systemPrompt = [compiledPrompt, guidanceUsage.system].filter(Boolean).join("\n\n").trim();
-  const projectContext = route.includeWorkspaceContext
-    ? buildProjectContextMessage({
-        dirMap: dirMapCache,
-        activeFile,
-        extraFiles: contextFilesCache,
-        contextBudget,
-      })
-    : "";
-  const checkpointTokens = Math.max(0, Number(memoryRecord(activeChatSession())?.checkpointTokens) || 0);
-  const draft = requestText;
-  const streamTokens = activeStreamContent ? estimateTokens(activeStreamContent) + 4 : 0;
-  const sections = [
-    {
-      key: "system_prompt",
-      label: "System Prompt",
-      color: "#a7a7ab",
-      tokens: baseSystemPrompt ? estimateMessagesTokens([{ role: "system", content: baseSystemPrompt }]) : 0,
-    },
-    {
-      key: "tool_definitions",
-      label: "Tool Definitions",
-      color: "#77a8d8",
-      tokens: (routedTools.length ? estimateTokens(JSON.stringify(routedTools)) : 0)
-        + (toolMenu ? estimateMessagesTokens([{ role: "system", content: toolMenu }]) : 0),
-    },
-    {
-      key: "rules",
-      label: "Rules",
-      color: "#67b7a5",
-      tokens: guidanceUsage.rules ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.rules }]) : 0,
-    },
-    {
-      key: "skills",
-      label: "Skills",
-      color: "#d58dbc",
-      tokens: guidanceUsage.skills ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.skills }]) : 0,
-    },
-    {
-      key: "subagents",
-      label: "Subagents",
-      color: "#b58de8",
-      tokens: guidanceUsage.subagents ? estimateMessagesTokens([{ role: "system", content: guidanceUsage.subagents }]) : 0,
-    },
-    {
-      key: "summarized_conversation",
-      label: "Summarized Conversation",
-      color: "#8ca6e8",
-      tokens: checkpointTokens,
-    },
-    {
-      key: "active_conversation",
-      label: "Active Conversation",
-      color: "#5d9ee8",
-      // The current prompt is protected in Block C, but its tokens are
-      // intentionally accounted for under Active Conversation in the meter.
-      tokens: estimateMessagesTokens(workingHistory)
-        + (draft ? estimateTokens(draft) + 4 : 0)
-        + streamTokens,
-    },
-    {
-      key: "current_workflow",
-      label: "Current Workflow",
-      color: "#67b7a5",
-      tokens: (() => {
-        const workflow = activeChatSession()?.currentWorkflow || activeChatSession()?.workflow || null;
-        return workflow ? estimateMessagesTokens([{ role: "user", content: JSON.stringify(workflow) }]) : 0;
-      })(),
-    },
-    {
-      key: "working_references",
-      label: "Working References",
-      color: "#e1a85b",
-      // Workspace/context packets are bounded working references in V3.  The
-      // authoritative Tier 2 domains remain outside the renderer meter.
-      tokens: projectContext ? estimateMessagesTokens([{ role: "user", content: projectContext }]) : 0,
-    },
-  ];
-  const summaryTokens = checkpointTokens;
-  const liveChatTokens = estimateMessagesTokens(workingHistory);
-  const toolTokens = sections.find((section) => section.key === "tool_definitions")?.tokens || 0;
-  const draftTokens = (draft ? estimateTokens(draft) + 4 : 0) + streamTokens;
-  const visibleComposerTokens = draftTokens;
-  const estimatedTotal = sections.reduce((sum, section) => sum + section.tokens, 0);
+function emptyContextUsageSections() {
+  return CONTEXT_USAGE_SECTIONS.map((section) => ({ ...section, tokens: 0 }));
+}
 
+function getContextBreakdown() {
+  const storedUsage = normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage);
+  const storedIsTier1 = Boolean(storedUsage && storedUsage.source === "estimate");
+  const sections = storedIsTier1
+    ? normalizeContextUsageSections(storedUsage.sections).map((section) => ({ ...section }))
+    : emptyContextUsageSections();
+  const estimatedTotal = sections.reduce((sum, section) => sum + section.tokens, 0);
   return {
     sections,
-    summaryTokens,
-    liveChatTokens,
-    draftTokens,
-    streamTokens,
-    visibleComposerTokens,
-    toolTokens,
+    summaryTokens: sections.find((section) => section.key === "summarized_conversation")?.tokens || 0,
+    liveChatTokens: sections.find((section) => section.key === "active_conversation")?.tokens || 0,
+    draftTokens: 0,
+    streamTokens: 0,
+    visibleComposerTokens: 0,
+    toolTokens: sections.find((section) => section.key === "tool_definitions")?.tokens || 0,
     estimatedTotal,
-    route,
-    tools: routedTools,
-    messages: [
-      ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
-      ...(toolMenu ? [{ role: "system", content: toolMenu }] : []),
-      ...(guidanceUsage.rules ? [{ role: "system", content: guidanceUsage.rules }] : []),
-      ...(guidanceUsage.skills ? [{ role: "system", content: guidanceUsage.skills }] : []),
-      ...(guidanceUsage.subagents ? [{ role: "system", content: guidanceUsage.subagents }] : []),
-      ...workingHistory,
-      ...(draft ? [{ role: "user", content: draft }] : []),
-      ...(activeStreamContent ? [{ role: "assistant", content: activeStreamContent }] : []),
-    ],
+    route: contextPreviewRoute(""),
+    tools: [],
+    messages: [],
+    authoritative: storedIsTier1,
   };
+}
+
+const CONTEXT_SUMMARIZING_NOTICE = "Chat context being summarized...";
+const CONTEXT_SUMMARIZED_NOTICE = "Summarized Conversation Updated";
+
+function pendingContextCheckpointNotice(container = messages) {
+  if (contextCheckpointNotice?.isConnected && contextCheckpointNotice.dataset.state === "pending") return contextCheckpointNotice;
+  return container?.querySelector?.(".context-checkpoint-notice[data-state='pending']") || null;
+}
+
+// The notice is a sibling of each agent-run-chunk, not a child of the growing
+// assistant turn. That keeps "Summarized Conversation Updated" at the moment
+// the checkpoint happened instead of sliding under later tokens and tools.
+function lastAgentRunChunk(root) {
+  if (!root?.querySelectorAll) return null;
+  const host = root.classList?.contains("agent-response-host")
+    ? root
+    : root.querySelector?.(":scope > .agent-response-host") || root;
+  const scoped = host.querySelectorAll(":scope > .agent-run-chunk");
+  if (scoped.length) return scoped[scoped.length - 1];
+  const nested = root.querySelectorAll(".agent-run-chunk");
+  return nested.length ? nested[nested.length - 1] : null;
+}
+
+function checkpointNoticeHost(container = messages) {
+  const root = container || messages;
+  if (!root) return null;
+  const exchange = root.classList?.contains("chat-exchange")
+    ? root
+    : root.querySelector?.(":scope > .chat-exchange:last-child");
+  const body = exchange ? chatExchangeBody(exchange) : root;
+  return lastAgentRunChunk(body) || body || root;
+}
+
+function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SUMMARIZING_NOTICE, state = "pending", assistant = null } = {}) {
+  const host = container || messages;
+  if (!host) return null;
+  let notice = pendingContextCheckpointNotice(host);
+  if (!notice) {
+    notice = document.createElement("div");
+    notice.className = "context-checkpoint-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    const label = document.createElement("span");
+    label.className = "context-checkpoint-text";
+    notice.append(label);
+    if (assistant?.splitAtContextCheckpoint) {
+      assistant.splitAtContextCheckpoint(notice);
+    } else {
+      const turn = assistant?.turn || null;
+      const chunk = wrapAssistantInRunChunk(turn) || checkpointNoticeHost(host);
+      if (chunk?.after) chunk.after(notice);
+      else host.appendChild(notice);
+    }
+  }
+  setContextCheckpointNoticeText(notice, text);
+  notice.dataset.state = state;
+  contextCheckpointNotice = notice;
+  return notice;
+}
+
+function setContextCheckpointNoticeText(notice, text) {
+  if (!notice) return;
+  const label = notice.querySelector(":scope > .context-checkpoint-text");
+  if (label) label.textContent = text;
+  else notice.textContent = text;
+}
+
+function hydrateContextCheckpointNotices(root = messages) {
+  for (const notice of root.querySelectorAll?.(".context-checkpoint-notice") || []) {
+    notice.querySelectorAll(":scope > .context-checkpoint-icon").forEach((icon) => icon.remove());
+    if (notice.querySelector(":scope > .context-checkpoint-text")) continue;
+    const text = String(notice.textContent || "").trim();
+    notice.replaceChildren();
+    const label = document.createElement("span");
+    label.className = "context-checkpoint-text";
+    label.textContent = text;
+    notice.append(label);
+  }
+}
+
+function finishContextCheckpointNotice(container = messages, outcome = "completed") {
+  const notice = pendingContextCheckpointNotice(container || messages);
+  if (!notice) return null;
+  const failed = String(outcome || "").toLowerCase() === "failed";
+  setContextCheckpointNoticeText(notice, failed ? "Context checkpoint needs attention" : CONTEXT_SUMMARIZED_NOTICE);
+  notice.dataset.state = failed ? "error" : "complete";
+  if (contextCheckpointNotice === notice) contextCheckpointNotice = null;
+  return notice;
+}
+
+function applyContextCheckpointUi(run, payload = {}) {
+  const session = run?.session;
+  const status = String(payload.status || "").toLowerCase();
+  const active = status === "started" || status === "running";
+  if (run) run.contextCheckpointPending = active;
+  if (session) contextCheckpointingSessionId = active ? session.id : (contextCheckpointingSessionId === session.id ? "" : contextCheckpointingSessionId);
+  const container = chatRunContainer(run);
+  if (active) ensureContextCheckpointNotice(container, { assistant: run?.assistant });
+  else finishContextCheckpointNotice(container, status);
+  const visible = Boolean(session && activeChatSessionId === session.id && !run?.viewHost);
+  setContextCheckpointUi(active && (visible || contextCheckpointingSessionId === activeChatSessionId));
+  if (visible) {
+    setAgentStatus(active ? CONTEXT_SUMMARIZING_NOTICE : status === "failed" ? "Context checkpoint needs attention" : `${modeLabel(run?.mode)} working`);
+    if (!active) updateContextUsage();
+    scrollMessages();
+  }
+  if (run) syncChatRunSession(run);
 }
 
 function setContextCheckpointUi(checkpointing) {
   contextCheckpointing = Boolean(checkpointing);
-  if (!contextCheckpointing) contextCheckpointingSessionId = "";
+  if (!contextCheckpointing) contextCheckpointingSessionId = contextCheckpointingSessionId && activeChatRuns.get(contextCheckpointingSessionId)?.contextCheckpointPending
+    ? contextCheckpointingSessionId
+    : "";
   const affectsActiveChat = contextCheckpointing && (!contextCheckpointingSessionId || contextCheckpointingSessionId === activeChatSessionId);
-  if (affectsActiveChat) {
-    if (!contextCheckpointNotice || !contextCheckpointNotice.isConnected) {
-      contextCheckpointNotice = document.createElement("div");
-      contextCheckpointNotice.className = "context-checkpoint-notice";
-      contextCheckpointNotice.setAttribute("role", "status");
-      contextCheckpointNotice.setAttribute("aria-live", "polite");
-      contextCheckpointNotice.textContent = "Context checkpointing…";
-      messages?.appendChild(contextCheckpointNotice);
-    }
-  } else {
-    contextCheckpointNotice?.remove();
-    contextCheckpointNotice = null;
-  }
   if (chatInput) {
     chatInput.disabled = affectsActiveChat;
     chatInput.readOnly = affectsActiveChat;
@@ -8763,6 +8984,12 @@ function storeLastContextUsage(value, {
   usage.contextWindowSource = usage.contextWindowSource === "fallback" && plan.source !== "fallback" ? plan.source : usage.contextWindowSource;
   usage.approximate = usage.approximate || plan.approximate;
   session.lastContextUsage = usage;
+  const summarizedTokens = usage.sections?.find((section) => section.key === "summarized_conversation")?.tokens;
+  if (Number(summarizedTokens) > 0) {
+    const memory = memoryRecord(session);
+    memory.checkpointTokens = Number(summarizedTokens);
+    if (memory.status === "empty") memory.status = "ready";
+  }
   if (session.id === activeChatSessionId) syncActiveChatSession();
   else schedulePersistChatSessions();
   return usage;
@@ -8793,25 +9020,13 @@ async function refreshStoredContextCapacity() {
 function getContextUsage(usedOverride = null) {
   const settings = selectedModel ? getModelSettings(selectedModel) : { context: AUTO_CONTEXT };
   const plan = resolvedWorkingContextPlan();
-  const draft = chatInput.value.trim();
-  const storedCandidate = !draft && !isRunningChatActive() ? normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage) : null;
-  const stored = storedCandidate && (!storedCandidate.model || !selectedModel || storedCandidate.model === selectedModel) && (!storedCandidate.provider || storedCandidate.provider === plan.provider) ? storedCandidate : null;
-  const storedToolNames = new Set(stored?.toolNames || []);
-  const legacyToolDefinitions = storedToolNames.size
-    ? modeTools().filter((tool) => storedToolNames.has(tool?.function?.name))
-    : [];
-  const legacyToolTokens = legacyToolDefinitions.length ? estimateTokens(JSON.stringify(legacyToolDefinitions)) : 0;
-  const storedSections = stored
-    ? normalizeContextUsageSections(stored.sections, { legacyToolTokens })
-    : [];
-  const storedTotal = stored ? stored.promptTokens : null;
-  const breakdown = stored
-    ? { sections: storedSections, estimatedTotal: storedTotal, tools: [], messages: [] }
-    : getContextBreakdown(draft);
+  const storedCandidate = normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage);
+  const stored = storedCandidate && storedCandidate.source === "estimate" ? storedCandidate : null;
+  const breakdown = getContextBreakdown();
   const total = plan.effectiveLimitTokens || resolvedContextCapacity.tokens || AUTO_CONTEXT_ESTIMATE;
   const capacityApproximate = Boolean(plan.approximate);
   const promptBudget = plan.promptBudgetTokens || total;
-  const used = usedOverride == null ? (storedTotal ?? breakdown.estimatedTotal) : usedOverride;
+  const used = breakdown.estimatedTotal;
   const pct = total > 0 ? Math.min(used / total, 1) : 0;
   const compactionPct = promptBudget > 0 ? Math.min(used / promptBudget, 1) : pct;
   return {
@@ -8822,8 +9037,8 @@ function getContextUsage(usedOverride = null) {
     pct,
     compactionPct,
     contextLabel: settings.context === AUTO_CONTEXT
-      ? `Auto · ${capacityApproximate ? "~" : ""}${formatTokenCount(total)} working budget`
-      : `${formatTokenCount(total)} working budget`,
+      ? `Auto · ${capacityApproximate ? "~" : ""}${formatContextWindowLabel(total)} working budget`
+      : `${formatContextWindowLabel(total)} working budget`,
     modelMaxTokens: plan.modelMaxTokens || stored?.modelMaxTokens || null,
     promptBudgetTokens: plan.promptBudgetTokens || stored?.promptBudgetTokens || null,
     responseReserveTokens: plan.responseReserveTokens || stored?.responseReserveTokens || null,
@@ -8836,62 +9051,58 @@ function getContextUsage(usedOverride = null) {
     compileLatencyMs: stored?.compileLatencyMs ?? null,
     knowledgeLease: stored?.knowledgeLease || null,
     breakdown,
-    source: ["ollama", "openrouter"].includes(stored?.source) ? "actual" : "estimate",
+    source: "estimate",
     capacityApproximate,
   };
-}
-
-function getContextUsageMessages(breakdown = getContextBreakdown()) {
-  return (breakdown.messages || []).map((message) => ({ ...message }));
 }
 
 function renderContextUsage({ total, used, free, pct, source, breakdown = getContextBreakdown(), capacityApproximate = true, provider = "ollama", model = "", modelMaxTokens = null, promptBudgetTokens = null, responseReserveTokens = null, contextWindowSource = "fallback", compressionRatio = null, sourcesRepresented = 0, freshness = "Current", compileLatencyMs = null }) {
   if (!contextRingFill) return;
   const displaySections = normalizeContextUsageSections(breakdown.sections);
-  const filled = pct * CONTEXT_RING_C;
-  const estimatedTotal = Math.max(displaySections.reduce((sum, section) => sum + section.tokens, 0), 1);
-  const scale = used > 0 ? used / estimatedTotal : 1;
+  const sectionTotal = displaySections.reduce((sum, section) => sum + section.tokens, 0);
+  const displayUsed = sectionTotal > 0 ? sectionTotal : Math.max(0, Number(used) || 0);
+  const displayPct = total > 0 ? Math.min(displayUsed / total, 1) : 0;
+  const filled = displayPct * CONTEXT_RING_C;
+  const displayFree = Math.max(total - displayUsed, 0);
 
   contextRingFill.style.strokeDasharray = `${filled} ${CONTEXT_RING_C}`;
-  contextUsageBtn.classList.toggle("warn", pct >= 0.75 && pct < 0.9);
-  contextUsageBtn.classList.toggle("full", pct >= 0.9);
+  contextUsageBtn.classList.toggle("warn", displayPct >= 0.75 && displayPct < 0.9);
+  contextUsageBtn.classList.toggle("full", displayPct >= 0.9);
 
   if (contextUsageFill) {
-    contextUsageFill.style.width = `${pct * 100}%`;
-    contextUsageFill.classList.toggle("warn", pct >= 0.75 && pct < 0.9);
-    contextUsageFill.classList.toggle("full", pct >= 0.9);
+    contextUsageFill.style.width = `${displayPct * 100}%`;
+    contextUsageFill.classList.toggle("warn", displayPct >= 0.75 && displayPct < 0.9);
+    contextUsageFill.classList.toggle("full", displayPct >= 0.9);
   }
-  const actual = source === "actual";
   const displayCapacity = Number(total) > 0 ? Number(total) : (Number(modelMaxTokens) || 0);
-  if (contextUsageHeadingValue) contextUsageHeadingValue.textContent = `${formatTokenCount(Math.round(used))} / ${formatTokenCount(Math.round(displayCapacity))}`;
-  if (contextUsageUsed) contextUsageUsed.textContent = `${Math.round(pct * 100)}%`;
+  if (contextUsageHeadingValue) contextUsageHeadingValue.textContent = `${formatTokenCount(Math.round(displayUsed))} / ${formatContextWindowLabel(Math.round(displayCapacity))}`;
+  if (contextUsageUsed) contextUsageUsed.textContent = `${Math.round(displayPct * 100)}%`;
   if (contextUsagePct) {
-    contextUsagePct.textContent = `${actual ? "Last model turn" : "Next prompt estimate"} · ${formatTokenCount(free)} free`;
+    contextUsagePct.textContent = `Next prompt estimate · ${formatTokenCount(displayFree)} free`;
   }
   if (contextUsageSource) {
-    contextUsageSource.textContent = actual ? `Measured · ${provider === "openrouter" ? "OpenRouter" : "Ollama"}` : "Estimate";
+    contextUsageSource.textContent = breakdown?.authoritative ? "Tier 1 estimate" : "Estimate";
   }
   if (contextUsageSegments) {
     const segments = displaySections
+      .filter((section) => section.tokens > 0)
       .map((section) => {
-        const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
-        const widthPct = Math.max((scaledTokens / Math.max(total, 1)) * 100, 1);
+        const widthPct = Math.max((section.tokens / Math.max(total, 1)) * 100, 1);
         const label = CONTEXT_USAGE_ROW_LABELS[section.key] || section.label;
-        return `<span class="context-usage-segment" style="width:${widthPct}%;background:${section.color}" title="${escapeHtml(label)}: ${escapeHtml(formatTokenCount(scaledTokens))}"></span>`;
+        return `<span class="context-usage-segment" style="width:${widthPct}%;background:${section.color}" title="${escapeHtml(label)}: ${escapeHtml(formatTokenCount(section.tokens))}"></span>`;
       });
     contextUsageSegments.innerHTML = segments.join("");
   }
   if (contextUsageBreakdown) {
     const rows = displaySections
       .map((section) => {
-        const scaledTokens = Math.max(0, Math.round(section.tokens * scale));
         return `
           <div class="context-usage-row">
             <div class="context-usage-row-label">
               <span class="context-usage-swatch" style="background:${section.color}"></span>
               <span>${escapeHtml(CONTEXT_USAGE_ROW_LABELS[section.key] || section.label)}</span>
             </div>
-            <div class="context-usage-row-value">${escapeHtml(formatTokenCount(scaledTokens))}</div>
+            <div class="context-usage-row-value">${escapeHtml(formatTokenCount(section.tokens))}</div>
           </div>
         `;
       });
@@ -8903,30 +9114,68 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
   }
 }
 
-function updateContextUsage() {
-  const fallbackUsage = getContextUsage();
-  renderContextUsage(fallbackUsage);
-  if (fallbackUsage.source === "actual" || !window.api?.countTokens || !selectedModel) return;
+// The nine meter rows are Tier 1 accounting, so an idle chat has to ask Tier 1
+// for them instead of estimating locally. This keeps every category live from
+// the moment a session is opened, rather than only after the first send.
+function tier1PreviewSignature() {
+  const session = activeChatSession();
+  if (!session || !rootPath || !selectedModel) return "";
+  const plan = resolvedWorkingContextPlan();
+  return [
+    rootPath,
+    session.memorySessionId || session.id,
+    selectedModel,
+    canonicalChatMode(session.chatMode || chatMode),
+    session.chatFamily || chatFamily,
+    authoritySettingsData?.superMode || "",
+    plan.effectiveLimitTokens || 0,
+  ].join("|");
+}
 
-  if (contextUsageTimer) clearTimeout(contextUsageTimer);
-  const seq = ++contextUsageSeq;
-  contextUsageTimer = setTimeout(async () => {
-    try {
-      const result = await window.api.countTokens({
-        model: selectedModel,
-        messages: getContextUsageMessages(fallbackUsage.breakdown),
-        tools: fallbackUsage.breakdown.tools || [],
-      });
-      if (seq !== contextUsageSeq || !result?.ok || !Number.isFinite(result.count)) return;
-      const preciseUsage = getContextUsage(result.count);
-      renderContextUsage({
-        ...preciseUsage,
-        source: "estimate",
-      });
-    } catch {
-      /* keep fallback estimate */
-    }
-  }, 250);
+function scheduleTier1ContextPreview({ force = false } = {}) {
+  if (typeof window.api?.contextTier1Usage !== "function") return;
+  const signature = tier1PreviewSignature();
+  if (!signature) return;
+  if (!force && signature === tier1PreviewSignatureValue) return;
+  tier1PreviewSignatureValue = signature;
+  clearTimeout(tier1PreviewTimer);
+  tier1PreviewTimer = setTimeout(() => { void refreshTier1ContextPreview(signature); }, 150);
+}
+
+async function refreshTier1ContextPreview(signature) {
+  const session = activeChatSession();
+  if (!session || tier1PreviewInFlight) return;
+  // A live run publishes its own Tier 1 snapshots; never overwrite them with a
+  // preview taken between two model rounds.
+  if (isChatSessionRunning(session.id)) return;
+  tier1PreviewInFlight = true;
+  try {
+    const plan = resolvedWorkingContextPlan();
+    const response = await window.api.contextTier1Usage({
+      workspace: rootPath || "",
+      model: selectedModel,
+      mode: canonicalChatMode(session.chatMode || chatMode),
+      modeFamily: session.chatFamily || chatFamily,
+      authorityProfile: authoritySettingsData?.superMode || "",
+      contextPlan: plan,
+      numCtx: plan.provider === "ollama" ? plan.effectiveLimitTokens : null,
+      contextBudget: plan.effectiveLimitTokens,
+      sessionId: session.memorySessionId || "",
+    });
+    const usage = response?.usage || response?.value?.usage || null;
+    if (!usage) return;
+    // The selection can change while the assembly is in flight; a stale answer
+    // must not replace the rows for a different session, mode, or model.
+    if (signature !== tier1PreviewSignature() || isChatSessionRunning(session.id)) return;
+    storeLastContextUsage(usage, { session, model: selectedModel, contextPlan: plan });
+    if (session.id === activeChatSessionId) renderContextUsage(getContextUsage());
+  } catch { /* the meter keeps its last Tier 1 snapshot */ }
+  finally { tier1PreviewInFlight = false; }
+}
+
+function updateContextUsage() {
+  renderContextUsage(getContextUsage());
+  scheduleTier1ContextPreview();
 }
 
 function positionContextPopover() {
@@ -8991,29 +9240,45 @@ function toggleContextPopover() {
 function setExplorerActionsEnabled(enabled) {
   btnNewFile.disabled = !enabled;
   btnNewFolder.disabled = !enabled;
-  if (btnProjectSettings) btnProjectSettings.disabled = !enabled;
 }
 
 setExplorerActionsEnabled(false);
 
 btnNewFile.addEventListener("click", () => createNewItemInput(false));
 btnNewFolder.addEventListener("click", () => createNewItemInput(true));
-btnProjectSettings?.addEventListener("click", () => {
-  openAppSettings("project");
-});
 fileTree?.addEventListener("click", (event) => {
   if (event.target?.closest?.(".tree-item")) return;
   selectItem(null);
 });
 
+const EXPLORER_TREE_BASE_PADDING = 8;
+const EXPLORER_TREE_LEVEL_INDENT = 14;
+
+function explorerTreeDepth(item) {
+  const explicit = Number(item?.dataset?.treeDepth);
+  if (Number.isSafeInteger(explicit) && explicit >= 0) return explicit;
+  const padding = Number.parseInt(item?.style?.paddingLeft, 10);
+  if (!Number.isFinite(padding)) return 0;
+  return Math.max(0, Math.round((padding - EXPLORER_TREE_BASE_PADDING) / EXPLORER_TREE_LEVEL_INDENT));
+}
+
+function setExplorerTreeDepth(item, depth = 0) {
+  const normalized = Math.max(0, Number.isSafeInteger(Number(depth)) ? Number(depth) : 0);
+  item.dataset.treeDepth = String(normalized);
+  item.style.paddingLeft = `${EXPLORER_TREE_BASE_PADDING + (normalized * EXPLORER_TREE_LEVEL_INDENT)}px`;
+  item.setAttribute("aria-level", String(normalized + 1));
+  return normalized;
+}
+
 let creatingItem = false;
+let renamingItem = false;
 async function createNewItemInput(isFolder) {
-  if (!rootPath || creatingItem) return;
+  if (!rootPath || creatingItem || renamingItem) return;
   creatingItem = true;
 
   let targetDir = rootPath;
   let targetContainer = fileTree;
-  let paddingLeft = "8px";
+  let inputDepth = 0;
 
   // If an item is highlighted, contextualize where to add the new element
   if (selectedItem) {
@@ -9032,27 +9297,27 @@ async function createNewItemInput(isFolder) {
       
       // Force directory load if it hasn't been cached/expanded yet
       if (childrenContainer && (childrenContainer.childElementCount === 0 || (childrenContainer.children.length === 1 && childrenContainer.children[0].textContent === "Loading…"))) {
-        const currentDepth = (parseInt(selectedItem.style.paddingLeft) - 8) / 8;
+        const currentDepth = explorerTreeDepth(selectedItem);
         childrenContainer.innerHTML = "";
         await renderTree(targetDir, childrenContainer, currentDepth + 1);
       }
       
       targetContainer = childrenContainer;
-      paddingLeft = `${parseInt(selectedItem.style.paddingLeft) + 8}px`;
+      inputDepth = explorerTreeDepth(selectedItem) + 1;
     } else {
       // If a file is selected, create adjacent to it inside its parent folder
       const filePath = selectedItem.dataset.path;
       const lastIdx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
       targetDir = filePath.substring(0, lastIdx);
       targetContainer = selectedItem.parentElement;
-      paddingLeft = selectedItem.style.paddingLeft;
+      inputDepth = explorerTreeDepth(selectedItem);
     }
   }
 
   // Generate the temporary tree input node
   const inputRow = document.createElement("div");
-  inputRow.className = "tree-item tree-input-row";
-  inputRow.style.paddingLeft = paddingLeft;
+  inputRow.className = `tree-item tree-input-row ${isFolder ? "tree-dir" : "tree-file"}`;
+  setExplorerTreeDepth(inputRow, inputDepth);
 
   const chevron = document.createElement("span");
   chevron.className = isFolder ? "tree-chevron codicon codicon-chevron-right" : "tree-chevron codicon hidden";
@@ -9107,7 +9372,7 @@ async function createNewItemInput(isFolder) {
         await rerenderExplorer({ preserveSelectionPath: newPath });
       } else {
         const parentItem = targetContainer.previousElementSibling;
-        const parentDepth = (parseInt(parentItem.style.paddingLeft) - 8) / 8;
+        const parentDepth = explorerTreeDepth(parentItem);
         await renderTree(targetDir, targetContainer, parentDepth + 1);
       }
       
@@ -9368,23 +9633,6 @@ function openInterceptorTab(tool = "") {
   switchToInterceptorTab();
 }
 
-async function openApplicationGraphTab({ build = false } = {}) {
-  showCodeEditorWorkspace();
-  if (!openTabs.has(APPLICATION_GRAPH_TAB_PATH)) {
-    openTabs.set(APPLICATION_GRAPH_TAB_PATH, {
-      path: APPLICATION_GRAPH_TAB_PATH,
-      diskPath: APPLICATION_GRAPH_TAB_PATH,
-      name: "Application Graph",
-      content: null,
-      savedContent: "",
-      dirty: false,
-      error: null,
-      special: "application-graph",
-    });
-  }
-  await switchToApplicationGraphTab({ build });
-}
-
 function switchToSettingsTab() {
   if (terminalMaximized) setTerminalMaximized(false);
   commitActiveTab();
@@ -9402,15 +9650,6 @@ function switchToInterceptorTab() {
   editorLoadedPath = null;
   renderTabs();
   renderEditor({ focusEditor: false });
-}
-
-async function switchToApplicationGraphTab({ build = false } = {}) {
-  if (terminalMaximized) setTerminalMaximized(false);
-  commitActiveTab();
-  activeTabPath = APPLICATION_GRAPH_TAB_PATH;
-  editorLoadedPath = null;
-  renderTabs();
-  await showMapWorkspace({ build });
 }
 
 function openSettingsWorkspace() {
@@ -9661,15 +9900,26 @@ securityToolMenu?.addEventListener("click", (event) => {
   showSecurityWorkspace(option.dataset.securityTool);
 });
 securityRunButton?.addEventListener("click", runSecurityWorkbench);
-securityProxyBrowser?.addEventListener("click", (event) => { event.stopPropagation(); chooseProxyBrowserIdentity(); });
-securityProxyBrowserMenu?.addEventListener("click", (event) => {
-  const action = event.target.closest("[data-proxy-identity]");
-  if (!action) return;
-  const identityId = action.dataset.proxyIdentity || "";
-  closeProxyBrowserMenu();
-  launchProxyBrowser(identityId);
+document.addEventListener("click", (event) => {
+  const identityAction = event.target.closest("#security-proxy-browser-menu [data-proxy-identity]");
+  if (identityAction) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeProxyBrowserMenu();
+    launchProxyBrowser(identityAction.dataset.proxyIdentity || "");
+    return;
+  }
+  if (event.target.closest("#security-proxy-browser")) {
+    event.stopPropagation();
+    chooseProxyBrowserIdentity();
+  }
 });
-securityGraphButton?.addEventListener("click", buildTrafficGraphFromToolbar);
+document.addEventListener("contextmenu", (event) => {
+  if (!event.target.closest("#security-proxy-browser")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  chooseProxyBrowserIdentity({ menuOnly: true });
+});
 securityHistoryToggle?.addEventListener("click", () => setSecurityHistoryVisible(securityHistoryPanel?.hidden));
 securityHistoryRefresh?.addEventListener("click", loadSecurityHistory);
 securityHistorySortHeaders.forEach((header) => header.querySelector("button")?.addEventListener("click", () => setSecurityHistorySort(header.dataset.historySort)));
@@ -9750,46 +10000,9 @@ securityPayloadEditor?.addEventListener("input", () => {
 terminalShellTab?.addEventListener("click", () => TerminalManager.focusActive());
 document.addEventListener("click", (event) => {
   if (!securityToolMenu?.hidden && !securityToolSwitcher?.contains(event.target)) closeSecurityToolMenu();
-  if (!securityProxyBrowserMenu?.hidden && !securityProxyBrowserWrap?.contains(event.target)) closeProxyBrowserMenu();
-});
-setMapDetailCollapsed(localStorage.getItem(MAP_INSPECT_COLLAPSED_KEY) === "true", { persist: false });
-mapDetailToggle?.addEventListener("click", () => setMapDetailCollapsed(!mapMain?.classList.contains("detail-collapsed")));
-mapBuildAction?.addEventListener("click", () => {
-  loadApplicationMap({ build: true });
-});
-mapDeepCollectAction?.addEventListener("click", deepCollectApplicationGraph);
-mapIntelligenceStart?.addEventListener("click", () => startMapIntelligenceIndex());
-mapIntelligenceStartAction?.addEventListener("click", () => startMapIntelligenceIndex());
-mapIntelligenceDefer?.addEventListener("click", async () => {
-  localStorage.setItem(mapIntelligencePromptKey(), "deferred");
-  if (mapIntelligencePrompt) mapIntelligencePrompt.hidden = true;
-  await refreshMapIntelligenceStatus();
-});
-mapIntelligencePause?.addEventListener("click", async () => {
-  if (assessmentPath && window.api.assessmentIntelligencePause) await window.api.assessmentIntelligencePause({ path: assessmentPath });
-  await refreshMapIntelligenceStatus();
-});
-mapIntelligenceResume?.addEventListener("click", async () => {
-  if (assessmentPath && window.api.assessmentIntelligenceResume) await window.api.assessmentIntelligenceResume({ path: assessmentPath });
-  await refreshMapIntelligenceStatus();
-});
-mapIntelligenceRebuild?.addEventListener("click", async () => {
-  if (assessmentPath && window.api.assessmentIntelligenceRebuild) await window.api.assessmentIntelligenceRebuild({ path: assessmentPath });
-  await refreshMapIntelligenceStatus();
-});
-window.api.onAssessmentIntelligence?.((event) => {
-  if (!assessmentPath || event?.workspace !== assessmentPath) return;
-  if (event.type === "progress") {
-    const progress = event.progress || {};
-    if (mapIntelligenceStatus) mapIntelligenceStatus.textContent = `Intelligence: indexing · ${progress.source || "preparing"} · ${Number(progress.records || 0)} records`;
-  } else {
-    refreshMapIntelligenceStatus();
-  }
-});
-window.api.onAssessmentGraphStatus?.((event) => {
-  if (!assessmentPath || event?.workspace !== assessmentPath || currentWorkspaceMode !== "map") return;
-  if (event.status === "building") setMapWorkspaceState({ exists: Boolean(applicationMap), busy: true, message: "Compiling deterministic graph passes in the background…" });
-  else if (event.status === "error") setMapWorkspaceState({ exists: Boolean(applicationMap), busy: false, message: event.result?.error || "Graph compilation failed." });
+  const proxyWrap = document.getElementById("security-proxy-browser-wrap") || securityProxyBrowserWrap;
+  const proxyMenu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
+  if (proxyMenu && !proxyMenu.hidden && !proxyWrap?.contains(event.target) && !proxyMenu.contains(event.target)) closeProxyBrowserMenu();
 });
 window.api.onIdentityStatus?.((snapshot) => {
   if (appSettingsSection !== "project") return;
@@ -9807,158 +10020,6 @@ window.api.onIdentityPersistence?.((event) => {
   } else if (event?.recovered) {
     setIdentitySettingsStatus("Identity state persistence recovered.", "success");
   }
-});
-document.querySelectorAll("[data-map-mode]").forEach((button) => button.addEventListener("click", () => {
-  applicationMapMode = button.dataset.mapMode || "route";
-  document.querySelectorAll("[data-map-mode]").forEach((candidate) => {
-    const active = candidate.dataset.mapMode === applicationMapMode;
-    candidate.classList.toggle("active", active);
-    candidate.setAttribute("aria-pressed", String(active));
-  });
-  if (mapSearch) mapSearch.placeholder = applicationMapMode === "state" ? "Find state, action, identity, or entity" : "Find route or host";
-  selectedMapNodeId = "";
-  renderApplicationMap();
-}));
-mapSearch?.addEventListener("input", renderApplicationMap);
-[mapMethodFilter, mapVisibilityFilter].forEach((control) => control?.addEventListener("change", renderApplicationMap));
-mapHostFilterToggle?.addEventListener("click", () => setMapHostFilterOpen(mapHostFilterMenu?.hidden));
-mapHostFilterAll?.addEventListener("change", () => {
-  if (!mapHostFilterAll.checked) return;
-  selectedMapHosts.clear();
-  renderMapHostFilter([...new Set((applicationMap?.nodes || []).filter((node) => node.type === "Route").map((node) => node.host).filter(Boolean))].sort());
-  renderApplicationMap();
-});
-mapHostFilterOptions?.addEventListener("change", (event) => {
-  const input = event.target.closest?.('input[type="checkbox"]');
-  if (!input) return;
-  if (input.checked) selectedMapHosts.add(input.value);
-  else selectedMapHosts.delete(input.value);
-  renderMapHostFilter([...new Set((applicationMap?.nodes || []).filter((node) => node.type === "Route").map((node) => node.host).filter(Boolean))].sort());
-  renderApplicationMap();
-});
-document.addEventListener("pointerdown", (event) => {
-  if (mapHostFilter && !mapHostFilter.contains(event.target)) setMapHostFilterOpen(false);
-});
-$("map-zoom-in")?.addEventListener("click", () => { mapZoom = Math.min(4, mapZoom * 1.2); updateMapViewportTransform(); });
-$("map-zoom-out")?.addEventListener("click", () => { mapZoom = Math.max(.12, mapZoom / 1.2); updateMapViewportTransform(); });
-$("map-fit")?.addEventListener("click", () => { mapZoom = 1; mapPanX = 0; mapPanY = 0; updateMapViewportTransform(); });
-function selectMapNode(nodeId) {
-  if (!nodeId) return;
-  selectedMapNodeId = nodeId;
-  setMapDetailCollapsed(false);
-  renderApplicationMap();
-}
-mapGraph?.addEventListener("click", (event) => {
-  const node = event.target.closest?.("[data-map-node-id]");
-  if (mapNodeClickSuppressed) { mapNodeClickSuppressed = false; return; }
-  if (mapPointerState?.moved) return;
-  if (!node) {
-    selectedMapNodeId = "";
-    renderApplicationMap();
-    return;
-  }
-  selectMapNode(node.dataset.mapNodeId || "");
-});
-mapGraph?.addEventListener("keydown", (event) => {
-  if (!["Enter", " "].includes(event.key)) return;
-  const node = event.target.closest?.("[data-map-node-id]");
-  if (!node) return;
-  event.preventDefault(); selectMapNode(node.dataset.mapNodeId || "");
-});
-mapGraph?.addEventListener("wheel", (event) => {
-  event.preventDefault();
-  mapZoom = Math.max(.12, Math.min(4, mapZoom * (event.deltaY < 0 ? 1.1 : .9)));
-  updateMapViewportTransform();
-}, { passive: false });
-mapGraph?.addEventListener("pointerdown", (event) => {
-  const node = event.target.closest?.("[data-map-node-id]");
-  if (node && event.button === 0 && event.isPrimary !== false) {
-    const nodeId = node.dataset.mapNodeId || "";
-    const origin = currentMapPositions.get(nodeId);
-    if (!origin) return;
-    const mode = applicationMapMode;
-    const overrides = activeMapPositionOverrides(mode);
-    mapNodeDragState = {
-      id: event.pointerId,
-      nodeId,
-      mode,
-      start: mapClientPoint(event.clientX, event.clientY),
-      origin: { ...origin },
-      previousOverride: overrides.has(nodeId) ? { ...overrides.get(nodeId) } : null,
-      moved: false,
-      armed: false,
-      holdTimer: null,
-    };
-    mapNodeClickSuppressed = false;
-    mapNodeDragState.holdTimer = setTimeout(() => {
-      if (!mapNodeDragState || mapNodeDragState.id !== event.pointerId) return;
-      mapNodeDragState.armed = true;
-      try { mapGraph.setPointerCapture(event.pointerId); } catch { /* pointer may have been released */ }
-      mapGraph.classList.add("dragging-node", "is-holding");
-    }, 1000);
-    return;
-  }
-  mapPointerState = { id: event.pointerId, x: event.clientX, y: event.clientY, panX: mapPanX, panY: mapPanY, moved: false };
-  mapGraph.setPointerCapture(event.pointerId); mapGraph.classList.add("panning", "is-holding");
-});
-mapGraph?.addEventListener("pointermove", (event) => {
-  if (mapNodeDragState?.id === event.pointerId) {
-    if (!mapNodeDragState.armed) return;
-    const current = mapClientPoint(event.clientX, event.clientY);
-    const dx = current.x - mapNodeDragState.start.x;
-    const dy = current.y - mapNodeDragState.start.y;
-    if (!mapNodeDragState.moved && Math.hypot(dx, dy) <= 4) return;
-    mapNodeDragState.moved = true;
-    mapNodeClickSuppressed = true;
-    const limit = 1_000_000;
-    updateDraggedMapNode(mapNodeDragState.nodeId, {
-      x: Math.max(-limit, Math.min(limit, mapNodeDragState.origin.x + dx)),
-      y: Math.max(-limit, Math.min(limit, mapNodeDragState.origin.y + dy)),
-    }, mapNodeDragState.mode);
-    return;
-  }
-  if (!mapPointerState || mapPointerState.id !== event.pointerId) return;
-  const rect = mapGraph.getBoundingClientRect();
-  const dx = (event.clientX - mapPointerState.x) * 1400 / Math.max(1, rect.width);
-  const dy = (event.clientY - mapPointerState.y) * 820 / Math.max(1, rect.height);
-  if (Math.abs(dx) + Math.abs(dy) > 2) mapPointerState.moved = true;
-  mapPanX = mapPointerState.panX + dx; mapPanY = mapPointerState.panY + dy; updateMapViewportTransform();
-});
-const endMapPointer = (event, canceled = false) => {
-  if (mapNodeDragState?.id === event.pointerId) {
-    const drag = mapNodeDragState;
-    mapNodeDragState = null;
-    if (drag.holdTimer) clearTimeout(drag.holdTimer);
-    mapGraph?.classList.remove("dragging-node", "is-holding");
-    try { mapGraph?.releasePointerCapture(event.pointerId); } catch { /* pointer capture may already be released */ }
-    if (canceled) {
-      const overrides = activeMapPositionOverrides(drag.mode);
-      if (drag.previousOverride) overrides.set(drag.nodeId, drag.previousOverride);
-      else overrides.delete(drag.nodeId);
-      renderApplicationMap();
-    } else if (drag.moved) {
-      persistMapNodePositions();
-    } else {
-      // Handle short clicks (and a held-but-never-moved node) directly on
-      // pointer release. Pointer capture can otherwise prevent the browser's
-      // synthetic click from reaching the freshly-rendered node.
-      mapNodeClickSuppressed = true;
-      selectMapNode(drag.nodeId);
-      setTimeout(() => { mapNodeClickSuppressed = false; }, 250);
-    }
-    if (drag.moved) setTimeout(() => { mapNodeClickSuppressed = false; }, 250);
-    return;
-  }
-  if (!mapPointerState || mapPointerState.id !== event.pointerId) return;
-  mapGraph?.classList.remove("panning", "is-holding");
-  try { mapGraph?.releasePointerCapture(event.pointerId); } catch { /* pointer capture may already be released */ }
-  setTimeout(() => { mapPointerState = null; }, 0);
-};
-mapGraph?.addEventListener("pointerup", endMapPointer);
-mapGraph?.addEventListener("pointercancel", (event) => endMapPointer(event, true));
-mapDetailContent?.addEventListener("click", (event) => {
-  const evidence = event.target.closest?.("[data-map-evidence]");
-  if (evidence) openMapEvidence(evidence.dataset.mapEvidence);
 });
 bugBountyTree?.addEventListener("click", async (event) => {
   const toggle = event.target.closest(".bounty-phase-toggle");
@@ -9978,7 +10039,6 @@ bugBountyTree?.addEventListener("click", async (event) => {
   item.setAttribute("aria-selected", "true");
   const selectedKey = item.dataset.bountyItem || item.dataset.bountyFolder;
   localStorage.setItem(BUG_BOUNTY_SELECTED_KEY, selectedKey);
-  if (item.dataset.bountyFolder === "Map") { await openApplicationGraphTab(); return; }
   if (item.dataset.bountyFolder === "WebClone") { await showWebCloneWorkspace(); return; }
   if (item.dataset.bountyFolder) return;
   await openAssessmentItem(item);
@@ -10077,8 +10137,6 @@ generalUpdatesToggle?.addEventListener("change", () => {
 });
 certificateBrowse?.addEventListener("click", chooseCertificateDirectory);
 certificateReset?.addEventListener("click", resetCertificateDirectory);
-$("knowledge-library-install")?.addEventListener("click", installKnowledgeLibraryPackage);
-$("knowledge-library-reindex")?.addEventListener("click", reindexKnowledgeLibrary);
 identityRefresh?.addEventListener("click", loadIdentitySettings);
 identityCreate?.addEventListener("click", createIdentityFromSettings);
 identityList?.addEventListener("click", (event) => {
@@ -10564,7 +10622,6 @@ function quickFileItems(query) {
   return files
     .map((file) => {
       const name = basenameOf(file);
-      const info = fileIconInfo(name);
       const score = Math.max(
         scoreQuickMatch(name, query) + 40,
         scoreQuickMatch(file, query),
@@ -10572,9 +10629,9 @@ function quickFileItems(query) {
       return {
         title: name,
         detail: file,
-        icon: `${info.icon} ${info.className}`,
+        icon: "codicon-file",
         score,
-        run: () => showResourcePreview(joinWorkspacePath(file), name, file, { icon: info.icon }),
+        run: () => showResourcePreview(joinWorkspacePath(file), name, file, { icon: "codicon-file" }),
       };
     })
     .filter((item) => item.score > 0)
@@ -10624,45 +10681,14 @@ function highlightExactText(text, query, highlights = []) {
   return html;
 }
 
-function setQuickSearchAssistVisible(visible) {
-  const show = Boolean(visible && quickMode === "search");
-  if (quickSearchAssist) quickSearchAssist.hidden = !show;
-  if (quickSearchHelp) quickSearchHelp.setAttribute("aria-expanded", String(show));
-  if (show) {
-    if (quickSearchSuggestions) quickSearchSuggestions.hidden = true;
-    quickPanel?.classList.remove("quick-panel-minimal");
-  }
+function setQuickSearchAssistVisible(_visible) {
+  if (quickSearchAssist) quickSearchAssist.hidden = true;
+  if (quickSearchHelp) quickSearchHelp.setAttribute("aria-expanded", "false");
   if (quickResults?.classList.contains("is-virtualized")) requestAnimationFrame(() => renderVirtualizedSearchResults());
 }
 
 function initializeAdvancedSearchHelp() {
-  if (quickSearchPresets && !quickSearchPresets.childElementCount) {
-    for (const preset of ADVANCED_SEARCH_PRESETS) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "quick-search-preset";
-      button.textContent = preset.label;
-      button.title = preset.query;
-      button.addEventListener("click", () => {
-        if (!quickInput) return;
-        quickInput.value = preset.query;
-        setQuickSearchAssistVisible(false);
-        quickSelection = 0;
-        renderWorkspaceSearch();
-        quickInput.focus();
-        quickInput.setSelectionRange(quickInput.value.length, quickInput.value.length);
-      });
-      quickSearchPresets.appendChild(button);
-    }
-  }
-  if (quickSearchReference && !quickSearchReference.childElementCount) {
-    for (const operator of ADVANCED_SEARCH_OPERATORS) {
-      const row = document.createElement("span");
-      row.title = `${operator.name}: ${operator.description}`;
-      row.innerHTML = `<code>${escapeHtml(operator.name)}:</code> ${escapeHtml(operator.description)}`;
-      quickSearchReference.appendChild(row);
-    }
-  }
+  setQuickSearchAssistVisible(false);
 }
 
 function advancedSearchTokenRange() {
@@ -10781,7 +10807,7 @@ function renderAdvancedSearchChips() {
 }
 
 function formattedSearchSources(counts = {}) {
-  const labels = { correlation: "Authorization", traffic: "Traffic", javascript: "JavaScript", evidence: "Evidence", tool: "Tools", map: "Map", asset: "Assets", code: "Code", workspace: "Files" };
+  const labels = { correlation: "Authorization", traffic: "Traffic", javascript: "JavaScript", evidence: "Evidence", tool: "Tools", asset: "Assets", code: "Code", workspace: "Files" };
   return Object.entries(counts).filter(([, count]) => Number(count) > 0).sort((a, b) => Number(b[1]) - Number(a[1]))
     .slice(0, 5).map(([source, count]) => `${labels[source] || source} ${Number(count).toLocaleString()}`).join(" · ");
 }
@@ -10936,8 +10962,7 @@ function syncQuickSelection() {
 
 function workspaceSearchResultItem(row, query) {
   const name = basenameOf(row.path);
-  const sourceIcons = { correlation: "codicon-shield", traffic: "codicon-globe", finding: "codicon-warning", evidence: "codicon-archive", map: "codicon-type-hierarchy", asset: "codicon-server", tool: "codicon-tools" };
-  const info = fileIconInfo(name);
+  const sourceIcons = { correlation: "codicon-shield", traffic: "codicon-globe", finding: "codicon-warning", evidence: "codicon-archive", asset: "codicon-server", tool: "codicon-tools" };
   const line = Number(row.line) || parseSnippetLine(row.snippet);
   const column = Number(row.column) || 1;
   const matchDetail = row.lineText || firstSnippetLine(row.snippet);
@@ -10949,7 +10974,7 @@ function workspaceSearchResultItem(row, query) {
     title: row.title || row.path,
     detail,
     detailHtml: highlightExactText(detail, query),
-    icon: `${sourceIcons[row.source] || info.icon} ${info.className}`,
+    icon: sourceIcons[row.source] || "codicon-file",
     key: row.key || `${sourceLabel}L${line}:C${column}`,
     run: async () => {
       await openFile(joinWorkspacePath(row.path), name, {
@@ -11210,7 +11235,8 @@ quickInput?.addEventListener("keydown", (e) => {
 
 quickSearchHelp?.addEventListener("click", (event) => {
   event.stopPropagation();
-  setQuickSearchAssistVisible(quickSearchAssist?.hidden !== false);
+  setQuickSearchAssistVisible(false);
+  quickInput?.focus();
 });
 
 quickOverlay?.addEventListener("mousedown", (e) => {
@@ -11440,21 +11466,8 @@ function remapExpandedTreePathsUnder(sourceAbsolute, destinationAbsolute) {
   }
 }
 
-async function renameWorkspaceContextTarget(target) {
-  if (!rootPath || !target?.relativePath || typeof window.api?.movePath !== "function") return;
-  const nextName = await AppDialog.prompt(
-    `Rename ${target.isDir ? "folder" : "file"}`,
-    target.name || basenameOf(target.relativePath),
-    { title: target.isDir ? "Rename folder" : "Rename file" },
-  );
-  if (nextName === null || nextName === undefined) return;
-  const normalizedName = String(nextName).trim();
-  const validationError = workspaceRenameValidationError(normalizedName);
-  if (validationError) {
-    await AppDialog.alert(validationError, { title: "Invalid name" });
-    return;
-  }
-  if (normalizedName === target.name) return;
+async function applyWorkspaceRename(target, normalizedName) {
+  if (!rootPath || !target?.relativePath || typeof window.api?.movePath !== "function") return false;
 
   const destination = workspaceRenameDestination(target.relativePath, normalizedName);
   const sourceAbsolute = normPath(target.path);
@@ -11464,10 +11477,7 @@ async function renameWorkspaceContextTarget(target) {
     source: target.relativePath,
     destination,
   });
-  if (result?.error) {
-    await AppDialog.alert(`Could not rename ${target.name}: ${result.error}`, { title: "Rename failed" });
-    return;
-  }
+  if (result?.error) return false;
 
   remapOpenTabsUnderWorkspacePath(sourceAbsolute, destinationAbsolute);
   remapExpandedTreePathsUnder(sourceAbsolute, destinationAbsolute);
@@ -11481,6 +11491,77 @@ async function renameWorkspaceContextTarget(target) {
   }
   syncActiveChatSession();
   await refreshWorkspaceUi({ preserveSelectionPath: destinationAbsolute });
+  return true;
+}
+
+function startInlineWorkspaceRename(target) {
+  if (!target?.item || !target?.relativePath || creatingItem || renamingItem) return;
+  const item = target.item;
+  const nameEl = item.querySelector(".tree-name");
+  if (!nameEl || item.querySelector(".tree-input")) return;
+
+  renamingItem = true;
+  const originalName = nameEl.textContent || target.name || basenameOf(target.relativePath);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "tree-input";
+  input.value = originalName;
+  item.classList.add("tree-input-row");
+  nameEl.replaceWith(input);
+  input.focus();
+  if (!target.isDir) {
+    const dot = originalName.lastIndexOf(".");
+    if (dot > 0) input.setSelectionRange(0, dot);
+    else input.select();
+  } else {
+    input.select();
+  }
+
+  let finished = false;
+  const restoreName = () => {
+    if (input.isConnected) {
+      const restored = document.createElement("span");
+      restored.className = "tree-name";
+      restored.textContent = originalName;
+      input.replaceWith(restored);
+    }
+    item.classList.remove("tree-input-row");
+    renamingItem = false;
+  };
+
+  async function commit() {
+    if (finished) return;
+    finished = true;
+    const normalizedName = input.value.trim();
+    const validationError = workspaceRenameValidationError(normalizedName);
+    if (validationError || normalizedName === originalName) {
+      restoreName();
+      return;
+    }
+
+    const renamed = await applyWorkspaceRename(target, normalizedName);
+    if (!renamed) restoreName();
+    else renamingItem = false;
+  }
+
+  input.addEventListener("keydown", async (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      await commit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finished = true;
+      restoreName();
+    }
+  });
+
+  input.addEventListener("blur", async () => {
+    await commit();
+  });
+}
+
+async function renameWorkspaceContextTarget(target) {
+  startInlineWorkspaceRename(target);
 }
 
 function setWorkspaceClipboard(operation) {
@@ -11542,6 +11623,8 @@ async function startWorkspaceFileAnalysis(target) {
   clearChatSessionState(session);
   session.chatMode = returnMode;
   session.kind = "file-analysis";
+  // Ask is private to this automatic first turn via modeOverride. The picker
+  // stays on returnMode unless the operator changes it during the run.
   chatSessions.push(session);
   applyActiveChatSession(session);
   renderChatSessionSelect();
@@ -11565,18 +11648,6 @@ async function startWorkspaceFileAnalysis(target) {
   try {
     await analysisRun;
   } finally {
-    // Ask mode is private to the automatic first turn. Whether it completes,
-    // fails, or is interrupted, the visible session returns to the mode the
-    // operator had selected before choosing Analyze.
-    session.chatMode = returnMode;
-    if (activeChatSessionId === session.id) {
-      chatMode = returnMode;
-      localStorage.setItem(CHAT_MODE_KEY, returnMode);
-      syncChatModeUi();
-      syncActiveChatSession();
-    } else {
-      schedulePersistChatSessions();
-    }
     renderChatSessionSelect();
   }
 }
@@ -11641,14 +11712,18 @@ async function renderTree(dirPath, container, depth) {
   const entries = await window.api.readdir(dirPath);
 
   if (entries.error) {
-    container.innerHTML = `<div class="tree-item dimmed">${entries.error}</div>`;
+    const errorRow = document.createElement("div");
+    errorRow.className = "tree-item dimmed";
+    setExplorerTreeDepth(errorRow, depth);
+    errorRow.textContent = entries.error;
+    container.replaceChildren(errorRow);
     return;
   }
 
   for (const entry of entries) {
     const item = document.createElement("div");
     item.className = `tree-item ${entry.isDir ? "tree-dir" : "tree-file"}`;
-    item.style.paddingLeft = `${depth * 8 + 8}px`;
+    setExplorerTreeDepth(item, depth);
     item.dataset.path  = entry.path;
     item.dataset.isDir = entry.isDir;
     item.tabIndex = -1;
@@ -11664,9 +11739,12 @@ async function renderTree(dirPath, container, depth) {
     if (entry.isDir) {
       icon.className = "tree-icon codicon codicon-folder";
     } else {
-      const info = fileIconInfo(entry.name);
-      icon.className = `tree-file-icon codicon ${info.icon} ${info.className}`;
+      const info = SetiIconTheme.iconForFile(entry.name);
+      icon.className = "tree-file-icon seti-icon";
+      icon.textContent = info.glyph;
+      icon.style.color = info.color;
     }
+    icon.setAttribute("aria-hidden", "true");
 
     const name = document.createElement("span");
     name.className = "tree-name";
@@ -11748,7 +11826,11 @@ async function renderTree(dirPath, container, depth) {
         icon.className = `tree-icon codicon ${expanded ? "codicon-folder-opened" : "codicon-folder"}`;
         childrenContainer.style.display = expanded ? "block" : "none";
         if (expanded && childrenContainer.childElementCount === 0) {
-          childrenContainer.innerHTML = `<div class="tree-item dimmed" style="padding-left:${(depth + 1) * 8 + 24}px">Loading…</div>`;
+          const loading = document.createElement("div");
+          loading.className = "tree-item dimmed";
+          setExplorerTreeDepth(loading, depth + 1);
+          loading.textContent = "Loading…";
+          childrenContainer.replaceChildren(loading);
           await renderTree(entry.path, childrenContainer, depth + 1);
         }
       });
@@ -12108,10 +12190,6 @@ function isInterceptorTab(tab) {
   return tab?.path === INTERCEPTOR_TAB_PATH || tab?.special === "interceptor";
 }
 
-function isApplicationGraphTab(tab) {
-  return tab?.path === APPLICATION_GRAPH_TAB_PATH || tab?.special === "application-graph";
-}
-
 function nestedSettingValue(object, settingPath) {
   return String(settingPath || "").split(".").reduce((value, key) => value?.[key], object);
 }
@@ -12280,6 +12358,10 @@ async function toggleInterceptorCapture() {
   const turningOn = !isInterceptionActive(nextSettings);
   nextSettings.interception.enabled = turningOn;
   nextSettings.interception.interceptRequests = turningOn;
+  if (turningOn) {
+    if (!nextSettings.listener || typeof nextSettings.listener !== "object") nextSettings.listener = {};
+    nextSettings.listener.enabled = true;
+  }
   const result = await saveAssessmentSettings(nextSettings);
   if (result?.error) {
     setSecurityStatus(result.error, "error");
@@ -12321,21 +12403,48 @@ async function configureProxyListener() {
 }
 
 function syncProxyBrowserUi(status = {}) {
-  if (!securityProxyBrowser) return;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (!button) return;
   const running = Boolean(status.running);
-  securityProxyBrowser.classList.toggle("active", running);
-  securityProxyBrowser.setAttribute("aria-pressed", String(running));
-  securityProxyBrowser.title = running
+  button.classList.toggle("active", running);
+  button.setAttribute("aria-pressed", String(running));
+  button.title = running
     ? `${status.browser === "edge" ? "Edge" : "Chrome"} is open through ${status.proxyHost || "127.0.0.1"}:${status.proxyPort || "proxy"}${status.agentShareAvailable ? "; matching agent browser actions can share it" : ""}`
-    : "Open browser through XEKUTE proxy";
+    : "Open browser through XEKUTE proxy. Right-click to choose an identity.";
 }
 
 function closeProxyBrowserMenu() {
-  if (securityProxyBrowserMenu) securityProxyBrowserMenu.hidden = true;
-  securityProxyBrowser?.setAttribute("aria-expanded", "false");
+  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (menu) {
+    menu.hidden = true;
+    menu.style.position = "";
+    menu.style.top = "";
+    menu.style.right = "";
+    menu.style.left = "";
+    menu.style.zIndex = "";
+    if (proxyBrowserMenuHome && menu.parentElement !== proxyBrowserMenuHome) proxyBrowserMenuHome.appendChild(menu);
+  }
+  button?.setAttribute("aria-expanded", "false");
 }
 
-async function chooseProxyBrowserIdentity() {
+function positionProxyBrowserMenu() {
+  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (!menu || !button) return;
+  if (!proxyBrowserMenuHome) proxyBrowserMenuHome = menu.parentElement;
+  document.body.appendChild(menu);
+  const rect = button.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+  menu.style.right = `${Math.round(Math.max(8, window.innerWidth - rect.right))}px`;
+  menu.style.left = "auto";
+  menu.style.zIndex = "12000";
+}
+
+async function chooseProxyBrowserIdentity(options = {}) {
+  const menuOnly = Boolean(options.menuOnly);
+  if (!menuOnly) return launchProxyBrowser("");
   if (!assessmentPath) return launchProxyBrowser("");
   let identities = [];
   try {
@@ -12343,13 +12452,17 @@ async function chooseProxyBrowserIdentity() {
     identities = identityRecordList(snapshot);
   } catch { identities = []; }
   if (!identities.length) return launchProxyBrowser("");
-  if (!securityProxyBrowserMenu) return launchProxyBrowser("");
-  securityProxyBrowserMenu.innerHTML = `
+  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (!menu || !button) return launchProxyBrowser("");
+  menu.innerHTML = `
     <button type="button" role="menuitem" data-proxy-identity=""><span class="codicon codicon-globe"></span><strong>Anonymous browser</strong><small>Separate unlabeled capture profile</small></button>
     ${identities.map((identity) => `<button type="button" role="menuitem" data-proxy-identity="${escapeHtml(identity.identityId)}"><span class="codicon codicon-account"></span><strong>${escapeHtml(identity.name || identity.identityId)}</strong><small>${escapeHtml(identity.role || "user")} · ${escapeHtml(identity.authStatus || "manual browser session")}</small></button>`).join("")}`;
-  securityProxyBrowserMenu.hidden = false;
-  securityProxyBrowser.setAttribute("aria-expanded", "true");
-  securityProxyBrowserMenu.querySelector("button")?.focus();
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  positionProxyBrowserMenu();
+  setSecurityStatus("Choose Anonymous or an identity for the proxied browser.");
+  menu.querySelector("button")?.focus();
 }
 
 async function launchProxyBrowser(identityId = "") {
@@ -12357,9 +12470,10 @@ async function launchProxyBrowser(identityId = "") {
     setSecurityStatus("Create or open a project first", "error");
     return;
   }
-  if (!window.api.proxyBrowserLaunch || securityProxyBrowser?.disabled) return;
-  const icon = securityProxyBrowser?.querySelector(".codicon");
-  if (securityProxyBrowser) securityProxyBrowser.disabled = true;
+  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
+  if (!window.api.proxyBrowserLaunch || button?.disabled) return;
+  const icon = button?.querySelector(".codicon");
+  if (button) button.disabled = true;
   if (icon) icon.className = "codicon codicon-loading codicon-modifier-spin";
   setSecurityStatus("Preparing XEKUTE proxy and browser…");
   try {
@@ -12381,35 +12495,7 @@ async function launchProxyBrowser(identityId = "") {
     syncProxyBrowserUi({ running: false });
   } finally {
     if (icon) icon.className = "codicon codicon-globe";
-    if (securityProxyBrowser) securityProxyBrowser.disabled = false;
-  }
-}
-
-async function buildTrafficGraphFromToolbar() {
-  if (!assessmentPath || securityGraphButton?.disabled) {
-    if (!assessmentPath) setSecurityStatus("Create or open a project first", "error");
-    return;
-  }
-  securityGraphButton.disabled = true;
-  try { await openApplicationGraphTab({ build: true }); }
-  finally { securityGraphButton.disabled = false; }
-}
-
-async function deepCollectApplicationGraph() {
-  if (!assessmentPath || !window.api.assessmentDeepCollectGraph || mapDeepCollectAction?.disabled) return;
-  setMapWorkspaceState({ exists: Boolean(applicationMap), busy: true, message: "Actively collecting referenced in-scope JavaScript…" });
-  try {
-    const result = await window.api.assessmentDeepCollectGraph({ path: assessmentPath });
-    if (result?.ok === false || result?.error) {
-      const message = result.error?.message || result.error || "Deep JavaScript collection failed.";
-      setMapWorkspaceState({ exists: Boolean(applicationMap), busy: false, message });
-      addErrorMessage(message);
-      return;
-    }
-    await loadApplicationMap();
-    if (mapWorkspaceSubtitle) mapWorkspaceSubtitle.textContent = `Deep collection complete · ${Number(result.downloaded) || 0} downloaded · ${Number(result.unchanged) || 0} deduplicated · ${Number(result.failed) || 0} unavailable`;
-  } catch (error) {
-    setMapWorkspaceState({ exists: Boolean(applicationMap), busy: false, message: error?.message || "Deep JavaScript collection failed." });
+    if (button) button.disabled = false;
   }
 }
 
@@ -12614,10 +12700,6 @@ function switchToTab(filePath, { focusEditor = true } = {}) {
     switchToInterceptorTab();
     return;
   }
-  if (isApplicationGraphTab(openTabs.get(filePath))) {
-    void switchToApplicationGraphTab();
-    return;
-  }
   showCodeEditorWorkspace();
   commitActiveTab();
   activeTabPath = filePath;
@@ -12663,7 +12745,7 @@ function focusExplorerSidebar() {
 }
 
 function getEditorTabAbsolutePath(tab) {
-  if (!tab || isSettingsTab(tab) || isInterceptorTab(tab) || isApplicationGraphTab(tab)) return null;
+  if (!tab || isSettingsTab(tab) || isInterceptorTab(tab)) return null;
   const rawPath = tab.diskPath || tab.path || "";
   if (!rawPath || String(rawPath).startsWith("xekute:")) return null;
   if (rootPath) {
@@ -12853,7 +12935,7 @@ function renderTabs() {
     el.className = "editor-tab"
       + (path === activeTabPath ? " active" : "")
       + (tab.pinned ? " editor-tab-pinned" : "");
-    const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab) || isApplicationGraphTab(tab);
+    const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab);
     if (specialWorkspaceTab) el.classList.add("special-workspace-tab");
     el.title = specialWorkspaceTab
       ? tab.name
@@ -12908,14 +12990,20 @@ function renderTabs() {
     });
 
     const icon = document.createElement("span");
-    const info = isSettingsTab(tab)
-      ? { icon: "codicon-settings-gear", className: "file-icon-config" }
+    const specialIcon = isSettingsTab(tab)
+      ? "codicon-settings-gear"
       : isInterceptorTab(tab)
-        ? { icon: "codicon-debug-disconnect", className: "file-icon-config" }
-        : isApplicationGraphTab(tab)
-          ? { icon: "codicon-type-hierarchy", className: "file-icon-config" }
-        : fileIconInfo(tab.name);
-    icon.className = `tab-icon codicon ${info.icon} ${info.className}`;
+        ? "codicon-debug-disconnect"
+        : "";
+    if (specialIcon) {
+      icon.className = `tab-icon codicon ${specialIcon}`;
+    } else {
+      const info = SetiIconTheme.iconForFile(tab.name);
+      icon.className = "tab-icon seti-icon";
+      icon.textContent = info.glyph;
+      icon.style.color = info.color;
+    }
+    icon.setAttribute("aria-hidden", "true");
 
     const label = document.createElement("span");
     label.className = "tab-label" + (tab.dirty ? " tab-dirty" : "");
@@ -12980,7 +13068,7 @@ function renderTabs() {
 function updateEditorPathBar() {
   if (!editorPathBar || !editorPathLabel) return;
   const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
-  if (!activeTab || isSettingsTab(activeTab) || isInterceptorTab(activeTab) || isApplicationGraphTab(activeTab)) {
+  if (!activeTab || isSettingsTab(activeTab) || isInterceptorTab(activeTab)) {
     editorPathBar.hidden = true;
     editorPathLabel.textContent = "";
     editorPathLabel.removeAttribute("title");
@@ -13019,7 +13107,6 @@ async function renderEditor({ focusEditor = true } = {}) {
     updateEditorPathBar();
     if (resourceViewer) resourceViewer.hidden = true;
     if (securityWorkspace) securityWorkspace.hidden = true;
-    if (mapWorkspace) mapWorkspace.hidden = true;
     if (webcloneWorkspace) webcloneWorkspace.hidden = true;
     if (assessmentModuleView) { assessmentModuleView.hidden = true; assessmentModuleActive = false; }
     window.api.webCloneHidePreview?.();
@@ -13038,17 +13125,6 @@ async function renderEditor({ focusEditor = true } = {}) {
     if (markdownPreview) markdownPreview.hidden = true;
     if (settingsEditorToolbar) settingsEditorToolbar.hidden = true;
     showSecurityWorkspaceContent(activeTab.securityTool || "");
-    return;
-  }
-
-  if (isApplicationGraphTab(activeTab)) {
-    if (editorEmpty) editorEmpty.setAttribute("hidden", "");
-    if (editorView) editorView.setAttribute("hidden", "");
-    if (monacoContainer) monacoContainer.hidden = true;
-    if (settingsUIView) settingsUIView.hidden = true;
-    if (markdownPreview) markdownPreview.hidden = true;
-    if (settingsEditorToolbar) settingsEditorToolbar.hidden = true;
-    await showMapWorkspace();
     return;
   }
 
@@ -13230,30 +13306,6 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
-function fileIconInfo(name) {
-  const ext = name.split(".").pop().toLowerCase();
-  const map = {
-    py: ["codicon-symbol-method", "file-icon-py"], pyw: ["codicon-symbol-method", "file-icon-py"],
-    c: ["codicon-file-code", "file-icon-c"], h: ["codicon-file-code", "file-icon-c"],
-    cpp: ["codicon-file-code", "file-icon-cpp"], cxx: ["codicon-file-code", "file-icon-cpp"], cc: ["codicon-file-code", "file-icon-cpp"], hpp: ["codicon-file-code", "file-icon-cpp"],
-    js: ["codicon-file-code", "file-icon-js"], mjs: ["codicon-file-code", "file-icon-js"], cjs: ["codicon-file-code", "file-icon-js"],
-    jsx: ["codicon-file-code", "file-icon-js"], ts: ["codicon-symbol-interface", "file-icon-ts"], tsx: ["codicon-symbol-interface", "file-icon-ts"],
-    json: ["codicon-json", "file-icon-json"], jsonc: ["codicon-json", "file-icon-json"],
-    html: ["codicon-code", "file-icon-html"], htm: ["codicon-code", "file-icon-html"],
-    css: ["codicon-symbol-color", "file-icon-css"], scss: ["codicon-symbol-color", "file-icon-css"],
-    md: ["codicon-markdown", "file-icon-md"], yml: ["codicon-settings", "file-icon-yaml"], yaml: ["codicon-settings", "file-icon-yaml"],
-    rs: ["codicon-file-code", "file-icon-rust"], go: ["codicon-file-code", "file-icon-go"], rb: ["codicon-file-code", "file-icon-ruby"],
-    sh: ["codicon-terminal", "file-icon-shell"], ps1: ["codicon-terminal", "file-icon-shell"], bat: ["codicon-terminal", "file-icon-shell"],
-    toml: ["codicon-settings", "file-icon-config"], env: ["codicon-key", "file-icon-config"], ini: ["codicon-settings", "file-icon-config"], config: ["codicon-settings-gear", "file-icon-config"],
-    lock: ["codicon-lock", "file-icon-lock"], gitignore: ["codicon-git-branch", "file-icon-git"],
-    png: ["codicon-file-media", "file-icon-media"], jpg: ["codicon-file-media", "file-icon-media"], jpeg: ["codicon-file-media", "file-icon-media"],
-    svg: ["codicon-file-media", "file-icon-media"], gif: ["codicon-file-media", "file-icon-media"], ico: ["codicon-file-media", "file-icon-media"],
-    pdf: ["codicon-file-pdf", "file-icon-pdf"],
-  };
-  const [icon, className] = map[ext] || ["codicon-file", "file-icon-text"];
-  return { icon, className };
-}
-
 // ── Model picker ──────────────────────────────────────────────────────────────
 
 function syncModelLabel() {
@@ -13331,6 +13383,7 @@ function resizeChatInput() {
   chatInput.style.overflowY = atCap ? "auto" : "hidden";
   chatInput.classList.toggle("at-scroll-cap", atCap);
 }
+globalThis.resizeChatInput = resizeChatInput;
 
 function resetChatInput() {
   if (!chatInput) return;
@@ -13439,6 +13492,15 @@ async function openModelEditMenu(modelName, rowEl) {
   } else {
     renderReasoningOptions(null);
     renderContextOptions(settings.context, null);
+    if (window.api?.runtimeModel) {
+      void window.api.runtimeModel({ model: modelName }).then((result) => {
+        if (editingModel !== modelName || !result?.ok) return;
+        if (result.contextLength) ollamaRuntimeContext[modelName] = result.contextLength;
+        renderContextOptions(getModelSettings(modelName).context, {
+          contextWindowTokens: result.contextLength,
+        });
+      }).catch(() => {});
+    }
   }
   updateModelRuntimeNote(modelName);
 
@@ -13552,10 +13614,9 @@ function renderReasoningOptions(openRouterMetadata = null) {
 }
 
 function formatOpenRouterContextLabel(tokens) {
-  const value = ContextBudget?.positiveInteger(tokens);
-  if (!value) return AUTO_CONTEXT;
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
-  return `${Math.ceil(value / 1000)}K`;
+  return ContextBudget?.positiveInteger(tokens)
+    ? (ContextBudget.formatPickerContextLabel(tokens) || formatContextWindowLabel(tokens))
+    : AUTO_CONTEXT;
 }
 
 function nearestContextChoice(choices, tokens) {
@@ -13565,64 +13626,72 @@ function nearestContextChoice(choices, tokens) {
   return choices.reduce((best, value) => Math.abs(value - selected) < Math.abs(best - selected) ? value : best);
 }
 
-function renderContextOptions(selected, openRouterMetadata = null) {
-  contextOptions.innerHTML = "";
-  const metadata = isOpenRouterProvider()
-    ? ContextBudget.normalizeModelMetadata(openRouterMetadata || openRouterModelMeta[editingModel] || {}, editingModel)
-    : null;
-  const settings = editingModel ? getModelSettings(editingModel) : { context: AUTO_CONTEXT, contextMode: "auto" };
-
+function pickerContextMaximum(metadataHint = null) {
   if (isOpenRouterProvider()) {
-    const choices = ContextBudget.contextOptions(Math.max(
-      Number(metadata?.contextWindowTokens) || 0,
-      ...(Array.isArray(metadata?.endpointContextLengths) ? metadata.endpointContextLengths : []),
-    ) || null);
-    if (!choices.length) {
-      const note = document.createElement("span");
-      note.className = "model-edit-note";
-      note.textContent = "Fetching model context…";
-      contextOptions.appendChild(note);
-      return;
-    }
-    const selectedTokens = settings.contextMode === "custom"
-      ? settings.contextLimitTokens
-      : (ContextBudget.positiveInteger(selected) || null);
-    const matched = nearestContextChoice(choices, selectedTokens) || choices[0];
-    for (const tokens of choices) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "context-option" + (tokens === matched ? " selected" : "");
-      btn.innerHTML = `<span>${formatOpenRouterContextLabel(tokens)}</span><span class="codicon codicon-check"></span>`;
-      btn.title = `Use a ${formatOpenRouterContextLabel(tokens)} token context window`;
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (!editingModel) return;
-        setModelSetting(editingModel, "context", tokens);
-        renderContextOptions(tokens, metadata);
-        updateModelRuntimeNote(editingModel);
-      });
-      contextOptions.appendChild(btn);
-    }
+    const metadata = ContextBudget.normalizeModelMetadata(
+      metadataHint || openRouterModelMeta[editingModel] || {},
+      editingModel,
+    );
+    return Math.max(
+      Number(metadata.contextWindowTokens) || 0,
+      ...(Array.isArray(metadata.endpointContextLengths) ? metadata.endpointContextLengths : []),
+    ) || null;
+  }
+  return ContextBudget.positiveInteger(metadataHint?.contextWindowTokens)
+    || ContextBudget.positiveInteger(ollamaRuntimeContext[editingModel])
+    || (resolvedContextCapacity?.plan?.model === editingModel
+      ? ContextBudget.positiveInteger(resolvedContextCapacity.plan.modelMaxTokens)
+      : null)
+    || 1_048_576;
+}
+
+function renderContextOptions(selected, metadataHint = null) {
+  contextOptions.innerHTML = "";
+  const settings = editingModel ? getModelSettings(editingModel) : { context: AUTO_CONTEXT, contextMode: "auto" };
+  const maximum = pickerContextMaximum(metadataHint);
+  if (isOpenRouterProvider() && !maximum) {
+    const note = document.createElement("span");
+    note.className = "model-edit-note";
+    note.textContent = "Fetching model context…";
+    contextOptions.appendChild(note);
     return;
   }
+  const choices = ContextBudget.pickerContextOptions(maximum);
+  const autoSelected = settings.contextMode !== "custom";
+  const selectedTokens = autoSelected
+    ? null
+    : (settings.contextLimitTokens || ContextBudget.positiveInteger(selected) || contextLabelToTokens(selected) || null);
+  const matched = nearestContextChoice(choices, selectedTokens);
+  const matchedExactly = matched && selectedTokens
+    && Math.abs(matched - selectedTokens) / Math.max(matched, selectedTokens) < 0.04;
 
-  const options = CONTEXT_OPTIONS;
-  const currentTokens = settings.contextMode === "custom"
-    ? (settings.contextLimitTokens || contextLabelToTokens(settings.context))
-    : null;
-  const selectedLabel = currentTokens
-    ? (options.find((opt) => contextLabelToTokens(opt) === currentTokens) || options.find((opt) => contextLabelToTokens(opt) === nearestContextChoice(options.map(contextLabelToTokens).filter(Boolean), currentTokens)))
-    : AUTO_CONTEXT;
-  for (const opt of options) {
+  const autoBtn = document.createElement("button");
+  autoBtn.type = "button";
+  autoBtn.className = "context-option" + (autoSelected ? " selected" : "");
+  autoBtn.innerHTML = `<span>${AUTO_CONTEXT}</span><span class="codicon codicon-check"></span>`;
+  autoBtn.title = "Use the model's full advertised context window";
+  autoBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!editingModel) return;
+    setModelSetting(editingModel, "context", AUTO_CONTEXT);
+    renderContextOptions(AUTO_CONTEXT, metadataHint);
+    updateModelRuntimeNote(editingModel);
+  });
+  contextOptions.appendChild(autoBtn);
+
+  for (const tokens of choices) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "context-option" + (opt === selectedLabel ? " selected" : "");
-    btn.innerHTML = `<span>${opt}</span><span class="codicon codicon-check"></span>`;
+    btn.className = "context-option" + (!autoSelected && matchedExactly && tokens === matched ? " selected" : "");
+    const pickerLabel = formatOpenRouterContextLabel(tokens);
+    const windowLabel = formatContextWindowLabel(tokens);
+    btn.innerHTML = `<span>${pickerLabel}</span><span class="codicon codicon-check"></span>`;
+    btn.title = `Use a ${windowLabel} token context window`;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!editingModel) return;
-      setModelSetting(editingModel, "context", opt);
-      renderContextOptions(opt, metadata);
+      setModelSetting(editingModel, "context", tokens);
+      renderContextOptions(tokens, metadataHint);
       updateModelRuntimeNote(editingModel);
     });
     contextOptions.appendChild(btn);
@@ -13635,17 +13704,17 @@ async function updateModelRuntimeNote(modelName) {
     const metadata = await fetchOpenRouterModelMetadata(modelName);
     const plan = resolveModelContextPlan(modelName, metadata);
     const maximum = metadata.contextWindowTokens
-      ? `${formatTokenCount(metadata.contextWindowTokens)} maximum`
+      ? `${formatContextWindowLabel(metadata.contextWindowTokens)} maximum`
       : "maximum unavailable";
     const endpointNote = metadata.endpointContextLengths?.length
       ? ` ${metadata.endpointContextLengths.length} provider endpoint${metadata.endpointContextLengths.length === 1 ? "" : "s"} reported.`
       : "";
     const output = metadata.maxCompletionTokens
-      ? ` · ${formatTokenCount(metadata.maxCompletionTokens)} output max`
+      ? ` · ${formatContextWindowLabel(metadata.maxCompletionTokens)} output max`
       : "";
     const budget = plan.mode === "custom"
-      ? `App budget ${formatTokenCount(plan.effectiveLimitTokens)}.`
-      : `Auto app budget ${formatTokenCount(plan.effectiveLimitTokens)}.`;
+      ? `App budget ${formatContextWindowLabel(plan.effectiveLimitTokens)}.`
+      : `Auto app budget ${formatContextWindowLabel(plan.effectiveLimitTokens)}.`;
     const openRouterNote = `OpenRouter ${maximum}${output}.${endpointNote} ${budget} ${plan.approximate ? "Capacity is approximate until model metadata is available." : ""}`;
     setModelRuntimeNote(openRouterNote.trim(), plan.approximate);
     return;
@@ -14165,9 +14234,9 @@ function attachAssistantCopyButton(contentEl) {
 
   // A restored transcript can contain several assistant messages for one
   // user exchange, and an automatic continuation can resume an exchange that
-  // already had a footer. Rebuild the footer so it is always the final node,
-  // and never show it while any part of the assistant exchange is still live.
-  exchange.querySelector(".assistant-reply-footer")?.remove();
+  // already had a footer. Rebuild it at the end of the chunk body so copy/time
+  // stay inside the user prompt + assistant response group.
+  exchange.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
   const assistantStillRunning = [...exchange.querySelectorAll(".chat-turn.assistant")]
     .some((assistantTurn) => assistantTurn.getAttribute("aria-busy") === "true");
   if (assistantStillRunning) return;
@@ -14224,7 +14293,8 @@ function attachAssistantCopyButton(contentEl) {
   footer.className = "assistant-reply-footer";
   footer.appendChild(timeLabel);
   footer.appendChild(button);
-  exchange.appendChild(footer);
+  const host = ensureAgentResponseHost(exchange) || chatExchangeBody(exchange);
+  host.appendChild(footer);
 }
 
 function toolIconClass(tool = {}) {
@@ -14239,24 +14309,11 @@ function toolIconClass(tool = {}) {
 
 const FILE_MUTATION_TOOL_NAMES = new Set([
   "apply_patch",
-  "update_project_artifacts",
-  "manage_state",
-  "manage_identity",
-  "attack_graph",
   "create_guidance",
 ]);
 
 const FILE_READ_TOOL_NAMES = new Set([
   "read_file",
-  "search_workspace",
-  "inspect_environment",
-  "ingest_traffic",
-  "replay_request",
-  "run_test_case",
-  "browser_action",
-  "compare_responses",
-  "verify_finding",
-  "delegate_agent",
 ]);
 
 function toolActionName(tool = {}) {
@@ -14272,7 +14329,7 @@ function isFileReadTool(tool = {}) {
 }
 
 function isFileActionTool(tool = {}) {
-  return isFileMutationTool(tool) || isFileReadTool(tool);
+  return Boolean(fileActionKindForTool(tool));
 }
 
 function toolCardKey(tool = {}) {
@@ -14285,39 +14342,332 @@ function toolCardKey(tool = {}) {
   ].join("\u0000");
 }
 
-function fileActionMessage(tool = {}, result = {}, phase = "running") {
-  const action = toolActionName(tool);
-  const isDelete = action === "apply_patch" && Array.isArray(tool?.args?.operations) && tool.args.operations.some((op) => op.kind === "delete");
-  const isCreate = action === "apply_patch" && Array.isArray(tool?.args?.operations) && tool.args.operations.some((op) => op.kind === "create");
-  if (phase === "running") {
-    if (isFileReadTool(tool)) return "Reading...";
-    if (isDelete) return "Deleting...";
-    if (isCreate || action === "create_guidance") return "Creating...";
-    return "Editing...";
+function toolTargetPath(tool = {}, result = {}) {
+  const args = tool.args && typeof tool.args === "object" ? tool.args : {};
+  const resultPath = result?.relativePath || result?.path || result?.file || "";
+  const operations = Array.isArray(args.operations) ? args.operations : [];
+  const op = operations.find((item) => item && (item.path || item.target)) || operations[0] || {};
+  return String(resultPath || args.path || args.file || tool.file || op.path || op.target || "").trim();
+}
+
+function toolTargetBasename(tool = {}, result = {}) {
+  const value = toolTargetPath(tool, result).replace(/\\/g, "/");
+  if (!value || value === "workspace" || value === ".") return "";
+  const parts = value.split("/").filter(Boolean);
+  return parts.at(-1) || value;
+}
+
+function compactText(text = "", max = 48) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return "";
+  return value.length > max ? `${value.slice(0, Math.max(1, max - 1))}\u2026` : value;
+}
+
+function toolArgsOf(tool = {}) {
+  return tool.args && typeof tool.args === "object" && !Array.isArray(tool.args) ? tool.args : {};
+}
+
+function compactUrlDetail(url = "") {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const path = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
+    return compactText(`${parsed.host || ""}${path}`, 48);
+  } catch {
+    return compactText(raw.replace(/^https?:\/\//i, ""), 48);
   }
-  if (phase === "error") return "Failed";
-  if (isFileReadTool(tool)) return "Read";
-  if (isDelete) return "Deleted";
-  if (isCreate || action === "create_guidance") return "Created";
-  return "Edited";
+}
+
+function compactSearchNeedle(tool = {}) {
+  const args = toolArgsOf(tool);
+  return compactText(args.query || args.pattern || args.filename || args.text || args.symbol || tool.query || "");
+}
+
+function isAskQuestionsTool(tool = {}) {
+  return toolActionName(tool) === "ask_questions";
+}
+
+function isSearchTool(tool = {}) {
+  const action = toolActionName(tool);
+  return action === "search_workspace" || (action !== "web_research" && /search|grep|find/.test(action));
+}
+
+function applyPatchOperations(tool = {}) {
+  const operations = toolArgsOf(tool).operations;
+  return Array.isArray(operations) ? operations.filter((item) => item && typeof item === "object") : [];
+}
+
+function applyPatchKind(tool = {}, result = {}) {
+  if (result?.mode === "delete") return "delete";
+  const operations = applyPatchOperations(tool);
+  if (!operations.length) return "modify";
+  if (operations.every((op) => op.kind === "delete")) return "delete";
+  if (operations.every((op) => op.kind === "create")) return "create";
+  if (operations.every((op) => op.kind === "move")) return "move";
+  if (operations.every((op) => op.kind === "ensure_dir")) return "ensure_dir";
+  return String(operations[0]?.kind || "modify");
+}
+
+function applyPatchDetail(tool = {}, result = {}) {
+  const operations = applyPatchOperations(tool);
+  const op = operations[0] || {};
+  if (applyPatchKind(tool, result) === "move") {
+    const from = toolTargetBasename({ args: { path: op.path } }, result) || toolTargetBasename(tool, result);
+    const to = toolTargetBasename({ args: { path: op.target } }, {});
+    if (from && to) return `${from} \u2192 ${to}`;
+    return to || from;
+  }
+  return toolTargetBasename(tool, result);
+}
+
+function isDeletePatchTool(tool = {}, result = {}) {
+  return toolActionName(tool) === "apply_patch" && applyPatchKind(tool, result) === "delete";
+}
+
+function webResearchParts(tool = {}, result = {}, running = false) {
+  const args = toolArgsOf(tool);
+  const operation = String(args.operation || result.operation || "").toLowerCase();
+  if (operation === "fetch_page") {
+    return {
+      verb: running ? "Reading page" : "Read page",
+      detail: compactText(result.title || "") || compactUrlDetail(args.url || result.url || ""),
+    };
+  }
+  return {
+    verb: running ? "Searching web" : "Searched web",
+    detail: compactSearchNeedle(tool) || compactText(result.query || ""),
+  };
+}
+
+function browserActionDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  const action = String(args.action || result.action || "").replace(/_/g, " ").trim();
+  const target = compactUrlDetail(args.url || result.url || "")
+    || compactText(args.selector || args.text || args.option || args.pageId || "", 40);
+  if (action && target) return `${action} ${target}`;
+  return target || action;
+}
+
+function replayRequestDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  const request = args.request && typeof args.request === "object" ? args.request : {};
+  const method = String(request.method || result.method || "GET").toUpperCase();
+  const path = compactUrlDetail(request.url || result.url || "") || compactText(request.url || result.url || "", 40);
+  return path ? `${method} ${path}` : method;
+}
+
+function identityActionDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  const operation = String(args.operation || result.operation || "").trim();
+  const name = compactText(args.name || args.identityId || result.name || result.identityId || "", 32);
+  if (operation && name) return `${operation} ${name}`;
+  return name || operation;
+}
+
+function delegateAgentDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  return compactText(
+    args.task
+    || args.prompt
+    || args.summary
+    || args.name
+    || result.task
+    || result.summary
+    || args.contextPackage?.role
+    || "",
+  );
+}
+
+function guidanceDetail(tool = {}, result = {}) {
+  const args = toolArgsOf(tool);
+  return compactText(args.name || result.name || "") || toolTargetBasename(tool, result);
+}
+
+function fileActionKindForTool(tool = {}, result = {}) {
+  const action = toolActionName(tool);
+  const args = toolArgsOf(tool);
+  if (action === "web_research") return String(args.operation || result.operation || "").toLowerCase() === "fetch_page" ? "read" : "search";
+  if (action === "browser_action") return "browse";
+  if (action === "replay_request") return "replay";
+  if (action === "manage_identity") return "identity";
+  if (action === "delegate_agent") return "delegate";
+  if (isSearchTool(tool)) return "search";
+  if (isDeletePatchTool(tool, result) || action === "delete" || result?.mode === "delete") return "delete";
+  if (isFileReadTool(tool) || /read|list|inspect|outline|index|web_page/.test(action)) return "read";
+  if (isFileMutationTool(tool) || /write|patch|edit|creat|delet|mutat/.test(action)) return "write";
+  return "";
+}
+
+function joinVerbAndTarget(verb, target) {
+  const name = String(target || "").trim();
+  return name ? `${verb} ${name}` : verb;
+}
+
+const TOOL_STATUS_VERBS = [
+  "Running Command",
+  "Ran Command",
+  "Command failed",
+  "Updating identity",
+  "Updated identity",
+  "Creating folder",
+  "Created folder",
+  "Searching web",
+  "Searched web",
+  "Reading page",
+  "Read page",
+  "Searching",
+  "Searched",
+  "Reading",
+  "Deleting",
+  "Deleted",
+  "Editing",
+  "Edited",
+  "Creating",
+  "Created",
+  "Moving",
+  "Moved",
+  "Browsing",
+  "Browsed",
+  "Replaying",
+  "Replayed",
+  "Delegating",
+  "Delegated",
+  "Failed",
+  "Read",
+];
+
+function splitToolStatusLabel(text = "") {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  const verb = TOOL_STATUS_VERBS.find((item) => value === item || value.startsWith(`${item} `));
+  if (!verb) return { verb: value, detail: "" };
+  return { verb, detail: value.slice(verb.length).trim() };
+}
+
+function isBareToolVerbLabel(label = "") {
+  const { verb, detail } = splitToolStatusLabel(label);
+  return Boolean(verb && !detail && KEEPABLE_TOOL_LABEL.test(verb));
+}
+
+function recoveredToolTargetName(card) {
+  const file = String(card?.dataset?.file || "").trim();
+  if (!file) return "";
+  return toolTargetBasename({ args: { path: file } }, {});
+}
+
+function decorateBareToolLabel(card, label = "") {
+  const value = String(label || "").trim();
+  if (!isBareToolVerbLabel(value)) return value;
+  const detail = recoveredToolTargetName(card);
+  if (!detail) return "";
+  return `${splitToolStatusLabel(value).verb} ${detail}`;
+}
+
+function renderToolStatusLabel(host, verb, detail = "") {
+  if (!host) return;
+  const nextVerb = isStubToolStatusLabel(verb) ? "" : String(verb || "").trim();
+  const nextDetail = isStubToolStatusLabel(detail) ? "" : String(detail || "").trim();
+  host.replaceChildren();
+  if (!nextVerb && !nextDetail) return;
+  const verbEl = document.createElement("span");
+  verbEl.className = "agent-tool-verb";
+  verbEl.textContent = nextVerb || nextDetail;
+  host.appendChild(verbEl);
+  if (nextVerb && nextDetail) {
+    host.appendChild(document.createTextNode(" "));
+    const detailEl = document.createElement("span");
+    detailEl.className = "agent-tool-detail";
+    detailEl.textContent = nextDetail;
+    host.appendChild(detailEl);
+  }
+}
+
+function renderToolStatusLabelFromText(host, text = "") {
+  const parts = splitToolStatusLabel(text);
+  renderToolStatusLabel(host, parts.verb, parts.detail);
+}
+
+function hydrateToolStatusLabels(root) {
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".tool-card-file, .agent-command-label, .agent-file-stack-text").forEach((el) => {
+    if (el.querySelector(".agent-tool-verb")) return;
+    if (isStubToolStatusLabel(el.textContent)) {
+      el.replaceChildren();
+      return;
+    }
+    renderToolStatusLabelFromText(el, el.textContent);
+  });
+}
+
+function exploredToolParts(tool = {}, result = {}, phase = "success") {
+  const action = toolActionName(tool);
+  const file = toolTargetBasename(tool, result);
+  if (phase === "error") return { verb: "Failed", detail: file };
+  const running = phase === "running";
+  if (isAskQuestionsTool(tool)) return { verb: "", detail: "" };
+  if (action === "view_active_terminal") {
+    return {
+      verb: running ? "Viewing terminal" : "Viewed terminal",
+      detail: String(tool.args?.terminal_id || result?.user_active_terminal || result?.terminal?.terminal_id || "active"),
+    };
+  }
+  if (isAgentTerminalTool(tool) || /^(exec_command)$/.test(action) || /command|terminal|process|shell|script|exec/.test(action)) {
+    return {
+      verb: running ? "Running Command" : "Ran Command",
+      detail: agentTerminalCommandForTool(tool),
+    };
+  }
+  if (action === "web_research") return webResearchParts(tool, result, running);
+  if (action === "browser_action") {
+    return { verb: running ? "Browsing" : "Browsed", detail: browserActionDetail(tool, result) };
+  }
+  if (action === "replay_request") {
+    return { verb: running ? "Replaying" : "Replayed", detail: replayRequestDetail(tool, result) };
+  }
+  if (action === "manage_identity") {
+    return { verb: running ? "Updating identity" : "Updated identity", detail: identityActionDetail(tool, result) };
+  }
+  if (action === "delegate_agent") {
+    return { verb: running ? "Delegating" : "Delegated", detail: delegateAgentDetail(tool, result) };
+  }
+  if (action === "create_guidance") {
+    return { verb: running ? "Creating" : "Created", detail: guidanceDetail(tool, result) };
+  }
+  if (isSearchTool(tool)) {
+    return { verb: running ? "Searching" : "Searched", detail: compactSearchNeedle(tool) || file };
+  }
+  if (action === "apply_patch") {
+    const kind = applyPatchKind(tool, result);
+    const detail = applyPatchDetail(tool, result);
+    if (kind === "delete") return { verb: running ? "Deleting" : "Deleted", detail };
+    if (kind === "create") return { verb: running ? "Creating" : "Created", detail };
+    if (kind === "move") return { verb: running ? "Moving" : "Moved", detail };
+    if (kind === "ensure_dir") return { verb: running ? "Creating folder" : "Created folder", detail };
+    return { verb: running ? "Editing" : "Edited", detail };
+  }
+  if (isDeletePatchTool(tool, result) || action === "delete" || result?.mode === "delete") {
+    return { verb: running ? "Deleting" : "Deleted", detail: file };
+  }
+  if (isFileReadTool(tool) || /read|list|inspect|outline|index/.test(action)) {
+    return { verb: running ? "Reading" : "Read", detail: file };
+  }
+  if (isFileMutationTool(tool) || /write|patch|edit|creat|delet|mutat/.test(action)) {
+    return { verb: running ? "Editing" : "Edited", detail: file };
+  }
+  return { verb: "", detail: file };
+}
+
+function exploredToolLabel(tool = {}, result = {}, phase = "success") {
+  const parts = exploredToolParts(tool, result, phase);
+  return joinVerbAndTarget(parts.verb, parts.detail);
+}
+
+function fileActionMessage(tool = {}, result = {}, phase = "running") {
+  return exploredToolLabel(tool, result, phase);
 }
 
 function toolRunningMessage(tool = {}) {
-  if (isFileActionTool(tool)) return fileActionMessage(tool, {}, "running");
-  const action = toolActionName(tool).toLowerCase();
-  if (/command|terminal|process|shell|script|exec/.test(action)) {
-    const command = agentTerminalCommandForTool(tool);
-    return command ? String(command) : "Running command\u2026";
-  }
-  if (/search|find|grep|web_search|web_research/.test(action)) return "Searching\u2026";
-  if (/read|list|inspect|outline|index|web_page/.test(action)) return "Reading\u2026";
-  if (/verify|test|check/.test(action)) return "Verifying\u2026";
-  if (/browser|navigate|click|type/.test(action)) return "Driving browser\u2026";
-  if (/replay|traffic|ingest/.test(action)) return "Replaying traffic\u2026";
-  if (/compare|responses/.test(action)) return "Comparing responses\u2026";
-  if (/delegate|subagent/.test(action)) return "Delegating sub-agent\u2026";
-  if (/update_project_artifacts|manage_state|manage_identity/.test(action)) return "Managing workflow\u2026";
-  return "Working\u2026";
+  return exploredToolLabel(tool, {}, "running");
 }
 
 function toolUiResult(result = {}) {
@@ -14338,81 +14688,100 @@ function toolUiResult(result = {}) {
 
 function minimalToolSuccessLabel(tool = {}, result = {}) {
   const uiResult = toolUiResult(result);
-  if (isFileActionTool(tool)) return fileActionMessage(tool, uiResult, "success");
   if (uiResult?.error) return "Failed";
-  if (uiResult?.mode === "command") return uiResult.timedOut ? "Timed out" : uiResult.exitCode === 0 ? "Completed" : "Failed";
-  if (["read", "read_many", "inspect", "list", "index", "search", "web_search", "web_page", "outline"].includes(uiResult?.mode)) return "Read";
-  if (["process_start", "process_read", "process_stop"].includes(result?.mode)) return "Process updated";
-  if (result?.mode === "terminal_wait") return "Waiting on terminal";
-  if (result?.mode === "subagent_wait") return "Waiting on subagent";
-  if (result?.mode === "delete") return "Deleted";
-  return "Done";
+  return exploredToolLabel(tool, uiResult, "success");
 }
 
 function createToolCard(tool, { pending = false } = {}) {
-  const card = document.createElement("div");
+  const card = document.createElement("button");
+  card.type = "button";
   const fileAction = isFileActionTool(tool);
-  card.className = `tool-card${pending ? " pending" : ""}${fileAction ? " file-action" : ""}`;
+  card.className = `agent-file-row tool-card${pending ? " pending" : ""}${fileAction ? " file-action" : ""}`;
+  card.dataset.lane = "activity";
   const label = ToolMap.targetForTool(tool);
   const callId = String(tool.callId || "").trim();
+  const path = toolTargetPath(tool);
   card.dataset.file = label;
+  if (path) card.dataset.path = path;
   card.dataset.toolAction = toolActionName(tool);
   card.dataset.toolKey = toolCardKey(tool);
   if (callId) card.dataset.callId = callId;
-  card.dataset.fileActionKind = isFileReadTool(tool) ? "read" : isFileMutationTool(tool) ? "write" : "";
-  card.dataset.runningLabel = toolRunningMessage(tool);
+  card.dataset.fileActionKind = fileActionKindForTool(tool);
+  card.dataset.runningLabel = exploredToolLabel(tool, {}, "running");
+  card.dataset.completedLabel = exploredToolLabel(tool, {}, "success");
   card.dataset.state = pending ? "queued" : "running";
-  const detail = fileAction ? "" : ToolParser.toolCardDetail(tool);
-  const iconMarkup = fileAction
-    ? '<img class="tool-card-icon tool-card-file-icon" src="assets/icons/chat_read_edit_file_icon.svg" alt="" aria-hidden="true">'
-    : `<span class="codicon ${toolIconClass(tool)} tool-card-icon"></span>`;
-  card.innerHTML = `
-    <div class="tool-card-header">
-      ${iconMarkup}
-      <span class="tool-card-file">${escapeHtml(card.dataset.runningLabel)}</span>
-      <span class="tool-card-badge">${escapeHtml(detail)}</span>
-      <span class="tool-card-status running"></span>
-    </div>
-  `;
-  card.setAttribute("role", "status");
+  const runningParts = exploredToolParts(tool, {}, "running");
+  card.dataset.fileVerb = stackVerbForLabel(runningParts.verb);
+  const fileEl = document.createElement("span");
+  fileEl.className = "tool-card-file";
+  if (!isStubToolStatusLabel(runningParts.verb)) {
+    renderToolStatusLabel(fileEl, runningParts.verb, runningParts.detail);
+  }
+  card.appendChild(fileEl);
   card.setAttribute("aria-label", card.dataset.runningLabel);
-  return card;
+  return syncToolCardPlaceholderVisibility(card);
 }
 
 function setToolCardStatus(card, type, message) {
-  const status = card.querySelector(".tool-card-status");
-  if (!status) return;
+  if (!card) return;
+  if (type === "error") {
+    card.remove();
+    return;
+  }
   const fileEl = card.querySelector(".tool-card-file");
-  const label = type === "running"
-    ? card.dataset.runningLabel || "Working\u2026"
-    : type === "error" ? "Failed" : String(message || "Completed");
-  if (fileEl) fileEl.textContent = label;
+  let label = type === "running"
+    ? card.dataset.runningLabel || ""
+    : String(message || card.dataset.completedLabel || "").trim();
+  label = decorateBareToolLabel(card, label);
+  if (!label || isStubToolStatusLabel(label) || isBareToolVerbLabel(label) || (type === "success" && isTransientToolCardLabel(label))) {
+    const recovered = [card.dataset.completedLabel, card.dataset.runningLabel, toolCardLabelText(card)]
+      .map((value) => decorateBareToolLabel(card, value))
+      .find((value) => keepableToolCardLabel(value));
+    if (recovered) label = recovered;
+    else if (type === "success") {
+      card.remove();
+      return;
+    } else {
+      if (fileEl) fileEl.replaceChildren();
+      card.dataset.state = "running";
+      card.classList.add("pending");
+      card.hidden = true;
+      return;
+    }
+  }
+  if (fileEl) renderToolStatusLabelFromText(fileEl, label);
+  const parts = splitToolStatusLabel(label);
+  if (parts.verb) card.dataset.fileVerb = stackVerbForLabel(parts.verb);
   card.dataset.state = type;
   card.classList.toggle("pending", type === "running");
   card.setAttribute("aria-label", label);
   card.classList.remove("status-updated");
   void card.offsetWidth;
   card.classList.add("status-updated");
-  status.className = `tool-card-status ${type}`;
-  status.textContent = "";
+  const status = card.querySelector(".tool-card-status");
+  if (status) {
+    status.className = `tool-card-status ${type}`;
+    status.textContent = "";
+  }
+  syncToolCardPlaceholderVisibility(card);
+  if (card.isConnected) absorbFileRow(card);
 }
 
-// Completed tool cards collapse and fade out of the chat, matching the
-// transient activity-feed style of modern agent harnesses. Only terminal
-// command/proc/security cards are auto-faded; file edits and errors stay so
-// the user can still see what changed.
+// Timeline rows (Read / Edited / Searched / commands) stay in the Tool Used
+// fold. Only unlabeled transient stubs are eligible to auto-fade.
 const TOOL_CARD_FADE_MS = 900;
 const TOOL_CARD_KEEP_MUTATION = new Set(["create_guidance"]);
 function shouldAutoFadeToolCard(card) {
+  if (!card) return false;
   if (card.dataset.state === "error") return false;
-  if (card.dataset.fileActionKind) return false;
-  if (card.dataset.toolAction === "exec_command") return false;
+  if (isKeepableToolCard(card)) return false;
   if (TOOL_CARD_KEEP_MUTATION.has(card.dataset.toolAction)) return false;
   return true;
 }
 function fadeToolCard(card) {
   if (!card || !card.isConnected || card.dataset.faded) return;
   if (card.dataset.state !== "success") return;
+  if (!shouldAutoFadeToolCard(card)) return;
   card.dataset.faded = "1";
   card.classList.add("tool-card-fade");
   card.setAttribute("aria-label", `${card.dataset.runningLabel || "Tool"} done`);
@@ -14422,33 +14791,72 @@ function fadeToolCard(card) {
   }, TOOL_CARD_FADE_MS);
 }
 
+function markAssistantToolUse(turn) {
+  if (!turn) return null;
+  for (const run of activeChatRuns.values()) {
+    const assistant = run.assistant;
+    if (!assistant) continue;
+    if (assistant.turn === turn || assistant.rootTurn === turn || assistant.assistantTurns?.().includes(turn)) {
+      assistant.markToolUse();
+      return assistant;
+    }
+  }
+  return null;
+}
+
+function toolCardMountHost(turn, contentEl, assistant) {
+  const work = assistant?.toolWorkMount?.() || assistantStreamHost(turn);
+  if (work && !work.classList?.contains("assistant-reply")) return work;
+  const parent = contentEl?.parentElement;
+  if (parent && !parent.classList.contains("assistant-reply")) return parent;
+  return turn;
+}
+
 function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
+  if (!tool || isAskQuestionsTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) return null;
+  const assistant = markAssistantToolUse(turn);
   const fileKey = ToolMap.targetForTool(tool);
   const action = toolActionName(tool);
   const callId = String(tool.callId || "").trim();
   const key = toolCardKey(tool);
-  const cards = [...turn.querySelectorAll(".tool-card")];
+  const cards = [...(turn?.closest?.(".chat-exchange") || assistant?.workHostTurn?.() || turn).querySelectorAll(".tool-card")];
   let card = cards.find((candidate) => callId && candidate.dataset.callId === callId)
     || cards.find((candidate) => candidate.dataset.toolKey === key)
     || cards.find((candidate) => candidate.dataset.toolAction === action && candidate.dataset.file === fileKey)
-    // Some providers omit a stable call id and emit create_guidance with a
-    // different display target in tool_call vs tool_start. Keep that one
-    // action as a single compact status line.
     || (action === "create_guidance" ? cards.find((candidate) => candidate.dataset.toolAction === action) : null);
+  const runningLabel = exploredToolLabel(tool, {}, "running");
+  const completedLabel = exploredToolLabel(tool, {}, "success");
+  const host = toolCardMountHost(turn, contentEl, assistant);
+  let mounted = false;
   if (!card) {
+    assistant?.sealCurrentContentSegment?.();
     card = createToolCard(tool, { pending });
-    turn.insertBefore(card, contentEl);
-  } else if (pending) {
-    card.classList.add("pending");
-    setToolCardStatus(card, "running", "Queued...");
-  } else {
-    card.classList.remove("pending");
-    setToolCardStatus(card, "running", "Working...");
+    appendChatStreamNode(host, card);
+    mounted = true;
+  } else if (!card.isConnected || card.closest(".assistant-reply")) {
+    assistant?.sealCurrentContentSegment?.();
+    appendChatStreamNode(host, card);
+    mounted = true;
   }
   card.dataset.file = fileKey;
   card.dataset.toolAction = action;
   card.dataset.toolKey = key;
+  const targetPath = toolTargetPath(tool);
+  if (targetPath) card.dataset.path = targetPath;
+  card.dataset.fileActionKind = card.dataset.fileActionKind || fileActionKindForTool(tool);
   if (callId) card.dataset.callId = callId;
+  card.dataset.runningLabel = runningLabel;
+  card.dataset.completedLabel = completedLabel;
+  if (card.dataset.state !== "success") {
+    card.classList.toggle("pending", pending);
+    setToolCardStatus(card, "running", runningLabel);
+  } else {
+    syncToolCardPlaceholderVisibility(card);
+  }
+  if (mounted) {
+    absorbFileRow(card);
+    assistant?.ensurePostToolContentSegment?.();
+  }
   return card;
 }
 
@@ -14710,34 +15118,44 @@ function rememberCommandCompletion(ids, completion, sessionId = "") {
 function commandTimelineStateLabel(state = "running") {
   if (state === "error") return "Command failed";
   if (state === "success") return "Ran Command";
-  return "Running command…";
+  return "Running Command";
+}
+
+function renderCommandTimelineLabel(row, state = "running", extraDetail = "") {
+  if (!row) return;
+  const label = row.querySelector(".agent-command-label");
+  if (!label) return;
+  const detail = String(extraDetail || row.dataset.commandText || "").trim();
+  renderToolStatusLabel(label, commandTimelineStateLabel(state), detail);
 }
 
 function createCommandTimelineRow(tool, { state = "running" } = {}) {
   const row = document.createElement("details");
   row.className = "agent-command-event";
+  row.dataset.lane = "activity";
   row.dataset.commandKey = commandTimelineKey(tool);
   bindCommandTimelineIdentity(row, tool);
   row.dataset.state = state;
   row.open = false;
+  const command = agentTerminalCommandForTool(tool) || "";
+  if (command) row.dataset.commandText = command;
+  const cwd = tool.args?.cwd || tool.cwd;
+  if (cwd) row.dataset.cwd = String(cwd);
+  row.dataset.startedAt = String(Date.now());
 
   const summary = document.createElement("summary");
   summary.className = "agent-command-summary";
-  summary.innerHTML = `
-    <img class="codicon-terminal agent-command-shell" src="assets/icons/shell_icon.svg" alt="" aria-hidden="true">
-    <span class="agent-command-label"></span>
-    <span class="codicon codicon-chevron-right agent-command-chevron" aria-hidden="true"></span>
-  `;
-  summary.querySelector(".agent-command-label").textContent = commandTimelineStateLabel(state);
+  const label = document.createElement("span");
+  label.className = "agent-command-label";
+  summary.appendChild(label);
+  row.appendChild(summary);
+  renderCommandTimelineLabel(row, state);
 
-  const command = agentTerminalCommandForTool(tool) || "Command details unavailable";
   const body = document.createElement("div");
   body.className = "agent-command-body";
   const code = document.createElement("code");
-  code.textContent = command;
+  code.textContent = command || "Command details unavailable";
   body.appendChild(code);
-
-  row.appendChild(summary);
   row.appendChild(body);
   return row;
 }
@@ -14748,7 +15166,7 @@ function updateCommandTimelineRow(row, state = "success") {
   row.dataset.state = state;
   delete row.dataset.waiting;
   const label = row.querySelector(".agent-command-label");
-  if (label) label.textContent = commandTimelineStateLabel(state);
+  if (label) renderCommandTimelineLabel(row, state);
   persistCommandTimelineRowState(row);
   return row;
 }
@@ -14777,7 +15195,7 @@ function startCommandTimelineTicker(row, startedAt = Date.now()) {
       return;
     }
     const label = row.querySelector(".agent-command-label");
-    if (label) label.textContent = `Running command · ${formatWaitClock(Date.now() - start)}`;
+    if (label) renderCommandTimelineLabel(row, "running");
   };
   tick();
   commandTimelineTickers.set(row, setInterval(tick, 1000));
@@ -14798,14 +15216,16 @@ function updateCommandTimelineLabel(identity, label) {
     if (!commandTimelineIdentityMatches(row, ids)) continue;
     if (row.dataset.waiting !== "true") continue;
     const labelEl = row.querySelector(".agent-command-label");
-    if (labelEl) labelEl.textContent = label;
+    if (labelEl) renderToolStatusLabelFromText(labelEl, label);
     row.dataset.state = "running";
     persistCommandTimelineRowState(row);
   }
 }
 
 async function applyToolResultToUi(tool, result, turn, contentEl) {
+  if (isAskQuestionsTool(tool) || isTaskListTool(tool)) return;
   const card = ensureToolCard(turn, contentEl, tool);
+  if (!card) return;
 
   if (result?.error) {
     setToolCardStatus(card, "error", result.error);
@@ -14819,7 +15239,11 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
   }
 
   let successText = minimalToolSuccessLabel(tool, result);
-  if (result?.terminalId) {
+  const uiResult = toolUiResult(result);
+  const resultPath = toolTargetPath(tool, uiResult);
+  if (resultPath) card.dataset.file = resultPath;
+  card.dataset.completedLabel = successText;
+  if (result?.terminalId && result.showInTerminal !== false) {
     successText = result.mode === "terminal_wait" || result.mode === "subagent_wait" ? "waiting" : "Terminal ready";
     TerminalManager.attachAgentSession({
       id: result.terminalId,
@@ -14842,8 +15266,6 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
     card.dataset.waitKind = result.mode === "subagent_wait" ? "subagent" : "terminal";
     card.dataset.waitStartedAt = String(Number(result.startedAt) || Date.now());
     card.dataset.waitMs = String(waitMs);
-    const budgetLabel = waitMs > 0 ? formatWaitClock(waitMs) : "";
-    appendHarnessWaitLine(waitId, budgetLabel ? `waiting ${budgetLabel}` : "waiting");
     startWaitCardTicker(card);
     const status = card.querySelector(".tool-card-status");
     if (status) {
@@ -14948,22 +15370,29 @@ messages.addEventListener("scroll", () => {
   syncChatStickyMask();
 }, { passive: true });
 
-function syncChatScrollbarHover(event) {
-  if (!messages || !event) return;
-  const rect = messages.getBoundingClientRect();
-  const reservedWidth = messages.offsetWidth - messages.clientWidth;
+function syncScrollerScrollbarHover(scroller, event) {
+  if (!scroller || !event) return;
+  const rect = scroller.getBoundingClientRect();
+  const reservedWidth = scroller.offsetWidth - scroller.clientWidth;
   const scrollbarLaneWidth = Math.max(12, reservedWidth + 2);
   const inScrollbarLane = event.clientX >= rect.right - scrollbarLaneWidth
     && event.clientX <= rect.right
     && event.clientY >= rect.top
     && event.clientY <= rect.bottom;
-  messages.classList.toggle("scrollbar-hover", inScrollbarLane);
+  scroller.classList.toggle("scrollbar-hover", inScrollbarLane);
 }
 
-messages.addEventListener("pointermove", syncChatScrollbarHover, { passive: true });
-messages.addEventListener("mousemove", syncChatScrollbarHover, { passive: true });
-messages.addEventListener("pointerleave", () => messages.classList.remove("scrollbar-hover"), { passive: true });
-messages.addEventListener("mouseleave", () => messages.classList.remove("scrollbar-hover"), { passive: true });
+function bindScrollbarHoverLane(scroller) {
+  if (!scroller) return;
+  const sync = (event) => syncScrollerScrollbarHover(scroller, event);
+  scroller.addEventListener("pointermove", sync, { passive: true });
+  scroller.addEventListener("mousemove", sync, { passive: true });
+  scroller.addEventListener("pointerleave", () => scroller.classList.remove("scrollbar-hover"), { passive: true });
+  scroller.addEventListener("mouseleave", () => scroller.classList.remove("scrollbar-hover"), { passive: true });
+}
+
+bindScrollbarHoverLane(messages);
+bindScrollbarHoverLane(chatHistoryBody);
 
 function animateStreamDelta(container, delta) {
   if (!container || !String(delta || "").trim()) return;
@@ -15020,7 +15449,7 @@ function conciseAgentStatus(text = "", kind = "working") {
   if (kind === "error" || /fail|error|blocked/.test(lower)) return "Action failed";
   if (kind === "success") return "Action complete";
   if (kind === "verify") return "Verifying\u2026";
-  if (kind === "planning") return "Forming hypothesis\u2026";
+  if (kind === "planning") return "Planning\u2026";
   if (/retry|trying again/.test(lower)) return "Trying again\u2026";
   if (/writing response|drafting|composing/.test(lower)) return "Writing response\u2026";
   if (/terminal|command/.test(lower)) return "Running command\u2026";
@@ -15029,7 +15458,7 @@ function conciseAgentStatus(text = "", kind = "working") {
   if (/read/.test(lower)) return "Reading files\u2026";
   if (/inspect|context|discover|inventory/.test(lower)) return "Inspecting workspace\u2026";
   if (/verify|verification|checking|test result/.test(lower)) return "Verifying\u2026";
-  if (/plan|preflight|ground/.test(lower)) return "Forming hypothesis\u2026";
+  if (/plan|preflight|ground/.test(lower)) return "Planning\u2026";
   if (/complete|finished|ready/.test(lower)) return "Action complete";
   if (/tool|using|execut|action|working|running|starting/.test(lower)) return "Working\u2026";
   return value ? `${value.slice(0, 68)}${value.length > 68 ? "\u2026" : ""}` : "Working\u2026";
@@ -15069,6 +15498,7 @@ function addUserMessage(text) {
   if (value && latestExchangeUserPromptText() === value.trim()) return;
   const turn = document.createElement("div");
   turn.className = "chat-turn user";
+  turn.dataset.createdAt = new Date().toISOString();
   const box = createUserPromptBox(value);
   turn.appendChild(box);
   appendChatTurn(turn, { startsExchange: true });
@@ -15077,25 +15507,52 @@ function addUserMessage(text) {
   scrollMessages({ force: true });
 }
 
-function addErrorMessage(text, { container = messages, session = activeChatSession() } = {}) {
-  const turn = document.createElement("div");
-  turn.className = "chat-turn error";
-  const box = document.createElement("div");
-  box.className = "chat-box chat-box-error";
-  const content = document.createElement("div");
-  content.className = "chat-box-content";
-  content.textContent = text;
-  box.appendChild(content);
-  turn.appendChild(box);
-  appendChatTurn(turn, { container });
-  if (container === messages) {
-    syncChatEmptyState();
-    syncActiveChatSession();
-    scrollMessages({ force: true });
-  } else if (session) {
-    session.messagesHtml = sanitizePersistedChatHtml(container.innerHTML || "");
-    schedulePersistChatSessions();
+const CHAT_ERROR_TOAST_MS = 15_000;
+let chatErrorToastTimer = 0;
+
+function hideChatErrorToast() {
+  if (chatErrorToastTimer) {
+    clearTimeout(chatErrorToastTimer);
+    chatErrorToastTimer = 0;
   }
+  const toast = $("chat-error-toast");
+  if (toast) toast.hidden = true;
+}
+
+function ensureChatErrorToast() {
+  let toast = $("chat-error-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "chat-error-toast";
+    toast.className = "chat-error-toast";
+    toast.hidden = true;
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    toast.innerHTML = `<p class="chat-error-toast-text"></p><button type="button" class="chat-error-toast-close" title="Dismiss" aria-label="Dismiss"><span class="codicon codicon-close" aria-hidden="true"></span></button>`;
+    const host = inputBar || $("input-bar");
+    const composer = host?.querySelector?.(".composer");
+    if (host && composer) host.insertBefore(toast, composer);
+    else host?.insertBefore?.(toast, host.firstChild);
+  }
+  if (toast && toast.dataset.bound !== "1") {
+    toast.dataset.bound = "1";
+    toast.querySelector(".chat-error-toast-close")?.addEventListener("click", hideChatErrorToast);
+  }
+  return toast;
+}
+
+function addErrorMessage(text, { container = messages, session = activeChatSession() } = {}) {
+  void container;
+  void session;
+  const message = String(text || "").trim();
+  if (!message) return;
+  const toast = ensureChatErrorToast();
+  const label = toast?.querySelector?.(".chat-error-toast-text");
+  if (label) label.textContent = message;
+  if (!toast) return;
+  toast.hidden = false;
+  if (chatErrorToastTimer) clearTimeout(chatErrorToastTimer);
+  chatErrorToastTimer = setTimeout(hideChatErrorToast, CHAT_ERROR_TOAST_MS);
 }
 
 function agentStateKindForText(text = "") {
@@ -15111,16 +15568,6 @@ function agentStateKindForText(text = "") {
 
 function isTaskListTool(tool) {
   return toolActionName(tool) === "update_task_list";
-}
-
-// Canonical project_info, H-####, C-####, and E-#### maintenance is the
-// durable Tier 2/artifact lane. It is operational state, not chat content.
-function isTier2MemoryTool(tool = {}) {
-  return toolActionName(tool) === "update_project_artifacts";
-}
-
-function isTier2MemoryActivity(text = "") {
-  return /\bupdate_project_artifacts\b/i.test(String(text || ""));
 }
 
 function clearComposerTaskList() {
@@ -15177,6 +15624,20 @@ document.addEventListener("pointerdown", (event) => {
 
 function composerQuestionSessionId(sessionId = activeChatSessionId) {
   return String(sessionId || activeChatSessionId || "");
+}
+
+const COMPOSER_FREE_WRITE_ID = "free_write";
+
+function questionOptionsWithFreeWrite(question = {}) {
+  const options = Array.isArray(question.options) ? [...question.options] : [];
+  if (options.some((option) => option?.freeWrite || option?.id === COMPOSER_FREE_WRITE_ID)) return options;
+  options.push({
+    id: COMPOSER_FREE_WRITE_ID,
+    label: "Or describe something else",
+    recommended: false,
+    freeWrite: true,
+  });
+  return options;
 }
 
 function syncComposerQuestionsForActiveSession() {
@@ -15269,7 +15730,18 @@ function showCommandApprovalPanel({
     button.addEventListener("click", () => finish(button.dataset.commandDecision === "approve" ? "approve" : "deny"));
   });
 
-  pendingComposerQuestionsBySession.set(ownerSessionId, { sessionId: ownerSessionId, block, promise, finish });
+  pendingComposerQuestionsBySession.set(ownerSessionId, {
+    sessionId: ownerSessionId,
+    block,
+    promise,
+    finish,
+    abort: () => {
+      if (settled) return;
+      settled = true;
+      dismissPanel();
+      resolveQuestions({ answers: [], skipped: true, aborted: true, requestId });
+    },
+  });
   syncComposerQuestionsForActiveSession();
   return promise;
 }
@@ -15306,7 +15778,7 @@ function showComposerQuestionsPanel({
   block.setAttribute("aria-label", "Operator clarification questions");
 
   const questionBlocks = visibleQuestions.map((question, index) => {
-    const options = Array.isArray(question.options) ? question.options : [];
+    const options = questionOptionsWithFreeWrite(question);
     const hasRecommended = options.some((option) => option.recommended);
     const optionsHtml = options.map((option, optionIndex) => {
       const selectedByDefault = !isToolQuestionnaire && (option.recommended || (!hasRecommended && optionIndex === 0));
@@ -15315,8 +15787,7 @@ function showComposerQuestionsPanel({
         return `
           <div class="agent-questions-option is-free-write">
             <input class="agent-questions-custom-radio" type="radio" name="agent-question-${escapeHtml(question.id)}" value="${escapeHtml(option.id)}" data-free-write="1"${selectedByDefault ? " checked" : ""}>
-            <span class="agent-questions-custom-icon codicon codicon-edit" aria-hidden="true"></span>
-            <input type="text" class="agent-questions-freetext" data-question-id="${escapeHtml(question.id)}" placeholder="Type something..." aria-label="Custom answer">
+            <input type="text" class="agent-questions-freetext" data-question-id="${escapeHtml(question.id)}" placeholder="Or describe something else" aria-label="Or describe something else">
           </div>
         `;
       }
@@ -15398,44 +15869,66 @@ function showComposerQuestionsPanel({
   block.querySelectorAll("input[type='radio']").forEach((input) => {
     input.addEventListener("change", () => {
       syncFreeWrite();
-      if (isToolQuestionnaire && input.checked) queueMicrotask(() => submitButton?.click());
+      if (isToolQuestionnaire && input.checked && input.dataset.freeWrite !== "1") {
+        queueMicrotask(() => submitButton?.click());
+      }
     });
   });
   block.querySelectorAll(".agent-questions-option.is-free-write").forEach((option) => {
     const radio = option.querySelector("input[type='radio']");
     const textInput = option.querySelector(".agent-questions-freetext");
     if (!radio || !textInput) return;
+    const field = option.closest(".agent-questions-field");
     const selectCustomAnswer = () => {
       radio.checked = true;
+      field?.querySelectorAll("input[type='checkbox']").forEach((checkbox) => { checkbox.checked = false; });
       syncFreeWrite();
     };
     textInput.addEventListener("focus", selectCustomAnswer);
     textInput.addEventListener("input", selectCustomAnswer);
+    textInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      if (String(textInput.value || "").trim()) submitButton?.click();
+    });
     option.addEventListener("click", (event) => {
       if (event.target === textInput) return;
       selectCustomAnswer();
       textInput.focus();
+    });
+    field?.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        if (!checkbox.checked) return;
+        radio.checked = false;
+        syncFreeWrite();
+      });
     });
   });
   syncFreeWrite();
   syncQuestionStep();
 
   let resolveQuestions;
+  let settled = false;
   const promise = new Promise((resolve) => { resolveQuestions = resolve; });
 
   const collectAnswers = () => {
     const answers = [];
     block.querySelectorAll(".agent-questions-field").forEach((field) => {
       const questionId = field.dataset.questionId || "";
-      const selectedInputs = [...field.querySelectorAll("input[type='radio']:checked, input[type='checkbox']:checked")];
+      if (!questionId) return;
+      const freeWriteSelected = field.querySelector("input[data-free-write='1']:checked");
+      const freeText = String(field.querySelector(".agent-questions-freetext")?.value || "").trim();
+      if (freeWriteSelected) {
+        answers.push({ questionId, selectedOptionId: COMPOSER_FREE_WRITE_ID, freeText });
+        return;
+      }
+      const selectedInputs = [...field.querySelectorAll("input[type='radio']:checked, input[type='checkbox']:checked")]
+        .filter((input) => input.dataset.freeWrite !== "1");
       const selected = selectedInputs[0];
-      if (!questionId || !selected) return;
-      const freeText = selected.dataset.freeWrite === "1"
-        ? String(field.querySelector(".agent-questions-freetext")?.value || "").trim()
-        : "";
+      if (!selected) return;
       answers.push(field.dataset.questionMultiple === "true"
         ? { questionId, selectedOptionIds: selectedInputs.map((input) => input.value), freeText: "" }
-        : { questionId, selectedOptionId: selected.value, freeText });
+        : { questionId, selectedOptionId: selected.value, freeText: "" });
     });
     return answers;
   };
@@ -15448,6 +15941,8 @@ function showComposerQuestionsPanel({
   };
 
   const finish = (skipped = false) => {
+    if (settled) return;
+    settled = true;
     const answers = skipped ? [] : collectAnswers();
     block.dataset.decision = skipped ? "skipped" : "answered";
     block.querySelectorAll("button, input, textarea").forEach((el) => { el.disabled = true; });
@@ -15464,6 +15959,11 @@ function showComposerQuestionsPanel({
 
   submitButton.addEventListener("click", () => {
     const activeField = questionFields[activeQuestionIndex];
+    const freeWriteSelected = activeField?.querySelector("input[data-free-write='1']:checked");
+    if (freeWriteSelected && !String(activeField.querySelector(".agent-questions-freetext")?.value || "").trim()) {
+      activeField.querySelector(".agent-questions-freetext")?.focus();
+      return;
+    }
     if (!activeField?.querySelector("input[type='radio']:checked, input[type='checkbox']:checked")) {
       activeField?.querySelector("input[type='radio'], input[type='checkbox']")?.focus();
       return;
@@ -15482,7 +15982,18 @@ function showComposerQuestionsPanel({
   });
   block.querySelector("[data-questions-action='skip']").addEventListener("click", () => finish(true));
 
-  pendingComposerQuestionsBySession.set(ownerSessionId, { sessionId: ownerSessionId, block, promise, finish });
+  pendingComposerQuestionsBySession.set(ownerSessionId, {
+    sessionId: ownerSessionId,
+    block,
+    promise,
+    finish,
+    abort: () => {
+      if (settled) return;
+      settled = true;
+      dismissPanel();
+      resolveQuestions({ answers: [], skipped: true, aborted: true, requestId });
+    },
+  });
   syncComposerQuestionsForActiveSession();
   return promise;
 }
@@ -15560,6 +16071,7 @@ function createSubagentRunCard(assistant, payload = {}) {
     (card) => (card.dataset.childInvocationId || card.dataset.childSessionId) === key,
   );
   if (existing) return existing;
+  markAssistantToolUse(assistant.turn);
 
   const card = document.createElement("div");
   card.className = "subagent-run-card";
@@ -15604,7 +16116,9 @@ function createSubagentRunCard(assistant, payload = {}) {
     summary: summarizeSubagentActivity(payload),
   });
   // Keep delegated rows below the parent's prose and tool timeline.
-  assistant.turn.appendChild(card);
+  assistant.markToolUse();
+  markActivityNode(card);
+  appendChatStreamNode(assistant.toolWorkMount(), card);
   wireSubagentRunCard(card);
   setSubagentCardState(card, card.dataset.state);
   return card;
@@ -15688,18 +16202,20 @@ function finalizeSubagentSessionTab(payload = {}) {
 
 function createAssistantTurn({ container = messages, sessionId = activeChatSessionId } = {}) {
   const turn = document.createElement("div");
-  turn.className = "chat-turn assistant";
+  turn.className = "chat-turn assistant agent-stream";
   turn.setAttribute("aria-busy", "true");
   turn.dataset.createdAt = new Date().toISOString();
 
   const contentEl = document.createElement("div");
   contentEl.className = "assistant-reply";
+  contentEl.dataset.lane = "prose";
   contentEl.hidden = true;
   turn.appendChild(contentEl);
   appendChatTurn(turn, { container });
+  wrapAssistantInRunChunk(turn);
   // Starting another model/tool cycle extends the current AI chunk. Remove
   // its prior metadata until this continuation reaches its true final state.
-  turn.closest(".chat-exchange")?.querySelector(".assistant-reply-footer")?.remove();
+  turn.closest(".chat-exchange")?.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
   if (container === messages) {
     syncChatEmptyState();
     scrollMessages();
@@ -15707,36 +16223,287 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
 
   const assistant = {
     turn,
+    rootTurn: turn,
     sessionId: String(sessionId || activeChatSessionId || ""),
     startedAt: Date.now(),
+    usedTools: false,
     finalOutcome: null,
     statusEl: null,
     contentEl,
     rawContent: "",
     contentSegments: [{ el: contentEl, raw: "" }],
     commandEntries: new Map(),
-    thinkingBlock: null,
-    thinkingBody: null,
-    thinkingPhases: [],
+    thinkingFoldEl: null,
+    thinkingContentEl: null,
+    thinkingRaw: "",
     activityLogEl: null,
     reasoningActivityLine: null,
     liveStateEl: null,
+    workFoldEl: null,
+    workFoldBodyEl: null,
+    workTimer: null,
+    exploredFoldEl: null,
+    exploredBodyEl: null,
+    verdictOpen: false,
+    pendingVerdictBreak: false,
     lastActivityKey: "",
     taskBriefEl: null,
     taskBrief: null,
+    assistantTurns() {
+      const exchange = (this.rootTurn || this.turn)?.closest(".chat-exchange");
+      if (!exchange) return [this.turn, this.rootTurn].filter(Boolean);
+      const turns = [...exchange.querySelectorAll(".chat-turn.assistant")];
+      return turns.length ? turns : [this.turn].filter(Boolean);
+    },
     currentContentSegment() {
       return this.contentSegments[this.contentSegments.length - 1];
     },
-    createContentSegment() {
+    createContentSegment({ after = null } = {}) {
       const next = document.createElement("div");
       next.className = "assistant-reply";
+      next.dataset.lane = "prose";
+      if (this.verdictOpen) next.dataset.workVerdict = "true";
       if (this.turn.getAttribute("aria-busy") === "true") next.classList.add("streaming");
       next.hidden = true;
-      this.turn.appendChild(next);
+      const host = this.conversationMount();
+      const anchor = (after && after.parentElement === host ? after : null) || this.contentSegmentAnchor(host);
+      if (anchor) anchor.after(next);
+      else host.appendChild(next);
       const segment = { el: next, raw: "" };
       this.contentSegments.push(segment);
       this.contentEl = next;
+      this.pendingVerdictBreak = false;
       return segment;
+    },
+    contentSegmentAnchor(host) {
+      if (!host) return null;
+      return [...host.children].findLast((child) => (
+        child.classList.contains("agent-work-header")
+        || child.classList.contains("agent-work-fold")
+        || isWorkNode(child)
+        || (child.classList.contains("assistant-reply") && !isEmptyAssistantReply(child))
+      )) || null;
+    },
+    workHostTurn() {
+      const current = this.turn;
+      if (current && !current.classList.contains("agent-run-stop") && !current.closest(".agent-run-stop")) {
+        return current;
+      }
+      const working = this.assistantTurns().filter((turn) => (
+        !turn.classList.contains("agent-run-stop") && !turn.closest(".agent-run-stop")
+      ));
+      return working.at(-1) || this.rootTurn || current;
+    },
+    // The closing answer belongs beside the fold, never inside it.
+    replyMount() {
+      if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
+        return this.turn;
+      }
+      return this.workHostTurn() || this.turn;
+    },
+    // Interim narration is part of the work, so it streams into the body while
+    // the fold is open. A run with no work at all has no fold to stream into.
+    conversationMount() {
+      if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
+        return this.turn;
+      }
+      if (this.verdictOpen) return this.replyMount();
+      const host = this.workHostTurn() || this.turn;
+      return workFoldBody(turnWorkFold(host)) || host;
+    },
+    workingMount() {
+      return this.replyMount();
+    },
+    toolWorkMount() {
+      const fold = this.ensureWorkFold();
+      return workFoldBody(fold) || this.workHostTurn();
+    },
+    ensureExploredGroup() {
+      return null;
+    },
+    exploredMount() {
+      return this.toolWorkMount();
+    },
+    ensureThinkingFold() {
+      const work = this.ensureWorkFold();
+      if (this.thinkingFoldEl?.isConnected && this.thinkingFoldEl.dataset.final !== "true") {
+        this.thinkingContentEl = thinkingContentOf(this.thinkingFoldEl);
+        return this.thinkingFoldEl;
+      }
+      const host = workFoldBody(work) || this.conversationMount();
+      const fold = createThinkingFold({ startedAt: Date.now() });
+      markActivityNode(fold);
+      if (host) appendChatStreamNode(host, fold);
+      this.thinkingFoldEl = fold;
+      this.thinkingContentEl = thinkingContentOf(fold);
+      this.thinkingRaw = "";
+      return fold;
+    },
+    appendThinking(token) {
+      const value = String(token || "");
+      this.showPrivateReasoning();
+      const fold = this.ensureThinkingFold();
+      if (!fold) return;
+      setThinkingFoldLabel(fold, { live: true });
+      setCollapsibleFoldExpanded(fold, true);
+      if (value) {
+        this.thinkingRaw = `${this.thinkingRaw || ""}${value}`;
+        const content = thinkingContentOf(fold) || this.thinkingContentEl;
+        if (content) {
+          content.hidden = false;
+          renderMarkdown(content, this.thinkingRaw, { streaming: true });
+        }
+      }
+      scrollMessages();
+    },
+    finishThinking({ collapse = true } = {}) {
+      const folds = [];
+      if (this.thinkingFoldEl?.isConnected) folds.push(this.thinkingFoldEl);
+      const host = this.workHostTurn();
+      host?.querySelectorAll?.(".agent-thinking-fold:not([data-final='true'])").forEach((fold) => {
+        if (!folds.includes(fold)) folds.push(fold);
+      });
+      for (const fold of folds) {
+        const content = thinkingContentOf(fold);
+        const raw = String(content?.dataset?.rawMd || (fold === this.thinkingFoldEl ? this.thinkingRaw : "") || "");
+        finishThinkingFold(fold, { collapse });
+        if (content && raw.trim()) renderMarkdown(content, raw, { streaming: false });
+      }
+    },
+    ensureConversationSegment() {
+      if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
+        return this.currentContentSegment()?.el || null;
+      }
+      const host = this.conversationMount();
+      const current = this.currentContentSegment()?.el;
+      if (current?.isConnected && !current.closest(".agent-explored-fold") && !current.closest(".agent-thinking-fold")) {
+        // Streamed text keeps flowing into the current block. The only things
+        // that may break it are tool work landing after it, or the block being
+        // mounted in the wrong place (inside the fold once the verdict opened,
+        // or outside the fold while work is still running).
+        const inWorkFold = Boolean(current.closest(".agent-work-fold, .agent-thinking-fold, .agent-file-stack"));
+        const misplaced = this.verdictOpen ? inWorkFold : current.parentElement !== host;
+        if (!misplaced) {
+          const followingWork = workFollowingReply(current);
+          if (!followingWork) return current;
+          if (isEmptyAssistantReply(current)) {
+            followingWork.after(current);
+            return current;
+          }
+        } else if (isEmptyAssistantReply(current)) {
+          const anchor = this.contentSegmentAnchor(host);
+          if (anchor) anchor.after(current);
+          else host.appendChild(current);
+          if (this.verdictOpen) current.dataset.workVerdict = "true";
+          return current;
+        }
+      }
+      this.sealCurrentContentSegment();
+      return this.createContentSegment().el;
+    },
+    ensurePostToolContentSegment(exploredFold = null) {
+      void exploredFold;
+      return this.ensureConversationSegment();
+    },
+    createWorkStatus(host) {
+      const fold = ensureAssistantWorkFold(host, { startedAt: this.startedAt });
+      if (!fold) return null;
+      const header = workFoldHeader(fold);
+      this.statusEl = header;
+      this.liveStateEl = header;
+      this.workFoldEl = fold;
+      this.workFoldBodyEl = workFoldBody(fold);
+      return header;
+    },
+    stopWorkTimer() {
+      if (this.workTimer) {
+        clearInterval(this.workTimer);
+        this.workTimer = null;
+      }
+    },
+    startWorkTimer() {
+      this.stopWorkTimer();
+      const tick = () => {
+        const label = `Working for ${formatAgentWorkDuration(this.startedAt)}`;
+        let live = false;
+        for (const turn of this.assistantTurns()) {
+          if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) continue;
+          for (const block of turn.querySelectorAll(":scope > .agent-work-fold > .agent-work-header")) {
+            if (block.dataset.final === "true") continue;
+            live = true;
+            const textEl = block.querySelector(".agent-status-text");
+            if (textEl) textEl.textContent = label;
+            syncWorkHeaderAffordance(block);
+          }
+        }
+        if (!live) this.stopWorkTimer();
+      };
+      tick();
+      this.workTimer = setInterval(tick, 1000);
+    },
+    // Creating the fold adopts whatever the run already wrote, so narration
+    // that arrived before the first tool call moves inside the section it
+    // belongs to instead of being stranded above it.
+    ensureWorkFold() {
+      const fold = ensureAssistantWorkFold(this.workHostTurn(), { startedAt: this.startedAt });
+      if (!fold) return null;
+      const header = workFoldHeader(fold);
+      if (this.startedAt && header) header.dataset.startedAt = String(this.startedAt);
+      this.workFoldEl = fold;
+      this.workFoldBodyEl = workFoldBody(fold);
+      this.liveStateEl = header;
+      this.statusEl = header;
+      this.exploredFoldEl = null;
+      this.exploredBodyEl = null;
+      this.startWorkTimer();
+      return fold;
+    },
+    splitAtContextCheckpoint(notice) {
+      if (!notice || !this.turn) return null;
+      this.sealCurrentContentSegment();
+      this.turn.querySelectorAll(".tool-card").forEach((card) => {
+        if (isKeepableToolCard(card)) return;
+        if (card.hidden || isPlaceholderToolCardLabel(toolCardLabelText(card))) card.remove();
+      });
+      const chunk = wrapAssistantInRunChunk(this.turn);
+      if (chunk) chunk.after(notice);
+      else this.turn.after(notice);
+
+      const nextTurn = document.createElement("div");
+      nextTurn.className = "chat-turn assistant";
+      nextTurn.setAttribute("aria-busy", this.turn.getAttribute("aria-busy") || "true");
+      nextTurn.dataset.createdAt = this.turn.dataset.createdAt || new Date().toISOString();
+      if (this.sessionId) nextTurn.dataset.sessionId = this.sessionId;
+      const nextContent = document.createElement("div");
+      nextContent.className = "assistant-reply";
+      if (nextTurn.getAttribute("aria-busy") === "true") nextContent.classList.add("streaming");
+      nextContent.hidden = true;
+      nextTurn.appendChild(nextContent);
+      const nextChunk = document.createElement("div");
+      nextChunk.className = "agent-run-chunk agent-run-working";
+      nextChunk.appendChild(nextTurn);
+      notice.after(nextChunk);
+
+      this.turn.setAttribute("aria-busy", "false");
+      this.finishThinking({ collapse: true });
+      this.stopWorkTimer();
+      this.workFoldEl = null;
+      this.workFoldBodyEl = null;
+      this.liveStateEl = null;
+      this.statusEl = null;
+      this.exploredFoldEl = null;
+      this.exploredBodyEl = null;
+      this.thinkingFoldEl = null;
+      this.thinkingContentEl = null;
+      this.thinkingRaw = "";
+      this.verdictOpen = false;
+      this.turn = nextTurn;
+      this.contentEl = nextContent;
+      this.contentSegments.push({ el: nextContent, raw: "" });
+      const host = notice.closest(".agent-response-host") || notice.parentElement;
+      const footer = host?.querySelector?.(":scope > .assistant-reply-footer");
+      if (footer) host.appendChild(footer);
+      return notice;
     },
     renderContentSegment(segment, { streaming = false } = {}) {
       if (!segment?.el) return;
@@ -15758,6 +16525,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       segment.el.classList.remove("streaming");
     },
     setRawContent(value) {
+      this.ensureConversationSegment();
       const next = String(value ?? "");
       const previous = this.rawContent;
       const segment = this.currentContentSegment();
@@ -15768,9 +16536,83 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         segment.raw = next;
       }
       this.rawContent = next;
-      this.turn.dataset.rawAssistant = next;
+      (this.rootTurn || this.turn).dataset.rawAssistant = next;
+    },
+    markToolUse() {
+      this.pendingVerdictBreak = false;
+      if (this.verdictOpen) {
+        this.verdictOpen = false;
+        const host = this.workHostTurn();
+        host?.querySelectorAll(":scope > .assistant-reply[data-work-verdict]").forEach((node) => {
+          delete node.dataset.workVerdict;
+        });
+      }
+      this.usedTools = true;
+      (this.rootTurn || this.turn).dataset.usedTools = "true";
+      this.ensureWorkFold();
+    },
+    hadToolActivity() {
+      return this.assistantTurns().some((turn) => boxHasToolUsage(turn));
+    },
+    applyModelRound({ finishReason = "", stop = false } = {}) {
+      const reason = String(finishReason || "").trim().toLowerCase();
+      if (this.turn) this.turn.dataset.finishReason = reason;
+      this.finishThinking({ collapse: true });
+      sealExploredFolds(this.workHostTurn());
+      if (!stop) return;
+      this.openStopSection({ collapse: true, allowEmpty: true });
+    },
+    // Make `el` the block that further streamed text appends to.
+    makeCurrentSegment(el) {
+      if (!el) return null;
+      const index = this.contentSegments.findIndex((item) => item.el === el);
+      const segment = index >= 0
+        ? this.contentSegments.splice(index, 1)[0]
+        : { el, raw: String(el.dataset?.rawMd || "") };
+      this.contentSegments.push(segment);
+      this.contentEl = el;
+      return segment;
+    },
+    // An answer delivered over several frames is still one answer.
+    coalesceLiveVerdict() {
+      const turn = this.workHostTurn();
+      const replies = [...(turn?.children || [])].filter((node) => (
+        node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node)
+      ));
+      if (replies.length < 2) return;
+      const raw = this.contentSegments
+        .filter((item) => replies.includes(item.el))
+        .map((item) => item.raw)
+        .join("");
+      const first = replies[0];
+      replies.slice(1).forEach((el) => el.remove());
+      this.contentSegments = this.contentSegments.filter((item) => item.el?.isConnected);
+      const segment = this.makeCurrentSegment(first);
+      if (raw) segment.raw = raw;
+      this.renderContentSegment(segment, { streaming: false });
+      first.dataset.workVerdict = "true";
+    },
+    // Closing a run: the answer moves out beside the fold so it survives the
+    // collapse, and any remaining text streams into it there.
+    openStopSection({ collapse = false, allowEmpty = true } = {}) {
+      if (!this.turn || this.turn.classList.contains("agent-run-stop") || this.turn.closest(".agent-run-stop")) return;
+      const turn = this.workHostTurn();
+      if (!turn) return;
+      this.sealCurrentContentSegment();
+      this.verdictOpen = true;
+      const fold = turnWorkFold(turn);
+      const answer = promoteFinalAnswer(turn)
+        || (allowEmpty ? this.createContentSegment({ after: fold }).el : null);
+      if (answer) {
+        answer.dataset.workVerdict = "true";
+        this.makeCurrentSegment(answer);
+      }
+      this.coalesceLiveVerdict();
+      this.pendingVerdictBreak = Boolean(String(this.currentContentSegment()?.raw || "").trim());
+      if (collapse && fold) setWorkFoldExpanded(fold, false);
     },
     ensureCommandEvent(tool) {
+      this.markToolUse();
       const key = commandTimelineKey(tool);
       const entries = this.commandEntries.get(key) || [];
       const existing = entries[entries.length - 1];
@@ -15779,10 +16621,11 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const row = createCommandTimelineRow(tool, { state: "running" });
       row.dataset.sessionId = String(this.sessionId || "");
       row.dataset.commandKey = `${key}:${entries.length + 1}`;
-      this.turn.appendChild(row);
+      markActivityNode(row);
+      appendChatStreamNode(this.toolWorkMount(), row);
       entries.push(row);
       this.commandEntries.set(key, entries);
-      this.createContentSegment();
+      this.ensurePostToolContentSegment();
       scrollMessages();
       return row;
     },
@@ -15791,6 +16634,19 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const entries = this.commandEntries.get(key) || [];
       const row = [...entries].reverse().find((entry) => entry.dataset.state === "running") || entries[entries.length - 1];
       bindCommandTimelineIdentity(row, tool, result);
+      if (row) {
+        const stdout = [result.stdout, result.output, typeof result.transcript === "string" ? result.transcript : "", result.content]
+          .map((value) => String(value || "").trim())
+          .find(Boolean);
+        if (stdout) row.dataset.stdout = stdout.slice(0, 50_000);
+        const exit = result.exitCode ?? result.exit_code;
+        if (exit != null && exit !== "") row.dataset.exitCode = String(exit);
+        const cwd = result.cwd || tool.args?.cwd || tool.cwd;
+        if (cwd) row.dataset.cwd = String(cwd);
+        if (!row.dataset.startedAt) {
+          row.dataset.startedAt = String(Number(result.startedAt || result.value?.startedAt) || Date.now());
+        }
+      }
       const resultMode = result?.mode || result?.value?.mode;
       const resultStatus = String(result?.status || result?.value?.status || "").toLowerCase();
       const waiting = !result?.error && result?.ok !== false && (resultMode === "terminal_wait"
@@ -15806,67 +16662,88 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         return row;
       }
       const failed = Boolean(result?.error || result?.ok === false);
+      if (row) {
+        row.dataset.endedAt = String(Date.now());
+        const start = Number(row.dataset.startedAt);
+        if (Number.isFinite(start)) row.dataset.durationMs = String(Math.max(0, Date.now() - start));
+      }
       return updateCommandTimelineRow(row, failed ? "error" : "success");
     },
     ensureLiveState() {
-      if (this.liveStateEl) return this.liveStateEl;
-      this.turn.classList.add("has-agent-run");
-      const block = document.createElement("div");
-      block.className = "agent-status-line";
-      block.setAttribute("aria-live", "polite");
-      block.setAttribute("role", "status");
-      block.innerHTML = `
-        <span class="agent-status-icon codicon codicon-loading codicon-modifier-spin" aria-hidden="true"></span>
-        <span class="agent-status-text">Working…</span>
-      `;
-      this.turn.insertBefore(block, this.contentEl);
-      this.statusEl = block;
-      this.liveStateEl = block;
-      return block;
+      if (this.liveStateEl?.isConnected) return this.liveStateEl;
+      const fold = this.ensureWorkFold();
+      return workFoldHeader(fold) || this.liveStateEl;
+    },
+    dismissLiveState() {
+      this.stopWorkTimer();
+      const fold = (this.workFoldEl?.classList?.contains("agent-work-fold") && this.workFoldEl)
+        || this.liveStateEl?.closest?.(".agent-work-fold");
+      if (fold && !hasWorkNode(workFoldBody(fold))) unwrapWorkFold(fold);
+      this.workFoldEl = null;
+      this.workFoldBodyEl = null;
+      this.liveStateEl = null;
+      this.statusEl = null;
+      this.exploredFoldEl = null;
+      this.exploredBodyEl = null;
+      this.thinkingFoldEl = null;
+      this.thinkingContentEl = null;
+      this.thinkingRaw = "";
+      this.lastActivityKey = "";
     },
     setLiveState({ kind = "working", title = "Working", detail = "", meta = "LIVE" } = {}) {
-      const block = this.ensureLiveState();
       const label = conciseAgentStatus(detail || title, kind);
+      if (/^Writing response/i.test(label)) return;
+      if (this.workFoldEl?.isConnected && this.liveStateEl?.dataset.final !== "true") {
+        this.startWorkTimer();
+        this.turn?.setAttribute("aria-busy", "true");
+        (this.rootTurn || this.turn)?.setAttribute("aria-busy", "true");
+        return;
+      }
+      if (kind === "working" || isStubToolStatusLabel(label)) {
+        this.turn?.setAttribute("aria-busy", "true");
+        (this.rootTurn || this.turn)?.setAttribute("aria-busy", "true");
+        return;
+      }
+      const block = this.ensureLiveState();
       const stateKey = `${kind}|${label}`;
       if (block.dataset.stateKey === stateKey) return;
       block.dataset.stateKey = stateKey;
       block.dataset.state = kind;
       block.dataset.final = "false";
-      const active = !["success", "error", "question"].includes(kind);
-      const icon = block.querySelector(".agent-status-icon");
-      if (icon) {
-        icon.hidden = false;
-        icon.className = active
-          ? "agent-status-icon codicon codicon-loading codicon-modifier-spin"
-          : `agent-status-icon codicon ${agentStateIcon(kind)}`;
-      }
+      block.querySelector(".agent-status-icon")?.remove();
       const textEl = block.querySelector(".agent-status-text");
       if (textEl) textEl.textContent = label;
+      syncWorkHeaderAffordance(block);
       block.classList.remove("status-updated");
       void block.offsetWidth;
       block.classList.add("status-updated");
       this.turn.setAttribute("aria-busy", "true");
+      (this.rootTurn || this.turn).setAttribute("aria-busy", "true");
       scrollMessages();
     },
     settlePendingActivities(outcome = "complete") {
       const failed = outcome === "error" || outcome === "stopped";
-      const pendingCards = this.turn.querySelectorAll(".tool-card.pending, .tool-card[data-state='queued'], .tool-card[data-state='running']");
+      const pendingCards = this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".tool-card.pending, .tool-card[data-state='queued'], .tool-card[data-state='running']")]);
       for (const card of pendingCards) {
         if (card.classList.contains("subagent-wait")) continue;
         const runningLabel = String(card.dataset.runningLabel || card.querySelector(".tool-card-file")?.textContent || "").trim();
-        const completedLabel = /^Reading/i.test(runningLabel)
-          ? "Read"
-          : /^Deleting/i.test(runningLabel)
-            ? "Deleted"
-            : /^Creating/i.test(runningLabel)
-              ? "Created"
-              : /^Editing/i.test(runningLabel)
-                ? "Edited"
-                : "Completed";
-        setToolCardStatus(card, failed ? "error" : "success", failed ? "Failed" : completedLabel);
+        let completedLabel = String(card.dataset.completedLabel || "").trim()
+          || completedToolLabelFromRunning(runningLabel);
+        if (failed && !isKeepableToolCard(card)) {
+          card.remove();
+          continue;
+        }
+        if (!completedLabel || isTransientToolCardLabel(completedLabel)) {
+          if (!isKeepableToolCard(card)) {
+            card.remove();
+            continue;
+          }
+          if (!completedLabel) completedLabel = completedToolLabelFromRunning(runningLabel) || runningLabel;
+        }
+        setToolCardStatus(card, "success", completedLabel);
       }
 
-      for (const row of this.turn.querySelectorAll(".agent-command-event[data-state='running']")) {
+      for (const row of this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".agent-command-event[data-state='running']")])) {
         // A durable terminal_wait command remains live after this agent turn
         // settles. Its row is finalized by the later terminal_complete event.
         if (row.dataset.waiting === "true") continue;
@@ -15874,31 +16751,69 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
     },
     finishLiveState(outcome = "complete") {
+      this.stopWorkTimer();
       this.finalOutcome = outcome;
       this.settlePendingActivities(outcome);
-      this.turn.setAttribute("aria-busy", "false");
-      if (outcome === "error" || outcome === "stopped") {
-        this.liveStateEl?.remove();
-        this.liveStateEl = null;
-        this.statusEl = null;
+      this.finishThinking({ collapse: true });
+      this.openStopSection({ collapse: true, allowEmpty: false });
+      for (const turn of this.assistantTurns()) {
+        stripFailedToolCardStubs(turn);
+        pruneEmptyWorkFolds(turn);
+        turn.setAttribute("aria-busy", "false");
+      }
+      const stopped = outcome === "stopped";
+      if (!stopped && !this.hadToolActivity()) {
+        this.dismissLiveState();
         return;
       }
-      const block = this.ensureLiveState();
+      if (this.hadToolActivity()) this.ensureWorkFold();
       const duration = formatAgentWorkDuration(this.startedAt);
-      const label = outcome === "inconclusive" ? `Finished in ${duration}` : `Worked for ${duration}`;
-      block.dataset.state = "complete";
-      block.dataset.final = "true";
-      block.dataset.stateKey = `${outcome}|${label}`;
-      const icon = block.querySelector(".agent-status-icon");
-      if (icon) {
-        icon.hidden = true;
-        icon.className = "agent-status-icon codicon";
+      const label = stopped
+        ? "Stopped"
+        : outcome === "inconclusive"
+          ? `Finished in ${duration}`
+          : `Worked for ${duration}`;
+      const blocks = [];
+      for (const turn of this.assistantTurns()) {
+        if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) continue;
+        for (const block of turn.querySelectorAll(":scope > .agent-work-fold > .agent-work-header, :scope > .agent-status-line")) {
+          if (!blocks.includes(block)) blocks.push(block);
+        }
       }
-      const textEl = block.querySelector(".agent-status-text");
-      if (textEl) textEl.textContent = label;
-      block.classList.remove("status-updated");
-      void block.offsetWidth;
-      block.classList.add("status-updated");
+      if (!blocks.length) {
+        const block = this.ensureLiveState();
+        if (block) blocks.push(block);
+      }
+      if (!stopped) (this.rootTurn || this.turn).dataset.usedTools = "true";
+      const endedAt = Date.now();
+      const workedForMs = Math.max(0, endedAt - Number(this.startedAt || endedAt));
+      for (const block of blocks) {
+        block.dataset.state = stopped ? "stopped" : "complete";
+        block.dataset.final = "true";
+        block.dataset.stateKey = `${outcome}|${label}`;
+        block.querySelector(".agent-status-icon")?.remove();
+        const textEl = block.querySelector(".agent-status-text");
+        if (textEl) textEl.textContent = label;
+        syncWorkHeaderAffordance(block);
+        block.classList.remove("status-updated");
+        void block.offsetWidth;
+        block.classList.add("status-updated");
+        block.dataset.workedForMs = String(workedForMs);
+        block.dataset.startedAt = String(this.startedAt || endedAt - workedForMs);
+        block.dataset.endedAt = String(endedAt);
+        const turn = block.closest(".chat-turn.assistant");
+        if (turn) {
+          turn.dataset.workedForMs = String(workedForMs);
+        }
+      }
+      for (const turn of this.assistantTurns()) {
+        if (turn.getAttribute("aria-busy") === "true") continue;
+        const fold = turnWorkFold(turn);
+        if (!fold) continue;
+        const answer = promoteFinalAnswer(turn);
+        if (answer) answer.dataset.workVerdict = "true";
+        if (isFinishedWorkFold(fold)) setWorkFoldExpanded(fold, false);
+      }
     },
     requestQuestions({
       reason = "The agent needs your input before continuing.",
@@ -15926,7 +16841,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       if (!brief || !Array.isArray(brief.steps) || !brief.steps.length) return;
       this.taskBrief = brief;
       this.turn.classList.add("has-agent-run");
-      this.setLiveState({ kind: "planning", detail: "Forming the next hypothesis" });
+      this.setLiveState({ kind: "planning", detail: "Planning" });
     },
     updateTaskStage(phase = "") {
       this.turn.dataset.taskPhase = String(phase || "");
@@ -15976,7 +16891,6 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const raw = String(segment.raw || "");
       const text = ToolParser.cleanReplyForDisplay(raw, { streaming: true }) || raw.trim();
       if (text) {
-        this.setLiveState({ kind: "working", detail: "Writing response" });
         segment.el.hidden = false;
         renderMarkdown(
           segment.el,
@@ -15988,36 +16902,57 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       scrollMessages();
     },
     appendContent(token) {
-      const value = String(token || "");
+      let value = String(token || "");
+      this.ensureConversationSegment();
       const segment = this.currentContentSegment();
+      if (this.pendingVerdictBreak) {
+        // A new model round is extending an already-finished verdict: keep it
+        // in the same block, but as its own paragraph.
+        this.pendingVerdictBreak = false;
+        if (segment && String(segment.raw || "").trim() && value.trim() && !/^\s*\n/.test(value)) value = `\n\n${value}`;
+      }
       this.rawContent += value;
       if (segment) segment.raw += value;
-      this.turn.dataset.rawAssistant = this.rawContent;
+      (this.rootTurn || this.turn).dataset.rawAssistant = this.rawContent;
       this.syncDisplay({ animateToken: token });
     },
     finalizeContent() {
       this.finalizeThinking();
-      this.turn.dataset.rawAssistant = this.rawContent;
+      (this.rootTurn || this.turn).dataset.rawAssistant = this.rawContent;
       for (const segment of this.contentSegments) {
         this.renderContentSegment(segment, { streaming: false });
         segment.el.classList.remove("streaming");
       }
-      const subagentRows = [...this.turn.querySelectorAll(".subagent-run-card")];
-      if (subagentRows.length) this.turn.append(...subagentRows);
+      const subagentRows = this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".subagent-run-card")]);
+      if (subagentRows.length) {
+        const host = assistantStreamHost(this.workHostTurn()) || this.rootTurn || this.turn;
+        host.append(...subagentRows);
+      }
       this.finishLiveState(this.finalOutcome || "complete");
-      const copyAnchor = this.contentSegments.find((segment) => !segment.el.hidden)?.el || this.contentEl;
+      const copyAnchor = this.contentSegments.findLast((segment) => !segment.el.hidden)?.el || this.contentEl;
       attachAssistantCopyButton(copyAnchor);
       this.pruneIfEmpty();
     },
     pruneIfEmpty() {
       const hasContent = this.contentSegments.some((segment) => !segment.el.hidden && segment.el.textContent.trim());
-      const statusActive = this.turn.getAttribute("aria-busy") === "true";
+      const statusActive = this.assistantTurns().some((turn) => turn.getAttribute("aria-busy") === "true");
       const hasStatus = Boolean(this.statusEl?.isConnected && !this.statusEl.hidden);
-      const hasThinking = this.thinkingBlock && !this.thinkingBlock.hidden;
+      const hasThinking = this.assistantTurns().some((turn) => turn.querySelector(".agent-thinking-fold"));
       const hasActivity = Boolean(this.activityLogEl?.childElementCount && this.activityLogEl.isConnected);
-      const hasTools = this.turn.querySelector(".tool-card, .agent-command-event");
+      const hasTools = this.assistantTurns().some((turn) => turn.querySelector(".tool-card, .agent-command-event, .agent-thinking-fold"));
       if (!hasContent && !statusActive && !hasStatus && !hasThinking && !hasActivity && !hasTools) {
-        this.turn.remove();
+        for (const turn of this.assistantTurns()) {
+          const chunk = turn.closest(".agent-run-chunk");
+          if (chunk) chunk.remove();
+          else turn.remove();
+        }
+        return;
+      }
+      for (const turn of this.assistantTurns()) {
+        if (turn === this.rootTurn) continue;
+        const visible = [...turn.querySelectorAll(".assistant-reply")].some((el) => !el.hidden && el.textContent.trim());
+        const extras = turn.querySelector(".tool-card, .agent-command-event, .subagent-run-card, .agent-status-line, .agent-thinking-fold");
+        if (!visible && !extras) (turn.closest(".agent-run-chunk") || turn).remove();
       }
     },
     showPrivateReasoning() {
@@ -16025,12 +16960,22 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       return true;
     },
     finalizeThinking() {
+      this.finishThinking({ collapse: true });
       return this.completeReasoningActivity();
     },
     completeReasoningActivity() {
       const wasThinking = this.liveStateEl?.dataset.state === "thinking";
       this.reasoningActivityLine = null;
       this.lastActivityKey = "";
+      if (wasThinking && this.liveStateEl?.isConnected && this.liveStateEl.dataset.final !== "true") {
+        if (this.workFoldEl?.isConnected) {
+          this.startWorkTimer();
+        } else {
+          this.liveStateEl.remove();
+          this.liveStateEl = null;
+          this.statusEl = null;
+        }
+      }
       return wasThinking;
     },
   };
@@ -16039,7 +16984,6 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
 }
 
 const SYSTEM_SKILL_SLASH_COMMANDS = Object.freeze([
-  Object.freeze({ name: "/pentest", title: "Adaptive penetration testing", description: "Run adaptive, scope-aware penetration testing", overview: "Internal evidence-led reconnaissance, testing, verification, and replanning guidance.", prompt: "", group: "system-skill" }),
   Object.freeze({ name: "/report", title: "VAPT report generation", description: "Generate an evidence-linked VAPT report", overview: "Build the current structured report from canonical verified evidence and checklist coverage.", prompt: "", group: "system-skill" }),
   Object.freeze({ name: "/create-rule", title: "Create a project rule", description: "Create a project or global rule", overview: "Create validated Xekute rule guidance through the protected guidance writer.", prompt: "", group: "system-skill" }),
   Object.freeze({ name: "/create-skill", title: "Create user guidance skill", description: "Create user-authored guidance", overview: "Create a validated project or global custom guidance skill.", prompt: "", group: "system-skill" }),
@@ -16397,37 +17341,6 @@ async function runSpecialSlashCommand(rawCommand) {
   return false;
 }
 
-function cancelPentestContinuation(sessionId = "") {
-  const key = String(sessionId || "");
-  const timer = pentestContinuationTimers.get(key);
-  if (timer) clearTimeout(timer);
-  pentestContinuationTimers.delete(key);
-}
-
-function schedulePentestContinuation(sessionId = "", prompt = "") {
-  const key = String(sessionId || "");
-  const message = String(prompt || "").trim().slice(0, 12_000);
-  if (!key || !message) return;
-  cancelPentestContinuation(key);
-  const resume = () => {
-    pentestContinuationTimers.delete(key);
-    if (!chatSessions.some((session) => session.id === key)) return;
-    if (contextCheckpointing) {
-      pentestContinuationTimers.set(key, setTimeout(resume, 100));
-      return;
-    }
-    if (isChatSessionRunning(key)) return;
-    Promise.resolve(sendMessageWithAgentRuntime({
-      internal: true,
-      internalSkillId: "pentest",
-      sessionId: key,
-      text: message,
-      skipContextFiles: true,
-    })).catch(() => {});
-  };
-  pentestContinuationTimers.set(key, setTimeout(resume, 75));
-}
-
 async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", options = {} } = {}) {
   const runSession = [...chatSessions, ...closedChatSessions, ...archivedChatSessions]
     .find((session) => session.id === String(targetSessionId || ""));
@@ -16436,10 +17349,11 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
   if (!runModel) return { ok: false, code: "BACKGROUND_MODEL_NOT_SELECTED" };
   const runMode = options?.modeOverride
     ? canonicalChatMode(options.modeOverride)
-    : (runSession.chatMode || chatMode);
+    : canonicalChatMode(runSession.turnMode || runSession.chatMode || chatMode);
   const runFamily = runSession.chatFamily || chatFamily;
   const runSettings = getModelSettings(runModel);
   const runContextPlan = resolvedWorkingContextPlan(runModel);
+  ensureChatMemorySessionId(runSession);
   const runtimeSessionId = runSession.memorySessionId || runSession.id;
   const providedContextFiles = Array.isArray(options?.contextFiles)
     ? options.contextFiles.filter((file) => file && typeof file.path === "string" && typeof file.content === "string")
@@ -16475,11 +17389,7 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
       internalSkillId: String(options?.internalSkillId || ""),
       continuation: options?.continuation || null,
       backgroundRuntime: true,
-      tier2MemoryMaintenance: Boolean(options?.tier2MemoryMaintenance),
     });
-    if (result?.pentestLoop?.continue === true && !result?.aborted) {
-      schedulePentestContinuation(runSession.id, result.pentestLoop.prompt);
-    }
     return result;
   } catch (error) {
     return { ok: false, error: error?.message || "Background runtime failed.", code: error?.code || "BACKGROUND_RUNTIME_FAILED" };
@@ -16489,30 +17399,12 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
   }
 }
 
-function tier2MemoryMaintenanceSucceeded(result = {}) {
-  return Boolean(
-    result?.ok
-    && !result?.aborted
-    && result?.runState?.status === "completed"
-    && result?.artifactSync?.ok !== false
-  );
-}
-
-async function executeQueuedHiddenAgentRuntime(payload = {}) {
-  const first = await executeHiddenAgentRuntime(payload);
-  if (!payload?.options?.tier2MemoryMaintenance || tier2MemoryMaintenanceSucceeded(first)) return first;
-  // The controller already retries a missing finalizer once. This second
-  // complete background attempt covers transient provider, staging, and
-  // commit failures without ever reopening the visible response.
-  return executeHiddenAgentRuntime(payload);
-}
-
 function sendHiddenAgentRuntime(payload = {}) {
   const key = String(payload.targetSessionId || "");
   const prior = hiddenAgentRuntimeQueues.get(key) || Promise.resolve();
   const task = prior
     .catch(() => {})
-    .then(() => executeQueuedHiddenAgentRuntime(payload));
+    .then(() => executeHiddenAgentRuntime(payload));
   hiddenAgentRuntimeQueues.set(key, task);
   task.finally(() => {
     if (hiddenAgentRuntimeQueues.get(key) === task) hiddenAgentRuntimeQueues.delete(key);
@@ -16520,29 +17412,9 @@ function sendHiddenAgentRuntime(payload = {}) {
   return task;
 }
 
-function scheduleTier2MemoryMaintenance({ targetSessionId = "", mode = "agent", workspace = "" } = {}) {
-  const maintenanceMode = canonicalChatMode(mode);
-  const projectRoot = String(workspace || "");
-  if (!targetSessionId || !projectRoot || !TIER2_MEMORY_MODES.has(maintenanceMode)) {
-    return Promise.resolve({ ok: true, skipped: true });
-  }
-  return sendHiddenAgentRuntime({
-    targetSessionId,
-    text: TIER2_MEMORY_MAINTENANCE_PROMPT,
-    options: {
-      modeOverride: maintenanceMode,
-      workspace: projectRoot,
-      activeFile: null,
-      contextFiles: [],
-      tier2MemoryMaintenance: true,
-    },
-  });
-}
-
 async function sendMessageWithAgentRuntime(options = {}) {
   const internal = Boolean(options?.internal);
   const targetSessionId = String(options?.sessionId || activeChatSessionId || "");
-  if (!internal) cancelPentestContinuation(targetSessionId);
   const hasExplicitText = Object.prototype.hasOwnProperty.call(options || {}, "text");
   let text = hasExplicitText
     ? String(options.text || "").trim()
@@ -16553,6 +17425,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
   if (!internal) {
     if (!text || isChatSessionRunning(targetSessionId) || chatSendInFlight.has(targetSessionId)) return;
     chatSendInFlight.add(targetSessionId);
+    clearChatSessionStoppedByOperator(chatSessions.find((session) => session.id === targetSessionId) || { id: targetSessionId });
   } else if (!text || isChatSessionRunning(targetSessionId)) return;
   try {
   if (!internal && isDelegatedChildRunLocked()) {
@@ -16582,12 +17455,14 @@ async function sendMessageWithAgentRuntime(options = {}) {
   const runModel = runSession.selectedModel || selectedModel;
   const runMode = options?.modeOverride
     ? canonicalChatMode(options.modeOverride)
-    : (runSession.chatMode || chatMode);
+    : canonicalChatMode(runSession.chatMode || chatMode);
+  runSession.turnMode = runMode;
   const runFamily = runSession.chatFamily || chatFamily;
   if (!runModel) {
     if (!internal) addErrorMessage("Select a model before sending a message.");
     return;
   }
+  ensureChatMemorySessionId(runSession);
   const runSettings = getModelSettings(runModel);
   const runContextPlan = resolvedWorkingContextPlan(runModel);
   const providedContextFiles = Array.isArray(options?.contextFiles)
@@ -16618,7 +17493,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
     : null;
   if (!reusedUserMessage) runHistory.push(userMessage);
   const promptMessage = reusedUserMessage || userMessage;
-  runSession.lastContextUsage = null;
   if (!internal) maybeNameActiveChat(text);
   const run = {
     sessionId: runSession.id,
@@ -16696,15 +17570,11 @@ async function sendMessageWithAgentRuntime(options = {}) {
     if (payload.source === "parent_continuation") return;
 
     if (payload.type === "context_checkpoint") {
-      // Checkpointing is automatic and main-process owned.  It is surfaced as
-      // a transient status only; no renderer action can force rotation.
-      if (runIsVisible()) {
-        const active = ["started", "running"].includes(String(payload.status || "").toLowerCase());
-        run.contextCheckpointPending = active;
-        contextCheckpointingSessionId = runSession.id;
-        setContextCheckpointUi(active);
-        setRunAgentStatus(active ? "Context checkpointing…" : payload.status === "failed" ? "Context checkpoint needs attention" : `${modeLabel(runMode)} working`);
-      }
+      // Checkpointing is automatic and main-process owned. The in-chat
+      // placeholder stays after completion so the operator can see that
+      // summarized conversation was refreshed.
+      applyCheckpointToSession(runSession, payload);
+      applyContextCheckpointUi(run, payload);
       return;
     }
 
@@ -16749,7 +17619,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
 
     if (payload.type === "activity") {
       if (isSilentToolRoutingActivity(payload.text)) return;
-      if (isTier2MemoryActivity(payload.text)) return;
       const kind = payload.kind || "info";
       if (payload.text && kind !== "meta" && kind !== "success") assistant.setStatus(payload.text);
       assistant.noteTaskActivity(payload.text, kind);
@@ -16758,8 +17627,13 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "thinking") {
-      assistant.showPrivateReasoning();
       assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
+      assistant.appendThinking(payload.token || payload.delta || "");
+      return;
+    }
+
+    if (payload.type === "model_round") {
+      assistant.applyModelRound(payload);
       return;
     }
 
@@ -16776,7 +17650,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
       syncAssistantDraftToHistory(run, assistant);
       if (runIsVisible()) activeStreamContent = run.activeStreamContent;
       lastAgentText = assistant.rawContent;
-      updateRunContextUsage();
       return;
     }
 
@@ -16788,6 +17661,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
 
     if (payload.type === "context_usage" && payload.usage) {
       storeLastContextUsage(payload.usage, { session: runSession, model: runModel, contextPlan: runContextPlan });
+      updateRunContextUsage();
       return;
     }
 
@@ -16827,7 +17701,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_call") {
-      const tools = (Array.isArray(payload.tools) ? payload.tools : []).filter((tool) => !isTier2MemoryTool(tool));
+      const tools = Array.isArray(payload.tools) ? payload.tools : [];
       if (!tools.length) return;
       assistant.finalizeThinking();
       for (const tool of tools) {
@@ -16855,11 +17729,11 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_start" && payload.tool) {
-      if (isTier2MemoryTool(payload.tool)) return;
       const toolHistoryWrite = queueChatHistoryEvent({
         type: "tool_usage",
         toolName: payload.tool.toolName || payload.tool.action || payload.tool.name || "tool",
       }, { session: runSession });
+      assistant.markToolUse();
       assistant.finalizeThinking();
       if (isTaskListTool(payload.tool)) {
         assistant.setStatus("Organizing the task list…");
@@ -16879,7 +17753,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_result" && payload.tool && payload.result) {
-      if (isTier2MemoryTool(payload.tool)) return;
       if (isTaskListTool(payload.tool)) {
         assistant.setStatus(payload.result?.error ? "Task list update failed" : "Task list updated");
         return;
@@ -17052,24 +17925,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
       chatInput.removeAttribute("aria-disabled");
       chatInput.focus();
     }
-    const shouldMaintainTier2 = Boolean(
-      agentRunResult?.ok
-      && !agentRunResult?.aborted
-      && !run.stopRequested
-      && ["completed", "inconclusive"].includes(String(agentRunResult?.runState?.status || ""))
-      && assistant?.displayContent?.().trim()
-      && TIER2_MEMORY_MODES.has(runMode)
-    );
-    if (shouldMaintainTier2) {
-      void scheduleTier2MemoryMaintenance({
-        targetSessionId: runSession.id,
-        mode: runMode,
-        workspace: run.workspace,
-      }).catch(() => {});
-    }
-    if (agentRunResult?.pentestLoop?.continue === true && !run.stopRequested && !agentRunResult?.aborted) {
-      schedulePentestContinuation(runSession.id, agentRunResult.pentestLoop.prompt);
-    }
     queueMicrotask(drainPendingBackgroundWaitEvents);
     scheduleSubagentResultDrain();
   }
@@ -17083,14 +17938,76 @@ function stopGeneration() {
   const run = activeSessionRun();
   if (!run || run.state !== "running") return;
   run.stopRequested = true;
+  markChatSessionStoppedByOperator(run);
+  dismissComposerQuestionsForStop(run);
+  dropAutoContinuationsForSession(run.sessionId);
+  dropAutoContinuationsForSession(run.memorySessionId || run.session?.memorySessionId || "");
   syncAssistantDraftToHistory(run, run.assistant, { persist: false });
   void persistChatHistorySnapshot(activeChatPersistenceScope, run.session);
   run.activeStreamContent = "";
   activeStreamContent = "";
   setAgentStatus("Stopping...");
-  window.api.abortChat?.({ sessionId: run.memorySessionId || run.session?.memorySessionId || run.sessionId || "" });
+  abortActiveChatRun(run);
   updateSendBtn();
   updateContextUsage();
+}
+
+function chatStopIdsForRun(run) {
+  return [...new Set([
+    run?.memorySessionId,
+    run?.session?.memorySessionId,
+    run?.sessionId,
+  ].map((value) => String(value || "")).filter(Boolean))];
+}
+
+function markChatSessionStoppedByOperator(run) {
+  for (const id of chatStopIdsForRun(run)) chatSessionsStoppedByOperator.add(id);
+}
+
+function clearChatSessionStoppedByOperator(session) {
+  chatSessionsStoppedByOperator.delete(String(session?.id || ""));
+  chatSessionsStoppedByOperator.delete(String(session?.memorySessionId || ""));
+}
+
+function isChatSessionStoppedByOperator(sessionId = "") {
+  const id = String(sessionId || "");
+  if (!id) return false;
+  if (chatSessionsStoppedByOperator.has(id)) return true;
+  const mapped = chatSessionIdForRuntimeId(id);
+  return Boolean(mapped && chatSessionsStoppedByOperator.has(mapped));
+}
+
+function abortActiveChatRun(run) {
+  const ids = chatStopIdsForRun(run);
+  if (!ids.length) {
+    window.api.abortChat?.({});
+    return;
+  }
+  for (const sessionId of ids) window.api.abortChat?.({ sessionId });
+}
+
+function dismissComposerQuestionsForStop(run) {
+  for (const sessionId of chatStopIdsForRun(run)) {
+    const pending = pendingComposerQuestionsBySession.get(composerQuestionSessionId(sessionId));
+    pending?.abort?.();
+  }
+}
+
+function dropAutoContinuationsForSession(sessionId = "") {
+  const id = String(sessionId || "");
+  if (!id) return;
+  const matches = (value) => {
+    const candidate = String(value || "");
+    if (!candidate) return false;
+    if (candidate === id) return true;
+    return chatSessionIdForRuntimeId(candidate) === id;
+  };
+  pendingSubagentResults = pendingSubagentResults.filter((item) => (
+    !matches(item.parentSessionId) && !matches(item.payload?.parentSessionId) && !matches(item.payload?.sessionId)
+  ));
+  pendingBackgroundWaitEvents = pendingBackgroundWaitEvents.filter((item) => (
+    !matches(item.payload?.sessionId) && !matches(item.payload?.parentSessionId)
+  ));
 }
 
 sendBtn.addEventListener("click", () => {
@@ -17385,7 +18302,10 @@ function handleParentSubagentLifecycle(payload = {}) {
     if (session.messagesHtml) {
       const host = document.createElement("div");
       host.innerHTML = session.messagesHtml;
-      if (updateRenderedSubagentCard(payload, host)) session.messagesHtml = sanitizePersistedChatHtml(host.innerHTML);
+      if (updateRenderedSubagentCard(payload, host)) {
+        session.messagesHtml = sanitizePersistedChatHtml(host.innerHTML);
+        captureSessionTranscript(session, host);
+      }
     }
     schedulePersistChatSessions(session);
   }
@@ -17399,11 +18319,14 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
   if (!assistant) return;
   const type = String(payload.type || "");
   if (type === "thinking") {
-    assistant.showPrivateReasoning();
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
+    assistant.appendThinking(payload.token || payload.delta || "");
+  } else if (type === "model_round") {
+    assistant.applyModelRound(payload);
   } else if (type === "content" || type === "token") {
     const delta = String(payload.delta || payload.token || "");
     if (delta) {
+      assistant.finalizeThinking();
       assistant.appendContent(delta);
       run.activeStreamContent = assistant.rawContent;
       syncAssistantDraftToHistory(run, assistant);
@@ -17418,14 +18341,20 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
       if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
     }
   } else if (type === "tool_start" && payload.tool) {
+    assistant.markToolUse();
     if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
     else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
   } else if (type === "tool_result" && payload.tool && payload.result) {
     const uiResult = toolUiResult(payload.result);
     if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
     else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+  } else if (type === "context_checkpoint") {
+    applyCheckpointToSession(run.session, payload);
+    applyContextCheckpointUi(run, payload);
+    if (runIsChildVisible(childSessionId)) updateContextUsage();
   } else if (type === "context_usage" && payload.usage) {
-    run.session.lastContextUsage = payload.usage;
+    storeLastContextUsage(payload.usage, { session: run.session, model: run.model || selectedModel, contextPlan: run.contextPlan });
+    if (runIsChildVisible(childSessionId)) updateContextUsage();
   }
   syncChatRunSession(run);
   if (runIsChildVisible(childSessionId)) scrollMessages();
@@ -17463,6 +18392,10 @@ function drainPendingSubagentResults() {
       next.payload?.parentSessionId || next.payload?.sessionId || next.parentSessionId,
     );
     if (resolvedParentSessionId) next.parentSessionId = resolvedParentSessionId;
+  }
+  if (isChatSessionStoppedByOperator(next.parentSessionId)) {
+    pendingSubagentResults.shift();
+    return;
   }
   if (!next
     || !chatSessions.some((session) => session.id === next.parentSessionId)
@@ -17566,8 +18499,10 @@ async function renderParentContinuationEvent(payload = {}) {
   const assistant = run.assistant;
   const visible = activeChatSessionId === run.sessionId && !run.viewHost;
   if (type === "thinking") {
-    assistant.showPrivateReasoning();
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
+    assistant.appendThinking(payload.token || payload.delta || "");
+  } else if (type === "model_round") {
+    assistant.applyModelRound(payload);
   } else if (type === "content" || type === "token") {
     const delta = String(payload.delta || payload.token || "");
     if (delta) {
@@ -17582,8 +18517,13 @@ async function renderParentContinuationEvent(payload = {}) {
     if (payload.text && !isSilentToolRoutingActivity(payload.text)) assistant.noteTaskActivity(payload.text, payload.kind || "info");
   } else if (type === "output_continuation") {
     assistant.setStatus("Continuing the response…");
+  } else if (type === "context_checkpoint") {
+    applyCheckpointToSession(run.session, payload);
+    applyContextCheckpointUi(run, payload);
+    if (visible) updateContextUsage();
   } else if (type === "context_usage" && payload.usage) {
     storeLastContextUsage(payload.usage, { session: run.session, model: run.model, contextPlan: run.contextPlan });
+    if (visible) updateContextUsage();
   } else if (type === "run_state") {
     const phase = String(payload.state?.phase || "working").replace(/-/g, " ");
     assistant.updateTaskStage(phase);
@@ -17602,6 +18542,7 @@ async function renderParentContinuationEvent(payload = {}) {
       if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
     }
   } else if (type === "tool_start" && payload.tool) {
+    assistant.markToolUse();
     assistant.finalizeThinking();
     if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
     else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
@@ -17775,11 +18716,9 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
       const waitLabel = kind === "terminal" ? `Running command · ${elapsedLabel}` : `waiting ${elapsedLabel}`;
       updateWaitCardLabel(waitId, waitLabel);
       if (kind === "terminal") updateCommandTimelineLabel(payload, waitLabel);
-      appendHarnessWaitLine(waitId, waitLabel);
     } else {
       finalizeSubagentWaitingCard(waitId, status, elapsedLabel);
       if (kind === "terminal") finalizeCommandTimeline(payload, status, payload.exitCode);
-      appendHarnessWaitLine(waitId, `waited ${elapsedLabel}`);
     }
     const transcript = String(payload.stdout || "").trim();
     const stderr = String(payload.stderr || "").trim();
@@ -17825,6 +18764,9 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
           "Continue from this terminal output.",
         ]).filter(Boolean).join("\n\n");
     const targetSessionId = chatSessionIdForRuntimeId(payload.sessionId || payload.parentSessionId || "") || activeChatSessionId;
+    if (isChatSessionStoppedByOperator(targetSessionId) || isChatSessionStoppedByOperator(payload.sessionId) || isChatSessionStoppedByOperator(payload.parentSessionId)) {
+      return;
+    }
     await sendMessageWithAgentRuntime({
       internal: true,
       sessionId: targetSessionId,
@@ -17859,7 +18801,7 @@ function startWaitCardTicker(card) {
     const elapsed = formatWaitClock(Date.now() - startedAt);
     const label = waitKind === "terminal" ? `Running command · ${elapsed}` : `waiting ${elapsed}`;
     const fileEl = card.querySelector(".tool-card-file");
-    if (fileEl) fileEl.textContent = label;
+    if (fileEl) renderToolStatusLabelFromText(fileEl, label);
     card.setAttribute("aria-label", label);
   };
   tick();
@@ -17879,30 +18821,9 @@ function updateWaitCardLabel(waitId, label) {
     const cardId = card.dataset.subagentId || card.dataset.waitId || "";
     if (cardId !== waitId) continue;
     const fileEl = card.querySelector(".tool-card-file");
-    if (fileEl) fileEl.textContent = label;
+    if (fileEl) renderToolStatusLabelFromText(fileEl, label);
     card.setAttribute("aria-label", label);
   }
-}
-
-function appendHarnessWaitLine(waitId, text) {
-  if (!messages || !text) return;
-  let host = null;
-  if (waitId) {
-    for (const card of messages.querySelectorAll(".tool-card.subagent-wait[data-subagent-id], .tool-card.subagent-wait[data-wait-id], .tool-card[data-wait-id]")) {
-      const cardId = card.dataset.subagentId || card.dataset.waitId || "";
-      if (cardId === waitId) {
-        host = card.parentElement || card;
-        break;
-      }
-    }
-  }
-  const line = document.createElement("div");
-  line.className = "harness-wait-line";
-  line.dataset.waitId = waitId || "";
-  line.textContent = text;
-  if (host?.appendChild) host.appendChild(line);
-  else messages.appendChild(line);
-  scrollMessages();
 }
 
 function finalizeCommandTimeline(identity, status = "complete", exitCode = null) {
@@ -17918,6 +18839,10 @@ function finalizeCommandTimeline(identity, status = "complete", exitCode = null)
   for (const row of commandTimelineRows()) {
     if (!commandTimelineIdentityMatches(row, ids)) continue;
     updateCommandTimelineRow(row, completion.state);
+    if (exitCode != null && exitCode !== "") row.dataset.exitCode = String(exitCode);
+    if (typeof source.stdout === "string" && source.stdout) row.dataset.stdout = source.stdout.slice(0, 50_000);
+    if (Number.isFinite(Number(source.elapsedMs))) row.dataset.durationMs = String(Number(source.elapsedMs));
+    row.dataset.endedAt = String(Date.parse(source.endedAt || "") || Date.now());
   }
 }
 
@@ -17933,7 +18858,7 @@ function finalizeSubagentWaitingCard(subagentId, status, elapsedLabel = "") {
     const label = elapsedLabel
       ? `waited ${elapsedLabel}`
       : `${card.dataset.waitKind === "terminal" ? "terminal" : "traffsucker subagent"} ${status === "complete" ? "completed" : status}`;
-    if (fileEl) fileEl.textContent = label;
+    if (fileEl) renderToolStatusLabelFromText(fileEl, label);
     card.setAttribute("aria-label", label);
     const statusEl = card.querySelector(".tool-card-status");
     if (statusEl) statusEl.className = `tool-card-status ${status === "complete" || status === "running" ? "success" : "error"}`;
@@ -18152,7 +19077,6 @@ function onChatInputChange() {
   reconcileSelectedSlashCommandAfterEdit();
   resizeChatInput();
   updateSendBtn();
-  updateContextUsage();
   renderSlashSuggestions();
 }
 
@@ -18242,6 +19166,7 @@ document.addEventListener("click", (e) => {
 });
 
 chatPane?.addEventListener("click", (e) => {
+  if (e.target.closest(".assistant-reply-footer, .assistant-reply-copy")) return;
   const promptBox = e.target.closest(".chat-turn.user .chat-box.user-prompt-expandable");
   if (promptBox) {
     const willExpand = !promptBox.classList.contains("is-expanded");
@@ -18268,6 +19193,36 @@ messages.addEventListener("click", (e) => {
     chatInput.value = starter.dataset.chatStarter || "";
     onChatInputChange();
     chatInput.focus();
+    return;
+  }
+
+  const workHeader = e.target.closest(".agent-work-header");
+  if (workHeader) {
+    if (workHeader.dataset.foldable === "false" || workHeader.dataset.state === "planning") return;
+    toggleWorkFold(workHeader.closest(".agent-work-fold"));
+    return;
+  }
+
+  const fileStackToggle = e.target.closest(".agent-file-stack-toggle");
+  if (fileStackToggle) {
+    toggleCollapsibleFold(fileStackToggle.parentElement);
+    return;
+  }
+
+  const workFoldToggle = e.target.closest(".agent-work-fold > .agent-status-line, .agent-explored-toggle, .agent-thinking-toggle");
+  if (workFoldToggle) {
+    toggleCollapsibleFold(workFoldToggle.parentElement);
+    return;
+  }
+
+  const fileRow = e.target.closest(".agent-file-row");
+  if (fileRow) {
+    const rel = String(fileRow.dataset.path || fileRow.dataset.file || "").trim();
+    if (rel && rel !== "workspace" && rel !== "." && !/^[a-z]+:\/\//i.test(rel)) {
+      e.preventDefault();
+      const name = rel.split(/[/\\]/).pop();
+      openFile(joinWorkspacePath(rel), name, { focusEditor: true });
+    }
     return;
   }
 
@@ -18360,12 +19315,14 @@ function makeDraggable(handle, onMove, { onStart, onEnd } = {}) {
   });
 }
 
-makeDraggable(sidebarResize, (e) => {
-  const min = 200, max = 360;
-  const left = sidebar.getBoundingClientRect().left;
-  sidebar.style.width = Math.min(max, Math.max(min, e.clientX - left)) + "px";
-  sidebarResize.setAttribute("aria-valuenow", String(Math.round(sidebar.offsetWidth)));
-});
+if (!globalThis.__XEKUTE_REACT_LAYOUT__) {
+  makeDraggable(sidebarResize, (e) => {
+    const min = 200, max = 360;
+    const left = sidebar.getBoundingClientRect().left;
+    sidebar.style.width = Math.min(max, Math.max(min, e.clientX - left)) + "px";
+    sidebarResize.setAttribute("aria-valuenow", String(Math.round(sidebar.offsetWidth)));
+  });
+}
 
 const CHAT_MIN_VIEWPORT_RATIO = 0.2;
 
@@ -18392,13 +19349,15 @@ function syncChatResizeLimit({ clamp = false } = {}) {
 
 syncChatResizeLimit({ clamp: true });
 
-makeDraggable(chatResize, (e) => {
-  const min = chatViewportMinWidth(), max = chatViewportMaxWidth();
-  const w = window.innerWidth - e.clientX;
-  chatPane.style.width = Math.min(max, Math.max(min, w)) + "px";
-  chatResize.setAttribute("aria-valuenow", String(Math.round(chatPane.offsetWidth)));
-  resizeChatInput();
-});
+if (!globalThis.__XEKUTE_REACT_LAYOUT__) {
+  makeDraggable(chatResize, (e) => {
+    const min = chatViewportMinWidth(), max = chatViewportMaxWidth();
+    const w = window.innerWidth - e.clientX;
+    chatPane.style.width = Math.min(max, Math.max(min, w)) + "px";
+    chatResize.setAttribute("aria-valuenow", String(Math.round(chatPane.offsetWidth)));
+    resizeChatInput();
+  });
+}
 
 makeDraggable(securityWorkbenchResize, (e) => {
   if (!securityHistoryPanel || securityHistoryPanel.hidden) return;
@@ -18462,6 +19421,7 @@ function setTerminalCollapsed(collapsed, { createIfMissing = true } = {}) {
   btnTopTerminal?.classList.toggle("inactive", collapsed);
   activityTerminal?.classList.toggle("panel-visible", !collapsed);
   activityTerminal?.setAttribute("aria-pressed", String(!collapsed));
+  TerminalManager.setPanelOpen?.(!collapsed);
 
   if (collapsed) {
     if (terminalPane.offsetHeight > TERMINAL_MIN_EXPANDED) {
@@ -18559,6 +19519,7 @@ globalThis.toggleTerminalPanel = () => {
 
 globalThis.onTerminalSessionStateChange = ({ count }) => {
   if (count === 0 && !terminalCollapsed) setTerminalCollapsed(true, { createIfMissing: false });
+  else TerminalManager.setPanelOpen?.(!terminalCollapsed && count > 0);
 };
 
 let terminalDragShouldCollapse = false;
@@ -18673,22 +19634,24 @@ function installSeparatorKeyboard(handle, { orientation, minimum, maximum, read,
   });
 }
 
-installSeparatorKeyboard(sidebarResize, {
-  orientation: "vertical", minimum: 200, maximum: () => 360,
-  read: () => sidebar.offsetWidth,
-  write: (value) => { sidebar.style.width = `${value}px`; },
-  reset: () => { sidebar.style.width = "244px"; },
-});
-installSeparatorKeyboard(chatResize, {
-  orientation: "vertical", minimum: chatViewportMinWidth, maximum: chatViewportMaxWidth,
-  read: () => chatPane.offsetWidth,
-  write: (value) => { chatPane.style.width = `${value}px`; resizeChatInput(); },
-  reset: () => {
-    const width = Math.min(chatViewportMaxWidth(), Math.max(chatViewportMinWidth(), 513));
-    chatPane.style.width = `${width}px`;
-    resizeChatInput();
-  },
-});
+if (!globalThis.__XEKUTE_REACT_LAYOUT__) {
+  installSeparatorKeyboard(sidebarResize, {
+    orientation: "vertical", minimum: 200, maximum: () => 360,
+    read: () => sidebar.offsetWidth,
+    write: (value) => { sidebar.style.width = `${value}px`; },
+    reset: () => { sidebar.style.width = "244px"; },
+  });
+  installSeparatorKeyboard(chatResize, {
+    orientation: "vertical", minimum: chatViewportMinWidth, maximum: chatViewportMaxWidth,
+    read: () => chatPane.offsetWidth,
+    write: (value) => { chatPane.style.width = `${value}px`; resizeChatInput(); },
+    reset: () => {
+      const width = Math.min(chatViewportMaxWidth(), Math.max(chatViewportMinWidth(), 513));
+      chatPane.style.width = `${width}px`;
+      resizeChatInput();
+    },
+  });
+}
 installSeparatorKeyboard(securityWorkbenchResize, {
   orientation: "horizontal", minimum: WORKBENCH_MIN_H,
   maximum: () => Math.max(WORKBENCH_MIN_H, (securityHistoryPanel?.parentElement?.clientHeight || 0) - WORKBENCH_TOOL_MIN_H - 4),

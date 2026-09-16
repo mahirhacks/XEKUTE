@@ -6,7 +6,7 @@ version: 1.1.0
 entrypoint: SKILL.md
 visibility: internal
 instruction_role: skill-context
-modes: ["agent", "ask", "plan", "hypothesis"]
+modes: ["agent", "ask"]
 required_tools: ["ask_questions", "create_guidance"]
 parameter_policy: context-only
 ---

@@ -2,21 +2,27 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { Worker } = require("node:worker_threads");
 const Store = require("./intelligence-store.js");
-const { sourceFilesForWorkspace, indexWorkspaceSync, cursorFingerprint } = require("./intelligence-indexer.js");
+const { sourceFilesForWorkspace, indexWorkspaceSync } = require("./intelligence-indexer.js");
 const { createAssessmentKnowledgeEngine } = require("../knowledge/assessment-knowledge-engine.js");
 
-function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker = true, mcpRuntime = null } = {}) {
+function createAssessmentIntelligenceService({ onEvent = () => {}, mcpRuntime = null } = {}) {
   const jobs = new Map();
   const evidenceJobs = new Map();
+  const databases = new Map();
+  const runtimeEvidence = new Map();
   const knowledge = createAssessmentKnowledgeEngine({ mcpRuntime });
-  let graphProvider = null;
-
-  function setGraphProvider(provider) { graphProvider = provider || null; return { ok: true }; }
 
   function rootOf(workspace) { return path.resolve(String(workspace || "")); }
-  function indexPath(workspace) { return path.join(rootOf(workspace), ".xekute", "intelligence", "index.sqlite"); }
+  function indexPath(_workspace) { return ":memory:"; }
+  function databaseFor(workspace, { create = false } = {}) {
+    const root = rootOf(workspace);
+    if (databases.has(root)) return databases.get(root);
+    if (!create) return null;
+    const db = Store.openDatabase(":memory:");
+    databases.set(root, db);
+    return db;
+  }
   function estimateSources(workspace) {
     const root = rootOf(workspace);
     const sources = [];
@@ -37,20 +43,17 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
   }
   function status(workspace) {
     const root = rootOf(workspace);
-    const target = indexPath(root);
     const job = jobs.get(root);
     const estimate = estimateSources(root);
-    if (job) return { ok: true, status: job.status, progress: job.progress || null, path: target, estimate };
-    if (!fs.existsSync(target)) return { ok: true, status: "not_built", path: target, overview: null, estimate };
+    if (job) return { ok: true, status: job.status, progress: job.progress || null, path: ":memory:", estimate };
+    const db = databaseFor(root);
+    if (!db) return { ok: true, status: "not_built", path: ":memory:", overview: null, estimate };
     try {
-      const db = Store.openDatabase(target);
       const overview = Store.overview(db);
       const meta = Store.readMeta(db);
-      const result = { ok: true, status: meta.status === "paused" ? "paused" : meta.status === "indexing" ? "running" : "ready", path: target, overview, estimate };
-      db.close();
-      return result;
+      return { ok: true, status: meta.status === "paused" ? "paused" : meta.status === "indexing" ? "running" : "ready", path: ":memory:", overview, estimate };
     } catch (error) {
-      return { ok: false, status: "corrupt", path: target, error: error.message, code: "INTELLIGENCE_CORRUPT" };
+      return { ok: false, status: "corrupt", path: ":memory:", error: error.message, code: "INTELLIGENCE_CORRUPT" };
     }
   }
 
@@ -58,8 +61,8 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
     const root = rootOf(workspace);
     if (!root || !fs.existsSync(root)) return Promise.resolve({ ok: false, error: "Assessment workspace does not exist.", code: "WORKSPACE_NOT_FOUND" });
     const existing = jobs.get(root);
-    if (existing && ["queued", "running"].includes(existing.status)) return Promise.resolve({ ok: true, status: existing.status, path: indexPath(root) });
-    if (existing && existing.status === "paused" && !options.resume) return Promise.resolve({ ok: true, status: "paused", path: indexPath(root) });
+    if (existing && ["queued", "running"].includes(existing.status)) return Promise.resolve({ ok: true, status: existing.status, path: ":memory:" });
+    if (existing && existing.status === "paused" && !options.resume) return Promise.resolve({ ok: true, status: "paused", path: ":memory:" });
     if (existing && existing.status === "paused") jobs.delete(root);
     const job = { status: "queued", progress: { source: "", records: 0, total: 0 }, worker: null, completion: null };
     jobs.set(root, job);
@@ -72,76 +75,48 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
       if (job.status !== "paused") jobs.delete(root);
       return result;
     };
-    if (!enableWorker) {
-      job.completion = Promise.resolve().then(() => indexWorkspaceSync({ workspace: root, indexPath: indexPath(root), runId: options.runId, planId: options.planId, shouldPause: () => job.status === "paused", onProgress: (progress) => { job.status = "running"; job.progress = progress; emit({ type: "progress", progress }); } })).then(finish);
-      return job.completion;
-    }
-    job.completion = new Promise((resolve) => {
-      const worker = new Worker(path.join(__dirname, "intelligence-worker.js"), { workerData: { workspace: root, indexPath: indexPath(root), runId: options.runId || "", planId: options.planId || "" } });
-      job.worker = worker;
-      job.status = "running";
-      worker.on("message", (message) => {
-        if (message.type === "progress") { job.progress = message.progress; emit(message); return; }
-        if (message.type === "complete") { const result = finish(message.result); resolve(result); }
-      });
-      worker.on("error", (error) => resolve(finish({ ok: false, error: error.message, code: "INTELLIGENCE_BUILD_FAILED" })));
-      worker.on("exit", (code) => { if (jobs.has(root) && code !== 0) resolve(finish({ ok: false, error: `Intelligence worker exited with code ${code}`, code: "INTELLIGENCE_WORKER_EXITED" })); });
-      emit({ type: "status", status: "running", path: indexPath(root) });
-    });
+    const db = databaseFor(root, { create: true });
+    job.completion = Promise.resolve()
+      .then(() => indexWorkspaceSync({ workspace: root, db, runId: options.runId, planId: options.planId, shouldPause: () => job.status === "paused", onProgress: (progress) => { job.status = "running"; job.progress = progress; emit({ type: "progress", progress }); } }))
+      .then((result) => {
+        replayRuntimeEvidence(root, db);
+        return result;
+      })
+      .then(finish);
     return job.completion;
   }
 
   function query(workspace, input = {}) {
-    const graphOperations = {
-      graph_overview: () => graphProvider?.getOverview?.(workspace),
-      graph_search: () => graphProvider?.searchNodes?.(workspace, input.query || "", { limit: input.limit, types: input.types }),
-      graph_node: () => graphProvider?.getNode?.(workspace, input.id || input.entityId || ""),
-      graph_neighbors: () => graphProvider?.getNeighbors?.(workspace, input.id || input.entityId || "", { minConfidence: input.minConfidence, edgeTypes: input.edgeTypes }),
-      graph_paths: () => graphProvider?.findPaths?.(workspace, input.from || input.id || "", input.to || input.entityId || "", { maxHops: input.maxHops, minConfidence: input.minConfidence }),
-      graph_workflow: () => graphProvider?.getWorkflow?.(workspace, { limit: input.limit }),
-      graph_state_model: () => graphProvider?.getStateModel?.(workspace, { limit: input.limit, minConfidence: input.minConfidence }),
-      graph_identity_diff: () => graphProvider?.getIdentityDiff?.(workspace, { limit: input.limit }),
-      graph_variants: () => graphProvider?.getVariants?.(workspace, input.id || input.entityId || "", { limit: input.limit }),
-      graph_anomalies: () => graphProvider?.getAnomalies?.(workspace, { limit: input.limit }),
-      graph_evidence: () => graphProvider?.getEvidence?.(workspace, input.evidenceIds?.length ? input.evidenceIds : input.id || input.entityId || "", { maxChars: 24_000 }),
-    };
-    if (graphOperations[input.operation]) {
-      if (!graphProvider) return { ok: false, error: "The application graph provider is unavailable.", code: "GRAPH_UNAVAILABLE" };
-      const result = graphOperations[input.operation]();
-      return result || { ok: false, error: "The requested graph operation is unavailable.", code: "GRAPH_OPERATION_UNAVAILABLE" };
-    }
     if (input.domain === "knowledge" || input.operation === "knowledge") return knowledge.query(input, { workspace: rootOf(workspace), sessionId: input.sessionId || "", mode: input.mode || "agent", activateMcp: false });
     if (input.domain === "both") {
       const engagement = query(workspace, { ...input, domain: "engagement" });
       const assessment = knowledge.query(input, { workspace: rootOf(workspace), sessionId: input.sessionId || "", mode: input.mode || "agent", activateMcp: false });
       return { ok: engagement.ok !== false && assessment.ok !== false, engagement, assessment };
     }
-    const target = indexPath(workspace);
-    if (!fs.existsSync(target)) return { ok: false, error: "The assessment intelligence index has not been built.", code: "INTELLIGENCE_NOT_BUILT", status: "not_built", remediation: "Start the intelligence build from the assessment Map." };
-    try { const db = Store.openDatabase(target); const result = Store.query(db, input); db.close(); return result; }
+    const db = databaseFor(workspace);
+    if (!db) return { ok: false, error: "The assessment intelligence index has not been built.", code: "INTELLIGENCE_NOT_BUILT", status: "not_built", remediation: "Start the intelligence build from the assessment workspace." };
+    try { return Store.query(db, input); }
     catch (error) { return { ok: false, error: error.message, code: "INTELLIGENCE_QUERY_FAILED" }; }
   }
 
   function expand(workspace, input = {}) {
-    const target = indexPath(workspace);
-    if (!fs.existsSync(target)) return { ok: false, error: "The assessment intelligence index has not been built.", code: "INTELLIGENCE_NOT_BUILT" };
-    try { const db = Store.openDatabase(target); const result = Store.expand(db, { ...input, workspace: rootOf(workspace) }); db.close(); return result; }
+    const db = databaseFor(workspace);
+    if (!db) return { ok: false, error: "The assessment intelligence index has not been built.", code: "INTELLIGENCE_NOT_BUILT" };
+    try { return Store.expand(db, { ...input, workspace: rootOf(workspace) }); }
     catch (error) { return { ok: false, error: error.message, code: "INTELLIGENCE_EXPAND_FAILED" }; }
   }
 
   function relatedEvidence(workspace, refs = []) {
-    const target = indexPath(workspace);
-    if (!fs.existsSync(target)) return [];
-    try { const db = Store.openDatabase(target); const result = Store.relatedEvidence(db, refs, 100); db.close(); return result; }
+    const db = databaseFor(workspace);
+    if (!db) return [];
+    try { return Store.relatedEvidence(db, refs, 100); }
     catch { return []; }
   }
   function recordRunEvidence(workspace, input = {}) {
-    const target = indexPath(workspace);
-    if (!fs.existsSync(target)) return { ok: false, code: "INTELLIGENCE_NOT_BUILT" };
+    const db = databaseFor(workspace);
+    if (!db) return { ok: false, code: "INTELLIGENCE_NOT_BUILT" };
     try {
-      const db = Store.openDatabase(target);
       Store.recordRunEvidence(db, input);
-      db.close();
       return { ok: true };
     } catch (error) { return { ok: false, error: error.message, code: "INTELLIGENCE_RUN_RECORD_FAILED" }; }
   }
@@ -155,43 +130,38 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
     next.finally(() => { if (evidenceJobs.get(root) === next) evidenceJobs.delete(root); }).catch(() => {});
     return next;
   }
+  function pendingRuntimeEvidence(root) {
+    if (!runtimeEvidence.has(root)) runtimeEvidence.set(root, []);
+    return runtimeEvidence.get(root);
+  }
+  function applyRuntimeEvidence(db, input, projection) {
+    const serialized = JSON.stringify(projection.rawRecord);
+    return Store.recordRuntimeEvidence(db, input, {
+      sourcePath: "runtime-evidence",
+      sourceOffset: 0,
+      sourceLength: Buffer.byteLength(serialized, "utf8"),
+      rawRecord: projection.rawRecord,
+    });
+  }
+  function replayRuntimeEvidence(root, db) {
+    if (!db) return;
+    for (const item of pendingRuntimeEvidence(root)) applyRuntimeEvidence(db, item.input, item.projection);
+  }
   function recordRuntimeEvidence(workspace, input = {}) {
     const root = rootOf(workspace);
-    const target = path.join(root, ".xekute", "evidence", "runtime.jsonl");
-    const relativePath = ".xekute/evidence/runtime.jsonl";
     const projection = Store.runtimeEvidenceProjection(input);
-    const line = `${JSON.stringify(projection.rawRecord)}\n`;
+    pendingRuntimeEvidence(root).push({ input, projection });
     queueEvidence(root, async () => {
-      await (fs.promises?.mkdir
-        ? fs.promises.mkdir(path.dirname(target), { recursive: true })
-        : Promise.resolve().then(() => fs.mkdirSync(path.dirname(target), { recursive: true })));
-      let sourceOffset = 0;
-      try { sourceOffset = fs.existsSync(target) ? fs.statSync(target).size : 0; } catch { sourceOffset = 0; }
-      if (fs.promises?.appendFile) await fs.promises.appendFile(target, line, "utf8");
-      else fs.appendFileSync(target, line, "utf8");
-      if (!fs.existsSync(indexPath(root))) return { ok: true };
-      const db = Store.openDatabase(indexPath(root));
-      try {
-        const result = Store.recordRuntimeEvidence(db, input, { sourcePath: relativePath, sourceOffset, sourceLength: Buffer.byteLength(line, "utf8"), rawRecord: projection.rawRecord });
-        const stat = fs.statSync(target);
-        Store.setSource(db, {
-          path: relativePath,
-          kind: "evidence",
-          fingerprint: cursorFingerprint(target, stat.size),
-          size: stat.size,
-          mtime: stat.mtimeMs,
-          cursor: stat.size,
-          status: "indexed",
-        });
-        return result;
-      } finally { db.close(); }
+      const db = databaseFor(root);
+      if (!db) return { ok: true };
+      return applyRuntimeEvidence(db, input, projection);
     });
     return { ok: true, evidenceIds: [projection.evidenceId], queued: true };
   }
   function completeRun(workspace, runId, status = "completed") {
-    const target = indexPath(workspace);
-    if (!fs.existsSync(target)) return { ok: false, code: "INTELLIGENCE_NOT_BUILT" };
-    try { const db = Store.openDatabase(target); Store.completeRun(db, runId, status); db.close(); return { ok: true }; }
+    const db = databaseFor(workspace);
+    if (!db) return { ok: false, code: "INTELLIGENCE_NOT_BUILT" };
+    try { Store.completeRun(db, runId, status); return { ok: true }; }
     catch (error) { return { ok: false, error: error.message, code: "INTELLIGENCE_RUN_COMPLETE_FAILED" }; }
   }
 
@@ -206,10 +176,12 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
 
   function resume(workspace, options = {}) { return start(workspace, { ...options, resume: true }); }
   function rebuild(workspace, options = {}) {
-    const target = indexPath(workspace);
-    try {
-      if (fs.existsSync(target)) fs.renameSync(target, `${target}.previous-${Date.now()}`);
-    } catch (error) { return Promise.resolve({ ok: false, error: error.message, code: "INTELLIGENCE_REBUILD_PREPARE_FAILED" }); }
+    const root = rootOf(workspace);
+    const existing = databases.get(root);
+    if (existing) {
+      try { existing.close(); } catch { /* ignore */ }
+      databases.delete(root);
+    }
     return start(workspace, options);
   }
   function refresh(workspace, options = {}) {
@@ -239,9 +211,12 @@ function createAssessmentIntelligenceService({ onEvent = () => {}, enableWorker 
     await flush();
     for (const job of jobs.values()) { try { job.worker?.terminate(); } catch { /* ignore */ } }
     jobs.clear();
+    for (const db of databases.values()) { try { db.close(); } catch { /* ignore */ } }
+    databases.clear();
+    runtimeEvidence.clear();
   }
 
-  return Object.freeze({ indexPath, status, start, pause, resume, rebuild, refresh, whenIdle, query, expand, relatedEvidence, recordRunEvidence, recordRuntimeEvidence, completeRun, flush, dispose, setGraphProvider, knowledge, mcpRuntime });
+  return Object.freeze({ indexPath, status, start, pause, resume, rebuild, refresh, whenIdle, query, expand, relatedEvidence, recordRunEvidence, recordRuntimeEvidence, completeRun, flush, dispose, knowledge, mcpRuntime });
 }
 
 module.exports = { createAssessmentIntelligenceService };

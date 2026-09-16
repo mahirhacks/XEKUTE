@@ -68,7 +68,12 @@ function createIdentityVault({
     return path.join(identitiesDir, `${safe}.json`);
   }
 
-  function metadataDir(workspace) { return path.join(path.resolve(String(workspace || ".")), ".xekute", "identities"); }
+  function leftoverMetadataDir(workspace) { return path.join(path.resolve(String(workspace || ".")), ".xekute", "identities"); }
+  function metadataDir(workspace) {
+    const projectId = projectIdFor(workspace, false);
+    const safe = text(projectId || "unscoped").replace(/[^a-z0-9_-]/gi, "_");
+    return path.join(identitiesDir, `${safe}-meta`);
+  }
   function metadataFile(workspace, identityId) { return path.join(metadataDir(workspace), `${identityId}.json`); }
 
   function validIdentityId(identityId) { return typeof identityId === "string" && SAFE_ID.test(identityId); }
@@ -641,7 +646,7 @@ function createIdentityVault({
   }
 
   function migrateLegacy(workspace) {
-    const dir = metadataDir(workspace);
+    const dir = leftoverMetadataDir(workspace);
     if (!fs.existsSync(dir)) return { ok: true, migrated: 0, skipped: 0 };
     const entries = fs.readdirSync(dir).filter((entry) => entry.endsWith(".json") && entry !== "active.json");
     let migrated = 0;
@@ -650,25 +655,20 @@ function createIdentityVault({
       const file = path.join(dir, entry);
       let legacy;
       try { legacy = JSON.parse(fs.readFileSync(file, "utf8")); } catch { skipped += 1; continue; }
-      if (legacy?.migration?.identityVaultVersion >= VAULT_VERSION && legacy.cookies === undefined && legacy.tokens === undefined) { skipped += 1; continue; }
       const identityId = text(legacy.identityId || entry.replace(/\.json$/, ""), "", 120);
       if (!SAFE_ID.test(identityId)) { skipped += 1; continue; }
       const hasSecrets = Array.isArray(legacy.cookies) && legacy.cookies.length || isRecord(legacy.tokens) && Object.keys(legacy.tokens).length;
-      if (!hasSecrets) {
-        writeMetadata(workspace, { ...legacy, identityId, migration: { identityVaultVersion: VAULT_VERSION, migratedAt: timestamp() } });
-        try { fs.rmSync(`${file}.bak`, { force: true }); } catch { /* Ensure no legacy backup can retain plaintext secrets. */ }
+      writeMetadata(workspace, { ...legacy, identityId, cookies: undefined, tokens: undefined, migration: { identityVaultVersion: VAULT_VERSION, migratedAt: timestamp() } });
+      if (hasSecrets) {
+        const secret = normalizeSecret({ cookies: legacy.cookies, unmappedTokens: legacy.tokens || {} });
+        const saved = saveSecret(workspace, identityId, secret);
+        if (!saved.ok) return { ...saved, migrated, skipped };
+        migrated += 1;
+      } else {
         skipped += 1;
-        continue;
       }
-      const secret = normalizeSecret({ cookies: legacy.cookies, unmappedTokens: legacy.tokens || {} });
-      const saved = saveSecret(workspace, identityId, secret);
-      if (!saved.ok) return { ...saved, migrated, skipped };
-      const sanitized = { ...legacy, ...saved.value.identity, cookies: undefined, tokens: undefined, migration: { identityVaultVersion: VAULT_VERSION, migratedAt: timestamp() } };
-      delete sanitized.cookies;
-      delete sanitized.tokens;
-      writeMetadata(workspace, sanitized);
-      try { fs.rmSync(`${file}.bak`, { force: true }); } catch { /* Ensure no legacy backup can retain plaintext secrets. */ }
-      migrated += 1;
+      try { fs.rmSync(file, { force: true }); } catch { /* Leftover workspace identity files are not rewritten. */ }
+      try { fs.rmSync(`${file}.bak`, { force: true }); } catch { /* Ensure no leftover backup retains plaintext secrets. */ }
     }
     return { ok: true, migrated, skipped };
   }

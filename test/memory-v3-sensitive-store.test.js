@@ -127,3 +127,55 @@ test("Tier 1 checkpoint read recovers the previous valid checkpoint after curren
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Tier 1 persists and restores the encrypted active conversation", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-memory-v3-active-"));
+  const protector = {
+    available: () => true,
+    encrypt: (value) => Buffer.from(String(value), "utf8").toString("base64"),
+    decrypt: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+  };
+  const store = createTier1SensitiveStore({ fs, path, crypto, baseDir: root, protector });
+  const project = "proj_00000000-0000-4000-8000-000000009030";
+  const session = "session_00000000-0000-4000-8000-000000009031";
+  const messages = [{ role: "user", content: "Inspect the authorized target." }];
+  try {
+    const written = store.writeActive(project, session, messages);
+    assert.equal(written.ok, true);
+    assert.equal(written.encrypted, true);
+    assert.equal(fs.existsSync(store.activeFile(project, session)), true);
+    const loaded = store.readActive(project, session);
+    assert.equal(loaded.ok, true);
+    assert.equal(loaded.exists, true);
+    assert.deepEqual(loaded.value.active, messages);
+    assert.equal(loaded.value.project_id, project);
+    assert.equal(loaded.value.session_id, session);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Tier 1 rejects an active conversation bound to another session", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-memory-v3-active-binding-"));
+  const protector = {
+    available: () => true,
+    encrypt: (value) => Buffer.from(String(value), "utf8").toString("base64"),
+    decrypt: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+  };
+  const store = createTier1SensitiveStore({ fs, path, crypto, baseDir: root, protector });
+  const project = "proj_00000000-0000-4000-8000-000000009032";
+  const sessionA = "session_00000000-0000-4000-8000-000000009033";
+  const sessionB = "session_00000000-0000-4000-8000-000000009034";
+  try {
+    assert.equal(store.writeActive(project, sessionA, [{ role: "user", content: "exact" }]).ok, true);
+    const fileA = store.activeFile(project, sessionA);
+    const fileB = store.activeFile(project, sessionB);
+    fs.mkdirSync(path.dirname(fileB), { recursive: true });
+    fs.copyFileSync(fileA, fileB);
+    const foreign = store.readActive(project, sessionB);
+    assert.equal(foreign.ok, false);
+    assert.equal(foreign.code, "MEMORY_ACTIVE_INVALID");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -6,13 +6,12 @@ const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/sc
 const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = require("../../storage/memory/memory-storage-utils.js");
 
 const SUMMARY_MAX = 32_768;
-const REFERENCES_MAX = 24_576;
 const SUMMARY_RATIO = 0.05;
-const REFERENCES_RATIO = 0.08;
-const CHECKPOINT_RATIO = 0.80;
+const CHECKPOINT_RATIO = 0.90;
+const ACTIVE_MAX = 2_000;
 const METER_ROWS = Object.freeze([
-  "System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents",
-  "Summarized Conversation", "Active Conversation", "Current Workflow", "Working References",
+  "System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP",
+  "Summarized Conversation", "Active Conversation", "Current Workflow",
 ]);
 const SEMANTIC_STOPWORDS = new Set([
   "the", "and", "that", "this", "with", "from", "for", "was", "were", "has", "have",
@@ -50,7 +49,6 @@ function budgetFor(limit, ratio, maximum, minimum) {
   return Math.min(maximum, Math.max(minimum, Math.floor(value * ratio)));
 }
 function summaryBudget(limit) { return budgetFor(limit, SUMMARY_RATIO, SUMMARY_MAX, 1_024); }
-function workingReferenceBudget(limit) { return budgetFor(limit, REFERENCES_RATIO, REFERENCES_MAX, 2_048); }
 function approximateTokens(value) {
   const text = typeof value === "string" ? value : JSON.stringify(value == null ? "" : value);
   // A deliberately conservative upper estimate. Provider adapters may replace
@@ -71,6 +69,7 @@ function createTier1ContextCoordinator({
   model = null,
   now = () => new Date(),
   crypto = nodeCrypto,
+  onChange = null,
 } = {}) {
   const schemas = schemaRegistry || getDefaultMemorySchemaRegistry();
   const sessions = new Map();
@@ -78,8 +77,48 @@ function createTier1ContextCoordinator({
   function sessionKey(projectId, sessionId) { return `${String(projectId)}|${String(sessionId)}`; }
   function stateFor(projectId, sessionId) {
     const key = sessionKey(projectId, sessionId);
-    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", references: [], checkpointRevision: 0, lastAssembly: null });
+    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false });
     return sessions.get(key);
+  }
+  function hydrateActive(projectId, sessionId, state) {
+    if (!state || state.activeHydrated) return state;
+    state.activeHydrated = true;
+    if (!sensitiveStore?.readActive) return state;
+    try {
+      const loaded = sensitiveStore.readActive(projectId, sessionId);
+      if (loaded?.ok && loaded.exists && Array.isArray(loaded.value?.active)) {
+        state.active = loaded.value.active.filter(Boolean).map(clone);
+      }
+    } catch { /* keep the in-memory ledger empty rather than injecting unsafe data */ }
+    return state;
+  }
+  function persistActive(projectId, sessionId) {
+    if (!sensitiveStore?.writeActive) return;
+    const state = stateFor(projectId, sessionId);
+    try { sensitiveStore.writeActive(projectId, sessionId, state.active); } catch { /* in-memory ledger remains authoritative */ }
+  }
+  function capActive(messages) {
+    const source = (Array.isArray(messages) ? messages : []).filter(Boolean).map(clone);
+    return source.length > ACTIVE_MAX ? source.slice(-ACTIVE_MAX) : source;
+  }
+  function emitChange(projectId, sessionId, changed, assembly) {
+    if (typeof onChange !== "function" || !assembly || assembly.ok === false) return;
+    try { onChange({ projectId, sessionId, changed, assembly, rows: assembly.rows }); } catch { /* display updates must not fail the ledger */ }
+  }
+  function hydrateSession(projectId, sessionId) {
+    return hydrateActive(projectId, sessionId, hydrateSummary(projectId, sessionId, stateFor(projectId, sessionId)));
+  }
+  function syncMeter(projectId, sessionId, changed) {
+    persistActive(projectId, sessionId);
+    const state = stateFor(projectId, sessionId);
+    if (!state.blockA) return null;
+    return assemble({
+      project_id: projectId,
+      session_id: sessionId,
+      effective_context_limit: state.lastAssembly?.effective_context_limit || 1,
+      changed: Array.isArray(changed) ? changed : ["Active Conversation"],
+      ...state.blockA,
+    });
   }
   function hydrateSummary(projectId, sessionId, state) {
     if (!state || state.summary !== null || !sensitiveStore?.readCheckpoint) return state;
@@ -109,14 +148,26 @@ function createTier1ContextCoordinator({
   }
   function count(value, exact = false) {
     if (typeof tokenCounter === "function") {
-      try { const result = Number(tokenCounter(value)); if (Number.isFinite(result) && result >= 0) return { tokens: Math.ceil(result), exact: true }; } catch { /* estimator below is safe */ }
+      try {
+        const counted = tokenCounter(value);
+        const result = counted && typeof counted === "object" ? Number(counted.tokens ?? counted.count) : Number(counted);
+        if (Number.isFinite(result) && result >= 0) {
+          return {
+            tokens: Math.ceil(result),
+            exact: counted && typeof counted === "object" ? counted.exact === true : true,
+          };
+        }
+      } catch { /* estimator below is safe */ }
     }
     return { tokens: approximateTokens(value), exact: Boolean(exact) };
   }
-  function component(label, value) { const result = count(value); return { label, value: clone(value), tokens: result.tokens, exact: result.exact }; }
-  function referenceId(entry, projectId, index) {
-    const candidate = String(entry?.record_id || entry?.recordId || entry?.id || "").trim();
-    return isMemoryId(candidate) ? candidate : `entity_${canonicalKeyHash({ projectId, index, content: entry }).slice(0, 48)}`;
+  function component(label, value) {
+    const empty = value == null
+      || value === ""
+      || (Array.isArray(value) && value.length === 0)
+      || (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0);
+    const result = empty ? { tokens: 0, exact: true } : count(value);
+    return { label, value: clone(value), tokens: result.tokens, exact: result.exact };
   }
   function safeReferenceIds(values, projectId, kind = "event") {
     const list = Array.isArray(values) ? values : [];
@@ -125,61 +176,6 @@ function createTier1ContextCoordinator({
       if (isMemoryId(candidate)) return candidate;
       return `${kind}_${canonicalKeyHash({ projectId, value: redactText(candidate, 240), index }).slice(0, 40)}`;
     }))].slice(0, 500);
-  }
-  function normalizeProvenance(value, fallbackRef) {
-    const source = value && typeof value === "object" ? value : {};
-    const sourceType = ["tool_result", "runtime_event", "operator_assertion", "project_profile", "canonical_derivation", "artifact", "knowledge"].includes(String(source.source_type || ""))
-      ? String(source.source_type)
-      : "canonical_derivation";
-    const refs = safeReferenceIds(source.source_refs, fallbackRef, "event");
-    return {
-      source_type: sourceType,
-      source_refs: refs.length ? refs : [fallbackRef],
-      captured_at: /^\d{4}-\d{2}-\d{2}T/.test(String(source.captured_at || "")) ? String(source.captured_at).slice(0, 80) : timestamp(now),
-      ...(source.model ? { model: redactText(source.model, 240) } : {}),
-      ...(source.provider ? { provider: redactText(source.provider, 120) } : {}),
-      redacted: source.redacted !== false,
-    };
-  }
-  function normalizeReference(entry, projectId, index) {
-    const source = entry && typeof entry === "object" ? sanitizeValue(entry) : { value: redactText(entry == null ? "" : entry, 4_000) };
-    if (!source || typeof source !== "object") return null;
-    const id = referenceId(source, projectId, index);
-    const sourceDomain = ["project", "investigation", "evidence", "knowledge", "graph"].includes(String(source.source_domain || source.sourceDomain || "").toLowerCase())
-      ? String(source.source_domain || source.sourceDomain).toLowerCase()
-      : "project";
-    const content = source.content && typeof source.content === "object" && !Array.isArray(source.content)
-      ? sanitizeValue(source.content)
-      : { value: redactText(source.value ?? source.text ?? source.summary ?? "", 4_000) };
-    const normalized = {
-      schema_version: 3,
-      record_id: id,
-      source_domain: sourceDomain,
-      source_revision: Number.isSafeInteger(Number(source.source_revision ?? source.sourceRevision)) && Number(source.source_revision ?? source.sourceRevision) >= 0 ? Number(source.source_revision ?? source.sourceRevision) : 0,
-      source_hash: /^[a-f0-9]{64}$/i.test(String(source.source_hash || source.sourceHash || "")) ? String(source.source_hash || source.sourceHash).toLowerCase() : canonicalKeyHash(content),
-      token_cost: Math.max(0, Number(source.token_cost ?? source.tokenCost) || approximateTokens(content)),
-      expires_at: String(source.expires_at || source.expiresAt || timestamp(now)),
-      pin_owner: source.pin_owner ?? source.pinOwner ?? null,
-      sensitivity: ["public", "internal", "confidential", "restricted"].includes(String(source.sensitivity || "").toLowerCase()) ? String(source.sensitivity).toLowerCase() : "internal",
-      provenance: normalizeProvenance(source.provenance, id),
-      content: content && typeof content === "object" ? content : {},
-    };
-    try { assertNoSecretValues(normalized); } catch { return null; }
-    return normalized;
-  }
-  function normalizeReferences(references, limit, projectId = "") {
-    const list = Array.isArray(references)
-      ? references.map((entry, index) => normalizeReference(entry, projectId, index)).filter(Boolean)
-      : [];
-    const selected = [];
-    let used = 0;
-    for (const entry of list) {
-      const measured = count(entry);
-      if (used + measured.tokens > limit) continue;
-      selected.push(entry);
-      used += measured.tokens;
-    }
-    return { references: selected, tokens: used, omitted: Math.max(0, list.length - selected.length) };
   }
   function normalizeWorkflow(workflow, projectId, sessionId, previousWorkflow = null) {
     const source = workflow && typeof workflow === "object" ? clone(workflow) : {};
@@ -260,64 +256,83 @@ function createTier1ContextCoordinator({
     const sessionId = String(input.session_id || input.sessionId || "");
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 assembly requires opaque project and session IDs.");
     const limit = Math.max(1, Number(input.effective_context_limit || input.effectiveContextLimit || 1));
-    const state = hydrateSummary(projectId, sessionId, stateFor(projectId, sessionId));
+    const state = hydrateSession(projectId, sessionId);
+    // A preview reports what Tier 1 currently holds for the display meter. It
+    // must never advance the ledger, its durable copy, or the cached Block A
+    // used by later OnChange recalculation.
+    const preview = input.preview === true;
     const summary = input.summary === undefined ? state.summary : input.summary;
-    const active = input.active_conversation === undefined ? state.active : (Array.isArray(input.active_conversation) ? input.active_conversation : []);
-    const workflow = normalizeWorkflow(input.current_workflow === undefined ? state.workflow : input.current_workflow, projectId, sessionId, state.workflow);
-    const currentPrompt = String(input.current_user_prompt === undefined ? state.currentPrompt : input.current_user_prompt || "");
-    const refs = normalizeReferences(input.working_references === undefined ? state.references : input.working_references, workingReferenceBudget(limit), projectId);
+    if (input.active_conversation !== undefined && !preview) {
+      state.active = capActive(Array.isArray(input.active_conversation) ? input.active_conversation : []);
+    }
+    const active = preview && input.active_conversation !== undefined
+      ? capActive(Array.isArray(input.active_conversation) ? input.active_conversation : [])
+      : state.active;
+    // Current Workflow is checkpoint-owned continuity. It starts empty and is
+    // only exposed after a conversation checkpoint has produced it.
+    const workflow = summary && state.workflow ? state.workflow : null;
     const a = [
       component("System Prompt", input.system_prompt || input.systemPrompt || ""),
       component("Tool Definitions", input.tool_definitions || input.toolDefinitions || []),
       component("Rules", input.rules || []),
       component("Skills", input.active_skills || input.activeSkills || []),
       component("Subagents", input.active_subagent_instructions || input.activeSubagentInstructions || []),
+      component("MCP", input.mcp_definitions || input.mcpDefinitions || []),
     ];
-    const b = [component("Summarized Conversation", summary || ""), component("Active Conversation", active), component("Current Workflow", workflow)];
-    const c = [component("Current user prompt", currentPrompt), component("Working References", refs.references)];
-    const prefix = { block_a: a, block_b: b, block_c: c };
-    const rows = Object.fromEntries([...a, ...b, { ...c[1], label: "Working References" }].map((entry) => [entry.label, entry.tokens]));
-    // The exact prompt is protected in Block C but intentionally accounted for
-    // in the Active Conversation row so the meter reflects user-visible use.
-    rows["Active Conversation"] += c[0].tokens;
+    const b = [component("Summarized Conversation", summary || ""), component("Active Conversation", active), component("Current Workflow", workflow || "")];
+    const prefix = { block_a: a, block_b: b };
+    const rows = Object.fromEntries([...a, ...b].map((entry) => [entry.label, entry.tokens]));
     const total = Object.values(rows).reduce((sum, value) => sum + value, 0);
     const upperBound = total;
     const result = {
       schema_version: 3,
       effective_context_limit: limit,
       checkpoint_threshold: Math.floor(limit * CHECKPOINT_RATIO),
-      blocks: { A: { components: a, exact: true }, B: { components: b, checkpoint_owned: true }, C: { components: c, protected: true } },
+      blocks: { A: { components: a, exact: true }, B: { components: b, checkpoint_owned: true } },
       rows,
       total_tokens: total,
       conservative_prompt_upper_bound: upperBound,
-      estimated: a.some((entry) => !entry.exact) || b.some((entry) => !entry.exact) || c.some((entry) => !entry.exact),
+      estimated: a.some((entry) => !entry.exact) || b.some((entry) => !entry.exact),
       should_checkpoint: upperBound >= Math.floor(limit * CHECKPOINT_RATIO),
-      reference_omissions: refs.omitted,
-      prefix_hash: hashText(crypto, stable({ A: a.map(({ label, value }) => ({ label, value })), B: b.map(({ label, value }) => ({ label, value })), C: c.map(({ label, value }) => ({ label, value: label === "Current user prompt" ? value : value })) })),
+      prefix_hash: hashText(crypto, stable({ A: a.map(({ label, value }) => ({ label, value })), B: b.map(({ label, value }) => ({ label, value })) })),
     };
-    state.workflow = workflow;
-    state.currentPrompt = currentPrompt;
-    state.references = refs.references;
+    if (preview) return result;
+    if (input.current_user_prompt !== undefined || input.currentUserPrompt !== undefined) {
+      state.currentPrompt = String(input.current_user_prompt ?? input.currentUserPrompt ?? "");
+    }
+    state.blockA = {
+      system_prompt: input.system_prompt || input.systemPrompt || "",
+      tool_definitions: clone(input.tool_definitions || input.toolDefinitions || []),
+      rules: clone(input.rules || []),
+      active_skills: clone(input.active_skills || input.activeSkills || []),
+      active_subagent_instructions: clone(input.active_subagent_instructions || input.activeSubagentInstructions || []),
+      mcp_definitions: clone(input.mcp_definitions || input.mcpDefinitions || []),
+    };
     state.lastAssembly = result;
+    persistActive(projectId, sessionId);
+    emitChange(projectId, sessionId, Array.isArray(input.changed) ? input.changed : METER_ROWS.slice(), result);
     return result;
   }
 
   function pressure(input = {}) {
     const assembled = input.assembled || assemble(input);
     const limit = Number(input.effective_context_limit || input.effectiveContextLimit || assembled.effective_context_limit || 1);
-    return { ok: true, shouldCheckpoint: Number(assembled.conservative_prompt_upper_bound) >= Math.floor(limit * CHECKPOINT_RATIO), protectedOverflow: assembled.blocks.A.components.concat(assembled.blocks.C.components).reduce((sum, item) => sum + item.tokens, 0) > limit, threshold: Math.floor(limit * CHECKPOINT_RATIO), totalTokens: assembled.total_tokens, estimated: assembled.estimated };
+    return { ok: true, shouldCheckpoint: Number(assembled.conservative_prompt_upper_bound) >= Math.floor(limit * CHECKPOINT_RATIO), protectedOverflow: assembled.blocks.A.components.reduce((sum, item) => sum + item.tokens, 0) > limit, threshold: Math.floor(limit * CHECKPOINT_RATIO), totalTokens: assembled.total_tokens, estimated: assembled.estimated };
   }
 
   function reduceConversation(messages = [], toolEvents = []) {
+    // Deterministic checkpoint stage: extract and normalize tool output, then
+    // extract workflow results. Semantic checkpointing later adds grounded
+    // continuation facts, decisions, and significant events.
     const source = Array.isArray(messages) ? messages : [];
     const events = Array.isArray(toolEvents) ? toolEvents : [];
     const normalized = [];
     for (const message of source) {
       const role = String(message?.role || "unknown");
-      const content = role === "tool" ? "[tool output retained by artifact/reference]" : redactText(message?.content || "", 4_000);
+      const content = redactText(message?.content || "", 4_000);
       normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80) });
     }
-    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || ""), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
+    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || ""), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
     return { messages: normalized, tool_events: eventSummary, message_count: normalized.length, event_count: eventSummary.length, digest: canonicalKeyHash({ messages: normalized, tool_events: eventSummary }) };
   }
 
@@ -325,7 +340,7 @@ function createTier1ContextCoordinator({
     const max = summaryBudget(limit);
     const facts = [];
     for (const message of reduction.messages) if (message.role === "user" && message.content) facts.push(`User request: ${truncateText(message.content, 1_900)}`);
-    for (const event of reduction.tool_events) if (event.tool_name) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.`);
+    for (const event of reduction.tool_events) if (event.tool_name) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.${event.safe_excerpt ? ` Result: ${truncateText(event.safe_excerpt, 1_000)}` : ""}`);
     const previousFacts = Array.isArray(previous?.grounded_facts) ? previous.grounded_facts : [];
     // A deterministic fallback is deliberately content addressed.  If the
     // provider is unavailable and the same ledger is retried, the checkpoint
@@ -662,21 +677,16 @@ function createTier1ContextCoordinator({
     const projectId = String(input.project_id || input.projectId || "");
     const sessionId = String(input.session_id || input.sessionId || "");
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_CHECKPOINT_INPUT_INVALID", "A V3 checkpoint requires opaque project_id and session_id.");
-    const state = hydrateSummary(projectId, sessionId, stateFor(projectId, sessionId));
+    const state = hydrateSession(projectId, sessionId);
     const active = Array.isArray(input.active_conversation) ? input.active_conversation : state.active;
-    const workflow = normalizeWorkflow(input.current_workflow === undefined ? state.workflow : input.current_workflow, projectId, sessionId, state.workflow);
-    // The current user prompt is protected Block C data and is not stored in
-    // Active Conversation. Include one synthetic entry in the reduction only
-    // so the checkpoint captures the turn and advances its transcript
-    // boundary; it is never emitted as a second Block B message.
-    // When the caller omits the prompt, preserve the exact protected Block C
-    // value already associated with this session.  An explicitly supplied
-    // empty string still means "no prompt for this checkpoint" and must not
-    // accidentally resurrect an earlier turn.
+    // Active Conversation is the complete raw ledger. Legacy callers may
+    // still supply a separately protected prompt; include it only when that
+    // exact user message is not already in the active ledger.
     const currentPrompt = input.current_user_prompt !== undefined || input.currentUserPrompt !== undefined
       ? String(input.current_user_prompt ?? input.currentUserPrompt ?? "")
       : String(state.currentPrompt || "");
-    const reductionMessages = currentPrompt
+    const promptAlreadyActive = currentPrompt && active.some((message) => message?.role === "user" && String(message?.content || "") === currentPrompt);
+    const reductionMessages = currentPrompt && !promptAlreadyActive
       ? [{ role: "user", content: currentPrompt, id: `prompt_${canonicalKeyHash({ projectId, sessionId, currentPrompt }).slice(0, 32)}` }, ...active]
       : active;
     const reduction = reduceConversation(reductionMessages, input.tool_events || input.toolEvents || []);
@@ -696,6 +706,13 @@ function createTier1ContextCoordinator({
     const rawProtectedRefs = input.protected_refs || input.protectedRefs || [];
     const rawSourceBlocks = input.source_block_refs || input.sourceBlockRefs || [];
     const rawConstraints = input.constraints || input.operator_constraints || input.operatorConstraints || [];
+    const objective = redactText(input.objective || "", 8_000);
+    const suppliedWorkflow = input.current_workflow === undefined ? state.workflow : input.current_workflow;
+    const workflow = normalizeWorkflow(suppliedWorkflow || {
+      state: objective ? "active" : "idle",
+      objective,
+      continuation_point: objective ? { next_action: `Continue working on: ${objective}` } : null,
+    }, projectId, sessionId, state.workflow);
     const context = {
       projectId,
       sessionId,
@@ -704,7 +721,7 @@ function createTier1ContextCoordinator({
       workflow,
       active,
       currentPrompt,
-      objective: redactText(input.objective || "", 8_000),
+      objective,
       constraints: (Array.isArray(rawConstraints) ? rawConstraints : [rawConstraints]).map((value) => redactText(value, 2_000)).filter(Boolean).slice(0, 200),
       decisions: (Array.isArray(input.decisions) ? input.decisions : [input.decisions]).map((value) => redactText(value, 2_000)).filter(Boolean).slice(0, 200),
       // Checkpoint references are identifiers, not arbitrary caller-provided
@@ -742,29 +759,38 @@ function createTier1ContextCoordinator({
     state.checkpointRevision += 1;
     state.active = [];
     state.currentPrompt = "";
-    state.workflow = workflow.state === "completed" ? null : workflow;
-    state.references = [];
-    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), workingReferenceBudget: workingReferenceBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic" };
+    // The workflow visible in Tier 1 changes only at this checkpoint boundary.
+    state.workflow = checkpointValue.workflow_continuity?.state === "completed" ? null : clone(checkpointValue.workflow_continuity);
+    syncMeter(projectId, sessionId, ["Summarized Conversation", "Active Conversation", "Current Workflow"]);
+    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic" };
   }
 
   function appendConversation(projectId, sessionId, messages) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 conversation state requires opaque project and session IDs.");
-    const state = stateFor(projectId, sessionId);
+    const state = hydrateSession(projectId, sessionId);
     const list = Array.isArray(messages) ? messages : [messages];
-    state.active.push(...list.filter(Boolean).map(clone));
+    state.active = capActive([...state.active, ...list.filter(Boolean).map(clone)]);
+    syncMeter(projectId, sessionId, ["Active Conversation"]);
     return { ok: true, active: clone(state.active), count: state.active.length };
   }
   function setActiveConversation(projectId, sessionId, messages) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 conversation state requires opaque project and session IDs.");
-    const state = stateFor(projectId, sessionId);
-    state.active = (Array.isArray(messages) ? messages : []).filter(Boolean).map(clone);
+    const state = hydrateSession(projectId, sessionId);
+    state.active = capActive(messages);
+    syncMeter(projectId, sessionId, ["Active Conversation"]);
     return { ok: true, active: clone(state.active), count: state.active.length };
   }
   function setWorkflow(projectId, sessionId, workflow) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 workflow state requires opaque project and session IDs.");
-    const state = stateFor(projectId, sessionId); state.workflow = normalizeWorkflow(workflow, projectId, sessionId, state.workflow); return clone(state.workflow);
+    const state = hydrateSession(projectId, sessionId);
+    state.workflow = normalizeWorkflow(workflow, projectId, sessionId, state.workflow);
+    syncMeter(projectId, sessionId, ["Current Workflow"]);
+    return clone(state.workflow);
   }
-  function state(projectId, sessionId) { const value = hydrateSummary(projectId, sessionId, stateFor(projectId, sessionId)); return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), references: clone(value.references), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) }; }
+  function state(projectId, sessionId) {
+    const value = hydrateSession(projectId, sessionId);
+    return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) };
+  }
   function clear(projectId, sessionId) { sessions.delete(sessionKey(projectId, sessionId)); return { ok: true }; }
   function clearProject(projectId) {
     const prefix = `${String(projectId)}|`;
@@ -773,7 +799,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, REFERENCES_MAX, METER_ROWS, summaryBudget, workingReferenceBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, state, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, state, clear, clearProject });
 }
 
-module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, REFERENCES_MAX, summaryBudget, workingReferenceBudget, approximateTokens, METER_ROWS });
+module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, METER_ROWS });

@@ -77,6 +77,7 @@ test("assessment intelligence records bounded plan-run evidence with provenance"
     assert.match(JSON.stringify(expanded.items[0]), /\[REDACTED\]/);
     const raw = service.expand(root, { refs: recorded.evidenceIds, level: "raw" });
     assert.equal(raw.items[0].sourceVerified, true);
+    assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "runtime.jsonl")), false);
   } finally {
     await service.dispose();
     fs.rmSync(root, { recursive: true, force: true });
@@ -97,7 +98,7 @@ test("runtime evidence remains durable when the intelligence index has not been 
     assert.equal(recorded.ok, true);
     assert.equal(service.status(root).status, "not_built");
     await service.flush();
-    assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "runtime.jsonl")), true);
+    assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "runtime.jsonl")), false);
     await service.start(root);
     const expanded = service.expand(root, { refs: recorded.evidenceIds, level: "raw" });
     assert.equal(expanded.items[0].sourceVerified, true);

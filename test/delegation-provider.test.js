@@ -209,7 +209,7 @@ test("child project context is finalized before the delegated result returns", a
       finalText: "Verified child result",
       executedTools: true,
       evidenceIds: ["e-child"],
-      appendedMessages: [{ role: "tool", tool_name: "verify_finding", content: JSON.stringify({ ok: true, summary: "Verified child result", evidenceIds: ["e-child"] }) }],
+      appendedMessages: [{ role: "tool", tool_name: "replay_request", content: JSON.stringify({ ok: true, summary: "Verified child result", evidenceIds: ["e-child"] }) }],
       runState: { status: "completed" },
     }),
     runModelRound: async () => ({ fullText: "", toolCalls: [] }),
@@ -235,7 +235,7 @@ test("child project context is finalized before the delegated result returns", a
   assert.equal(finalized.sessionId, "child-shared");
   assert.equal(finalized.blockId, "block_1");
   assert.deepEqual(finalized.evidenceIds, ["e-child"]);
-  assert.equal(finalized.messages[0].tool_name, "verify_finding");
+  assert.equal(finalized.messages[0].tool_name, "replay_request");
   assert.deepEqual(result.metadata.sharedContext, { ok: true, projectMemoryRevision: 12, intelligenceStatus: "ready" });
 });
 

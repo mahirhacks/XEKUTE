@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { nextSelection, topLevelTargets } = require("../src/ui/features/project/explorer-selection.js");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 const ordered = ["/root/a", "/root/b", "/root/folder", "/root/folder/c", "/root/d"];
 
@@ -41,7 +42,7 @@ test("batch operations omit descendants when their selected parent is included",
 
 test("the project explorer wires modifier clicks, accessible multi-selection, and batch deletion", () => {
   const bootstrap = fs.readFileSync(path.join(__dirname, "..", "src/ui/bootstrap.js"), "utf8");
-  const index = fs.readFileSync(path.join(__dirname, "..", "src/ui/index.html"), "utf8");
+  const index = readUiShell();
   assert.match(index, /id="file-tree" role="tree" aria-multiselectable="true"/);
   assert.match(bootstrap, /selectItem\(item, \{ ctrlKey: e\.ctrlKey, metaKey: e\.metaKey, shiftKey: e\.shiftKey \}\)/);
   assert.match(bootstrap, /const orderedVisiblePaths = visibleExplorerItems\(\)\.map/);

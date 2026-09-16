@@ -12,15 +12,21 @@ test("direct prompt modules compile deterministically without generated hashes",
   assert.deepEqual(SystemPrompt.MODULE_ORDER, ["role", "evidence", "loop", "failure", "feedback", "guardrails"]);
   assert.match(first, /You are XEKUTE/);
   assert.match(first, /Runtime scope checks are enforced/i);
+  assert.match(first, /put CONTINUE on its own last line/);
   assert.doesNotMatch(first, /AUTO-GENERATED|content-addressed|prompt_builder|approval token/i);
   assert.equal(PromptCompiler.validate(PromptCompiler.defaults()).ok, true);
 });
 
 test("prompt assembly keeps mode and specialist context selectable", () => {
   const ask = PromptCompiler.compile({ mode: "ask" });
-  const plan = PromptCompiler.compile({ mode: "plan" });
+  const agent = PromptCompiler.compile({ mode: "agent" });
+  const leftoverPlan = PromptCompiler.compile({ mode: "plan" });
+  const leftoverHypothesis = PromptCompiler.compile({ mode: "hypothesis" });
   assert.match(ask, /PROFILE — Ask/);
-  assert.match(plan, /PROFILE — Plan/);
-  assert.notEqual(ask, plan);
+  assert.match(agent, /PROFILE — Agent/);
+  assert.equal(leftoverPlan, ask);
+  assert.equal(leftoverHypothesis, ask);
+  assert.notEqual(ask, agent);
+  assert.doesNotMatch(ask, /PROFILE — Plan|PROFILE — Hypothesis/);
   assert.ok(PromptCompiler.checksum(PromptCompiler.defaults()).length >= 8);
 });

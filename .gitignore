@@ -59,8 +59,6 @@ pnpm-debug.log*
 *.bak
 
 # Stray local/editor artifacts
-entry.type
-m[1])
 
 # Runtime subagent output (e.g. traffsucker run dirs)
 /runtime/
@@ -99,3 +97,17 @@ $RECYCLE.BIN/
 /tmp/
 /version_tracking/
 temp_test
+
+# Vite renderer output is produced by `npm run build:ui`
+/src/ui/dist/
+
+# Local throwaway repro scripts and test dumps
+/tmp-electron-chrome-launch.js
+/tmp-intercept-browser-repro.js
+/test-new.txt
+/test-out.txt
+/chat.json
+DIAGRAM_P.md
+
+# Private Cursor-agent CLI (local only; not part of the product)
+/.agent-cli/

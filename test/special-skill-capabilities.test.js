@@ -27,7 +27,7 @@ test("creation special skills receive create_guidance only in their turn catalog
   assert.equal(definitions.length, 1);
   assert.equal(definitions[0].function.name, CREATE_GUIDANCE_TOOL);
   assert.deepEqual(definitions[0].function.parameters.required, ["kind", "name", "content"]);
-  assert.equal(createSpecialSkillToolDefinitions({ manifest: { id: "pentest", requiredTools: [] } }).length, 0);
+  assert.equal(createSpecialSkillToolDefinitions({ manifest: { id: "report", requiredTools: [] } }).length, 0);
 });
 
 test("create_guidance uses the safe guidance writer and refuses duplicates", () => {

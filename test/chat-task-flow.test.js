@@ -3,21 +3,23 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createV3SessionStore } = require("../src/app/storage/memory/v3-session-store.js");
+const { readUiShell } = require("./helpers/ui-shell.js");
 
 const read = (relativePath) => fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
 
-test("only reasonably large Agent tasks receive the temporary checklist surface", () => {
+test("Agent tasks keep the two-mode catalog without a temporary checklist tool", () => {
   const controller = read("src/agent/controller/agent-controller.js");
   const modes = read("src/agent/modes/mode-registry.js");
   assert.match(controller, /function isReasonablyLargeAgentRequest\(/);
-  assert.match(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
-  assert.match(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
-  assert.match(controller, /sendEvent\(\{ type: "task_list"/);
+  assert.doesNotMatch(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
+  assert.doesNotMatch(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
+  assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_list"/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
   assert.match(modes, /const AGENT_TOOLS = Object\.freeze\(\[/);
-  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "read_file", "search_workspace", "inspect_environment", "query_assessment", "expand_evidence", "query_knowledge"\]\)/);
-  assert.match(modes, /const MODE_TOOL_GROUPS = Object\.freeze\(\{ ask: SAFE_READ_TOOLS, agent: AGENT_TOOLS, hypothesis: Object\.freeze\(\[\.\.\.SAFE_READ_TOOLS, "update_project_artifacts"\]\), plan: Object\.freeze\(\[\.\.\.SAFE_READ_TOOLS, "update_project_artifacts"\]\) \}\)/);
-  assert.match(modes, /"update_project_artifacts"/);
+  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "read_file", "search_workspace", "view_active_terminal"\]\)/);
+  assert.match(modes, /const MODE_TOOL_GROUPS = Object\.freeze\(\{ ask: SAFE_READ_TOOLS, agent: AGENT_TOOLS \}\)/);
+  assert.doesNotMatch(modes, /"update_project_artifacts"/);
+  assert.doesNotMatch(modes, /"query_knowledge"/);
   assert.doesNotMatch(modes, /ALL_MODE_TOOLS/);
   assert.doesNotMatch(modes, /"manage_plan"/);
 });
@@ -32,13 +34,13 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   const main = read("src/app/electron/main.js");
   const projectIpc = read("src/app/ipc/project.js");
   const activeIpc = `${main}\n${projectIpc}`;
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
   assert.match(renderer, /payload\.type === "task_brief"/);
   assert.match(renderer, /completeTaskBrief\(/);
   assert.match(renderer, /FILE_READ_TOOL_NAMES/);
-  assert.match(renderer, /if \(phase === "error"\) return "Failed"/);
-  assert.match(renderer, /if \(isFileReadTool\(tool\)\) return "Read"/);
-  assert.match(renderer, /return "Edited"/);
+  assert.match(renderer, /if \(phase === "error"\) return \{ verb: "Failed"/);
+  assert.match(renderer, /running \? "Reading" : "Read"/);
+  assert.match(renderer, /running \? "Editing" : "Edited"/);
   assert.match(renderer, /data-guidance-delete-path/);
   assert.match(renderer, /deleteGuidanceEntry\(button\.dataset\.guidanceDeletePath/);
   assert.match(controller, /isReasonablyLargeAgentRequest/);
@@ -131,9 +133,10 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(chatMarkup, /id="send-btn"[\s\S]*?codicon-arrow-up/);
   assert.match(html, /id="context-usage-popover"[\s\S]*?Context Usage[\s\S]*?id="context-usage-heading-value"[\s\S]*?id="context-usage-used"[\s\S]*?id="context-usage-breakdown"/);
   assert.doesNotMatch(html, /context-usage-free|context-usage-diagnostics|context-compaction-status|context-usage-measure-note/);
-  for (const label of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "Summarized Conversation", "Active Conversation", "Current Workflow", "Working References"]) assert.match(renderer, new RegExp(`label: "${label}"`));
+  for (const label of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP", "Summarized Conversation", "Active Conversation", "Current Workflow"]) assert.match(renderer, new RegExp(`label: "${label}"`));
+  assert.doesNotMatch(renderer, /label: "Working References"/);
   assert.ok(renderer.indexOf("const CONTEXT_USAGE_ROW_LABELS") < renderer.indexOf("\nsyncChatModeUi();"), "context labels must initialize before the first context render");
-  assert.match(renderer, /contextUsageUsed\.textContent = `\$\{Math\.round\(pct \* 100\)\}%`/);
+  assert.match(renderer, /contextUsageUsed\.textContent = `\$\{Math\.round\(displayPct \* 100\)\}%`/);
   assert.doesNotMatch(renderer, /context-usage-row-value">~/);
   assert.match(layoutStyles, /\.context-ring-btn \{[\s\S]*?display: inline-flex;[\s\S]*?width: 24px;[\s\S]*?height: 24px;/);
   assert.match(layoutStyles, /\.send-btn:disabled \{[\s\S]*?visibility: visible;/);
@@ -142,25 +145,26 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(layoutStyles, /\.chat-tab-close::before \{[\s\S]*?display: block;[\s\S]*?line-height: 1;[\s\S]*?transform: translateY\([12]px\);/);
   assert.doesNotMatch(chatMarkup, /12\s*Files|paperclip|microphone|attachment/i);
   assert.doesNotMatch(chatMarkup, /chat-sticky-user/);
-  assert.match(html, /href="styles\/chat\.css"/);
+  assert.match(read("src/ui/react/main.jsx"), /import "\.\.\/styles\/chat\.css"/);
   assert.doesNotMatch(renderer, /chatStickyUser|syncStickyUserTurn|cloneNode\(true\)/);
   assert.match(renderer, /function normalizeChatExchanges\(/);
   assert.match(renderer, /appendChatTurn\(turn, \{ startsExchange: true \}\)/);
-  assert.match(chatStyles, /#messages \.chat-exchange \{[\s\S]*position: relative[\s\S]*flex: 0 0 auto[\s\S]*gap: 18px/);
+  assert.match(chatStyles, /#messages \.chat-exchange-body \{[\s\S]*?gap: 0/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*position: sticky[\s\S]*top: 8px/);
+  assert.match(chatStyles, /#messages \.agent-response-host > \.assistant-reply-footer/);
+  assert.match(chatStyles, /#messages \.chat-exchange-body > \.assistant-reply-footer/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \.chat-box[\s\S]*background: #252526 !important/);
   assert.match(chatStyles, /#chat-pane::before[\s\S]*height: var\(--chat-sticky-mask-solid-height\)[\s\S]*background: #171717/);
   assert.match(chatStyles, /#chat-pane::after[\s\S]*top: calc\(35px \+ var\(--chat-sticky-mask-solid-height\)\)[\s\S]*height: 12px[\s\S]*linear-gradient/);
   assert.match(chatStyles, /#chat-pane::before[\s\S]*right: 10px/);
   assert.match(chatStyles, /#messages::-webkit-scrollbar-track[\s\S]*background: transparent !important/);
   assert.match(chatStyles, /#messages::-webkit-scrollbar-thumb[\s\S]*background: transparent !important/);
-  assert.match(renderer, /function syncChatScrollbarHover\(/);
+  assert.match(renderer, /function syncScrollerScrollbarHover\(/);
   assert.match(renderer, /function chatViewportMaxWidth\(/);
   assert.match(renderer, /window\.innerWidth \* 0\.5/);
   assert.match(renderer, /scrollbar-hover/);
-  assert.match(chatStyles, /#messages\.scrollbar-hover[\s\S]*rgba\(56, 56, 56, \.55\)/);
-  assert.match(chatStyles, /transition: background-color 160ms ease, opacity 160ms ease/);
-  assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*margin: 0[\s\S]*padding: 0/);
+  assert.match(chatStyles, /#messages\.scrollbar-hover[\s\S]*rgba\(66, 66, 66, \.7\)/);
+  assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*margin: var\(--chat-row-gap\) 0 0[\s\S]*padding: 0/);
   assert.doesNotMatch(chatStyles, /\.chat-sticky-user/);
 });
 
@@ -168,7 +172,7 @@ test("chat history is compact, searchable, and keeps archive/delete actions hove
   const renderer = read("src/ui/bootstrap.js");
   const history = read("src/ui/features/history/history-model.js");
   const chatStyles = read("src/ui/styles/chat.css");
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
 
   assert.match(html, /id="chat-history-search"[^>]*placeholder="Search Agents\.\.\."/);
   assert.doesNotMatch(html, /chat-history-close/);
@@ -251,7 +255,7 @@ test("running chats stay navigable and signal background completion per tab", ()
 test("question-tool cards use the refreshed UI and stay scoped to their owning chat", () => {
   const renderer = read("src/ui/bootstrap.js");
   const chatStyles = read("src/ui/styles/chat.css");
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
 
   assert.match(html, /id="composer-questions"[^>]*hidden/);
   assert.match(renderer, /const pendingComposerQuestionsBySession = new Map\(\)/);
@@ -269,11 +273,15 @@ test("question-tool cards use the refreshed UI and stay scoped to their owning c
   assert.match(chatStyles, /data-questions-action="submit"\][\s\S]*?background: #2f8cf4/);
   assert.match(chatStyles, /\.composer-questions\s*\{[\s\S]*?margin-bottom: 8px/);
   assert.match(chatStyles, /#input-bar\.has-composer-questions \.composer\s*\{[\s\S]*?border-color: #3b3b3b/);
+  assert.match(renderer, /function questionOptionsWithFreeWrite\(/);
+  assert.match(renderer, /placeholder="Or describe something else"/);
+  assert.match(renderer, /input\.dataset\.freeWrite !== "1"/);
+  assert.doesNotMatch(renderer, /placeholder="Type something\.\.\."/);
 });
 
 test("mouse-picked slash commands use a yellow chip while typed commands remain plain", () => {
   const renderer = read("src/ui/bootstrap.js");
-  const html = read("src/ui/index.html");
+  const html = readUiShell();
   const chatStyles = read("src/ui/styles/chat.css");
   const parser = read("src/app/commands/command-parser.js");
 
@@ -309,44 +317,41 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
 test("background terminal continuations remain internal to the agent runtime", () => {
   const renderer = read("src/ui/bootstrap.js");
   const main = read("src/app/electron/main.js");
+  const chatStyles = read("src/ui/styles/chat.css");
 
   assert.match(renderer, /function isInternalRuntimeInputMessage\(message = \{\}\)/);
   assert.match(renderer, /__xekuteInternalRuntimeInput/);
   assert.match(renderer, /\^Harness \(\?:checkpoint:\|waited\\b\)/);
   assert.match(renderer, /handleBackgroundWaitEvent\([\s\S]*?sendMessageWithAgentRuntime\(\{[\s\S]*?internal: true,[\s\S]*?text: message,[\s\S]*?skipContextFiles: true/);
+  assert.doesNotMatch(renderer, /function appendHarnessWaitLine\(/);
+  assert.doesNotMatch(renderer, /className = "harness-wait-line"/);
+  assert.doesNotMatch(chatStyles, /\.harness-wait-line/);
+  assert.match(renderer, /querySelectorAll\("\.harness-wait-line"\)\.forEach\(\(node\) => node\.remove\(\)\)/);
   assert.doesNotMatch(renderer, /chatInput\.value = message;[\s\S]{0,100}sendMessageWithAgentRuntime\(\)/);
   assert.match(renderer, /userMessage: internal && options\?\.continuation \? "" : text/);
   assert.match(renderer, /internalRuntimeInput: internal/);
   assert.match(renderer, /internalSkillId: internal \? String\(options\?\.internalSkillId \|\| ""\) : ""/);
-  assert.match(main, /const internalSkillId = payload\.internalRuntimeInput && payload\.internalSkillId === "pentest" \? "pentest" : ""/);
+  assert.match(main, /const internalSkillId = payload\.internalRuntimeInput \? String\(payload\.internalSkillId \|\| ""\)\.trim\(\)\.toLowerCase\(\) : ""/);
   assert.match(main, /const skillIntent = payload\.internalRuntimeInput[\s\S]*?\? \(internalSkillId \? `\/\$\{internalSkillId\}` : ""\)/);
 });
 
-test("Tier 2 memory maintenance runs on a hidden background surface", () => {
+test("hidden background runtime remains isolated from the visible chat surface", () => {
   const renderer = read("src/ui/bootstrap.js");
   const main = read("src/app/electron/main.js");
   const prompt = read("src/prompts/instructions/system-prompt.js");
 
-  assert.match(renderer, /function isTier2MemoryTool\([\s\S]*?update_project_artifacts/);
-  assert.match(renderer, /payload\.type === "tool_call"[\s\S]*?filter\(\(tool\) => !isTier2MemoryTool\(tool\)\)/);
-  assert.match(renderer, /payload\.type === "tool_start"[\s\S]*?if \(isTier2MemoryTool\(payload\.tool\)\) return/);
-  assert.match(renderer, /payload\.type === "tool_result"[\s\S]*?if \(isTier2MemoryTool\(payload\.tool\)\) return/);
+  assert.doesNotMatch(renderer, /scheduleTier2MemoryMaintenance|isTier2MemoryTool|tier2MemoryMaintenance|TIER2_MEMORY/);
+  assert.doesNotMatch(main, /tier2MemoryMaintenance|requireArtifactFinalization|update_project_artifacts|query_knowledge/);
+  assert.doesNotMatch(prompt, /update_project_artifacts|Tier 2 maintenance/);
   assert.match(renderer, /function executeHiddenAgentRuntime\([\s\S]*?backgroundRuntime: true/);
-  assert.match(renderer, /tier2MemoryMaintenance: Boolean\(options\?\.tier2MemoryMaintenance\)/);
   assert.match(renderer, /function sendHiddenAgentRuntime\([\s\S]*?hiddenAgentRuntimeQueues\.set\(key, task\)/);
-  assert.match(renderer, /function scheduleTier2MemoryMaintenance\([\s\S]*?TIER2_MEMORY_MAINTENANCE_PROMPT[\s\S]*?tier2MemoryMaintenance: true/);
-  assert.match(renderer, /shouldMaintainTier2[\s\S]*?scheduleTier2MemoryMaintenance\(\{/);
-  assert.match(renderer, /executeQueuedHiddenAgentRuntime[\s\S]*?tier2MemoryMaintenanceSucceeded[\s\S]*?return executeHiddenAgentRuntime\(payload\)/);
+  assert.doesNotMatch(renderer, /schedulePentestContinuation|pentestLoop|internalSkillId:\s*"pentest"/);
   assert.match(renderer, /payload\?\.source === "background_runtime"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
   assert.match(renderer, /payload\?\.source === "parent_continuation"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
   assert.match(renderer, /handleHiddenBackgroundRuntimeEvent[\s\S]*?ackParentContinuation/);
-  assert.match(main, /const runKey = tier2MemoryMaintenance[\s\S]*?`\$\{foregroundRunKey\}::tier2`[\s\S]*?`\$\{foregroundRunKey\}::background`[\s\S]*?: foregroundRunKey/);
-  assert.match(main, /const runtimeTools = tier2MemoryMaintenance[\s\S]*?name === "update_project_artifacts"[\s\S]*?name !== "update_project_artifacts"/);
-  assert.match(main, /requireArtifactFinalization: artifactWorkspace && backgroundRuntime/);
-  assert.match(main, /v3SessionStore\?\.record && !tier2MemoryMaintenance/);
+  assert.doesNotMatch(main, /pentestLoopController|createPentestLoopController|pentest_checkpoint/);
   assert.match(main, /source: "background_runtime"/);
   assert.doesNotMatch(main, /result\.finalText = `\$\{String\(result\.finalText/);
-  assert.match(prompt, /update_project_artifacts is available only in the isolated post-response Tier 2 maintenance turn/);
 });
 
 test("assistant messages render a relative-time label beside the copy button", () => {
@@ -409,6 +414,7 @@ test("V3 checkpointing never hides or removes visible chat history", () => {
 
 test("stopped streamed responses enter history before the durable outcome is written", () => {
   const renderer = read("src/ui/bootstrap.js");
+  const main = read("src/app/electron/main.js");
   const finalizeStart = renderer.indexOf("const finalizeChatHistory = async (outcome) =>");
   const finalizeEnd = renderer.indexOf("const runIsVisible", finalizeStart);
   const finalizeBody = renderer.slice(finalizeStart, finalizeEnd);
@@ -420,6 +426,14 @@ test("stopped streamed responses enter history before the durable outcome is wri
   assert.match(renderer, /assistant\.appendContent\(delta\);[\s\S]*?syncAssistantDraftToHistory\(run, assistant\)/);
   assert.match(finalizeBody, /syncAssistantDraftToHistory\(run, assistant, \{ persist: false \}\)[\s\S]*?syncChatRunSession\(run, \{ persist: false \}\)[\s\S]*?finishChatHistoryBlock/);
   assert.match(stopBody, /syncAssistantDraftToHistory\(run, run\.assistant, \{ persist: false \}\)[\s\S]*?persistChatHistorySnapshot\(activeChatPersistenceScope, run\.session\)/);
+  assert.match(stopBody, /abortActiveChatRun\(run\)/);
+  assert.match(stopBody, /dropAutoContinuationsForSession/);
+  assert.match(renderer, /function abortActiveChatRun\([\s\S]*?abortChat\?\.\(\{ sessionId \}\)/);
+  assert.match(renderer, /isChatSessionStoppedByOperator/);
+  assert.match(main, /function abortAgentSession\(/);
+  assert.match(main, /key === prefix \|\| key\.startsWith\(`\$\{prefix\}::`\)/);
+  assert.match(main, /if \(!current \|\| current\.aborted/);
+  assert.doesNotMatch(stopBody, /manager\.stop|agent_cancelled/);
   assert.doesNotMatch(renderer, /runHistory\.splice\(historyStart\)/);
 });
 
@@ -462,6 +476,35 @@ test("encrypted V3 chat sessions preserve the exact sanitized display transcript
     { role: "user", content: "Run it" },
     { role: "assistant", content: "Done" },
   ]);
+
+  const uiTranscript = {
+    version: 1,
+    runs: [{
+      id: "run-000",
+      started_at: "2026-09-12T08:00:00.000Z",
+      ended_at: "2026-09-12T08:01:38.000Z",
+      worked_for_ms: 98000,
+      user: { created_at: "2026-09-12T08:00:00.000Z", message: "Run it" },
+      events: [
+        { type: "thinking", started_at: "2026-09-12T08:00:04.200Z", ended_at: "2026-09-12T08:00:16.200Z", duration_ms: 12000, text: "check the renderer" },
+        { type: "tool_group", items: [{ type: "tool", name: "read_file", target: "index.js", status: "ok" }] },
+        { type: "chat", verdict: true, created_at: "2026-09-12T08:01:38.000Z", text: "Done" },
+      ],
+    }],
+  };
+  const withTimeline = await store.record("G:/Xekute", {
+    type: "snapshot",
+    sessionId: begun.sessionId,
+    blockId: begun.blockId,
+    transcript: [{ role: "user", content: "Run it" }, { role: "assistant", content: "Done" }],
+    displayHtml,
+    uiTranscript,
+  });
+  assert.equal(withTimeline.ok, true);
+  const reloaded = store.load("G:/Xekute");
+  assert.equal(reloaded.sessions[0].transcript.runs[0].worked_for_ms, 98000);
+  assert.equal(reloaded.sessions[0].transcript.runs[0].events[0].duration_ms, 12000);
+  assert.equal(reloaded.sessions[0].transcript.runs[0].events[2].verdict, true);
 });
 
 test("every rendered agent event refreshes the durable display transcript", () => {
@@ -470,11 +513,17 @@ test("every rendered agent event refreshes the durable display transcript", () =
   const delegation = read("src/agent/runtime/delegation-provider.js");
 
   assert.match(renderer, /displayHtml: session\.messagesHtml \|\| ""/);
+  assert.match(renderer, /uiTranscript: normalizeUiTranscript\(session\.transcript\)/);
+  assert.match(renderer, /function renderStructuredChatTranscript/);
+  assert.match(renderer, /from "\.\/features\/chat\/chat-transcript\.js"/);
+  assert.match(renderer, /captureChatTranscript\(/);
   assert.match(renderer, /await handleAgentEvent\(payload\);\s*syncChatRunSession\(run\)/);
   assert.match(renderer, /function hydratePersistedChatTranscript/);
   assert.match(renderer, /syncChatRunSession\(run\);\s*if \(runIsChildVisible/);
   assert.match(renderer, /function persistCommandTimelineRowState/);
   assert.match(store, /display_html: messageContent\(source\.display_html \|\| source\.displayHtml \|\| ""\)/);
+  assert.match(store, /ui_transcript: normalizeUiTranscript/);
+  assert.match(store, /transcript: clone\(document\.ui_transcript\)/);
   assert.match(delegation, /childSessionBindings/);
   assert.match(delegation, /blockId: event\.blockId \|\| binding\.blockId \|\| ""/);
 });
@@ -488,12 +537,20 @@ test("agent turns retain tool and command rows without a redundant progress chec
   assert.doesNotMatch(renderer, /className = "agent-progress-feed"|setProgressUpdate|agentToolProgressText/);
   assert.match(renderer, /querySelectorAll\("\.agent-progress-feed"\).*node\.remove/);
   assert.match(renderer, /ensureToolCard\(assistant\.turn, assistant\.contentEl, payload\.tool, \{ pending: true \}\)/);
-  assert.match(renderer, /card\.dataset\.toolAction === "exec_command"/);
+  assert.match(renderer, /KEEPABLE_TOOL_ACTIONS\.has\(action\)/);
   assert.match(renderer, /if \(!streamedText\) assistant\.setRawContent\(finalText\)/);
   assert.match(renderer, /payload\.type === "output_continuation"/);
   assert.match(renderer, /Continuing the response/);
   assert.doesNotMatch(chatStyles, /\.agent-progress-(?:feed|entry|icon|text)/);
-  assert.match(chatStyles, /\.tool-card\[data-state="error"\] \.tool-card-icon \{ display: none !important; \}/);
+  assert.match(chatStyles, /\.tool-card\[data-state="error"\] \{ display: none !important; \}/);
+  assert.match(renderer, /function stripFailedToolCardStubs\(/);
+  assert.match(renderer, /function isTransientToolCardLabel\(/);
+  assert.match(renderer, /function isPlaceholderToolCardLabel\(/);
+  assert.match(renderer, /function isStubToolStatusLabel\(/);
+  assert.match(renderer, /syncToolCardPlaceholderVisibility\(card\)/);
+  assert.match(renderer, /if \(type === "error"\) \{\s*card\.remove\(\);/);
+  assert.match(renderer, /isStubToolStatusLabel\(label\) \|\| isBareToolVerbLabel\(label\) \|\| \(type === "success" && isTransientToolCardLabel\(label\)\)/);
+  assert.match(renderer, /KEEPABLE_TOOL_LABEL\.test\(value\)/);
   assert.match(prompt, /Before invoking a tool, provide one short user-facing progress update/);
   assert.match(prompt, /never reveal private chain-of-thought/);
 });
@@ -505,12 +562,12 @@ test("command execution renders as sequential collapsed chat events without ente
   assert.match(renderer, /function createCommandTimelineRow/);
   assert.match(renderer, /row\.className = "agent-command-event"/);
   assert.match(renderer, /row\.open = false/);
-  assert.match(renderer, /codicon-terminal agent-command-shell/);
+  assert.doesNotMatch(renderer, /createCommandTimelineRow[\s\S]*?codicon-terminal agent-command-shell/);
   assert.match(renderer, /if \(state === "success"\) return "Ran Command"/);
-  assert.match(renderer, /sealCurrentContentSegment\(\);[\s\S]*?appendChild\(row\)[\s\S]*?createContentSegment\(\)/);
+  assert.match(renderer, /sealCurrentContentSegment\(\);[\s\S]*?appendChatStreamNode\(this\.toolWorkMount\(\), row\)[\s\S]*?ensurePostToolContentSegment\(/);
   assert.match(renderer, /assistant\.ensureCommandEvent\(payload\.tool\)/);
   assert.match(renderer, /assistant\.completeCommandEvent\(payload\.tool, uiResult\)/);
-  assert.match(renderer, /turn\.dataset\.rawAssistant = this\.rawContent/);
+  assert.match(renderer, /\(this\.rootTurn \|\| this\.turn\)\.dataset\.rawAssistant = this\.rawContent/);
   assert.match(renderer, /assistantTurn\.dataset\.rawAssistant/);
   assert.match(renderer, /TerminalManager\.attachAgentSession\(\{[\s\S]{0,220}payload\.id/);
   assert.match(chatStyles, /\.agent-command-event\s*\{/);
@@ -542,4 +599,45 @@ test("saved command transcripts reopen through the browser-safe tool normalizer"
   assert.doesNotMatch(restoreHelper, /ToolMap\.parseArguments/);
   assert.match(restoreHelper, /catch \{ \/\* A damaged historical tool call must not block session opening/);
   assert.match(renderer, /\.map\(commandToolFromHistoryCall\)[\s\S]*?\.filter\(\(tool\) => isAgentTerminalTool\(tool\)\)/);
+});
+
+test("chat mode picker stays usable during a reply and only the next user turn uses the new mode", () => {
+  const renderer = read("src/ui/bootstrap.js");
+  const openMenu = renderer.slice(
+    renderer.indexOf("function openChatModeMenu"),
+    renderer.indexOf("function closeChatModeMenu"),
+  );
+  const toggleMenu = renderer.slice(
+    renderer.indexOf("function toggleChatModeMenu"),
+    renderer.indexOf("function positionChatModeMenu"),
+  );
+  const setMode = renderer.slice(
+    renderer.indexOf("function setChatMode"),
+    renderer.indexOf("function setChatFamily"),
+  );
+  const syncRun = renderer.slice(
+    renderer.indexOf("function syncChatRunSession"),
+    renderer.indexOf("function prepareActiveChatSessionForSwitch"),
+  );
+  const hiddenRuntime = renderer.slice(
+    renderer.indexOf("async function executeHiddenAgentRuntime"),
+    renderer.indexOf("function sendHiddenAgentRuntime"),
+  );
+  const sendStart = renderer.indexOf("async function sendMessageWithAgentRuntime");
+  const sendRuntime = renderer.slice(
+    sendStart,
+    renderer.indexOf("activeChatRuns.set(run.sessionId, run)", sendStart),
+  );
+
+  assert.doesNotMatch(openMenu, /isRunningChatActive\(\)/);
+  assert.doesNotMatch(toggleMenu, /isRunningChatActive\(\)/);
+  assert.doesNotMatch(setMode, /isRunningChatActive\(\)/);
+  assert.doesNotMatch(syncRun, /session\.chatMode = run\.mode/);
+  assert.match(sendRuntime, /runSession\.turnMode = runMode/);
+  assert.match(sendRuntime, /ensureChatMemorySessionId\(runSession\)/);
+  assert.match(hiddenRuntime, /runSession\.turnMode \|\| runSession\.chatMode \|\| chatMode/);
+  assert.match(hiddenRuntime, /ensureChatMemorySessionId\(runSession\)/);
+  assert.match(renderer, /modeLabel\(liveRun\?\.mode \|\| chatMode\)/);
+  assert.match(renderer, /from "\.\/features\/history\/chat-memory-session\.js"/);
+  assert.doesNotMatch(renderer.slice(renderer.indexOf("function createChatSession"), renderer.indexOf("function memoryRecord")), /ensureChatMemorySessionId/);
 });

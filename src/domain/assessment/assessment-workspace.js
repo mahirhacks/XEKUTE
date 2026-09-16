@@ -3,44 +3,31 @@
 const crypto = require("node:crypto");
 const Artifacts = require("../artifacts/investigation-artifacts.js");
 
-const ASSESSMENT_VERSION = 5;
+const ASSESSMENT_VERSION = 6;
 const ASSESSMENT_ITEM_FILES = Object.freeze({
-  "active-recon": "recon/active-recon.json", "passive-recon": "recon/passive-recon.json",
-  endpoints: "enumeration/endpoints.json", pages: "enumeration/pages.json", subdomains: "enumeration/subdomains.json", assets: "enumeration/assets.json",
-  "raw-traffic": "traffic/raw.jsonl", "filtered-traffic": "traffic/filtered.jsonl", runs: "runs/runs.json", report: "report/report.md",
-  "agent-actions": ".xekute/logs/agent-actions.jsonl", "project-info": Artifacts.PATHS.projectIndex,
-  hypotheses: Artifacts.PATHS.hypotheses, "investigation-checklist": Artifacts.PATHS.checklist, evidence: Artifacts.PATHS.evidenceIndex,
-  "agent-runs": ".xekute/logs/agent-runs.jsonl", "tool-output": ".xekute/logs/tool-output.jsonl",
+  "raw-traffic": "traffic/raw.jsonl",
+  "filtered-traffic": "traffic/filtered.jsonl",
+  "project-info": Artifacts.PATHS.projectIndex,
 });
 const REQUIRED_DIRECTORIES = Object.freeze([
-  "recon", "enumeration", "traffic", "runs", "report", "context/sources", "evidence", "custom", "custom_scripts", "tools", "Map", "WebClone",
-  ".xekute", ".xekute/project_info", ".xekute/evidence", ".xekute/logs", ".xekute/.internal", ".xekute/.internal/transactions",
+  "traffic",
+  ".xekute",
+  ".xekute/project_info",
 ]);
 const RESERVED_ASSESSMENT_NAMES = new Set([
-  ...REQUIRED_DIRECTORIES.flatMap((item) => item.split("/")), ...Object.values(ASSESSMENT_ITEM_FILES).flatMap((item) => item.split("/")),
+  ...REQUIRED_DIRECTORIES.flatMap((item) => item.split("/")),
+  ...Object.values(ASSESSMENT_ITEM_FILES).flatMap((item) => item.split("/")),
+  "custom", "webclone", "report", "report.md", "recon", "enumeration", "runs", "evidence",
+  "checklist.md", "hypotheses.md", "agent-actions.jsonl", "agent-runs.jsonl", "tool-output.jsonl",
 ].map((item) => item.toLowerCase()));
 
-const RECON_RUN_TEMPLATE = { id: "", startedAt: "", completedAt: "", operator: "", tool: "", toolVersion: "", commandReference: "", sourceIp: "", targetIds: [], status: "not-started", requestsSent: 0, rateLimitPerSecond: null, outputFiles: [], errors: [], notes: "" };
-const EVIDENCE_REFERENCE_TEMPLATE = { id: "", type: "request-response", title: "", filePath: "", capturedAt: "", capturedBy: "", sha256: "", redacted: false, notes: "" };
 const RUN_TEMPLATE = { id: "", type: "assessment", status: "planned", profile: "agent", operator: "", createdAt: "", startedAt: "", completedAt: "", scopeSnapshotSha256: "", configurationSnapshotSha256: "", toolVersions: {}, approvedBy: "", approvalReference: "", stopReason: "", actions: [], hypotheses: [], checklistIds: [], evidenceIds: [], coverage: { tested: 0, passed: 0, failed: 0, blocked: 0, notApplicable: 0 }, notes: "" };
 
-const JSON_TEMPLATES = Object.freeze({
-  "recon/active-recon.json": { schemaVersion: ASSESSMENT_VERSION, authorizationRequired: true, runTemplate: RECON_RUN_TEMPLATE, runs: [], techniques: [], discoveredAssetTemplate: { targetId: "", type: "", value: "", source: "", discoveredAt: "", confidence: "", inScope: null, notes: "" }, discoveredAssets: [], evidenceTemplate: EVIDENCE_REFERENCE_TEMPLATE, evidence: [] },
-  "recon/passive-recon.json": { schemaVersion: ASSESSMENT_VERSION, authorizationRequired: false, runTemplate: RECON_RUN_TEMPLATE, runs: [], sources: [], sourceTemplate: { name: "", type: "", url: "", queriedAt: "", terms: [], reliability: "", notes: "" }, discoveredAssetTemplate: { targetId: "", type: "", value: "", source: "", firstSeen: "", lastSeen: "", confidence: "", inScope: null, notes: "" }, discoveredAssets: [], evidenceTemplate: EVIDENCE_REFERENCE_TEMPLATE, evidence: [] },
-  "enumeration/assets.json": { schemaVersion: ASSESSMENT_VERSION, assetTemplate: { id: "", assetType: "host", value: "", rootDomain: "", owner: "", environment: "production", source: "", firstSeen: "", lastSeen: "", inScope: null, scopeReason: "", status: "unknown", services: [], relationships: [], confidence: "unconfirmed", evidence: [], tags: [], notes: "" }, assets: [], relationships: [], statistics: { total: 0, inScope: 0, outOfScope: 0, unknownScope: 0, live: 0, stale: 0, untested: 0 }, lastReconciledAt: "", reconciliationNotes: [] },
-  "enumeration/endpoints.json": { schemaVersion: ASSESSMENT_VERSION, endpointTemplate: { id: "", targetId: "", method: "GET", scheme: "https", host: "", port: 443, path: "", url: "", parameters: [], headers: {}, requestContentTypes: [], responseContentTypes: [], authentication: "unknown", authorizationRoles: [], statusCodes: [], technologies: [], discoveredBy: "", firstSeen: "", lastSeen: "", deprecated: false, tested: false, evidence: [], notes: "", tags: [] }, parameterTemplate: { name: "", location: "query", dataType: "string", required: false, exampleRedacted: "", observedValues: [], notes: "" }, endpoints: [], statistics: { total: 0, authenticated: 0, unauthenticated: 0, tested: 0, untested: 0 } },
-  "enumeration/pages.json": { schemaVersion: ASSESSMENT_VERSION, pageTemplate: { id: "", targetId: "", url: "", path: "", title: "", statusCode: null, contentType: "", contentLength: null, authentication: "unknown", roles: [], technologies: [], forms: [], scripts: [], apiCalls: [], parameters: [], securityHeaders: {}, cacheControls: {}, discoveredBy: "", firstSeen: "", lastSeen: "", screenshotPath: "", tested: false, evidence: [], notes: "", tags: [] }, pages: [], statistics: { total: 0, authenticated: 0, unauthenticated: 0, tested: 0, untested: 0 } },
-  "enumeration/subdomains.json": { schemaVersion: ASSESSMENT_VERSION, subdomainTemplate: { id: "", targetId: "", hostname: "", rootDomain: "", inScope: null, source: "", firstSeen: "", lastSeen: "", dns: { a: [], aaaa: [], cname: [], mx: [], ns: [], txt: [] }, resolvedIps: [], httpStatus: null, httpsStatus: null, title: "", technologies: [], cdn: "", cloudProvider: "", takeoverStatus: "not-checked", takeoverEvidence: [], live: null, tested: false, notes: "", tags: [] }, subdomains: [], statistics: { total: 0, live: 0, inScope: 0, takeoverCandidates: 0, tested: 0 } },
-  "runs/runs.json": { schemaVersion: ASSESSMENT_VERSION, runTemplate: RUN_TEMPLATE, activeRunId: "", runs: [], defaults: { profile: "agent", retainToolOutput: true }, statistics: { total: 0, planned: 0, running: 0, paused: 0, completed: 0, stopped: 0, failed: 0 } },
-});
+const JSON_TEMPLATES = Object.freeze({});
 const JSONL_TEMPLATES = Object.freeze({
   "traffic/raw.jsonl": { recordType: "xekute-log-schema", schemaVersion: ASSESSMENT_VERSION, fields: ["timestamp", "requestId", "targetId", "direction", "protocol", "method", "url", "statusCode", "headers", "request", "response", "durationMs", "source", "tags"] },
   "traffic/filtered.jsonl": { recordType: "xekute-log-schema", schemaVersion: ASSESSMENT_VERSION, fields: ["timestamp", "requestId", "targetId", "filterReason", "method", "url", "statusCode", "parameterNames", "contentType", "evidenceFiles", "notes", "tags"] },
-  ".xekute/logs/agent-actions.jsonl": { recordType: "xekute-agent-action-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "phase", "tool", "target", "risk", "allowed", "reason", "ok", "errorCode", "output", "claim"] },
-  ".xekute/logs/agent-runs.jsonl": { recordType: "xekute-agent-run-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "type", "timestamp", "profile", "status", "scopeSnapshotSha256", "configurationSnapshotSha256", "approvedBy", "approvalReference", "stopReason"] },
-  ".xekute/logs/tool-output.jsonl": { recordType: "xekute-tool-output-log", schemaVersion: ASSESSMENT_VERSION, fields: ["runId", "timestamp", "tool", "version", "command", "target", "exitCode", "outputPath", "sha256", "redacted", "truncated"] },
 });
-const REPORT_TEMPLATE = "# Security Assessment Report\n\n## Engagement and Scope\n\n## Executive Summary\n\n## Attack Surface\n\n## Verified Evidence\n\n## Investigation Coverage\n\n## Limitations\n\n## Evidence Index\n";
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function isPlainObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
@@ -155,6 +142,12 @@ function collectSchemaIssues(actual, expected, prefix = "") {
 }
 
 function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectArtifacts = null, projectProfileProvider = null } = {}) {
+  const runStore = new Map();
+  function runsFor(root) {
+    const key = String(root || "").toLowerCase();
+    if (!runStore.has(key)) runStore.set(key, { runs: [], activeRunId: "" });
+    return runStore.get(key);
+  }
   function resolveRoot(rawRoot) {
     const value = String(rawRoot || "").trim();
     if (!value) return { error: "Missing assessment folder", code: "MISSING_PATH" };
@@ -172,13 +165,8 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
   function expectedEntries() {
     return [
       ...REQUIRED_DIRECTORIES.map((relativePath) => ({ relativePath, type: "directory" })),
-      ...Object.entries(JSON_TEMPLATES).map(([relativePath, template]) => ({ relativePath, type: "file", content: () => `${JSON.stringify(template, null, 2)}\n` })),
       ...Object.entries(JSONL_TEMPLATES).map(([relativePath, template]) => ({ relativePath, type: "file", content: () => `${JSON.stringify(template)}\n` })),
-      { relativePath: "report/report.md", type: "file", content: () => REPORT_TEMPLATE },
-      { relativePath: Artifacts.PATHS.gitignore, type: "file", content: Artifacts.gitignoreTemplate },
       ...Artifacts.PROJECT_DOCUMENTS.map((document) => ({ relativePath: document.path, type: "file", content: () => Artifacts.projectDocumentTemplate(document.id) })),
-      { relativePath: Artifacts.PATHS.hypotheses, type: "file", content: Artifacts.hypothesesTemplate },
-      { relativePath: Artifacts.PATHS.checklist, type: "file", content: Artifacts.checklistTemplate },
     ];
   }
   function entryStatus(root, entry) {
@@ -198,17 +186,12 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
     return issues;
   }
   function artifactIssues(root) {
-    const checks = [...Artifacts.PROJECT_DOCUMENTS.map((document) => [document.path, (text) => Artifacts.parseProjectDocument(document.id, text)]), [Artifacts.PATHS.hypotheses, Artifacts.parseHypotheses], [Artifacts.PATHS.checklist, Artifacts.parseChecklist]];
     const issues = [];
-    for (const [relativePath, parser] of checks) {
-      const file = path.join(root, ...relativePath.split("/")); if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue;
-      const parsed = parser(fs.readFileSync(file, "utf8")); if (!parsed.ok) issues.push({ path: relativePath, type: "file", reason: "invalid_artifact", fields: [], code: parsed.code, message: parsed.error });
-    }
-    const directory = path.join(root, ...Artifacts.PATHS.evidenceDirectory.split("/"));
-    if (fs.existsSync(directory)) for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (!entry.isFile() || !/^E-\d{4,}\.md$/i.test(entry.name)) continue;
-      const parsed = Artifacts.parseEvidence(fs.readFileSync(path.join(directory, entry.name), "utf8"));
-      if (!parsed.ok) issues.push({ path: `${Artifacts.PATHS.evidenceDirectory}/${entry.name}`, type: "file", reason: "invalid_artifact", fields: [], code: parsed.code, message: parsed.error });
+    for (const document of Artifacts.PROJECT_DOCUMENTS) {
+      const file = path.join(root, ...document.path.split("/"));
+      if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue;
+      const parsed = Artifacts.parseProjectDocument(document.id, fs.readFileSync(file, "utf8"));
+      if (!parsed.ok) issues.push({ path: document.path, type: "file", reason: "invalid_artifact", fields: [], code: parsed.code, message: parsed.error });
     }
     return issues;
   }
@@ -234,13 +217,15 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
   }
   function appendJsonl(root, relativePath, record, maxBytes = 1_500_000) {
     const serialized = JSON.stringify(record); if (Buffer.byteLength(serialized, "utf8") > maxBytes) return { error: "Record exceeds the configured evidence limit", code: "RECORD_TOO_LARGE" };
-    const target = path.join(root, ...relativePath.split("/")); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.appendFileSync(target, `${serialized}\n`, "utf8"); return { ok: true, path: relativePath, record };
+    const normalized = String(relativePath || "").replace(/\\/g, "/");
+    if (!normalized.startsWith("traffic/")) return { ok: true, skipped: true, path: normalized, record };
+    const target = path.join(root, ...normalized.split("/")); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.appendFileSync(target, `${serialized}\n`, "utf8"); return { ok: true, path: normalized, record };
   }
   function appendEvidenceRecord(rawRoot, record = {}) {
-    const verification = verify(rawRoot); if (verification.error) return verification;
+    const resolved = resolveRoot(rawRoot); if (resolved.error) return resolved;
     const capturedAt = String(record.capturedAt || now().toISOString()), request = String(record.request || ""), response = String(record.response || ""), content = String(record.content || `${request}\n${response}`);
     const entry = { id: String(record.id || record.requestId || `evidence-${Date.now().toString(36)}`).slice(0, 160), type: String(record.type || "request-response"), title: String(record.title || record.url || "Captured evidence").slice(0, 300), capturedAt, capturedBy: String(record.capturedBy || record.tool || "XEKUTE").slice(0, 160), source: String(record.source || record.tool || "unknown").slice(0, 120), requestId: String(record.requestId || ""), targetId: String(record.targetId || ""), host: String(record.host || ""), url: String(record.url || "").slice(0, 2000), sha256: String(record.sha256 || sha256(content)), requestSha256: request ? sha256(request) : "", responseSha256: response ? sha256(response) : "", redacted: record.redacted !== false, redactionProfile: String(record.redactionProfile || "default"), filePath: String(record.filePath || ""), semanticEvidenceRefs: Array.isArray(record.semanticEvidenceRefs) ? record.semanticEvidenceRefs.map(String).slice(0, 50) : [], notes: String(record.notes || "").slice(0, 2000) };
-    try { return appendJsonl(verification.root, "evidence/index.jsonl", entry); } catch (error) { return { error: error.message, code: "EVIDENCE_WRITE_FAILED" }; }
+    return { ok: true, skipped: true, record: entry };
   }
   function readJsonl(rawRoot, relativePath, { limit = 500, maxBytes = 20 * 1024 * 1024 } = {}) {
     const verification = verify(rawRoot); if (verification.error) return verification;
@@ -254,14 +239,15 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
     } catch (error) { return { error: error.message, code: "JSONL_READ_FAILED" }; }
   }
   function ensureTrafficLog(rawRoot) {
-    const verification = verify(rawRoot); if (verification.error) return verification;
-    const trafficDir = path.join(verification.root, "traffic"), rawPath = path.join(trafficDir, "raw.jsonl");
+    const resolved = resolveRoot(rawRoot); if (resolved.error) return resolved; const { root } = resolved;
     try {
-      fs.mkdirSync(trafficDir, { recursive: true });
-      fs.writeFileSync(rawPath, "", { encoding: "utf8", flag: "wx" });
-      return { ok: true, root: verification.root, path: "traffic/raw.jsonl" };
+      fs.mkdirSync(path.join(root, "traffic"), { recursive: true });
+      for (const [relativePath, template] of Object.entries(JSONL_TEMPLATES)) {
+        const target = path.join(root, ...relativePath.split("/"));
+        try { fs.writeFileSync(target, `${JSON.stringify(template)}\n`, { encoding: "utf8", flag: "wx" }); } catch (error) { if (error.code !== "EEXIST") throw error; }
+      }
+      return { ok: true, root, path: "traffic/raw.jsonl" };
     } catch (error) {
-      if (error.code === "EEXIST") return { ok: true, root: verification.root, path: "traffic/raw.jsonl" };
       return { error: error.message, code: "TRAFFIC_LOG_FAILED" };
     }
   }
@@ -294,21 +280,31 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
   }
   function projectProfile(root) { try { return typeof projectProfileProvider === "function" ? projectProfileProvider(root) || null : null; } catch { return null; } }
   function createRun(rawRoot, input = {}) {
-    const verification = verify(rawRoot); if (verification.error) return verification; const target = path.join(verification.root, "runs", "runs.json");
-    try { const document = JSON.parse(fs.readFileSync(target, "utf8")), profile = projectProfile(verification.root) || {}; const entry = { ...clone(RUN_TEMPLATE), ...input, id: String(input.id || `run-${Date.now().toString(36)}`).slice(0, 160), createdAt: input.createdAt || now().toISOString(), scopeSnapshotSha256: input.scopeSnapshotSha256 || sha256(JSON.stringify(profile.scope || {})), configurationSnapshotSha256: input.configurationSnapshotSha256 || sha256(JSON.stringify({ authorization: profile.authorization || {}, rulesOfEngagement: profile.rulesOfEngagement || {} })) }; document.runs = [...(Array.isArray(document.runs) ? document.runs : []), entry]; document.activeRunId = entry.status === "running" ? entry.id : document.activeRunId || ""; document.statistics = { ...(document.statistics || {}), total: document.runs.length }; atomicWriteJson(target, document); return { ok: true, run: entry, path: "runs/runs.json" }; } catch (error) { return { error: error.message, code: "RUN_WRITE_FAILED" }; }
+    const resolved = resolveRoot(rawRoot); if (resolved.error) return resolved;
+    const document = runsFor(resolved.root);
+    const profile = projectProfile(resolved.root) || {};
+    const entry = { ...clone(RUN_TEMPLATE), ...input, id: String(input.id || `run-${Date.now().toString(36)}`).slice(0, 160), createdAt: input.createdAt || now().toISOString(), scopeSnapshotSha256: input.scopeSnapshotSha256 || sha256(JSON.stringify(profile.scope || {})), configurationSnapshotSha256: input.configurationSnapshotSha256 || sha256(JSON.stringify({ authorization: profile.authorization || {}, rulesOfEngagement: profile.rulesOfEngagement || {} })) };
+    document.runs.push(entry);
+    document.activeRunId = entry.status === "running" ? entry.id : document.activeRunId || "";
+    return { ok: true, run: entry, skipped: true };
   }
   function updateRun(rawRoot, runId, patch = {}) {
-    const verification = verify(rawRoot); if (verification.error) return verification; const target = path.join(verification.root, "runs", "runs.json");
-    try { const document = JSON.parse(fs.readFileSync(target, "utf8")), index = (document.runs || []).findIndex((run) => run.id === String(runId)); if (index < 0) return { error: `Run not found: ${runId}`, code: "RUN_NOT_FOUND" }; const allowed = ["status", "startedAt", "completedAt", "approvedBy", "approvalReference", "stopReason", "actions", "hypotheses", "checklistIds", "evidenceIds", "coverage", "notes"]; document.runs[index] = { ...document.runs[index], ...Object.fromEntries(allowed.filter((key) => Object.prototype.hasOwnProperty.call(patch, key)).map((key) => [key, patch[key]])) }; if (["completed", "inconclusive", "stopped", "failed"].includes(document.runs[index].status) && document.activeRunId === runId) document.activeRunId = ""; atomicWriteJson(target, document); return { ok: true, run: document.runs[index], path: "runs/runs.json" }; } catch (error) { return { error: error.message, code: "RUN_UPDATE_FAILED" }; }
+    const resolved = resolveRoot(rawRoot); if (resolved.error) return resolved;
+    const document = runsFor(resolved.root);
+    const index = document.runs.findIndex((run) => run.id === String(runId));
+    if (index < 0) return { error: `Run not found: ${runId}`, code: "RUN_NOT_FOUND" };
+    const allowed = ["status", "startedAt", "completedAt", "approvedBy", "approvalReference", "stopReason", "actions", "hypotheses", "checklistIds", "evidenceIds", "coverage", "notes"];
+    document.runs[index] = { ...document.runs[index], ...Object.fromEntries(allowed.filter((key) => Object.prototype.hasOwnProperty.call(patch, key)).map((key) => [key, patch[key]])) };
+    if (["completed", "inconclusive", "stopped", "failed"].includes(document.runs[index].status) && document.activeRunId === runId) document.activeRunId = "";
+    return { ok: true, run: document.runs[index], skipped: true };
   }
   function generateReport(rawRoot) {
-    const verification = verify(rawRoot); if (verification.error) return verification;
-    const readJson = (relativePath, fallback) => { try { return JSON.parse(fs.readFileSync(path.join(verification.root, ...relativePath.split("/")), "utf8")); } catch { return fallback; } };
-    const profile = projectProfile(verification.root) || {}, snapshot = projectArtifacts?.inspect ? projectArtifacts.inspect(verification.root) : { ok: false, evidence: [], checklist: [] }, semantic = snapshot.ok ? snapshot.evidence || [] : [], verified = semantic.filter((item) => item.status === "verified"), checklist = snapshot.ok ? snapshot.checklist || [] : [], assets = readJson("enumeration/assets.json", { assets: [] }), endpoints = readJson("enumeration/endpoints.json", { endpoints: [] }), runs = readJson("runs/runs.json", { runs: [] }), operational = readJsonl(verification.root, "evidence/index.jsonl", { limit: 500 }), stamp = now().toISOString();
-    const clean = (value, fallback = "") => String(value == null || value === "" ? fallback : value).replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|"), statusCounts = checklist.reduce((counts, item) => { const key = String(item.status || "not_started"); counts[key] = (counts[key] || 0) + 1; return counts; }, {}), profileScope = profile.scope || {}, rules = profile.rulesOfEngagement || {}, title = clean(profile.engagement?.name || profile.project?.name || verification.name || "Security Assessment").slice(0, 240);
+    const resolved = resolveRoot(rawRoot); if (resolved.error) return resolved;
+    const profile = projectProfile(resolved.root) || {}, snapshot = projectArtifacts?.inspect ? projectArtifacts.inspect(resolved.root) : { ok: false, evidence: [], checklist: [] }, semantic = snapshot.ok ? snapshot.evidence || [] : [], verified = semantic.filter((item) => item.status === "verified"), checklist = snapshot.ok ? snapshot.checklist || [] : [], runs = runsFor(resolved.root), stamp = now().toISOString();
+    const clean = (value, fallback = "") => String(value == null || value === "" ? fallback : value).replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|"), statusCounts = checklist.reduce((counts, item) => { const key = String(item.status || "not_started"); counts[key] = (counts[key] || 0) + 1; return counts; }, {}), profileScope = profile.scope || {}, rules = profile.rulesOfEngagement || {}, title = clean(profile.engagement?.name || profile.project?.name || path.basename(resolved.root) || "Security Assessment").slice(0, 240);
     const rows = verified.map((item) => `| ${clean(item.id)} | ${clean(item.title)} | ${clean(item.severity, "unrated")} | ${clean(item.confidence)} | ${clean((item.target_refs || []).join(", "), "not recorded")} |`), details = verified.flatMap((item) => [`### ${clean(item.id)}: ${clean(item.title)}`, "", `- Targets: ${clean((item.target_refs || []).join(", "), "not recorded")}`, `- Severity: ${clean(item.severity, "unrated")}`, `- Confidence: ${clean(item.confidence, "unknown")}`, `- Impact: ${clean(item.impact, "not recorded")}`, `- Remediation: ${clean(item.remediation, "not recorded")}`, `- Retest criteria: ${clean(item.retest_criteria, "not recorded")}`, `- Checklist references: ${clean((item.checklist_refs || []).join(", "), "none")}`, ""]);
-    const report = [`# ${title}`, "", "## Engagement and Scope", "", `- Authorization confirmed: ${profile.authorization?.confirmed ? "yes" : "no"}`, `- In-scope targets: ${(profileScope.inScopeTargets || []).map((item) => clean(item)).join(", ") || "not recorded"}`, `- Out-of-scope targets: ${(profileScope.outOfScopeTargets || []).map((item) => clean(item)).join(", ") || "none recorded"}`, `- Testing windows: ${(rules.testingWindows || []).map((item) => clean(item)).join(", ") || "not configured"}`, "", "## Executive Summary", "", `- Verified evidence records: ${verified.length}`, `- Other evidence records: ${semantic.length - verified.length}`, `- Discovered assets: ${(assets.assets || []).length}`, `- Recorded endpoints: ${(endpoints.endpoints || []).length}`, `- Runs: ${(runs.runs || []).length}`, "", "## Attack Surface", "", `- Assets: ${(assets.assets || []).length}`, `- Endpoints: ${(endpoints.endpoints || []).length}`, "", "## Verified Evidence", "", "| ID | Title | Severity | Confidence | Targets |", "|---|---|---|---|---|", ...(rows.length ? rows : ["| none | No verified evidence recorded | unrated | unknown | not recorded |"]), "", ...details, "## Investigation Coverage", "", ...Object.entries(statusCounts).sort().map(([status, count]) => `- ${status}: ${count}`), "", "## Limitations", "", `- Inconclusive evidence: ${semantic.filter((item) => item.status === "inconclusive").length}`, `- Rejected evidence: ${semantic.filter((item) => item.status === "rejected").length}`, `- Blocked checklist items: ${statusCounts.blocked || 0}`, `- Not-started checklist items: ${statusCounts.not_started || 0}`, "", "## Evidence Index", "", "| Evidence ID | File/source | SHA-256 |", "|---|---|---|", ...(operational.records || []).map((item) => `| ${clean(item.id)} | ${clean(item.filePath || item.source, "not recorded")} | ${clean(item.sha256, "not recorded")} |`), ""].join("\n");
-    try { const reportDir = path.join(verification.root, "report"), exportDir = path.join(reportDir, "exports"), target = path.join(exportDir, `security-report-${stamp.replace(/[:.]/g, "-")}.md`); atomicWrite(path.join(reportDir, "report.md"), report); fs.mkdirSync(exportDir, { recursive: true }); atomicWrite(target, report); return { ok: true, path: path.relative(verification.root, target).replace(/\\/g, "/"), workingPath: "report/report.md", generatedAt: stamp, summary: { verifiedEvidence: verified.length, evidence: semantic.length, assets: (assets.assets || []).length, runs: (runs.runs || []).length } }; } catch (error) { return { error: error.message, code: "REPORT_GENERATION_FAILED" }; }
+    const report = [`# ${title}`, "", "## Engagement and Scope", "", `- Authorization confirmed: ${profile.authorization?.confirmed ? "yes" : "no"}`, `- In-scope targets: ${(profileScope.inScopeTargets || []).map((item) => clean(item)).join(", ") || "not recorded"}`, `- Out-of-scope targets: ${(profileScope.outOfScopeTargets || []).map((item) => clean(item)).join(", ") || "none recorded"}`, `- Testing windows: ${(rules.testingWindows || []).map((item) => clean(item)).join(", ") || "not configured"}`, "", "## Executive Summary", "", `- Verified evidence records: ${verified.length}`, `- Other evidence records: ${semantic.length - verified.length}`, `- Runs: ${runs.runs.length}`, "", "## Attack Surface", "", "", "## Verified Evidence", "", "| ID | Title | Severity | Confidence | Targets |", "|---|---|---|---|---|", ...(rows.length ? rows : ["| none | No verified evidence recorded | unrated | unknown | not recorded |"]), "", ...details, "## Investigation Coverage", "", ...Object.entries(statusCounts).sort().map(([status, count]) => `- ${status}: ${count}`), "", "## Limitations", "", `- Inconclusive evidence: ${semantic.filter((item) => item.status === "inconclusive").length}`, `- Rejected evidence: ${semantic.filter((item) => item.status === "rejected").length}`, `- Blocked checklist items: ${statusCounts.blocked || 0}`, `- Not-started checklist items: ${statusCounts.not_started || 0}`, "", "## Evidence Index", "", "| Evidence ID | File/source | SHA-256 |", "|---|---|---|", ...verified.map((item) => `| ${clean(item.id)} | ${clean(item.source || "memory", "not recorded")} | ${clean(item.sha256, "not recorded")} |`), ""].join("\n");
+    return { ok: true, skipped: true, markdown: report, generatedAt: stamp, summary: { verifiedEvidence: verified.length, evidence: semantic.length, runs: runs.runs.length } };
   }
   function deleteCustomEntries(rawRoot, relativePaths = []) {
     const verification = verify(rawRoot); if (verification.error) return verification; const requested = [...new Set((Array.isArray(relativePaths) ? relativePaths : []).map((value) => String(value || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")).filter(Boolean))].slice(0, 100); if (!requested.length) return { error: "Select at least one Custom item", code: "NO_SELECTION" }; const customRoot = path.resolve(verification.root, "custom"), resolved = [];
@@ -318,4 +314,4 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
   return Object.freeze({ verify, repair, ensureTrafficLog, appendTrafficRecord, appendEvidenceRecord, readJsonl, createRun, updateRun, generateReport, deleteTrafficRecords, deleteCustomEntries, readTrafficHistory, readTrafficRecords, expectedEntries, requiredDirectories: [...REQUIRED_DIRECTORIES] });
 }
 
-module.exports = { ASSESSMENT_ITEM_FILES, ASSESSMENT_VERSION, JSON_TEMPLATES, REQUIRED_DIRECTORIES, RESERVED_ASSESSMENT_NAMES, createAssessmentWorkspace, formatTrafficTimestamp, redactHttpMessage, redactTrafficRecord, summarizeTrafficRecord, validateCustomEntryPath };
+module.exports = { ASSESSMENT_ITEM_FILES, ASSESSMENT_VERSION, JSON_TEMPLATES, JSONL_TEMPLATES, REQUIRED_DIRECTORIES, RESERVED_ASSESSMENT_NAMES, createAssessmentWorkspace, formatTrafficTimestamp, redactHttpMessage, redactTrafficRecord, summarizeTrafficRecord, validateCustomEntryPath };

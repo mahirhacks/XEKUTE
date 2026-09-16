@@ -4,6 +4,7 @@ const Tunables = {
   // operator, scope/policy denial, provider failure, or an explicitly supplied
   // operation deadline—not by an arbitrary model/tool round count.
   MAX_AGENT_ROUNDS: 0,
+  MAX_CONTINUE_INTENTS: 8,
   MAX_EDIT_RETRIES_WITHOUT_TOOLS: 1,
   MAX_PLAN_RETRIES_WITHOUT_FILE: 3,
   MAX_VERIFICATION_REMINDERS: 1,

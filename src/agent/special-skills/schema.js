@@ -1,7 +1,7 @@
 "use strict";
 
 const ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const DEFAULT_MODES = Object.freeze(["agent", "ask", "plan", "hypothesis"]);
+const DEFAULT_MODES = Object.freeze(["agent", "ask"]);
 const SUPPORTED_MODES = new Set(DEFAULT_MODES);
 
 function string(value, fallback = "", max = 240) {
@@ -48,7 +48,7 @@ function validateManifest(manifest) {
   if (!manifest?.version) errors.push("version is required");
   if (!manifest?.entrypoint || manifest.entrypoint.includes("..") || manifest.entrypoint.includes("\\")) errors.push("entrypoint must be a package-relative file");
   if (!Array.isArray(manifest?.modes) || !manifest.modes.length) errors.push("at least one mode is required");
-  if (Array.isArray(manifest?.modes) && manifest.modes.some((mode) => !SUPPORTED_MODES.has(mode))) errors.push("modes must be selected from agent, ask, plan, or hypothesis");
+  if (Array.isArray(manifest?.modes) && manifest.modes.some((mode) => !SUPPORTED_MODES.has(mode))) errors.push("modes must be selected from agent or ask");
   if (typeof manifest?.acceptsContext !== "boolean") errors.push("accepts_context must be boolean");
   if (manifest?.parameterPolicy !== "context-only") errors.push("parameter_policy must be context-only");
   if (manifest?.visibility !== "internal") errors.push("visibility must be internal");

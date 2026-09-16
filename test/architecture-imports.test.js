@@ -51,6 +51,7 @@ test("one DI composition root and native renderer entry are present", () => {
   assert.match(container, /createToolRegistry/);
   assert.match(container, /createAuthorityComposition/);
   assert.match(container, /createInvocationPipeline/);
-  assert.match(fs.readFileSync(path.join(SRC, "ui", "index.html"), "utf8"), /<script type="module" src="bootstrap\.js">/);
+  assert.match(fs.readFileSync(path.join(SRC, "ui", "index.html"), "utf8"), /<script type="module" src="\/react\/main\.jsx">/);
+  assert.match(fs.readFileSync(path.join(SRC, "ui", "react", "App.jsx"), "utf8"), /startRenderer\(\)/);
   assert.match(fs.readFileSync(path.join(SRC, "app", "electron", "preload.js"), "utf8"), /contextBridge\.exposeInMainWorld/);
 });

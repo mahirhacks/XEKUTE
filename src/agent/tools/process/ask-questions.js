@@ -76,10 +76,16 @@ function answerValue(questions, response = {}) {
   const answers = Array.isArray(response.answers) ? response.answers : [];
   return answers.map((answer) => {
     const question = questions.find((item) => item.id === answer?.questionId);
+    const freeText = String(answer?.freeText || "").trim();
     const selectedIds = question?.multiple
       ? (Array.isArray(answer?.selectedOptionIds) ? answer.selectedOptionIds : [])
       : [String(answer?.selectedOptionId || "")].filter(Boolean);
-    const selectedChoices = selectedIds.map((id) => question?.options.find((option) => option.id === id)?.label || id);
+    const selectedChoices = selectedIds.map((id) => {
+      if (id === "free_write" || question?.options.find((option) => option.id === id)?.freeWrite) {
+        return freeText;
+      }
+      return question?.options.find((option) => option.id === id)?.label || id;
+    }).filter(Boolean);
     return {
       questionId: String(answer?.questionId || ""),
       question: question?.prompt || "",

@@ -40,10 +40,11 @@ test("identity vault encrypts secrets and keeps workspace metadata sanitized", (
       headerBindings: [{ origin: "https://fixture.test/", headers: { Authorization: "Bearer header-secret" } }],
     });
     assert.equal(saved.ok, true);
-    const metadata = JSON.parse(fs.readFileSync(path.join(workspace, ".xekute", "identities", "account-a.json"), "utf8"));
+    const metadata = JSON.parse(fs.readFileSync(path.join(root, "data", "identities", "project-fixture-meta", "account-a.json"), "utf8"));
     assert.equal(JSON.stringify(metadata).includes("cookie-secret"), false);
     assert.equal(JSON.stringify(metadata).includes("header-secret"), false);
     assert.equal(JSON.stringify(metadata).includes("do-not-store"), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".xekute", "identities", "account-a.json")), false);
     const vaultFile = path.join(root, "data", "identities", "project-fixture.json");
     const envelope = JSON.parse(fs.readFileSync(vaultFile, "utf8"));
     assert.equal(envelope.encrypted, true);
@@ -181,11 +182,12 @@ test("legacy identity migration encrypts secrets and removes plaintext backups",
     const result = vault.migrateLegacy(workspace);
     assert.equal(result.ok, true);
     assert.equal(result.migrated, 1);
-    const metadataFile = path.join(legacyDir, "legacy.json");
+    assert.equal(fs.existsSync(path.join(legacyDir, "legacy.json")), false);
+    assert.equal(fs.existsSync(path.join(legacyDir, "legacy.json.bak")), false);
+    const metadataFile = path.join(root, "data", "identities", "project-fixture-meta", "legacy.json");
     const metadata = JSON.parse(fs.readFileSync(metadataFile, "utf8"));
     assert.equal(metadata.cookies, undefined);
     assert.equal(metadata.tokens, undefined);
-    assert.equal(fs.existsSync(`${metadataFile}.bak`), false);
     const loaded = vault.readSecret(workspace, "legacy");
     assert.equal(loaded.ok, true);
     assert.equal(loaded.secret.unmappedTokens.accessToken, "token");

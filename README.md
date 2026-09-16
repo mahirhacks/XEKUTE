@@ -2,7 +2,7 @@
 
 **A local-first, AI-assisted workspace for authorized penetration testing and vulnerability assessment.**
 
-XEKUTE brings assessment scope, HTTP traffic, evidence, security tools, an application behavior map, a terminal, and a local AI assistant into one Windows desktop application. Its primary workflow is human-in-the-loop: the operator defines the authority and remains able to inspect, approve, interrupt, and review every action.
+XEKUTE brings assessment scope, HTTP traffic, evidence, security tools, a terminal, and a local AI assistant into one Windows desktop application. Its primary workflow is human-in-the-loop: the operator defines the authority and remains able to inspect, approve, interrupt, and review every action.
 
 > **Project status:** Alpha. XEKUTE is under active development and should currently be used in controlled, authorized environments. Keep backups of important assessment data.
 
@@ -38,14 +38,6 @@ XEKUTE is designed to provide:
 - URL, Base64, Base64URL, HTML, hexadecimal, JWT, and cookie inspection utilities.
 - Configurable capture redaction for credentials, cookies, tokens, and secret fields.
 
-### Application Behavior Map
-
-- Build a deterministic graph from captured HTTP evidence.
-- Correlate hosts, subdomains, routes, methods, redirects, workflows, shared objects, and supporting evidence.
-- Browse route, workflow, and risk views.
-- Select a node to inspect its variants and highlight connected nodes.
-- Pan, zoom, arrange nodes, query paths, and preserve graph provenance.
-
 ### WebClone
 
 - Download bounded public HTML, JavaScript, and CSS assets from an authorized HTTPS target.
@@ -58,11 +50,11 @@ WebClone is a review aid, not a guaranteed offline reproduction. Applications th
 ### AI-assisted workflow
 
 - Use locally installed Ollama models.
-- Choose **Hypothesis**, **Agent**, or **Ask** according to the task.
+- Choose **Agent** or **Ask** according to the task.
 - Use **Safe** mode for analysis and workspace-safe operations.
 - Opt into **Test** mode for policy-controlled active testing within an authorized assessment.
-- Route a compact tool set by profile: read-only context for Ask and Hypothesis, workspace operations for Safe Agent, and typed security adapters only for Testing Agent.
-- Configure authority for file access, commands, processes, terminal use, network requests, proxy actions, traffic capture, Map operations, reconnaissance, scanning, and exploit validation.
+- Route a compact tool set by profile: read-only context for Ask, and the full Agent catalog for execution.
+- Configure authority for file access, commands, processes, terminal use, network requests, proxy actions, traffic capture, reconnaissance, scanning, and exploit validation.
 - In **Ask for Approval**, review the exact command before it runs; long commands collapse to two lines and expand on click, and Approve/Deny acts immediately.
 - Let the agent request structured operator input through recommended-first single- or multi-select question cards instead of burying choices in chat text.
 - Review agent runs, actions, approvals, hypotheses, and tool output.
@@ -72,9 +64,8 @@ Safety modes and policy checks are defense-in-depth controls; they do not replac
 
 ### Commands
 
-XEKUTE ships five parameterless in-chat special skills:
+XEKUTE ships four parameterless in-chat special skills:
 
-- `/pentest` - run the adaptive, scope-aware assessment lifecycle.
 - `/report` - generate the evidence-linked VAPT Markdown report.
 - `/create-rule` - create user-authored project or global rules.
 - `/create-skill` - create user-authored guidance.
@@ -137,7 +128,7 @@ npm start
 ```
 
 This launches the XEKUTE desktop workbench. It includes the chat interface,
-project workspace, security workbench, behavior Map, terminal, and editor.
+project workspace, security workbench, terminal, and editor.
 Ollama is optional when using XEKUTE without AI features.
 
 ## Development Mode
@@ -234,7 +225,7 @@ Additional safeguards include:
 - Safe and Test operating modes.
 - Granular authority permissions and approval policy.
 - Scope and authorization checks before supported active workflows.
-- Bounded process output, traffic parsing, Map queries, and WebClone assets.
+- Bounded process output, traffic parsing, and WebClone assets.
 - Centralized proxy CA storage configurable from XEKUTE Settings.
 - Encrypted local chat persistence when Windows secure storage is available.
 - Evidence-preserving traffic storage with configurable secret redaction.
