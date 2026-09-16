@@ -28,7 +28,7 @@
     "@electron/fuses": "1.8.0",
     "@electron/rebuild": "4.2.0",
     "@vitejs/plugin-react": "^6.1.1",
-    "electron": "43.4.0",
+    "electron": "44.3.0",
     "electron-builder": "^26.15.3",
     "electronmon": "2.0.4",
     "jsdom": "^29.1.1",
