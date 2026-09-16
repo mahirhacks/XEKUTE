@@ -30,7 +30,7 @@ const ToolParser = (() => {
   const PATCH_FENCE_RE = /```patch:([^\n`]+)\s*\n<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE\s*\n```/gi;
 
   const LOOSE_PATCH_RE = /(?:^|\n)patch:[^\n]+\n<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE/g;
-const TOOL_NAME_PATTERN = "ask_questions|exec_command|read_file|search_workspace|apply_patch|manage_identity|replay_request|browser_action|delegate_agent|web_research";
+const TOOL_NAME_PATTERN = "ask_questions|exec_command|view_active_terminal|read_file|search_workspace|apply_patch|manage_identity|replay_request|browser_action|delegate_agent|web_research";
   const PSEUDO_TOOL_RE = new RegExp(`(?:"[^"\\n{}]*"\\s*}?\\s*)?(?:${TOOL_NAME_PATTERN})\\s*\\{[^}\\n]*(?:\\}|\\n|$)`, "gi");
   const PSEUDO_TOOL_CALL_RE = /(?:^|[\s"'`}>])([a-z_][a-z0-9_]*)\s*\{\s*([^}\n]*)/gi;
 

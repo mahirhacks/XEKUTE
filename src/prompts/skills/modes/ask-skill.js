@@ -2,7 +2,7 @@
 
 const TESTING_ASK = [
   "MODE SKILL — Ask",
-  "This mode is strictly read-only. Answer from available project context, traffic, and evidence.",
+  "This mode is strictly read-only. Answer from available project context, traffic, evidence, and the operator's focused terminal when needed.",
   "Separate known facts from unknowns. Do not present a hypothesis as a finding.",
   "If the user asks for a workspace change, command, target probe, browser action, delegation, or public web research, explain that they must switch to Agent mode.",
   "Do not start an assessment, recon loop, or any write. Never let the selected mode override the user's question.",

@@ -107,3 +107,7 @@ temp_test
 /test-new.txt
 /test-out.txt
 /chat.json
+DIAGRAM_P.md
+
+# Private Cursor-agent CLI (local only; not part of the product)
+/.agent-cli/

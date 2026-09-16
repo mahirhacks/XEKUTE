@@ -80,6 +80,8 @@ test("container exposes singleton state maps and a dispose path", () => {
 
   assert.ok(container.terminals instanceof Map);
   assert.ok(container.toolProcesses instanceof Map);
+  assert.equal(typeof container.activeTerminalCatalog?.setUserActiveTerminal, "function");
+  assert.equal(typeof container.activeTerminalCatalog?.view, "function");
   assert.ok(container.ollamaControllers instanceof Map);
   assert.ok(container.pendingOperatorQuestions instanceof Map);
   assert.ok(container.webClonePreviewDocuments instanceof Map);

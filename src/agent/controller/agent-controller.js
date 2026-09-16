@@ -1234,84 +1234,25 @@ async function runAgentTurn({
     const seenThisRound = new Set();
     let tier1ExecutedThisRound = false;
     let tier1ToolResponseStored = false;
-    for (const tool of normalizedCalls) {
-      const toolName = String(tool.toolName || tool.action || "");
-      const signature = toolCallSignature(tool);
-      const actionId = String(tool.callId || signature).slice(0, 200);
-      const toolForEvent = { ...tool, args: tool.args || {}, toolName, actionId };
-      emitToolActivity(sendEvent, "tool_start", { tool: toolForEvent });
-      const preview = tool.args?.path || tool.args?.url || tool.args?.target || "";
-      sendEvent({
-        type: "activity",
-        text: "Running " + toolName + (preview ? ": " + String(preview).slice(0, 240) : ""),
-        kind: "tool",
-      });
 
-      let toolResult;
-      let toolWasExecuted = false;
-      if (!allowedNames.has(toolName)) {
-        toolResult = {
-          ok: false,
-          error: toolName + " is not available for this turn.",
-          errorCode: "TOOL_UNAVAILABLE",
-          retryable: false,
-        };
-      } else if (seenThisRound.has(signature)) {
-        toolResult = {
-          ok: false,
-          error: "Duplicate tool call in the same model response was ignored.",
-          errorCode: "DUPLICATE_TOOL_CALL",
-          retryable: false,
-        };
-      } else if ((failureCounts.get(signature) || 0) >= 1) {
-        toolResult = {
-          ok: false,
-          error: "The identical failed tool call was suppressed. Change the arguments or choose a different action.",
-          errorCode: "REPEATED_FAILED_CALL",
-          retryable: false,
-        };
-      } else {
-        seenThisRound.add(signature);
-        executedTools = true;
-        toolWasExecuted = true;
-        try {
-          toolResult = normalizeFailure(await executeToolCall({
-            workspace,
-            toolCall: buildToolCallForExecution(tool),
-            signal,
-            sessionId,
-            mode: profile.key,
-          }));
-        } catch (error) {
-          toolResult = {
-            ok: false,
-            error: error.message,
-            errorCode: "TOOL_EXECUTION_FAILED",
-            retryable: false,
-          };
-        }
-      }
-      const workflowUpdate = toolResult?.current_workflow || toolResult?.currentWorkflow || toolResult?.value?.current_workflow || toolResult?.value?.currentWorkflow || toolResult?.workflow;
-      if (workflowUpdate && typeof workflowUpdate === "object" && !Array.isArray(workflowUpdate)) currentWorkflow = { ...workflowUpdate };
-      actionResults.push(toolResult);
-      noteLongHorizonAction(longHorizonLedger, tool, toolResult);
+    const abortTurnResult = () => {
+      AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
+      sendEvent({ type: "run_state", runId, state: { ...runState } });
+      return {
+        ok: false,
+        error: "The agent turn was stopped.",
+        finalText,
+        appendedMessages: appendedMessages(),
+        runState,
+        contextRoute,
+        aborted: true,
+        evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+        failureRecords,
+      };
+    };
+
+    const sealToolOutcome = async ({ tool, toolForEvent, toolName, signature, actionId, toolResult, toolWasExecuted }) => {
       await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, lastTool: toolName, lastToolOk: Boolean(toolResult?.ok && !toolResult?.error), evidenceIds: AgentRuntime.evidenceIdsFromResults([toolResult]), ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
-      const actionEvidenceIds = AgentRuntime.evidenceIdsFromResults([toolResult]);
-      if (toolResult?.ok && !toolResult?.error) {
-        if (tool.callId) successfulToolRefs.add(String(tool.callId));
-        if (actionId) successfulToolRefs.add(String(actionId));
-        for (const ref of actionEvidenceIds) successfulToolRefs.add(String(ref));
-      }
-      AgentRuntime.noteAction(runState, {
-        actionId,
-        ok: Boolean(toolResult?.ok && !toolResult?.error),
-        evidenceIds: actionEvidenceIds,
-      });
-      if (!toolResult?.ok || toolResult?.error) {
-        failureCounts.set(signature, (failureCounts.get(signature) || 0) + 1);
-        const record = failureRecordFor(tool, toolResult);
-        if (record) failureRecords.push(record);
-      }
       emitToolActivity(sendEvent, "tool_result", {
         tool: { ...toolForEvent, executed: toolWasExecuted },
         result: toolResult,
@@ -1361,27 +1302,111 @@ async function runAgentTurn({
         const toolResultPressure = measureTier1Pressure();
         if (!toolResultPressure.ok) {
           AgentRuntime.finalize(runState, { status: "inconclusive", reason: toolResultPressure.error });
-          return { ok: false, error: toolResultPressure.error, code: toolResultPressure.code, finalText, runState, contextRoute, appendedMessages: appendedMessages(), failureRecords };
+          return {
+            stop: {
+              ok: false,
+              error: toolResultPressure.error,
+              code: toolResultPressure.code,
+              finalText,
+              runState,
+              contextRoute,
+              appendedMessages: appendedMessages(),
+              failureRecords,
+            },
+          };
         }
         const liveUsage = currentTier1Usage();
         if (liveUsage) sendEvent({ type: "context_usage", usage: liveUsage });
       }
       sendEvent({ type: "run_state", runId, state: { ...runState } });
       if (signal?.aborted || toolResult?.aborted || toolResult?.code === "RUN_TEST_CASE_STOPPED" || toolResult?.code === "BROWSER_ACTION_STOPPED" || toolResult?.code === "REPLAY_REQUEST_STOPPED") {
-        AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
-        sendEvent({ type: "run_state", runId, state: { ...runState } });
-        return {
-          ok: false,
-          error: "The agent turn was stopped.",
-          finalText,
-          appendedMessages: appendedMessages(),
-          runState,
-          contextRoute,
-          aborted: true,
-          evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
-          failureRecords,
-        };
+        return { stop: abortTurnResult() };
       }
+      return { stop: null };
+    };
+
+    for (const tool of normalizedCalls) {
+      if (signal?.aborted) return abortTurnResult();
+      const toolName = String(tool.toolName || tool.action || "");
+      const signature = toolCallSignature(tool);
+      const actionId = String(tool.callId || signature).slice(0, 200);
+      const toolForEvent = { ...tool, args: tool.args || {}, toolName, actionId };
+      emitToolActivity(sendEvent, "tool_start", { tool: toolForEvent });
+      const preview = tool.args?.path || tool.args?.url || tool.args?.target || "";
+      sendEvent({
+        type: "activity",
+        text: "Running " + toolName + (preview ? ": " + String(preview).slice(0, 240) : ""),
+        kind: "tool",
+      });
+
+      let toolResult;
+      let toolWasExecuted = false;
+      if (!allowedNames.has(toolName)) {
+        toolResult = {
+          ok: false,
+          error: toolName + " is not available for this turn.",
+          errorCode: "TOOL_UNAVAILABLE",
+          retryable: false,
+        };
+      } else if (seenThisRound.has(signature)) {
+        toolResult = {
+          ok: false,
+          error: "Duplicate tool call in the same model response was ignored.",
+          errorCode: "DUPLICATE_TOOL_CALL",
+          retryable: false,
+        };
+      } else if ((failureCounts.get(signature) || 0) >= 1) {
+        toolResult = {
+          ok: false,
+          error: "The identical failed tool call was suppressed. Change the arguments or choose a different action.",
+          errorCode: "REPEATED_FAILED_CALL",
+          retryable: false,
+        };
+      } else {
+        seenThisRound.add(signature);
+        executedTools = true;
+        toolWasExecuted = true;
+        try {
+          toolResult = normalizeFailure(await executeToolCall({
+            workspace,
+            toolCall: buildToolCallForExecution(tool),
+            signal,
+            sessionId,
+            mode: profile.key,
+            durableRunId: runId,
+          }));
+        } catch (error) {
+          toolResult = {
+            ok: false,
+            error: error.message,
+            errorCode: "TOOL_EXECUTION_FAILED",
+            retryable: false,
+          };
+        }
+      }
+      const workflowUpdate = toolResult?.current_workflow || toolResult?.currentWorkflow || toolResult?.value?.current_workflow || toolResult?.value?.currentWorkflow || toolResult?.workflow;
+      if (workflowUpdate && typeof workflowUpdate === "object" && !Array.isArray(workflowUpdate)) currentWorkflow = { ...workflowUpdate };
+      actionResults.push(toolResult);
+      noteLongHorizonAction(longHorizonLedger, tool, toolResult);
+      const actionEvidenceIds = AgentRuntime.evidenceIdsFromResults([toolResult]);
+      if (toolResult?.ok && !toolResult?.error) {
+        if (tool.callId) successfulToolRefs.add(String(tool.callId));
+        if (actionId) successfulToolRefs.add(String(actionId));
+        for (const ref of actionEvidenceIds) successfulToolRefs.add(String(ref));
+      }
+      AgentRuntime.noteAction(runState, {
+        actionId,
+        ok: Boolean(toolResult?.ok && !toolResult?.error),
+        evidenceIds: actionEvidenceIds,
+      });
+      if (!toolResult?.ok || toolResult?.error) {
+        failureCounts.set(signature, (failureCounts.get(signature) || 0) + 1);
+        const record = failureRecordFor(tool, toolResult);
+        if (record) failureRecords.push(record);
+      }
+      const outcome = { tool, toolForEvent, toolName, signature, actionId, toolResult, toolWasExecuted };
+      const sealed = await sealToolOutcome(outcome);
+      if (sealed.stop) return sealed.stop;
     }
     if (useTier1 && tier1ExecutedThisRound) {
       const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results" });

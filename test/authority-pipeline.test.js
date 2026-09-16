@@ -74,9 +74,13 @@ test("G1 role access enforces every canonical mode surface under every authority
   for (const authority of ["ask_for_approval", "approve_for_me", "full_authority"]) {
     for (const mode of Object.keys(MODE_TOOL_GROUPS)) {
       for (const toolName of TOOL_REGISTRY_NAMES) {
-        if (!MODE_TOOL_GROUPS[mode].includes(toolName)) continue;
         const decision = await gate.evaluate({ context: { role: mode, authority }, toolName, entry: entry(toolName) });
-        assert.equal(decision.decision, "allow", `${authority}/${mode}/${toolName}`);
+        if (MODE_TOOL_GROUPS[mode].includes(toolName)) {
+          assert.equal(decision.decision, "allow", `${authority}/${mode}/${toolName}`);
+        } else {
+          assert.equal(decision.decision, "deny", `${authority}/${mode}/${toolName} must be denied`);
+          assert.equal(decision.metadata.code, "TOOL_UNAVAILABLE_IN_MODE");
+        }
       }
     }
   }
@@ -107,6 +111,46 @@ test("G2 request validation applies schema structure and canonicalizes nested ta
   const invalid = await gate.evaluate({ context: { workspace: { root } }, entry: toolEntry, args: { path: "", request: { url: "not a URI", extra: true }, extra: true }, state: createInvocationState() });
   assert.equal(invalid.terminal, true);
   assert.equal(invalid.metadata.code, "INVALID_TOOL_INPUT");
+});
+
+test("request validation blocks mass deletes and recursive workspace wipes", async () => {
+  const gate = createRequestValidationGate();
+  const patchEntry = {
+    name: "apply_patch",
+    inputSchema: { type: "object", required: ["operations"], properties: { operations: { type: "array" } }, additionalProperties: true },
+  };
+  const mass = await gate.evaluate({
+    toolName: "apply_patch",
+    entry: patchEntry,
+    args: { operations: [
+      { kind: "delete", path: "README.md" },
+      { kind: "delete", path: "a.js" },
+      { kind: "delete", path: "b.js" },
+      { kind: "delete", path: "c.js" },
+    ] },
+    state: createInvocationState(),
+  });
+  assert.equal(mass.decision, "deny");
+  assert.equal(mass.metadata.code, "MASS_DELETE_DENIED");
+  const single = await gate.evaluate({
+    toolName: "apply_patch",
+    entry: patchEntry,
+    args: { operations: [{ kind: "delete", path: "notes/hello.txt" }] },
+    state: createInvocationState(),
+  });
+  assert.equal(single.decision, "allow");
+  const execEntry = {
+    name: "exec_command",
+    inputSchema: { type: "object", properties: { command: { type: "string" } }, additionalProperties: true },
+  };
+  const wipe = await gate.evaluate({
+    toolName: "exec_command",
+    entry: execEntry,
+    args: { command: "Remove-Item -Recurse -Force .\\notes, .\\src", context: "wipe trees" },
+    state: createInvocationState(),
+  });
+  assert.equal(wipe.decision, "deny");
+  assert.equal(wipe.metadata.code, "DESTRUCTIVE_WIPE_DENIED");
 });
 
 test("G3 typed scope permits in-scope, defers only explicit soft boundaries, and terminates hard boundaries", async () => {
@@ -163,6 +207,13 @@ test("G7 risk classification is deterministic and never makes an authority decis
   assert.equal(high.level, "high");
   assert.ok(high.dimensions.length > low.dimensions.length);
   assert.equal(Object.hasOwn(high, "decision"), false);
+  const deletes = classifyRisk({
+    toolName: "apply_patch",
+    args: { operations: [{ kind: "delete", path: "a.js" }] },
+    entry: entry("apply_patch", { mutating: true, reversible: true }),
+  });
+  assert.equal(deletes.reversible, false);
+  assert.ok(deletes.dimensions.some((item) => item.id === "destructive_operation"));
 });
 
 test("G8/G9 policy requests approval only for exec_command and records command approval", async () => {
@@ -215,6 +266,18 @@ test("G11 resource gate understands nested barrier demand and current durable-pr
   assert.equal(denied.metadata.code, "CONCURRENCY_LIMIT_EXCEEDED");
   const processDenied = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10, processCount: 1 } }, toolName: "exec_command", args: { operation: "start" }, state: createInvocationState(), runtime: { resourceUsage: async () => ({ processCount: 1 }) } });
   assert.equal(processDenied.metadata.code, "PROCESS_LIMIT_EXCEEDED");
+  for (const args of [{}, { operation: "run" }, { operation: "run", wait_ms: 0 }, { operation: "start" }]) {
+    assert.equal(requestedResources("exec_command", args).processCount, 1);
+  }
+  for (const operation of ["status", "stop", "list"]) {
+    assert.equal(requestedResources("exec_command", { operation }).processCount, 0);
+  }
+  const runAtCap = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10, processCount: 1 } }, toolName: "exec_command", args: { operation: "run" }, state: createInvocationState(), runtime: { resourceUsage: async () => ({ processCount: 1 }) } });
+  assert.equal(runAtCap.metadata.code, "PROCESS_LIMIT_EXCEEDED");
+  const usageThrow = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10, processCount: 4 } }, toolName: "exec_command", args: { operation: "run" }, state: createInvocationState(), runtime: { resourceUsage: async () => { throw new Error("usage boom"); } } });
+  assert.equal(usageThrow.metadata.code, "RESOURCE_USAGE_UNAVAILABLE");
+  const usageError = await createResourceLimitGate().evaluate({ context: { resourceLimits: { maximumConcurrency: 4, requestsPerSecond: 10, processCount: 4 } }, toolName: "exec_command", args: { operation: "run" }, state: createInvocationState(), runtime: { resourceUsage: async () => ({ error: "usage missing" }) } });
+  assert.equal(usageError.metadata.code, "RESOURCE_USAGE_UNAVAILABLE");
 });
 
 test("G12 reader/writer concurrency permits readers, queues a conflicting writer, and releases leases", async () => {
@@ -360,7 +423,7 @@ test("G19 protected audit verifier detects a modified lifecycle record", (t) => 
   assert.equal(audit.verify(root).records, 2);
 });
 
-test("hard scope denials remain enforced while selected modes do not deny tools", async (t) => {
+test("hard scope denials remain enforced and Ask mode denies mutating tools", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-hard-deny-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const authority of ["ask_for_approval", "approve_for_me", "full_authority"]) {
@@ -386,5 +449,6 @@ test("hard scope denials remain enforced while selected modes do not deny tools"
     args: { operation: "run", command: "echo ok" },
     entry: entry("exec_command"),
   });
-  assert.equal(modeDecision.decision, "allow");
+  assert.equal(modeDecision.decision, "deny");
+  assert.equal(modeDecision.metadata.code, "TOOL_UNAVAILABLE_IN_MODE");
 });

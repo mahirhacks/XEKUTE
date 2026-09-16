@@ -30,12 +30,15 @@ const { createInvocationPipeline } = require("../../agent/authority/invocation-p
 const { createToolAuditStore } = require("../../app/storage/tool-audit-store.js");
 const { createLongHorizonRunStore } = require("../../app/storage/long-horizon-run-store.js");
 const { createDurableProcessManager } = require("../../app/services/terminal/durable-process-manager.js");
+const { terminateProcessTree } = require("../../app/services/terminal/terminate-process-tree.js");
+const { createActiveTerminalCatalog } = require("../../app/services/terminal/active-terminal-catalog.js");
 const ContextBudget = require("../../agent/runtime/context-budget.js");
 
-// Tool registry + raw adapters (the 10 canonical tools).
-const { createToolRegistry, registerAskQuestions, registerExecCommand, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerManageIdentity, registerReplayRequest, registerBrowserAction, registerDelegateAgent, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
+// Tool registry + raw adapters (the canonical tools).
+const { createToolRegistry, registerAskQuestions, registerExecCommand, registerViewActiveTerminal, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerManageIdentity, registerReplayRequest, registerBrowserAction, registerDelegateAgent, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
 const { createAskQuestionsTool } = require("../../agent/tools/process/ask-questions.js");
 const { createExecCommandTool } = require("../../agent/tools/process/exec-command.js");
+const { createViewActiveTerminalTool } = require("../../agent/tools/process/view-active-terminal.js");
 const { createReadFileTool } = require("../../agent/tools/workspace/read-file.js");
 const { createSearchWorkspaceTool } = require("../../agent/tools/workspace/search-workspace.js");
 const { createApplyPatchTool } = require("../../agent/tools/workspace/apply-patch.js");
@@ -154,9 +157,15 @@ function createContainer({
     resolveExecutable: require("../../agent/tools/process/executable-resolver.js").resolveSecurityExecutable,
     terminateProcessTree,
   });
+  const terminals = new Map();
+  const activeTerminalCatalog = createActiveTerminalCatalog({
+    terminals,
+    durableProcessManager,
+  });
   const toolRegistry = createToolRegistry();
   registerAskQuestions(toolRegistry, createAskQuestionsTool());
   registerExecCommand(toolRegistry, createExecCommandTool({ processManager: durableProcessManager }));
+  registerViewActiveTerminal(toolRegistry, createViewActiveTerminalTool({ catalog: activeTerminalCatalog }));
   registerReadFile(toolRegistry, createReadFileTool());
   registerSearchWorkspace(toolRegistry, createSearchWorkspaceTool());
   registerApplyPatch(toolRegistry, createApplyPatchTool());
@@ -270,7 +279,6 @@ function createContainer({
     return projectProfiles;
   }
 
-  const terminals = new Map();
   const toolProcesses = new Map();
   const ollamaControllers = new Map();
   const pendingOperatorQuestions = new Map();
@@ -342,8 +350,9 @@ function createContainer({
         try { record.pty.kill(); } catch { /* ignore */ }
       }
       terminals.clear();
+      activeTerminalCatalog.clearAll();
       for (const record of toolProcesses.values()) {
-        terminateProcessTree(record.child);
+        void terminateProcessTree(record.child);
       }
       toolProcesses.clear();
       for (const pending of pendingOperatorQuestions.values()) {
@@ -371,36 +380,6 @@ function createContainer({
       try { tier1SensitiveStore.clearEphemeral?.(); } catch { /* best effort */ }
     })();
     return disposePromise;
-  }
-
-  function terminateProcessTree(child, tree = null) {
-    if (!child?.pid) return;
-    if (process.platform === "win32") {
-      try {
-        const { spawn } = require("child_process");
-        const pids = [...new Set([child.pid, ...(Array.isArray(tree?.pids) ? tree.pids : [])]
-          .map((pid) => Number(pid))
-          .filter((pid) => Number.isInteger(pid) && pid > 0))];
-        for (const pid of pids) {
-          const killer = spawn("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-          killer.unref();
-        }
-        return;
-      } catch { /* Fall back to the direct child below. */ }
-    }
-    // POSIX supervised commands are started detached, making the root PID the
-    // process-group ID. Signal the whole group so descendants do not survive
-    // a user stop or agent cancellation. Windows commands stay attached to
-    // avoid a PowerShell detached-launch bug and are terminated by taskkill
-    // using the sampled process-tree PIDs above.
-    try {
-      const pid = Number(child.pid);
-      if (Number.isInteger(pid) && pid > 0) {
-        process.kill(-pid, "SIGTERM");
-        return;
-      }
-    } catch { /* No detached process group; fall back to the direct child. */ }
-    try { child.kill("SIGTERM"); } catch { /* Process already exited. */ }
   }
 
   return {
@@ -437,6 +416,7 @@ function createContainer({
     toolAuditStore,
     longHorizonRunStore,
     durableProcessManager,
+    activeTerminalCatalog,
     resolveCentralCaDirectory,
     readApplicationPreferences,
     terminateProcessTree,

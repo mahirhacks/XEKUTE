@@ -20,7 +20,7 @@ function createDurableProcessManager({
   spawnProcess = spawn,
   resolveWorkspaceTarget,
   resolveExecutable = (value) => value,
-  terminateProcessTree = (child) => child?.kill?.(),
+  terminateProcessTree = async (child) => { child?.kill?.(); },
   now = () => new Date(),
   sampleTree = sampleProcessTree,
   monitorIntervalMs = DEFAULT_MONITOR_INTERVAL_MS,
@@ -77,6 +77,26 @@ function createDurableProcessManager({
       return { text: buffer.toString("utf8").slice(0, maxChars), nextOffset: start + bytes, truncated: available > bytes };
     } catch { return { text: "", nextOffset: Number(offset) || 0, truncated: false }; }
   }
+  function fileExists(file) {
+    if (!file) return false;
+    try { return Boolean(fsImpl.existsSync(file)); } catch { return false; }
+  }
+  function sliceRetained(tail, offset, maxChars) {
+    const text = String(tail || "");
+    const buf = Buffer.from(text, "utf8");
+    if (!maxChars) return { text: "", nextOffset: buf.byteLength, truncated: false };
+    if (offset === undefined) {
+      return { text, nextOffset: buf.byteLength, truncated: false };
+    }
+    const start = Math.max(0, Number(offset) || 0);
+    if (start >= buf.byteLength) return { text: "", nextOffset: buf.byteLength, truncated: false };
+    const slice = buf.subarray(start, start + maxChars);
+    return {
+      text: slice.toString("utf8"),
+      nextOffset: start + slice.byteLength,
+      truncated: buf.byteLength - start > slice.byteLength,
+    };
+  }
   function invocation(input) {
     if (typeof input.command === "string") return resolveShellInvocation(input.command, input.shell || "auto");
     return { shell: null, executable: input.executable, args: Array.isArray(input.args) ? input.args : [] };
@@ -121,6 +141,9 @@ function createDurableProcessManager({
     delete projected.stderrFile;
     delete projected.foregroundWaitMs;
     delete projected.foreground_wait_ms;
+    delete projected.logsUnlinked;
+    delete projected.retainedStdout;
+    delete projected.retainedStderr;
     if (projected.metrics) projected.metrics = projectMetrics(projected.metrics);
     if (projected.health && typeof projected.health === "object") projected.health = projectMetrics(projected.health);
     if (!projected.processId && projected.id) projected.processId = projected.id;
@@ -130,22 +153,38 @@ function createDurableProcessManager({
     if (!result?.value) return result;
     return { ...result, value: projectAgentFacing({ ...result.value }) };
   }
-  function listInternal(workspace) {
+  function listInternal(workspace, sessionId = "") {
     const prefix = `${pathImpl.resolve(workspace)}::`;
+    const wantSession = String(sessionId || "").trim();
     const listed = [];
-    for (const [key, record] of records) if (key.startsWith(prefix)) listed.push(record);
+    for (const [key, record] of records) {
+      if (!key.startsWith(prefix)) continue;
+      if (wantSession && String(record.sessionId || "") !== wantSession) continue;
+      listed.push(record);
+    }
     return listed.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).slice(0, 200);
   }
   function snapshot(workspace, record, input = {}, entry = live.get(record.id)) {
     const { stdoutFile, stderrFile } = pathsFor(workspace, record);
     const max = input.tail_chars === undefined ? 50_000 : Math.max(0, Number(input.tail_chars) || 0);
     const stderrLimit = Math.min(max, 20_000);
-    const stdoutRead = input.stdout_offset === undefined
-      ? { text: tail(stdoutFile, max), nextOffset: fileSize(stdoutFile), truncated: fileSize(stdoutFile) > Math.max(max * 4, max) }
-      : readFrom(stdoutFile, input.stdout_offset, max);
-    const stderrRead = input.stderr_offset === undefined
-      ? { text: tail(stderrFile, stderrLimit), nextOffset: fileSize(stderrFile), truncated: fileSize(stderrFile) > Math.max(stderrLimit * 4, stderrLimit) }
-      : readFrom(stderrFile, input.stderr_offset, stderrLimit);
+    const logsUnlinked = Boolean(record.logsUnlinked);
+    const stdoutMissing = logsUnlinked || !fileExists(stdoutFile);
+    const stderrMissing = logsUnlinked || !fileExists(stderrFile);
+    const stdoutRead = stdoutMissing
+      ? (input.stdout_offset === undefined
+        ? sliceRetained(record.stdout, undefined, max)
+        : sliceRetained(record.stdout, input.stdout_offset, max))
+      : (input.stdout_offset === undefined
+        ? { text: tail(stdoutFile, max), nextOffset: fileSize(stdoutFile), truncated: fileSize(stdoutFile) > Math.max(max * 4, max) }
+        : readFrom(stdoutFile, input.stdout_offset, max));
+    const stderrRead = stderrMissing
+      ? (input.stderr_offset === undefined
+        ? sliceRetained(record.stderr, undefined, stderrLimit)
+        : sliceRetained(record.stderr, input.stderr_offset, stderrLimit))
+      : (input.stderr_offset === undefined
+        ? { text: tail(stderrFile, stderrLimit), nextOffset: fileSize(stderrFile), truncated: fileSize(stderrFile) > Math.max(stderrLimit * 4, stderrLimit) }
+        : readFrom(stderrFile, input.stderr_offset, stderrLimit));
     const alive = currentAlive(entry, record);
     const changed = Boolean(entry?.outputChanged) || stdoutRead.nextOffset > (Number(input.stdout_offset) || 0) || stderrRead.nextOffset > (Number(input.stderr_offset) || 0);
     const quietForMs = Math.max(0, Date.now() - new Date(record.lastOutputAt || record.startedAt || 0).getTime());
@@ -297,6 +336,16 @@ function createDurableProcessManager({
     value.terminationReason = terminationReason;
     value.outputCompleteness = "complete";
     entry.completion = value;
+    entry.record.stdout = String(value.stdout || "");
+    entry.record.stderr = String(value.stderr || "");
+    persist(entry);
+    const { stdoutFile, stderrFile } = pathsFor(entry.workspace, entry.record);
+    try { fsImpl.unlinkSync(stdoutFile); } catch { /* best-effort unlink must not fail completion */ }
+    try { fsImpl.unlinkSync(stderrFile); } catch { /* best-effort unlink must not fail completion */ }
+    if (!fileExists(stdoutFile) && !fileExists(stderrFile)) {
+      entry.record.logsUnlinked = true;
+      persist(entry);
+    }
     live.delete(entry.record.id);
     try { entry.runtime?.onComplete?.(value); } catch { /* renderer may have closed */ }
     emit(entry.runtime, { type: "terminal_complete", processId: entry.record.id, terminalId: entry.record.terminalId || "", command: entry.record.command, ...value });
@@ -306,10 +355,11 @@ function createDurableProcessManager({
   function attachChild(entry) {
     const child = entry.child;
     child.once?.("error", (error) => {
-      if (!entry.finished) completeEntry(entry, { status: "failed", terminationReason: "start_failed", signal: error.code || "PROCESS_ERROR" });
+      if (entry.finished || entry.killIntent) return;
+      completeEntry(entry, { status: "failed", terminationReason: "start_failed", signal: error.code || "PROCESS_ERROR" });
     });
     child.once?.("exit", (exitCode, signal) => {
-      if (entry.finished) return;
+      if (entry.finished || entry.killIntent) return;
       completeEntry(entry, {
         status: exitCode === 0 ? "complete" : "failed",
         exitCode,
@@ -317,6 +367,16 @@ function createDurableProcessManager({
         terminationReason: signal ? "signaled" : "exit_code",
       });
     });
+  }
+  async function killAndComplete(entry, intent, { reason } = {}) {
+    if (!entry || entry.finished) return entry?.completion;
+    entry.killIntent = intent;
+    try {
+      await terminateProcessTree(entry.child, entry.tree);
+    } finally {
+      if (!entry.finished) completeEntry(entry, { status: intent, terminationReason: reason || intent });
+    }
+    return entry.completion;
   }
   function activateMonitoring(entry) {
     entry.outputTimer = setInterval(() => pollOutput(entry), Math.max(50, Number(outputPollMs) || DEFAULT_OUTPUT_POLL_MS));
@@ -332,7 +392,7 @@ function createDurableProcessManager({
     sampleHealth(entry).catch(() => {});
   }
   function makeEntry(workspace, record, child, runtime = {}) {
-    const entry = { workspace, record, child, runtime, stdoutOffset: 0, stderrOffset: 0, outputChanged: false, finished: false, tree: null, health: record.health || null, donePromise: null, doneResolve: null };
+    const entry = { workspace, record, child, runtime, stdoutOffset: 0, stderrOffset: 0, outputChanged: false, finished: false, killIntent: null, tree: null, health: record.health || null, donePromise: null, doneResolve: null };
     entry.donePromise = new Promise((resolve) => { entry.doneResolve = resolve; });
     return entry;
   }
@@ -413,7 +473,9 @@ function createDurableProcessManager({
     activateMonitoring(entry);
     const timeoutMs = Number(input.timeout_ms) || 0;
     if (timeoutMs > 0) {
-      entry.timeoutTimer = setTimeout(() => { try { terminateProcessTree(child); } catch {} completeEntry(entry, { status: "timeout", terminationReason: "timeout" }); }, Math.min(timeoutMs, 86_400_000));
+      entry.timeoutTimer = setTimeout(() => {
+        void killAndComplete(entry, "timeout", { reason: "timeout" }).catch(() => {});
+      }, Math.min(timeoutMs, 86_400_000));
       entry.timeoutTimer.unref?.();
     }
     child.unref?.();
@@ -425,10 +487,8 @@ function createDurableProcessManager({
     const processId = started.value.processId;
     const entry = live.get(processId);
     if (!entry) return { ok: false, error: { code: "PROCESS_START_FAILED", message: "The process started but could not be supervised.", retryable: true } };
-    let detached = false;
-    const onAbort = () => { if (!detached) stop(workspace, { process_id: processId, reason: "agent_cancelled" }).catch(() => {}); };
-    if (runtime.signal?.aborted) onAbort();
-    else runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
+    let abortWait = null;
+    const onAbort = () => abortWait?.();
     const waitSpecified = Object.prototype.hasOwnProperty.call(input, "wait_ms");
     const waitMs = waitSpecified ? Math.max(0, Number(input.wait_ms) || 0) : null;
     const finishWith = (completed) => {
@@ -436,7 +496,6 @@ function createDurableProcessManager({
       return projectResult({ ok: completed.status === "complete" && completed.exitCode === 0, value: { ...completed, mode: "command" } });
     };
     const detachWithPartial = () => {
-      detached = true;
       runtime.signal?.removeEventListener?.("abort", onAbort);
       const record = readRecord(workspace, processId) || entry.record;
       const value = snapshot(workspace, record, { tail_chars: 50_000 }, entry);
@@ -453,15 +512,21 @@ function createDurableProcessManager({
       return projectResult({ ok: true, value });
     };
     if (waitMs === 0) return detachWithPartial();
+    const abortPromise = new Promise((resolve) => { abortWait = () => resolve("aborted"); });
+    if (runtime.signal?.aborted) onAbort();
+    else runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
+    const done = entry.donePromise.then((value) => (value ? { kind: "done", value } : { kind: "detach" }));
+    const aborted = abortPromise.then(() => ({ kind: "abort" }));
     if (waitMs == null) {
-      const completed = await entry.donePromise;
-      return completed ? finishWith(completed) : detachWithPartial();
+      const completed = await Promise.race([done, aborted]);
+      if (completed.kind === "done") return finishWith(completed.value);
+      return detachWithPartial();
     }
     let timer;
-    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), waitMs); });
-    const completed = await Promise.race([entry.donePromise, timeout]);
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ kind: "timeout" }), waitMs); });
+    const completed = await Promise.race([done, aborted, timeout]);
     if (timer) clearTimeout(timer);
-    if (completed) return finishWith(completed);
+    if (completed.kind === "done") return finishWith(completed.value);
     return detachWithPartial();
   }
   async function status(workspace, input = {}, runtime = {}) {
@@ -507,34 +572,45 @@ function createDurableProcessManager({
     const record = readRecord(workspace, input.process_id);
     if (!record) return { ok: false, error: { code: "PROCESS_NOT_FOUND", message: `Unknown durable process: ${input.process_id}`, retryable: false } };
     const entry = live.get(record.id);
-    const active = entry?.child || { pid: record.pid, kill: () => process.kill(record.pid) };
     if (entry?.finished) return projectResult({ ok: true, value: { processId: record.id, pid: record.pid, status: record.status, completedAt: record.completedAt } });
-    let tree = entry?.tree || null;
-    let treeAlive = tree?.alive;
-    if (treeAlive === undefined && record.status === "running") {
+    if (entry) {
+      try {
+        const value = await killAndComplete(entry, "stopped", { reason: input.reason || "user_requested" });
+        return projectResult({ ok: true, value: { ...value, processId: record.id, pid: record.pid, status: "stopped", completedAt: record.completedAt } });
+      } catch (error) {
+        return { ok: false, error: { code: "PROCESS_STOP_FAILED", message: error.message, retryable: true } };
+      }
+    }
+    let tree = null;
+    let treeAlive;
+    if (record.status === "running") {
       try {
         tree = await sampleTree(record.pid, { fsImpl, platform: process.platform });
         treeAlive = Boolean(tree?.alive);
       } catch { treeAlive = undefined; }
     }
-    if (entry || record.status === "running" && (treeAlive || isAlive(record.pid))) {
-      try { terminateProcessTree(active, tree); } catch (error) { return { ok: false, error: { code: "PROCESS_STOP_FAILED", message: error.message, retryable: true } }; }
+    if (record.status === "running" && (treeAlive || isAlive(record.pid))) {
+      try {
+        await terminateProcessTree({ pid: record.pid, kill: () => process.kill(record.pid) }, tree);
+      } catch (error) {
+        return { ok: false, error: { code: "PROCESS_STOP_FAILED", message: error.message, retryable: true } };
+      }
     }
-    const value = entry
-      ? completeEntry(entry, { status: "stopped", terminationReason: input.reason || "user_requested" })
-      : (() => {
-        record.status = "stopped";
-        record.completedAt = now().toISOString();
-        record.updatedAt = record.completedAt;
-        record.terminationReason = input.reason || "user_requested";
-        writeRecord(workspace, record);
-        return snapshot(workspace, record, {}, null);
-      })();
-    return projectResult({ ok: true, value: { ...value, processId: record.id, pid: record.pid, status: "stopped", completedAt: record.completedAt } });
+    if (record.status === "running") {
+      record.status = "stopped";
+      record.completedAt = now().toISOString();
+      record.updatedAt = record.completedAt;
+      record.terminationReason = input.reason || "user_requested";
+      writeRecord(workspace, record);
+    }
+    return projectResult({ ok: true, value: { ...snapshot(workspace, record, {}, null), processId: record.id, pid: record.pid, status: "stopped", completedAt: record.completedAt } });
   }
-  async function list(workspace) {
+  async function list(workspace, input = {}, runtime = {}) {
+    // Session filter comes only from host/runtime. Never from model input —
+    // a tool argument could otherwise list another chat's jobs.
+    const sessionId = String(runtime?.sessionId || "").trim();
     const processes = [];
-    for (const record of listInternal(workspace)) {
+    for (const record of listInternal(workspace, sessionId)) {
       let alive = record.status === "running" ? (live.has(record.id) || isAlive(record.pid)) : false;
       // After an app restart there is no in-memory entry. If the detached
       // shell exited while a descendant remains, sample the persisted PID's

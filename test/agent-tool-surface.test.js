@@ -11,7 +11,9 @@ test("agent tool surface is always available and the mode skill names canonical 
   const askTools = Surface.providerTools("ask");
   const agentTools = Surface.providerTools("agent");
   assert.notDeepEqual(askTools, agentTools);
-  assert.equal(agentTools.length, 10);
+  assert.equal(agentTools.length, 11);
+  assert.equal(askTools.includes("view_active_terminal"), true);
+  assert.equal(agentTools.includes("view_active_terminal"), true);
   assert.equal(agentTools.includes("update_project_artifacts"), false);
   assert.equal(agentTools.includes("query_knowledge"), false);
   assert.equal(agentTools.includes("manage_plan"), false);
@@ -24,5 +26,6 @@ test("agent tool surface is always available and the mode skill names canonical 
 test("chat-leased MCP schemas remain visible only after mode filtering", () => {
   const dynamic = { type: "function", function: { name: "mcp__scout__host_search", parameters: { type: "object" } } };
   const read = { type: "function", function: { name: "read_file", parameters: { type: "object" } } };
-  assert.deepEqual(ToolPort.toolsForProfile({ key: "ask" }, undefined, [read, dynamic]).map((tool) => tool.function.name), ["read_file", "mcp__scout__host_search"]);
+  assert.deepEqual(ToolPort.toolsForProfile({ key: "ask" }, undefined, [read, dynamic]).map((tool) => tool.function.name), ["read_file"]);
+  assert.deepEqual(ToolPort.toolsForProfile({ key: "agent" }, undefined, [read, dynamic]).map((tool) => tool.function.name), ["read_file", "mcp__scout__host_search"]);
 });

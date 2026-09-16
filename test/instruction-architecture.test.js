@@ -48,6 +48,9 @@ test("agent skill teaches run waits for exit and status as secondary", () => {
   assert.match(agentSkill, /timeout_ms/);
   assert.match(agentSkill, /terminal_complete/);
   assert.match(agentSkill, /secondary/);
+  assert.match(agentSkill, /ask_questions before mutating/);
+  assert.match(agentSkill, /do not substitute web_research/i);
+  assert.match(agentSkill, /Never wipe the workspace/);
   assert.doesNotMatch(agentSkill, /default 1500/);
   assert.doesNotMatch(agentSkill, /operation=status[\s\S]{0,120}wait mechanism/i);
 });

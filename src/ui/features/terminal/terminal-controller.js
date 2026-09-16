@@ -22,6 +22,7 @@ const TerminalManager = (() => {
   /** @type {Map<string, { id: string, name: string, profileId: string, groupId: string, container: HTMLElement, term: Terminal, fitAddon: FitAddon.FitAddon, exited: boolean, lastCols: number, lastRows: number }>} */
   const sessions = new Map();
   let activeId = null;
+  let panelOpen = true;
   let counter = 0;
   let cwd = null;
   let fitAnimationFrame = 0;
@@ -221,7 +222,7 @@ const TerminalManager = (() => {
   }
 
   function sessionIconClass(session) {
-    if (session?.agent) return "codicon-sparkle";
+    if (session?.agent) return "codicon-copilot";
     return shellIconClass(session?.profileId, session?.name);
   }
 
@@ -233,7 +234,30 @@ const TerminalManager = (() => {
     btnKill.disabled = !has;
     if (btnSplit) btnSplit.disabled = !has;
     updateActiveSessionUi();
+    publishUserActiveTerminal();
     globalThis.onTerminalSessionStateChange?.({ count: sessions.size, activeId });
+  }
+
+  function terminalTabSnapshot() {
+    return [...sessions.values()].map((session) => ({
+      id: session.id,
+      name: session.name,
+      agent: Boolean(session.agent),
+      exited: Boolean(session.exited),
+    }));
+  }
+
+  function publishUserActiveTerminal() {
+    window.api?.terminalSetActive?.({
+      terminalId: panelOpen && activeId ? activeId : null,
+      panelOpen: Boolean(panelOpen && activeId),
+      tabs: terminalTabSnapshot(),
+    });
+  }
+
+  function setPanelOpen(open) {
+    panelOpen = Boolean(open);
+    publishUserActiveTerminal();
   }
 
   function updateActiveSessionUi() {
@@ -318,15 +342,11 @@ const TerminalManager = (() => {
         session.exited ? "exited" : "",
         session.agent ? "agent" : "",
       ].filter(Boolean).join(" ");
-      btn.title = session.exited
-        ? `${session.name} (exited)`
-        : session.agent
-          ? `${session.name} — AI agent command`
-          : session.name;
+      btn.title = session.exited ? `${session.name} (exited)` : session.name;
       btn.innerHTML = `
         <span class="codicon terminal-shell-icon ${sessionIconClass(session)}"></span>
         <span class="terminal-tab-name">${escapeHtml(session.name)}</span>
-        <span class="terminal-tab-status">${session.agent ? "AI" : ""}${session.exited ? (session.agent ? " · exited" : "exited") : ""}</span>
+        <span class="terminal-tab-status">${session.exited ? "exited" : ""}</span>
         <span class="codicon codicon-close terminal-tab-close" title="Close"></span>`;
       btn.addEventListener("click", () => switchTerminal(session.id));
       btn.querySelector(".terminal-tab-close")?.addEventListener("click", (e) => {
@@ -352,6 +372,7 @@ const TerminalManager = (() => {
       fitVisibleSessions();
       active.term.focus();
     });
+    publishUserActiveTerminal();
   }
 
   function fitSession(session) {
@@ -555,11 +576,12 @@ const TerminalManager = (() => {
   async function runCommand(command) {
     const text = String(command || "").trim();
     if (!text) return false;
-    if (!activeId || !sessions.has(activeId) || sessions.get(activeId)?.exited) {
+    const active = activeId ? sessions.get(activeId) : null;
+    if (!activeId || !active || active.exited || active.agent) {
       await createTerminal();
     }
     const session = activeId ? sessions.get(activeId) : null;
-    if (!session || session.exited) return false;
+    if (!session || session.exited || session.agent) return false;
     globalThis.expandTerminalPanel?.({ createIfMissing: false });
     session.term.focus();
     window.api.terminalWrite(session.id, `${text}\r`);
@@ -576,7 +598,7 @@ const TerminalManager = (() => {
     const session = sessions.get(id);
     if (!session || session.exited || session.interrupting) return;
     session.interrupting = true;
-    term.writeln("\r\n\x1b[33m^C  Stopping AI command…\x1b[0m");
+    term.writeln("\r\n\x1b[33m^C  Stopping command…\x1b[0m");
     try {
       const result = await window.api.terminalKill(id);
       if (result?.alreadyStopped) {
@@ -621,7 +643,7 @@ const TerminalManager = (() => {
       return null;
     }
 
-    const term = new globalThis.Terminal(xtermOptions({ cursorBlink: false }));
+    const term = new globalThis.Terminal(xtermOptions({ cursorBlink: true }));
 
     const fitAddon = new FitCtor();
     term.loadAddon(fitAddon);
@@ -647,7 +669,7 @@ const TerminalManager = (() => {
     const label = shortenCommand(command) || toolName.replace(/_/g, " ");
     const session = {
       id,
-      name: `AI · ${label}`,
+      name: label,
       profileId: "agent",
       groupId: id,
       container,
@@ -662,8 +684,7 @@ const TerminalManager = (() => {
     };
     sessions.set(id, session);
 
-    term.writeln("\x1b[36m\x1b[1m● XEKUTE AI Agent\x1b[0m \x1b[90mread-only output · Ctrl+C stops the process\x1b[0m");
-    if (command) term.writeln(`\x1b[90m$ ${command}\x1b[0m`);
+    term.writeln("\x1b[90mread-only output\x1b[0m");
 
     clearTerminalError();
     updateEmptyState();
@@ -687,6 +708,13 @@ const TerminalManager = (() => {
     }
     const result = await window.api.terminalKill(target);
     if (result?.alreadyStopped) {
+      if (session.agent) {
+        session.interrupting = false;
+        session.exited = true;
+        session.term.writeln("\x1b[90mThis command is no longer running.\x1b[0m");
+        renderTabsList();
+        return;
+      }
       removeSession(target);
       return;
     }
@@ -695,6 +723,7 @@ const TerminalManager = (() => {
       session.interrupting = false;
       return;
     }
+    if (session.agent) return;
     removeSession(target);
   }
 
@@ -716,6 +745,7 @@ const TerminalManager = (() => {
     session.term.dispose();
     session.container.remove();
     sessions.delete(id);
+    window.api?.terminalForget?.(id);
 
     if (activeId === id) {
       activeId = groupSessions(previousGroupId)[0]?.id || (sessions.size ? [...sessions.keys()][0] : null);
@@ -735,13 +765,12 @@ const TerminalManager = (() => {
   function onExit({ id }) {
     const session = sessions.get(id);
     if (!session) return;
-    if (session.agent) {
-      removeSession(id);
-      return;
-    }
     session.exited = true;
+    session.interrupting = false;
     session.term.writeln("");
-    session.term.writeln("\x1b[33mTerminal process exited. Press the trash icon to close this session.\x1b[0m");
+    session.term.writeln(session.agent
+      ? "\x1b[33mCommand exited. Press the trash icon to close this session.\x1b[0m"
+      : "\x1b[33mTerminal process exited. Press the trash icon to close this session.\x1b[0m");
     renderTabsList();
     updateEmptyState();
   }
@@ -858,6 +887,8 @@ const TerminalManager = (() => {
     ensureTerminal,
     openWithProject,
     setCwd,
+    setPanelOpen,
+    publishUserActiveTerminal,
   };
 })();
 

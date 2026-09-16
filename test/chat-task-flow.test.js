@@ -16,7 +16,7 @@ test("Agent tasks keep the two-mode catalog without a temporary checklist tool",
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_list"/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
   assert.match(modes, /const AGENT_TOOLS = Object\.freeze\(\[/);
-  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "read_file", "search_workspace"\]\)/);
+  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "read_file", "search_workspace", "view_active_terminal"\]\)/);
   assert.match(modes, /const MODE_TOOL_GROUPS = Object\.freeze\(\{ ask: SAFE_READ_TOOLS, agent: AGENT_TOOLS \}\)/);
   assert.doesNotMatch(modes, /"update_project_artifacts"/);
   assert.doesNotMatch(modes, /"query_knowledge"/);
@@ -159,12 +159,11 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(chatStyles, /#chat-pane::before[\s\S]*right: 10px/);
   assert.match(chatStyles, /#messages::-webkit-scrollbar-track[\s\S]*background: transparent !important/);
   assert.match(chatStyles, /#messages::-webkit-scrollbar-thumb[\s\S]*background: transparent !important/);
-  assert.match(renderer, /function syncChatScrollbarHover\(/);
+  assert.match(renderer, /function syncScrollerScrollbarHover\(/);
   assert.match(renderer, /function chatViewportMaxWidth\(/);
   assert.match(renderer, /window\.innerWidth \* 0\.5/);
   assert.match(renderer, /scrollbar-hover/);
-  assert.match(chatStyles, /#messages\.scrollbar-hover[\s\S]*rgba\(56, 56, 56, \.55\)/);
-  assert.match(chatStyles, /transition: background-color 160ms ease, opacity 160ms ease/);
+  assert.match(chatStyles, /#messages\.scrollbar-hover[\s\S]*rgba\(66, 66, 66, \.7\)/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*margin: var\(--chat-row-gap\) 0 0[\s\S]*padding: 0/);
   assert.doesNotMatch(chatStyles, /\.chat-sticky-user/);
 });
@@ -415,6 +414,7 @@ test("V3 checkpointing never hides or removes visible chat history", () => {
 
 test("stopped streamed responses enter history before the durable outcome is written", () => {
   const renderer = read("src/ui/bootstrap.js");
+  const main = read("src/app/electron/main.js");
   const finalizeStart = renderer.indexOf("const finalizeChatHistory = async (outcome) =>");
   const finalizeEnd = renderer.indexOf("const runIsVisible", finalizeStart);
   const finalizeBody = renderer.slice(finalizeStart, finalizeEnd);
@@ -426,6 +426,14 @@ test("stopped streamed responses enter history before the durable outcome is wri
   assert.match(renderer, /assistant\.appendContent\(delta\);[\s\S]*?syncAssistantDraftToHistory\(run, assistant\)/);
   assert.match(finalizeBody, /syncAssistantDraftToHistory\(run, assistant, \{ persist: false \}\)[\s\S]*?syncChatRunSession\(run, \{ persist: false \}\)[\s\S]*?finishChatHistoryBlock/);
   assert.match(stopBody, /syncAssistantDraftToHistory\(run, run\.assistant, \{ persist: false \}\)[\s\S]*?persistChatHistorySnapshot\(activeChatPersistenceScope, run\.session\)/);
+  assert.match(stopBody, /abortActiveChatRun\(run\)/);
+  assert.match(stopBody, /dropAutoContinuationsForSession/);
+  assert.match(renderer, /function abortActiveChatRun\([\s\S]*?abortChat\?\.\(\{ sessionId \}\)/);
+  assert.match(renderer, /isChatSessionStoppedByOperator/);
+  assert.match(main, /function abortAgentSession\(/);
+  assert.match(main, /key === prefix \|\| key\.startsWith\(`\$\{prefix\}::`\)/);
+  assert.match(main, /if \(!current \|\| current\.aborted/);
+  assert.doesNotMatch(stopBody, /manager\.stop|agent_cancelled/);
   assert.doesNotMatch(renderer, /runHistory\.splice\(historyStart\)/);
 });
 

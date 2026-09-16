@@ -837,7 +837,8 @@ body,
    thumbs painted (not overlay/hover-only). */
 #messages,
 .app-settings-content,
-.app-settings-tabs {
+.app-settings-tabs,
+.chat-history-body {
   overflow-y: scroll;
   scrollbar-gutter: stable;
   scrollbar-width: thin !important;
@@ -846,7 +847,8 @@ body,
 
 #messages::-webkit-scrollbar,
 .app-settings-content::-webkit-scrollbar,
-.app-settings-tabs::-webkit-scrollbar {
+.app-settings-tabs::-webkit-scrollbar,
+.chat-history-body::-webkit-scrollbar {
   width: 10px;
   height: 10px;
   display: block !important;
@@ -858,13 +860,16 @@ body,
 .app-settings-content::-webkit-scrollbar-track,
 .app-settings-content::-webkit-scrollbar-corner,
 .app-settings-tabs::-webkit-scrollbar-track,
-.app-settings-tabs::-webkit-scrollbar-corner {
+.app-settings-tabs::-webkit-scrollbar-corner,
+.chat-history-body::-webkit-scrollbar-track,
+.chat-history-body::-webkit-scrollbar-corner {
   background: transparent !important;
 }
 
 #messages::-webkit-scrollbar-thumb,
 .app-settings-content::-webkit-scrollbar-thumb,
-.app-settings-tabs::-webkit-scrollbar-thumb {
+.app-settings-tabs::-webkit-scrollbar-thumb,
+.chat-history-body::-webkit-scrollbar-thumb {
   min-width: 0;
   min-height: 24px;
   background: rgba(56, 56, 56, .55) !important;
@@ -876,7 +881,8 @@ body,
 
 #messages::-webkit-scrollbar-thumb:hover,
 .app-settings-content::-webkit-scrollbar-thumb:hover,
-.app-settings-tabs::-webkit-scrollbar-thumb:hover {
+.app-settings-tabs::-webkit-scrollbar-thumb:hover,
+.chat-history-body::-webkit-scrollbar-thumb:hover {
   background: rgba(66, 66, 66, .7) !important;
 }
 
@@ -2167,6 +2173,11 @@ body,
 .editor-tab-context-menu {
   background: var(--revamp-surface, var(--bg-0));
   border-color: var(--revamp-divider, var(--border));
+}
+
+#chat-history-popover {
+  background: var(--revamp-surface) !important;
+  border-color: var(--revamp-divider) !important;
 }
 
 .security-proxy-browser-menu button,

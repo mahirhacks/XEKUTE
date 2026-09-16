@@ -124,7 +124,7 @@ test("exec_command terminal visibility is an optional boolean that defaults show
   const property = tool.inputSchema.properties.show_in_terminal;
   assert.equal(property.type, "boolean");
   assert.equal(property.default, true);
-  assert.match(property.description, /true or omitted[\s\S]*in-app Terminal panel[\s\S]*Set false only for small background commands/i);
+  assert.match(property.description, /true or omitted[\s\S]*in-app Terminal panel[\s\S]*1\.5 seconds/i);
   assert.equal(validateInput({ command: "git status", context: "git status" }).ok, true);
   assert.equal(validateInput({ command: "npm test", context: "npm test", show_in_terminal: false }).ok, true);
 });
@@ -203,4 +203,127 @@ test("exec_command context is at most 5 words and is required for run and start"
   assert.equal(validateInput({ command: "echo ok" }).ok, false);
   assert.equal(validateInput({ operation: "status", process_id: "process-abc", context: "status peek" }).ok, false);
   assert.equal((validateInput({ command: "echo ok", context: "one two three four five six" })).error.code, "INVALID_EXEC_COMMAND_INPUT");
+});
+
+test("exec_command uses runtime.processManager per call without mutating the constructed manager", async () => {
+  const constructedCalls = [];
+  const runtimeCalls = [];
+  const constructed = {
+    async run(workspace, input, runtime) {
+      constructedCalls.push({ workspace, input, runtime });
+      return { ok: true, value: { processId: "process-constructed", status: "complete", exitCode: 0 } };
+    },
+  };
+  const perCall = {
+    async run(workspace, input, runtime) {
+      runtimeCalls.push({ workspace, input, runtime });
+      return { ok: true, value: { processId: "process-runtime", status: "complete", exitCode: 0 } };
+    },
+  };
+  const tool = createExecCommandTool({ processManager: constructed });
+  const withRuntime = await tool.execute(
+    { command: "echo one", context: "echo one" },
+    execContext(),
+    { processManager: perCall, commandCallId: "call-1", commandInvocationId: "inv-1" },
+  );
+  assert.equal(withRuntime.ok, true);
+  assert.equal(withRuntime.value.processId, "process-runtime");
+  assert.equal(withRuntime.value.commandCallId, "call-1");
+  assert.equal(withRuntime.value.commandInvocationId, "inv-1");
+  assert.equal(runtimeCalls.length, 1);
+  assert.equal(constructedCalls.length, 0);
+  const withoutRuntime = await tool.execute(
+    { command: "echo two", context: "echo two" },
+    execContext(),
+  );
+  assert.equal(withoutRuntime.ok, true);
+  assert.equal(withoutRuntime.value.processId, "process-constructed");
+  assert.equal(constructedCalls.length, 1);
+  assert.equal(runtimeCalls.length, 1);
+});
+
+test("exec_command maps failed run envelopes from value.status without overwriting structured errors", async () => {
+  const tool = createExecCommandTool({
+    processManager: {
+      async run() {
+        return { ok: false, value: { status: "timeout", timedOut: true } };
+      },
+      async start() {
+        return { ok: false, value: { status: "timeout" } };
+      },
+      async status() {
+        return { ok: false, value: { status: "stopped" } };
+      },
+      async stop() {
+        return { ok: false, value: { status: "stopped" } };
+      },
+      async list() {
+        return { ok: false, value: { status: "timeout" } };
+      },
+    },
+  });
+  const timeout = await tool.execute({ command: "sleep 1", context: "sleep one" }, execContext(), { commandCallId: "c-timeout" });
+  assert.equal(timeout.ok, false);
+  assert.equal(timeout.error?.code, "EXEC_COMMAND_TIMEOUT");
+  assert.equal(timeout.value.commandCallId, "c-timeout");
+  const stoppedTool = createExecCommandTool({
+    processManager: { async run() { return { ok: false, value: { status: "stopped" } }; } },
+  });
+  const stopped = await stoppedTool.execute({ command: "sleep 1", context: "sleep one" }, execContext());
+  assert.equal(stopped.error?.code, "EXEC_COMMAND_STOPPED");
+  const failedTool = createExecCommandTool({
+    processManager: { async run() { return { ok: false, value: { status: "failed", exitCode: 7 } }; } },
+  });
+  const failed = await failedTool.execute({ command: "false", context: "false cmd" }, execContext());
+  assert.equal(failed.error?.code, "EXEC_COMMAND_EXIT_FAILED");
+  assert.match(failed.error.message, /7/);
+  const scoped = createExecCommandTool({
+    processManager: {
+      async run() {
+        return { ok: false, error: { code: "WORKSPACE_OUT_OF_SCOPE", message: "nope", retryable: false }, value: { status: "timeout" } };
+      },
+    },
+  });
+  const kept = await scoped.execute({ command: "echo x", context: "echo x" }, execContext());
+  assert.equal(kept.error.code, "WORKSPACE_OUT_OF_SCOPE");
+  const start = await tool.execute({ operation: "start", command: "sleep 1", context: "sleep one" }, execContext());
+  assert.notEqual(start.error?.code, "EXEC_COMMAND_TIMEOUT");
+  const status = await tool.execute({ operation: "status", process_id: "process-abc" }, execContext());
+  assert.notEqual(status.error?.code, "EXEC_COMMAND_STOPPED");
+  const stop = await tool.execute({ operation: "stop", process_id: "process-abc" }, execContext());
+  assert.notEqual(stop.error?.code, "EXEC_COMMAND_STOPPED");
+  const list = await tool.execute({ operation: "list" }, execContext());
+  assert.notEqual(list.error?.code, "EXEC_COMMAND_TIMEOUT");
+});
+
+test("exec_command stop cannot interrupt an operator terminal", async () => {
+  const stops = [];
+  const tool = createExecCommandTool({
+    processManager: {
+      async stop(_workspace, input) {
+        stops.push(input);
+        return { ok: true, value: { status: "stopped" } };
+      },
+    },
+  });
+  const terminals = new Map([
+    ["term-1", { agent: false, ownerId: 3 }],
+    ["agent-1", { agent: true, ownerId: 3, processId: "process-agent-1" }],
+  ]);
+  const denied = await tool.execute(
+    { operation: "stop", process_id: "term-1" },
+    execContext(),
+    { terminals },
+  );
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error.code, "TERMINAL_CONTROL_DENIED");
+  assert.equal(stops.length, 0);
+
+  const allowed = await tool.execute(
+    { operation: "stop", process_id: "agent-1" },
+    execContext(),
+    { terminals },
+  );
+  assert.equal(allowed.ok, true);
+  assert.equal(stops[0].process_id, "process-agent-1");
 });

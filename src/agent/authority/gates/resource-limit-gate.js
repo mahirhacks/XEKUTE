@@ -28,12 +28,13 @@ function requestedResources(toolName, args = {}) {
     Number(args?.execution?.concurrency || args?.concurrency) || 1,
     ...barrierCounts.values(),
   );
+  const operation = String(args.operation || "run");
   return {
     memoryBytes: Number(args?.resources?.memoryBytes || 0),
     cpuPercent: Number(args?.resources?.cpuPercent || 0),
     diskBytes: Number(args?.resources?.diskBytes || 0),
     outputBytes: Number(args?.resources?.outputBytes || 0),
-    processCount: toolName === "exec_command" && String(args.operation || "run") === "start" ? 1 : 0,
+    processCount: toolName === "exec_command" && (operation === "run" || operation === "start") ? 1 : 0,
     concurrency,
     repetitions,
   };

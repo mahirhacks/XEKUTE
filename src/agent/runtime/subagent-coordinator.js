@@ -282,8 +282,8 @@ function createSubagentCoordinator({
       if (parent.resultQueue[0]?.resultId === resultId && !stopped) parent.resultQueue.shift();
       parent.processingResultId = "";
       if (parent.announcedResultId === resultId) parent.announcedResultId = "";
-      if (stopped) parent.pausedResultId = resultId;
     }
+    if (stopped) parent.pausedResultId = resultId || "OPERATOR_STOPPED";
     parent.parentBusy = false;
     if (!stopped) notifyResult(parent);
     return { ok: true, state: parent.parentBusy ? "BUSY" : parent.processingResultId ? "PROCESSING_RESULT" : "IDLE", queueLength: parent.resultQueue.length };
@@ -334,6 +334,17 @@ function createSubagentCoordinator({
     return child
       ? cancelChild(child.childInvocationId, child.parentKey)
       : { ok: false, code: "UNKNOWN_SUBAGENT", error: "The delegated child no longer exists." };
+  }
+
+  function cancelChildrenForParent(parentKey, reason = "OPERATOR_STOPPED") {
+    const parent = parents.get(String(parentKey || ""));
+    if (!parent) return { ok: true, cancelled: 0 };
+    const open = [...children.values()].filter((child) => (
+      child.parentKey === parent.parentKey
+      && (child.status === "queued" || child.status === "working")
+    ));
+    for (const child of open) cancelChild(child.childInvocationId, parent.parentKey, reason);
+    return { ok: true, cancelled: open.length };
   }
 
   function pendingResultsForSender(senderId = "") {
@@ -414,6 +425,7 @@ function createSubagentCoordinator({
     claimResult,
     cancelChild,
     cancelChildBySession,
+    cancelChildrenForParent,
     pendingResultsForSender,
     shutdown,
     snapshot,

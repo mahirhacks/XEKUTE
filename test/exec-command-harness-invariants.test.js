@@ -20,6 +20,8 @@ test("exec_command harness invariants keep review timer, PTY channels, and check
   assert.match(terminalIpc, /terminal:write/);
   assert.match(terminalIpc, /terminal:resize/);
   assert.match(terminalIpc, /terminal:kill/);
+  assert.match(terminalIpc, /terminal:setActive/);
+  assert.match(terminalIpc, /terminal:forget/);
 
   const handleBackground = bootstrap.slice(
     bootstrap.indexOf("async function handleBackgroundWaitEvent"),

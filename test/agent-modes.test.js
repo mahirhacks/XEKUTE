@@ -10,11 +10,11 @@ test("every mode exposes the canonical surface and does not depend on authority 
   assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
   const ask = ModeRegistry.MODE_TOOL_GROUPS.ask;
   const agent = ModeRegistry.MODE_TOOL_GROUPS.agent;
-  assert.equal(ask.length, 3);
-  assert.equal(agent.length, 10);
+  assert.equal(ask.length, 4);
+  assert.equal(agent.length, 11);
   assert.equal(ModeRegistry.MODE_TOOL_GROUPS.hypothesis, undefined);
   assert.equal(ModeRegistry.MODE_TOOL_GROUPS.plan, undefined);
-  assert.deepEqual(ask, ["ask_questions", "read_file", "search_workspace"]);
+  assert.deepEqual(ask, ["ask_questions", "read_file", "search_workspace", "view_active_terminal"]);
   assert.equal(ask.includes("ingest_traffic"), false);
   assert.equal(ask.includes("exec_command"), false);
   assert.equal(agent.includes("update_project_artifacts"), false);

@@ -3,6 +3,8 @@
 const { assertToolAdapter } = require("../../../contracts/tool/tool-adapter");
 const { isRestrictedToolContext } = require("../../../contracts/tool/execution-context");
 const { validateExecCommandContext } = require("./exec-command-context.js");
+const { findLiveTerminal } = require("../../../app/services/terminal/terminal-ownership.js");
+const { denyUserTerminalControl } = require("../../../app/services/terminal/active-terminal-catalog.js");
 
 const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -16,7 +18,7 @@ const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
     cwd: { type: "string", description: "Working directory inside the active workspace. Defaults to the workspace root." },
     env: { type: "object", additionalProperties: { type: "string" }, description: "Environment variables merged over the application environment for this process." },
     timeout_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "Optional hard kill in milliseconds. Zero or omission means no kill timer. Distinct from wait_ms." },
-    show_in_terminal: { type: "boolean", default: true, description: "For run/start only. When true or omitted, the command streams into Xekute's in-app Terminal panel. Set false only for small background commands that should not open a terminal tab. Commands never open an external OS console." },
+    show_in_terminal: { type: "boolean", default: true, description: "For run/start only. When true or omitted, the command streams into Xekute's in-app Terminal panel immediately. Set false to hide short commands; the host still opens a terminal tab if the command runs longer than 1.5 seconds. Commands never open an external OS console." },
     context: { type: "string", description: "For run/start only. Required operator label: at most 5 whitespace-separated words. Extra words are rejected before the command starts." },
     process_id: { type: "string", description: "Durable process-… handle used by status or stop. Not an OS PID." },
     tail_chars: { type: "integer", minimum: 0, maximum: 200000, description: "Maximum recent stdout/stderr characters returned by status." },
@@ -119,6 +121,33 @@ function validateInput(input) {
   return { ok: true };
 }
 
+function applyExecCommandEnvelope(result, { operation, runtime } = {}) {
+  const next = result && typeof result === "object" ? result : { ok: false };
+  const callId = String(runtime?.commandCallId || "");
+  const invocationId = String(runtime?.commandInvocationId || "");
+  if (callId || invocationId) {
+    if (!next.value || typeof next.value !== "object" || Array.isArray(next.value)) next.value = {};
+    if (callId) next.value.commandCallId = callId;
+    if (invocationId) next.value.commandInvocationId = invocationId;
+  }
+  if (operation === "run" && next.ok === false && !next.error?.code) {
+    const status = next.value?.status;
+    const timedOut = Boolean(next.timedOut || status === "timeout");
+    if (timedOut) {
+      next.error = { code: "EXEC_COMMAND_TIMEOUT", message: "The command reached its explicit timeout.", retryable: false };
+    } else if (status === "stopped") {
+      next.error = { code: "EXEC_COMMAND_STOPPED", message: "The command was stopped.", retryable: false };
+    } else {
+      next.error = {
+        code: "EXEC_COMMAND_EXIT_FAILED",
+        message: `The command exited with code ${next.value?.exitCode ?? next.exitCode}.`,
+        retryable: false,
+      };
+    }
+  }
+  return next;
+}
+
 function createExecCommandTool({ processManager = null } = {}) {
   const adapter = {
     name: "exec_command",
@@ -139,10 +168,22 @@ function createExecCommandTool({ processManager = null } = {}) {
       }
 
       const operation = String(input.operation || "run");
-      if (!processManager || typeof processManager[operation] !== "function") {
+      const constructedProcessManager = processManager;
+      const manager = runtime.processManager || constructedProcessManager;
+      if (!manager || typeof manager[operation] !== "function") {
         return { ok: false, error: { code: "DURABLE_PROCESS_PROVIDER_UNAVAILABLE", message: "Durable process management is unavailable in this execution environment.", retryable: false } };
       }
-      return processManager[operation](executionContext.workspace?.root, input, runtime);
+      let payload = input;
+      if (operation === "stop" && runtime.terminals) {
+        const { record } = findLiveTerminal(runtime.terminals, input.process_id);
+        if (record) {
+          const denied = denyUserTerminalControl(record);
+          if (denied) return denied;
+          if (record.processId) payload = { ...input, process_id: record.processId };
+        }
+      }
+      const result = await manager[operation](executionContext.workspace?.root, payload, runtime);
+      return applyExecCommandEnvelope(result, { operation, runtime });
     },
   };
 

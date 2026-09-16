@@ -24,6 +24,7 @@ const MUTATING_TOOL_NAMES = new Set([
 
 const READ_ONLY_TOOL_NAMES = new Set([
   "ask_questions",
+  "view_active_terminal",
   "read_file",
   "search_workspace",
   "replay_request",
@@ -73,7 +74,8 @@ function toolsForProfile(profile, _registry = undefined, tools = []) {
   }
   return available.filter((tool) => {
     const name = String(tool?.function?.name || "");
-    return group.includes(name) || name.startsWith("mcp__");
+    if (name.startsWith("mcp__")) return key !== "ask";
+    return group.includes(name);
   });
 }
 

@@ -85,6 +85,21 @@ function registerExecCommand(toolRegistry, adapter) {
   });
 }
 
+function registerViewActiveTerminal(toolRegistry, adapter) {
+  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
+  return toolRegistry.register({
+    name: "view_active_terminal",
+    adapter,
+    inputSchema: adapter.inputSchema,
+    description: adapter.description,
+    metadata: {
+      targetTypes: ["process", "workspace"],
+      mutating: false,
+      reversible: true,
+    },
+  });
+}
+
 function registerAskQuestions(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
@@ -216,6 +231,7 @@ module.exports = {
   toOpenAITools,
   registerAskQuestions,
   registerExecCommand,
+  registerViewActiveTerminal,
   registerReadFile,
   registerSearchWorkspace,
   registerApplyPatch,

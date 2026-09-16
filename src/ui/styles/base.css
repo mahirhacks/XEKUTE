@@ -3289,23 +3289,8 @@ html.panel-resizing iframe {
   color: var(--fg);
 }
 
-.terminal-tab-item.agent {
-  color: #8ad4ff;
-}
-
-.terminal-tab-item.agent.active {
-  background: rgba(56, 139, 253, 0.18);
-  color: #d8ecff;
-}
-
-.terminal-tab-item.agent .terminal-tab-status {
-  color: #79c0ff;
-  font-weight: 400;
-  letter-spacing: 0.04em;
-}
-
 .terminal-instance.agent-terminal {
-  border-top: 1px solid rgba(56, 139, 253, 0.35);
+  border-top: none;
 }
 
 .terminal-tab-item.exited {

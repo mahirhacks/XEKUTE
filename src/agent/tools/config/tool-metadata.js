@@ -5,6 +5,7 @@
 const TOOL_REGISTRY_NAMES = Object.freeze([
   "ask_questions",
   "exec_command",
+  "view_active_terminal",
   "read_file",
   "search_workspace",
   "apply_patch",
@@ -18,6 +19,7 @@ const TOOL_REGISTRY_NAMES = Object.freeze([
 const TOOL_METADATA = Object.freeze({
   ask_questions: Object.freeze({ mutating: false, reversible: true, interactive: true, targetTypes: ["operator", "interaction"] }),
   exec_command: Object.freeze({ mutating: true, reversible: false, targetTypes: ["process", "workspace"] }),
+  view_active_terminal: Object.freeze({ mutating: false, reversible: true, targetTypes: ["process", "workspace"] }),
   read_file: Object.freeze({ mutating: false, reversible: true, targetTypes: ["file", "workspace"] }),
   search_workspace: Object.freeze({ mutating: false, reversible: true, targetTypes: ["file", "workspace"] }),
   apply_patch: Object.freeze({ mutating: true, reversible: true, targetTypes: ["file", "workspace"] }),
@@ -29,7 +31,7 @@ const TOOL_METADATA = Object.freeze({
 });
 
 const ALL_MODE_TOOLS = Object.freeze([...TOOL_REGISTRY_NAMES]);
-const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "read_file", "search_workspace"]);
+const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "read_file", "search_workspace", "view_active_terminal"]);
 const MODE_TOOL_GROUPS = Object.freeze({
   ask: SAFE_READ_TOOLS,
   agent: ALL_MODE_TOOLS,

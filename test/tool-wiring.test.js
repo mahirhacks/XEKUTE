@@ -1,6 +1,6 @@
 "use strict";
 
-// Tool-wiring tests: the DI container builds the 10-tool registry, and the
+// Tool-wiring tests: the DI container builds the canonical tool registry, and the
 // execution path (registry adapter + restricted context projection) works
 // end-to-end for apply_patch/read_file/search_workspace.
 
@@ -19,7 +19,7 @@ const { createExecCommandTool } = require("../src/agent/tools/process/exec-comma
 
 const EXPECTED_TOOLS = [
   "ask_questions",
-  "exec_command", "read_file", "search_workspace", "apply_patch",
+  "exec_command", "view_active_terminal", "read_file", "search_workspace", "apply_patch",
   "manage_identity", "replay_request",
   "browser_action", "delegate_agent", "web_research",
 ];

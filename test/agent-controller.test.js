@@ -1286,3 +1286,159 @@ test("model rounds emit stop only when finishReason is stop and there are no too
   assert.equal(roundsEmitted[1].stop, true);
   assert.equal(result.finalText, "The start script is electron .");
 });
+
+function execToolCall(id, args = {}) {
+  return {
+    id,
+    type: "function",
+    function: { name: "exec_command", arguments: { command: `echo ${id}`, context: "echo command", ...args } },
+  };
+}
+
+test("a single exec_command run seals its result as soon as it finishes", async () => {
+  const log = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "run one",
+    tools: [{ type: "function", function: { name: "exec_command", description: "run", parameters: {} } }],
+    sendEvent(event) {
+      if (event.type === "tool_result") log.push(`result:${event.tool.callId}`);
+    },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) return { fullText: "", toolCalls: [execToolCall("call-one")] };
+      return { fullText: "done", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall }) {
+      log.push(`start:${toolCall.id}`);
+      log.push(`end:${toolCall.id}`);
+      return { ok: true, value: { stdout: toolCall.id, exitCode: 0 } };
+    },
+  });
+  assert.equal(result.ok, true, result.error || "");
+  assert.deepEqual(log, ["start:call-one", "end:call-one", "result:call-one"]);
+});
+
+test("multiple exec_command runs seal agent-facing results in call order", async () => {
+  const log = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "run three",
+    tools: [{ type: "function", function: { name: "exec_command", description: "run", parameters: {} } }],
+    sendEvent(event) {
+      if (event.type === "tool_start") log.push(`start-event:${event.tool.callId}`);
+      if (event.type === "tool_result") log.push(`result:${event.tool.callId}:${event.result?.error || event.result?.value?.stdout || ""}`);
+    },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) {
+        return {
+          fullText: "",
+          toolCalls: [execToolCall("call-1"), execToolCall("call-2"), execToolCall("call-3")],
+        };
+      }
+      return { fullText: "done", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall }) {
+      log.push(`exec:${toolCall.id}`);
+      if (toolCall.id === "call-2") return { ok: false, error: "boom", value: { stdout: "call-2", exitCode: 1 } };
+      return { ok: true, value: { stdout: toolCall.id, exitCode: 0 } };
+    },
+  });
+  assert.equal(result.ok, true, result.error || "");
+  assert.deepEqual(log, [
+    "start-event:call-1",
+    "exec:call-1",
+    "result:call-1:call-1",
+    "start-event:call-2",
+    "exec:call-2",
+    "result:call-2:boom",
+    "start-event:call-3",
+    "exec:call-3",
+    "result:call-3:call-3",
+  ]);
+});
+
+test("mixed run and non-run tools seal in call order", async () => {
+  const log = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "run mixed",
+    tools: [
+      { type: "function", function: { name: "exec_command", description: "run", parameters: {} } },
+      { type: "function", function: { name: "read_file", description: "read", parameters: {} } },
+    ],
+    sendEvent(event) {
+      if (event.type === "tool_result") log.push(`result:${event.tool.toolName}:${event.tool.callId}`);
+    },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) {
+        return {
+          fullText: "",
+          toolCalls: [
+            execToolCall("call-run-1"),
+            {
+              id: "call-read",
+              type: "function",
+              function: { name: "read_file", arguments: { path: "README.md" } },
+            },
+            execToolCall("call-run-2"),
+          ],
+        };
+      }
+      return { fullText: "done", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall }) {
+      log.push(`exec:${toolCall.id}`);
+      return { ok: true, value: { stdout: toolCall.id } };
+    },
+  });
+  assert.equal(result.ok, true, result.error || "");
+  assert.deepEqual(log, [
+    "exec:call-run-1",
+    "result:exec_command:call-run-1",
+    "exec:call-read",
+    "result:read_file:call-read",
+    "exec:call-run-2",
+    "result:exec_command:call-run-2",
+  ]);
+  const toolMessages = result.appendedMessages.filter((message) => message.role === "tool");
+  assert.deepEqual(toolMessages.map((message) => message.tool_name), ["exec_command", "read_file", "exec_command"]);
+});
+
+test("aborting an agent run does not execute remaining queued commands", async () => {
+  const log = [];
+  const abort = new AbortController();
+  let rounds = 0;
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "run two",
+    signal: abort.signal,
+    tools: [{ type: "function", function: { name: "exec_command", description: "run", parameters: {} } }],
+    sendEvent(event) {
+      if (event.type === "tool_result") log.push(`result:${event.tool.callId}`);
+    },
+    async runModelRound() {
+      rounds += 1;
+      if (rounds === 1) return { fullText: "", toolCalls: [execToolCall("call-a"), execToolCall("call-b")] };
+      return { fullText: "should not happen", toolCalls: [] };
+    },
+    async executeToolCall({ toolCall }) {
+      log.push(`exec:${toolCall.id}`);
+      if (toolCall.id === "call-a") abort.abort();
+      return { ok: true, aborted: toolCall.id === "call-a", value: { stdout: toolCall.id } };
+    },
+  });
+  assert.equal(result.aborted, true);
+  assert.deepEqual(log, ["exec:call-a", "result:call-a"]);
+  assert.equal(log.includes("exec:call-b"), false);
+});
+

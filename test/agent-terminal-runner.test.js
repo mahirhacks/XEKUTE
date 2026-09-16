@@ -193,30 +193,39 @@ test("typed exec accepts an absolute executable path", async () => {
 test("canonical agent exec projects terminal output only when explicitly requested", () => {
   const runner = fs.readFileSync(path.join(__dirname, "..", "src", "app", "services", "terminal", "terminal-runner.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
+  const hostSource = fs.readFileSync(path.join(__dirname, "..", "src", "app", "services", "terminal", "agent-terminal-host.js"), "utf8");
 
-  assert.match(main, /runSupervisedCommand/);
-  assert.match(main, /const exposeTerminal = input\.show_in_terminal !== false/);
-  assert.match(main, /if \(exposeTerminal\) sendTerminalData/);
-  assert.match(main, /if \(result\?\.value\) result\.value\.showInTerminal = terminal\.exposeTerminal/);
-  assert.match(main, /createSupervisedTerminal/);
-  assert.doesNotMatch(main.slice(main.indexOf("const executeRaw = async"), main.indexOf("} else {", main.indexOf("const executeRaw = async"))), /terminalHost\.runShellCommand/);
-  assert.doesNotMatch(main.slice(main.indexOf("const executeRaw = async"), main.indexOf("} else {", main.indexOf("const executeRaw = async"))), /terminalHost\.runExecutable\(workspace, args\.executable/);
-  assert.match(main, /ipcMain\.handle\("tools:execute", async \(_event, payload = \{\}\) => executeToolCall\(\{ workspace: payload\.workspace, toolCall: payload\.toolCall \|\| payload \}\)\)/);
+  assert.doesNotMatch(main, /function createAgentTerminalHost/);
+  assert.match(hostSource, /const wantVisible = input\.show_in_terminal !== false/);
+  assert.match(hostSource, /if \(decision\.live\) sendTerminalData/);
+  assert.match(hostSource, /result\.value\.showInTerminal = revealed/);
+  assert.match(hostSource, /createSupervisedTerminal/);
+  assert.doesNotMatch(hostSource, /createProcessCommandQueue/);
+  const executeRawStart = main.indexOf("const executeRaw = async");
+  const executeRawEnd = main.indexOf("const result = await container.invocationPipeline.invoke");
+  const executeRaw = main.slice(executeRawStart, executeRawEnd);
+  assert.doesNotMatch(executeRaw, /runShellCommand/);
+  assert.doesNotMatch(executeRaw, /runExecutable/);
+  assert.doesNotMatch(executeRaw, /runSupervisedCommand/);
+  assert.doesNotMatch(executeRaw, /name === "exec_command" && terminalHost/);
+  assert.doesNotMatch(executeRaw, /commandCallId: commandRuntime\.commandCallId/);
+  assert.match(executeRaw, /commandCallId: String\(toolCall\?\.id \|\| toolCall\?\.callId \|\| ""\)/);
+  assert.match(executeRaw, /commandInvocationId: String\(context\.invocationId \|\| ""\)/);
+  assert.match(executeRaw, /\.\.\.\(processManager \? \{ processManager \} : \{\}\)/);
+  assert.doesNotMatch(executeRaw, /\bpid:/);
+  assert.match(main, /ipcMain\.handle\("tools:execute", async \(_event, payload = \{\}\) => executeToolCall\(\{ workspace: payload\.workspace, toolCall: payload\.toolCall \|\| payload, ownerId: _event\.sender\.id, sessionId: payload\.sessionId \|\| "" \}\)\)/);
   assert.doesNotMatch(main, /ipcMain\.handle\("tools:execute"[\s\S]{0,200}terminalHost/);
+  assert.doesNotMatch(main, /ipcMain\.handle\("tools:execute"[\s\S]{0,200}processManager/);
   assert.match(main, /typeof container\.durableProcessManager\?\.run === "function"/);
   assert.doesNotMatch(main, /name === "exec_command" \? Boolean\(terminalHost\?\.runExecutable\)/);
-  const executeRaw = main.slice(main.indexOf("const executeRaw = async"), main.indexOf("} else {", main.indexOf("const executeRaw = async")));
-  assert.match(executeRaw, /commandCallId: commandRuntime\.commandCallId/);
-  assert.match(executeRaw, /commandInvocationId: commandRuntime\.commandInvocationId/);
-  assert.doesNotMatch(executeRaw, /\bpid:/);
   assert.match(runner, /function runShellCommand/);
   assert.match(runner, /exposeTerminal = false/);
   assert.match(runner, /if \(exposeTerminal\) sendTerminalData/);
   assert.match(runner, /if \(exposeTerminal\) \{[\s\S]*?announceAgentTerminal/);
-  const terminalHost = main.slice(main.indexOf("function createAgentTerminalHost"), main.indexOf("const assessmentIngestQueues"));
-  assert.doesNotMatch(terminalHost, /artifactProvenance/, "terminal supervision must not reference tool-only provenance outside its scope");
-  assert.match(main, /commandCallId: String\(toolCall\?\.id \|\| toolCall\?\.callId \|\| ""\)/);
-  assert.match(terminalHost, /type: "terminal_complete"[\s\S]{0,300}commandCallId[\s\S]{0,100}commandInvocationId/);
+  assert.doesNotMatch(hostSource, /artifactProvenance/, "terminal supervision must not reference tool-only provenance outside its scope");
+  assert.match(hostSource, /type: "terminal_complete"[\s\S]{0,300}commandCallId[\s\S]{0,100}commandInvocationId/);
+  assert.match(hostSource, /HIDDEN_COMMAND_REVEAL_MS/);
+  assert.match(main, /processManager: agentTerminalHost/);
 });
 
 test("typed exec cancellation settles cleanly and removes its AbortSignal listener", async () => {

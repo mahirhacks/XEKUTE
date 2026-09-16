@@ -170,6 +170,8 @@ const api = {
   terminalWrite: (id, data) => ipcRenderer.invoke("terminal:write", { id, data }),
   terminalResize: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", { id, cols, rows }),
   terminalKill: (id) => ipcRenderer.invoke("terminal:kill", { id }),
+  terminalSetActive: (payload) => ipcRenderer.invoke("terminal:setActive", payload),
+  terminalForget: (id) => ipcRenderer.invoke("terminal:forget", { id }),
   onTerminalData: (cb) => ipcRenderer.on("terminal:data", (_e, payload) => cb(payload)),
   onTerminalExit: (cb) => ipcRenderer.on("terminal:exit", (_e, payload) => cb(payload)),
   onMenuAction: (cb) => ipcRenderer.on("app:menu", (_e, action) => cb(action)),

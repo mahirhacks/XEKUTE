@@ -40,7 +40,7 @@ const appController = new globalThis.XekuteCore.AppController(xekuteStore);
 const appLifecycle = new globalThis.XekuteCore.LifecycleCollection();
 const ToolMap = globalThis.ToolMap || (() => {
   const MODE_TOOL_GROUPS = globalThis.XekuteOperatingModes?.MODE_TOOL_GROUPS || {
-    ask: ["ask_questions", "read_file", "search_workspace"],
+    ask: ["ask_questions", "read_file", "search_workspace", "view_active_terminal"],
     agent: null,
   };
   const MUTATING = new Set(["apply_patch", "manage_identity"]);
@@ -646,6 +646,7 @@ let deletingExplorerItem = false;
 let deletingCustomEntries = false;
 let chatHistory  = [];
 const activeChatRuns = new Map();
+const chatSessionsStoppedByOperator = new Set();
 const chatSendInFlight = new Set();
 const hiddenAgentRuntimeQueues = new Map();
 const chatSessionsNeedingAttention = new Set();
@@ -1053,12 +1054,13 @@ function isStubToolStatusLabel(label = "") {
   return /^(Working|Queued|Completed|Done)(?:\.{0,3}|\u2026)?$/i.test(String(label || "").trim());
 }
 
-const KEEPABLE_TOOL_LABEL = /^(Reading page|Read page|Searching web|Searched web|Creating folder|Created folder|Updating identity|Updated identity|Running Command|Ran Command|Reading|Read|Editing|Edited|Searching|Searched|Deleting|Deleted|Creating|Created|Moving|Moved|Browsing|Browsed|Replaying|Replayed|Delegating|Delegated)\b/i;
+const KEEPABLE_TOOL_LABEL = /^(Reading page|Read page|Searching web|Searched web|Creating folder|Created folder|Updating identity|Updated identity|Running Command|Ran Command|Viewing terminal|Viewed terminal|Reading|Read|Editing|Edited|Searching|Searched|Deleting|Deleted|Creating|Created|Moving|Moved|Browsing|Browsed|Replaying|Replayed|Delegating|Delegated)\b/i;
 
 const KEEPABLE_TOOL_ACTIONS = new Set([
   "read_file",
   "apply_patch",
   "exec_command",
+  "view_active_terminal",
   "search_workspace",
   "web_research",
   "browser_action",
@@ -1070,6 +1072,7 @@ const KEEPABLE_TOOL_ACTIONS = new Set([
 
 const RUNNING_TOOL_VERBS = [
   ["Running Command", "Ran Command"],
+  ["Viewing terminal", "Viewed terminal"],
   ["Updating identity", "Updated identity"],
   ["Creating folder", "Created folder"],
   ["Searching web", "Searched web"],
@@ -14602,6 +14605,12 @@ function exploredToolParts(tool = {}, result = {}, phase = "success") {
   if (phase === "error") return { verb: "Failed", detail: file };
   const running = phase === "running";
   if (isAskQuestionsTool(tool)) return { verb: "", detail: "" };
+  if (action === "view_active_terminal") {
+    return {
+      verb: running ? "Viewing terminal" : "Viewed terminal",
+      detail: String(tool.args?.terminal_id || result?.user_active_terminal || result?.terminal?.terminal_id || "active"),
+    };
+  }
   if (isAgentTerminalTool(tool) || /^(exec_command)$/.test(action) || /command|terminal|process|shell|script|exec/.test(action)) {
     return {
       verb: running ? "Running Command" : "Ran Command",
@@ -15234,7 +15243,7 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
   const resultPath = toolTargetPath(tool, uiResult);
   if (resultPath) card.dataset.file = resultPath;
   card.dataset.completedLabel = successText;
-  if (result?.terminalId) {
+  if (result?.terminalId && result.showInTerminal !== false) {
     successText = result.mode === "terminal_wait" || result.mode === "subagent_wait" ? "waiting" : "Terminal ready";
     TerminalManager.attachAgentSession({
       id: result.terminalId,
@@ -15361,22 +15370,29 @@ messages.addEventListener("scroll", () => {
   syncChatStickyMask();
 }, { passive: true });
 
-function syncChatScrollbarHover(event) {
-  if (!messages || !event) return;
-  const rect = messages.getBoundingClientRect();
-  const reservedWidth = messages.offsetWidth - messages.clientWidth;
+function syncScrollerScrollbarHover(scroller, event) {
+  if (!scroller || !event) return;
+  const rect = scroller.getBoundingClientRect();
+  const reservedWidth = scroller.offsetWidth - scroller.clientWidth;
   const scrollbarLaneWidth = Math.max(12, reservedWidth + 2);
   const inScrollbarLane = event.clientX >= rect.right - scrollbarLaneWidth
     && event.clientX <= rect.right
     && event.clientY >= rect.top
     && event.clientY <= rect.bottom;
-  messages.classList.toggle("scrollbar-hover", inScrollbarLane);
+  scroller.classList.toggle("scrollbar-hover", inScrollbarLane);
 }
 
-messages.addEventListener("pointermove", syncChatScrollbarHover, { passive: true });
-messages.addEventListener("mousemove", syncChatScrollbarHover, { passive: true });
-messages.addEventListener("pointerleave", () => messages.classList.remove("scrollbar-hover"), { passive: true });
-messages.addEventListener("mouseleave", () => messages.classList.remove("scrollbar-hover"), { passive: true });
+function bindScrollbarHoverLane(scroller) {
+  if (!scroller) return;
+  const sync = (event) => syncScrollerScrollbarHover(scroller, event);
+  scroller.addEventListener("pointermove", sync, { passive: true });
+  scroller.addEventListener("mousemove", sync, { passive: true });
+  scroller.addEventListener("pointerleave", () => scroller.classList.remove("scrollbar-hover"), { passive: true });
+  scroller.addEventListener("mouseleave", () => scroller.classList.remove("scrollbar-hover"), { passive: true });
+}
+
+bindScrollbarHoverLane(messages);
+bindScrollbarHoverLane(chatHistoryBody);
 
 function animateStreamDelta(container, delta) {
   if (!container || !String(delta || "").trim()) return;
@@ -15714,7 +15730,18 @@ function showCommandApprovalPanel({
     button.addEventListener("click", () => finish(button.dataset.commandDecision === "approve" ? "approve" : "deny"));
   });
 
-  pendingComposerQuestionsBySession.set(ownerSessionId, { sessionId: ownerSessionId, block, promise, finish });
+  pendingComposerQuestionsBySession.set(ownerSessionId, {
+    sessionId: ownerSessionId,
+    block,
+    promise,
+    finish,
+    abort: () => {
+      if (settled) return;
+      settled = true;
+      dismissPanel();
+      resolveQuestions({ answers: [], skipped: true, aborted: true, requestId });
+    },
+  });
   syncComposerQuestionsForActiveSession();
   return promise;
 }
@@ -15881,6 +15908,7 @@ function showComposerQuestionsPanel({
   syncQuestionStep();
 
   let resolveQuestions;
+  let settled = false;
   const promise = new Promise((resolve) => { resolveQuestions = resolve; });
 
   const collectAnswers = () => {
@@ -15913,6 +15941,8 @@ function showComposerQuestionsPanel({
   };
 
   const finish = (skipped = false) => {
+    if (settled) return;
+    settled = true;
     const answers = skipped ? [] : collectAnswers();
     block.dataset.decision = skipped ? "skipped" : "answered";
     block.querySelectorAll("button, input, textarea").forEach((el) => { el.disabled = true; });
@@ -15952,7 +15982,18 @@ function showComposerQuestionsPanel({
   });
   block.querySelector("[data-questions-action='skip']").addEventListener("click", () => finish(true));
 
-  pendingComposerQuestionsBySession.set(ownerSessionId, { sessionId: ownerSessionId, block, promise, finish });
+  pendingComposerQuestionsBySession.set(ownerSessionId, {
+    sessionId: ownerSessionId,
+    block,
+    promise,
+    finish,
+    abort: () => {
+      if (settled) return;
+      settled = true;
+      dismissPanel();
+      resolveQuestions({ answers: [], skipped: true, aborted: true, requestId });
+    },
+  });
   syncComposerQuestionsForActiveSession();
   return promise;
 }
@@ -17384,6 +17425,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
   if (!internal) {
     if (!text || isChatSessionRunning(targetSessionId) || chatSendInFlight.has(targetSessionId)) return;
     chatSendInFlight.add(targetSessionId);
+    clearChatSessionStoppedByOperator(chatSessions.find((session) => session.id === targetSessionId) || { id: targetSessionId });
   } else if (!text || isChatSessionRunning(targetSessionId)) return;
   try {
   if (!internal && isDelegatedChildRunLocked()) {
@@ -17896,14 +17938,76 @@ function stopGeneration() {
   const run = activeSessionRun();
   if (!run || run.state !== "running") return;
   run.stopRequested = true;
+  markChatSessionStoppedByOperator(run);
+  dismissComposerQuestionsForStop(run);
+  dropAutoContinuationsForSession(run.sessionId);
+  dropAutoContinuationsForSession(run.memorySessionId || run.session?.memorySessionId || "");
   syncAssistantDraftToHistory(run, run.assistant, { persist: false });
   void persistChatHistorySnapshot(activeChatPersistenceScope, run.session);
   run.activeStreamContent = "";
   activeStreamContent = "";
   setAgentStatus("Stopping...");
-  window.api.abortChat?.({ sessionId: run.memorySessionId || run.session?.memorySessionId || run.sessionId || "" });
+  abortActiveChatRun(run);
   updateSendBtn();
   updateContextUsage();
+}
+
+function chatStopIdsForRun(run) {
+  return [...new Set([
+    run?.memorySessionId,
+    run?.session?.memorySessionId,
+    run?.sessionId,
+  ].map((value) => String(value || "")).filter(Boolean))];
+}
+
+function markChatSessionStoppedByOperator(run) {
+  for (const id of chatStopIdsForRun(run)) chatSessionsStoppedByOperator.add(id);
+}
+
+function clearChatSessionStoppedByOperator(session) {
+  chatSessionsStoppedByOperator.delete(String(session?.id || ""));
+  chatSessionsStoppedByOperator.delete(String(session?.memorySessionId || ""));
+}
+
+function isChatSessionStoppedByOperator(sessionId = "") {
+  const id = String(sessionId || "");
+  if (!id) return false;
+  if (chatSessionsStoppedByOperator.has(id)) return true;
+  const mapped = chatSessionIdForRuntimeId(id);
+  return Boolean(mapped && chatSessionsStoppedByOperator.has(mapped));
+}
+
+function abortActiveChatRun(run) {
+  const ids = chatStopIdsForRun(run);
+  if (!ids.length) {
+    window.api.abortChat?.({});
+    return;
+  }
+  for (const sessionId of ids) window.api.abortChat?.({ sessionId });
+}
+
+function dismissComposerQuestionsForStop(run) {
+  for (const sessionId of chatStopIdsForRun(run)) {
+    const pending = pendingComposerQuestionsBySession.get(composerQuestionSessionId(sessionId));
+    pending?.abort?.();
+  }
+}
+
+function dropAutoContinuationsForSession(sessionId = "") {
+  const id = String(sessionId || "");
+  if (!id) return;
+  const matches = (value) => {
+    const candidate = String(value || "");
+    if (!candidate) return false;
+    if (candidate === id) return true;
+    return chatSessionIdForRuntimeId(candidate) === id;
+  };
+  pendingSubagentResults = pendingSubagentResults.filter((item) => (
+    !matches(item.parentSessionId) && !matches(item.payload?.parentSessionId) && !matches(item.payload?.sessionId)
+  ));
+  pendingBackgroundWaitEvents = pendingBackgroundWaitEvents.filter((item) => (
+    !matches(item.payload?.sessionId) && !matches(item.payload?.parentSessionId)
+  ));
 }
 
 sendBtn.addEventListener("click", () => {
@@ -18289,6 +18393,10 @@ function drainPendingSubagentResults() {
     );
     if (resolvedParentSessionId) next.parentSessionId = resolvedParentSessionId;
   }
+  if (isChatSessionStoppedByOperator(next.parentSessionId)) {
+    pendingSubagentResults.shift();
+    return;
+  }
   if (!next
     || !chatSessions.some((session) => session.id === next.parentSessionId)
     || isChatSessionRunning(next.parentSessionId)
@@ -18656,6 +18764,9 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
           "Continue from this terminal output.",
         ]).filter(Boolean).join("\n\n");
     const targetSessionId = chatSessionIdForRuntimeId(payload.sessionId || payload.parentSessionId || "") || activeChatSessionId;
+    if (isChatSessionStoppedByOperator(targetSessionId) || isChatSessionStoppedByOperator(payload.sessionId) || isChatSessionStoppedByOperator(payload.parentSessionId)) {
+      return;
+    }
     await sendMessageWithAgentRuntime({
       internal: true,
       sessionId: targetSessionId,
@@ -19310,6 +19421,7 @@ function setTerminalCollapsed(collapsed, { createIfMissing = true } = {}) {
   btnTopTerminal?.classList.toggle("inactive", collapsed);
   activityTerminal?.classList.toggle("panel-visible", !collapsed);
   activityTerminal?.setAttribute("aria-pressed", String(!collapsed));
+  TerminalManager.setPanelOpen?.(!collapsed);
 
   if (collapsed) {
     if (terminalPane.offsetHeight > TERMINAL_MIN_EXPANDED) {
@@ -19407,6 +19519,7 @@ globalThis.toggleTerminalPanel = () => {
 
 globalThis.onTerminalSessionStateChange = ({ count }) => {
   if (count === 0 && !terminalCollapsed) setTerminalCollapsed(true, { createIfMissing: false });
+  else TerminalManager.setPanelOpen?.(!terminalCollapsed && count > 0);
 };
 
 let terminalDragShouldCollapse = false;
