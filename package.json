@@ -32,7 +32,7 @@
     "electron-builder": "^26.15.3",
     "electronmon": "2.0.4",
     "jsdom": "^29.1.1",
-    "vite": "^8.2.2"
+    "vite": "^8.3.0"
   },
   "electronmon": {
     "patterns": [
@@ -54,21 +54,21 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "ajv": "8.20.0",
-    "dompurify": "3.4.14",
+    "dompurify": "3.4.15",
     "electron-updater": "^6.8.9",
     "highlight.js": "^11.12.0",
     "http-mitm-proxy": "^1.1.0",
-    "marked": "^18.0.9",
+    "marked": "^18.0.13",
     "mermaid": "^11.16.1",
     "monaco-editor": "0.56.0",
     "node-pty": "^1.1.0",
-    "playwright-core": "1.62.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "tldts": "^7.4.10"
+    "playwright-core": "1.63.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tldts": "^7.4.12"
   },
   "overrides": {
-    "dompurify": "3.4.14",
+    "dompurify": "3.4.15",
     "sharp": "0.35.4",
     "uuid": "11.1.1",
     "tar": "7.5.22",
