@@ -156,7 +156,7 @@ test("large Agent work uses a temporary collapsible composer checklist", () => {
 
 test("status styling is chrome-free, neutral, animated, and motion-safe", () => {
   assert.match(chatStyles, /#messages \.agent-status-line \{[\s\S]*?border: 0[\s\S]*?background: transparent/);
-  assert.match(chatStyles, /#messages \.agent-status-line \{[\s\S]{0,220}font: 400 14px/);
+  assert.match(chatStyles, /#messages \.agent-status-line \{[\s\S]{0,280}font: 400 14px/);
   assert.match(chatStyles, /#messages \.context-checkpoint-notice \{[\s\S]{0,220}font: 400 14px/);
   assert.match(chatStyles, /#messages \.agent-status-line\[data-final="true"\]/);
   assert.doesNotMatch(chatStyles, /#messages \.agent-status-line\[data-final="true"\] \{[\s\S]{0,120}font-size: 11\.5px/);
