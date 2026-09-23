@@ -24,6 +24,7 @@ const MUTATING_TOOL_NAMES = new Set([
 
 const READ_ONLY_TOOL_NAMES = new Set([
   "ask_questions",
+  "end_turn",
   "view_active_terminal",
   "read_file",
   "search_workspace",

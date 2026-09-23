@@ -44,9 +44,13 @@ function usageFromResponse(usage) {
 }
 
 async function captureOpenRouterStream(readable, callbacks = {}, options = {}) {
-  const idleTimeoutMs = Number.isFinite(Number(options.idleTimeoutMs))
-    ? Math.max(1000, Number(options.idleTimeoutMs))
-    : 120000;
+  const idleTimeoutRaw = options.idleTimeoutMs;
+  const idleDisabled = idleTimeoutRaw === 0 || idleTimeoutRaw === null;
+  const idleTimeoutMs = idleDisabled
+    ? 0
+    : Number.isFinite(Number(idleTimeoutRaw))
+      ? Math.max(1000, Number(idleTimeoutRaw))
+      : 120000;
   const configuredTotalTimeoutMs = Number(options.totalTimeoutMs);
   const totalTimeoutMs = Number.isFinite(configuredTotalTimeoutMs) && configuredTotalTimeoutMs > 0
     ? Math.max(idleTimeoutMs, configuredTotalTimeoutMs)
@@ -62,12 +66,13 @@ async function captureOpenRouterStream(readable, callbacks = {}, options = {}) {
     if (totalTimeoutMs && now - startedAt > totalTimeoutMs) {
       throw streamError(`OpenRouter stream exceeded ${Math.round(totalTimeoutMs / 1000)}s.`, "OPENROUTER_STREAM_TIMEOUT");
     }
-    if (now - lastActivityAt > idleTimeoutMs) {
+    if (idleTimeoutMs && now - lastActivityAt > idleTimeoutMs) {
       throw streamError(`OpenRouter stream stalled for ${Math.round(idleTimeoutMs / 1000)}s.`, "OPENROUTER_STREAM_IDLE_TIMEOUT");
     }
   };
   const touch = () => { lastActivityAt = Date.now(); };
   const readChunk = () => {
+    if (!idleTimeoutMs) return reader.read();
     let timer;
     return Promise.race([
       reader.read(),

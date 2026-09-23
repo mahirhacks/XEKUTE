@@ -12,7 +12,10 @@ test("direct prompt modules compile deterministically without generated hashes",
   assert.deepEqual(SystemPrompt.MODULE_ORDER, ["role", "evidence", "loop", "failure", "feedback", "guardrails"]);
   assert.match(first, /You are XEKUTE/);
   assert.match(first, /Runtime scope checks are enforced/i);
-  assert.match(first, /put CONTINUE on its own last line/);
+  assert.match(first, /end_turn with status stop/);
+  assert.match(first, /Write a clear answer to the user's question, then call end_turn/);
+  assert.doesNotMatch(first, /end_turn message|put a clear answer to the user's question in message/i);
+  assert.doesNotMatch(first, /summariz|writeup|paraphrase/i);
   assert.doesNotMatch(first, /AUTO-GENERATED|content-addressed|prompt_builder|approval token/i);
   assert.equal(PromptCompiler.validate(PromptCompiler.defaults()).ok, true);
 });

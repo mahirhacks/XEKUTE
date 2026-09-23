@@ -274,6 +274,7 @@ ipcMain.handle("assessment:trafficRecords", async (_event, { path: assessmentPat
 });
 
 ipcMain.handle("chat-history:load", async (_event, { workspace } = {}) => {
+  if (workspace) container.longHorizonRunStore?.read?.(workspace);
   return container.v3SessionStore.load(workspace);
 });
 

@@ -166,7 +166,7 @@ function indexEvidenceMarkdown(db, workspace, state = {}) {
     if (!entry.isFile() || !/^E-\d{4,}\.md$/i.test(entry.name)) continue;
     const relativePath = `.xekute/evidence/${entry.name}`;
     const parsed = Artifacts.parseEvidence(fs.readFileSync(path.join(directory, entry.name), "utf8"));
-    if (!parsed.ok) continue;
+    if (!parsed.ok || !parsed.value) continue;
     count += indexMarkdownRecords(db, workspace, relativePath, "evidence", [parsed.value], state).count;
   }
   return { count };

@@ -173,6 +173,17 @@ test("search_workspace registration adds exactly one raw tool entry", () => {
   assert.equal(entry.metadata.mutating, false);
 });
 
+test("search_workspace lets the event loop run while scanning files", async () => {
+  const { root } = makeFixture();
+  const tool = createSearchWorkspaceTool();
+  let ticked = false;
+  const timer = setTimeout(() => { ticked = true; }, 0);
+  const result = await awaitToolExecute(tool, { mode: "text", query: "alpha" }, root);
+  clearTimeout(timer);
+  assert.equal(result.ok, true);
+  assert.equal(ticked, true);
+});
+
 test("search_workspace raw adapter contains no authority decision result", async () => {
   const { root } = makeFixture();
   const tool = createSearchWorkspaceTool();

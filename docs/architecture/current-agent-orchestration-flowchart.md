@@ -26,29 +26,29 @@ flowchart TD
     INTENT --> PROMPT[Compile system prompt, mode skill, VAPT/cyber guidance, memory and workspace context]
     PROMPT --> ROUND
 
-    ROUND[Agent round, maximum 10] --> BUDGET{Wall clock, prompt tokens and context fit?}
-    BUDGET -->|No| TERMINAL[finishRun]
+    ROUND[Agent round, unlimited unless a budget is set] --> BUDGET{Wall clock, prompt tokens and context fit?}
+    BUDGET -->|No| COMPACT[Checkpoint, drop oldest live messages, shrink unused MCP tools]
+    COMPACT --> ROUND
     BUDGET -->|Yes| MODEL[Call Ollama or OpenRouter stream]
     MODEL --> STREAM[Stream thinking, content and tool-call deltas]
     STREAM --> RESPONSE{Provider result?}
-    RESPONSE -->|Provider error/abort| TERMINAL
+    RESPONSE -->|Transient error| RETRY_ROUND[Retry the same round up to 3 times]
+    RETRY_ROUND --> MODEL
+    RESPONSE -->|Hard provider error/abort| TERMINAL[finishRun]
     RESPONSE -->|Text/tool calls| PARSE[Normalize and resolve calls]
     PARSE --> CALLS{Usable tool calls?}
-    CALLS -->|No| NO_TOOL[No-tool branch]
+    CALLS -->|No| NUDGE[Internal continue nudge; do not end the turn]
+    NUDGE --> ROUND
     CALLS -->|Yes| TOOL_LOOP[Tool-call gate and execution pipeline]
-    NO_TOOL --> NO_TOOL_DECISION{What was requested?}
-    NO_TOOL_DECISION -->|Read/conversation| COMPLETE_TEXT[Use model text or tool summary]
-    NO_TOOL_DECISION -->|Mutation/plan| RETRY_TEXT[Retry tool instructions, plan save, verification or missing-file work]
-    RETRY_TEXT --> ROUND
-    NO_TOOL_DECISION -->|Retries exhausted| COMPLETE_TEXT
-    COMPLETE_TEXT --> TERMINAL
-    TOOL_LOOP --> WAIT_OR_NEXT{Wait state, stop condition or continue?}
+    TOOL_LOOP --> END_TURN{end_turn status stop?}
+    END_TURN -->|Yes after siblings| COMPLETE_TEXT[Finalize completed]
+    END_TURN -->|No| WAIT_OR_NEXT{Wait state, stop condition or continue?}
     WAIT_OR_NEXT -->|Continue| ROUND
     WAIT_OR_NEXT -->|Terminal wait/subagent wait| WAITING[Return waiting status; harness resumes later]
-    WAIT_OR_NEXT -->|Stop condition| STOPPED[Stop run]
+    WAIT_OR_NEXT -->|Operator abort| STOPPED[Stop run]
     WAITING --> TERMINAL
     STOPPED --> TERMINAL
-    TERMINAL --> CLAIMS[Evidence, completion gates and final claim validation]
+    COMPLETE_TEXT --> TERMINAL
     CLAIMS --> RECORD[Write run terminal/action/claim records]
     RECORD --> UI[Return result and stream events to UI]
 ```
@@ -239,7 +239,7 @@ flowchart TD
     CLEAR --> ROUND
     NO_COUNT --> ROUND
     ADAPT --> ROUND
-    ROUND --> BUDGET{MAX_AGENT_ROUNDS = 10 / wall clock 600s / token ceiling}
+    ROUND --> BUDGET{MAX_AGENT_ROUNDS = 0 / wall clock 0 / token ceiling with compact-and-continue}
     BUDGET -->|Exceeded| INCONCLUSIVE[finishRun failed/inconclusive]
 ```
 
@@ -334,8 +334,8 @@ flowchart TD
 
 ## Runtime constants that materially affect the flow
 
-- `MAX_AGENT_ROUNDS = 10`
-- `TURN_WALL_CLOCK_MS = 600000` (10 minutes)
+- `MAX_AGENT_ROUNDS = 0` (unlimited)
+- `TURN_WALL_CLOCK_MS = 0` (unlimited)
 - `REPEAT_CLASS_LIMIT = 2`
 - `FAILURE_MEMORY_TTL_MS = 86400000` (24 hours)
 - `MAX_RECORDS = 24` failure records

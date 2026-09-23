@@ -147,6 +147,14 @@
   background: #181818;
   box-shadow: none;
 }
+.agent-questions-subagent-label {
+  padding: 8px 12px 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #8ab4f8;
+}
 .agent-questions-header {
   display: flex;
   align-items: center;
@@ -1487,6 +1495,7 @@
   -webkit-appearance: none;
   color: #d4d4d4;
   font: 400 14px/1.45 var(--font-ui);
+  opacity: 0.6;
 }
 
 #messages .agent-explored-fold,
@@ -1554,7 +1563,21 @@
   color: #9a9a9a;
   font: 400 13px/1.5 var(--font-ui);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  align-self: stretch;
+}
+
+#messages .agent-thinking-fold,
+#messages .agent-thinking-body,
+#messages .chat-turn.assistant > .assistant-reply {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  align-self: stretch;
 }
 
 #messages .agent-thinking-fold[data-expanded="false"] > .agent-thinking-body {
@@ -1628,6 +1651,7 @@
   border: 0;
   background: transparent;
   color: #d4d4d4;
+  opacity: 0.6;
   font: 400 14px/1.45 var(--font-ui);
   text-align: left;
   cursor: pointer;
@@ -1745,12 +1769,12 @@
 }
 
 #messages .agent-work-header[data-foldable="false"],
-#messages .agent-status-line[data-state="planning"] {
+#messages .agent-status-line[data-state="planning"]:not(.is-foldable) {
   cursor: default;
 }
 
 #messages .agent-work-header[data-foldable="false"] .agent-work-caret,
-#messages .agent-status-line[data-state="planning"] .agent-work-caret {
+#messages .agent-status-line[data-state="planning"]:not(.is-foldable) .agent-work-caret {
   display: none !important;
 }
 

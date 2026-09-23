@@ -211,62 +211,102 @@ function renderFactLine(fact) {
 function parseProjectDocument(documentId, markdown) {
   const spec = PROJECT_DOCUMENT_BY_ID[documentId];
   if (!spec) return { ok: false, code: "ARTIFACT_PROJECT_DOCUMENT_REQUIRED", error: `Unknown project document: ${documentId}.` };
-  const title = String(markdown || "").match(/^# (.+)\s*$/m)?.[1]?.trim();
-  if (title !== spec.title) return { ok: false, code: "ARTIFACT_PROJECT_TITLE_INVALID", error: `${spec.path} must start with '# ${spec.title}'.` };
-  const found = new Map(splitSections(markdown, 2).map((section) => [section.title, section.body]));
-  const missing = spec.headings.filter((name) => !found.has(name));
-  if (missing.length) return { ok: false, code: "ARTIFACT_PROJECT_SECTIONS_INVALID", error: `${spec.path} is missing required sections: ${missing.join(", ")}.` };
+  const text = String(markdown || "").replace(/\r/g, "");
+  const sections = splitSections(text, 2);
   const facts = [];
-  for (const heading of spec.headings) {
+  let note = 0;
+  const nextNoteId = () => `${documentId}-note-${String(++note).padStart(4, "0")}`;
+  const consume = (heading, body) => {
     let pendingId = "";
-    for (const raw of found.get(heading).split(/\r?\n/)) {
+    const prose = [];
+    const flushProse = () => {
+      const value = prose.join("\n").trim();
+      prose.length = 0;
+      if (!value) return;
+      facts.push({
+        fact_id: nextNoteId(),
+        key: "note",
+        value,
+        source_refs: [],
+        observed_at: "",
+        confidence: "unknown",
+        scope_decision: "unknown",
+        heading: heading || spec.headings[0],
+        prose: true,
+      });
+    };
+    for (const raw of String(body || "").split("\n")) {
       const line = raw.trim();
-      if (!line || !line.startsWith("-")) continue;
+      if (!line) {
+        if (prose.length) prose.push("");
+        continue;
+      }
       if (/^-\s*Not recorded\.?$/i.test(line)) continue;
       const factId = /^- \*\*fact_id:\*\*\s+(\S+)\s*$/i.exec(line);
       if (factId) {
+        flushProse();
         pendingId = factId[1];
         continue;
       }
       const match = /^- \*\*(.+?)\*\*\s+[—–-]\s+(.+)$/.exec(line)
         || /^- \*\*(.+?)\*\*\s*:\s*(.+)$/.exec(line)
         || /^- ([A-Za-z][A-Za-z0-9 /_-]*):\s*(.*)$/.exec(line);
-      if (!match) return { ok: false, code: "ARTIFACT_PROJECT_ENTRY_INVALID", error: `Invalid project entry in ${spec.id}/${heading}: ${line}` };
-      if (!pendingId) return { ok: false, code: "ARTIFACT_PROJECT_ENTRY_INVALID", error: `Missing fact_id for entry in ${spec.id}/${heading}.` };
-      const parsed = parseFactAnnotations(match[2]);
-      facts.push({
-        fact_id: cleanText(pendingId, 80),
-        key: cleanText(match[1], 300),
-        value: parsed.value,
-        source_refs: parsed.source_refs,
-        observed_at: parsed.observed_at,
-        confidence: parsed.confidence,
-        scope_decision: parsed.scope_decision,
-        ...(parsed.corrects ? { corrects: parsed.corrects } : {}),
-        heading,
-      });
-      pendingId = "";
+      if (match) {
+        flushProse();
+        const parsed = parseFactAnnotations(match[2]);
+        facts.push({
+          fact_id: cleanText(pendingId || nextNoteId(), 80),
+          key: cleanText(match[1], 300),
+          value: parsed.value,
+          source_refs: parsed.source_refs,
+          observed_at: parsed.observed_at,
+          confidence: parsed.confidence,
+          scope_decision: parsed.scope_decision,
+          ...(parsed.corrects ? { corrects: parsed.corrects } : {}),
+          heading: heading || spec.headings[0],
+        });
+        pendingId = "";
+        continue;
+      }
+      if (pendingId) {
+        prose.push(`- **fact_id:** ${pendingId}`);
+        pendingId = "";
+      }
+      prose.push(line);
     }
-    if (pendingId) return { ok: false, code: "ARTIFACT_PROJECT_ENTRY_INVALID", error: `Dangling fact_id ${pendingId} in ${spec.id}/${heading}.` };
+    if (pendingId) prose.push(`- **fact_id:** ${pendingId}`);
+    flushProse();
+  };
+  if (!sections.length) {
+    consume(spec.headings[0], text.replace(/^#[ \t]+[^\n]*\n?/, ""));
+    return { ok: true, value: facts };
   }
+  const preamble = text.slice(0, sections[0].index).replace(/^#[ \t]+[^\n]*\n?/, "").trim();
+  if (preamble) consume(spec.headings[0], preamble);
+  for (const section of sections) consume(section.title, section.body);
   return { ok: true, value: facts };
 }
 
 function renderProjectDocument(documentId, facts = []) {
   const spec = PROJECT_DOCUMENT_BY_ID[documentId];
   if (!spec) return "";
-  const grouped = Object.fromEntries(spec.headings.map((heading) => [heading, []]));
+  const grouped = new Map(spec.headings.map((heading) => [heading, []]));
   for (const fact of facts) {
-    const heading = spec.headings.includes(fact.heading) ? fact.heading : headingForFact(documentId, fact.key);
-    if (!grouped[heading]) grouped[heading] = [];
-    grouped[heading].push(fact);
+    const heading = fact.prose
+      ? (fact.heading || spec.headings[0])
+      : (spec.headings.includes(fact.heading) ? fact.heading : headingForFact(documentId, fact.key));
+    if (!grouped.has(heading)) grouped.set(heading, []);
+    grouped.get(heading).push(fact);
   }
   const lines = [`# ${spec.title}`, ""];
-  for (const heading of spec.headings) {
+  for (const [heading, entries] of grouped) {
     lines.push(`## ${heading}`, "");
-    const entries = grouped[heading] || [];
     if (!entries.length) lines.push("- Not recorded.");
     else for (const fact of entries) {
+      if (fact.prose) {
+        lines.push(String(fact.value || "").trim());
+        continue;
+      }
       lines.push(`- **fact_id:** ${inline(fact.fact_id)}`);
       lines.push(renderFactLine(fact));
     }
@@ -352,11 +392,10 @@ function renderHypotheses(records = []) {
 }
 
 function parseHypotheses(markdown) {
-  if (!/^# Investigation Hypotheses\s*$/m.test(String(markdown || ""))) return { ok: false, code: "ARTIFACT_HYPOTHESES_TITLE_INVALID", error: "hypotheses.md must start with '# Investigation Hypotheses'." };
   const records = [];
   for (const section of splitSections(markdown, 2)) {
     const heading = /^(H-\d{4,}):\s+(.+)$/.exec(section.title);
-    if (!heading) return { ok: false, code: "ARTIFACT_HYPOTHESIS_HEADING_INVALID", error: `Invalid hypothesis heading: ${section.title}` };
+    if (!heading) continue;
     const fields = parseFields(section.body);
     const status = cleanText(fields.status).toLowerCase();
     if (!HYPOTHESIS_STATES.includes(status)) return { ok: false, code: "ARTIFACT_HYPOTHESIS_STATUS_INVALID", error: `Invalid status for ${heading[1]}.` };
@@ -425,13 +464,12 @@ function renderChecklist(records = [], hypotheses = []) {
 }
 
 function parseChecklist(markdown) {
-  if (!/^# Investigation Checklist\s*$/m.test(String(markdown || ""))) return { ok: false, code: "ARTIFACT_CHECKLIST_TITLE_INVALID", error: "checklist.md must start with '# Investigation Checklist'." };
   const records = [];
   let currentHypothesis = "";
   const sections = splitSections(markdown, 3);
   for (const section of sections) {
     const heading = /^(C-\d{4,}):\s+(.+)$/.exec(section.title);
-    if (!heading) return { ok: false, code: "ARTIFACT_CHECKLIST_HEADING_INVALID", error: `Invalid checklist heading: ${section.title}` };
+    if (!heading) continue;
     const before = String(markdown).slice(0, section.index);
     const parentMatches = [...before.matchAll(/^## (H-\d{4,}):/gm)];
     currentHypothesis = parentMatches.at(-1)?.[1] || currentHypothesis;
@@ -493,7 +531,7 @@ function renderEvidence(record = {}) {
 
 function parseEvidence(markdown) {
   const heading = /^# (E-\d{4,}):\s+(.+)$/m.exec(String(markdown || ""));
-  if (!heading) return { ok: false, code: "ARTIFACT_EVIDENCE_TITLE_INVALID", error: "Evidence must start with '# E-####: <title>'." };
+  if (!heading) return { ok: true, value: null };
   const fields = parseFields(String(markdown).slice(0, String(markdown).search(/^## /m) < 0 ? undefined : String(markdown).search(/^## /m)));
   const status = cleanText(fields.status).toLowerCase();
   if (!EVIDENCE_STATES.includes(status)) return { ok: false, code: "ARTIFACT_EVIDENCE_STATUS_INVALID", error: `Invalid evidence status for ${heading[1]}.` };

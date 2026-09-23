@@ -262,6 +262,9 @@ function workDurationMs(fold) {
 }
 
 function foldStatus(fold) {
+  const outcome = String(dataset(fold).runOutcome || "").toLowerCase();
+  if (outcome === "stopped") return "stopped";
+  if (outcome === "inconclusive") return "inconclusive";
   const label = String(fold?.querySelector?.(".agent-status-text")?.textContent || "").trim();
   if (/^Stopped\b/i.test(label)) return "stopped";
   if (/^Finished in\b/i.test(label)) return "inconclusive";

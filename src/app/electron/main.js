@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard, powerSaveBlocker } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -9,6 +9,7 @@ const { spawn } = require("child_process");
 const { createAgentTerminalRunner } = require("../services/terminal/terminal-runner.js");
 const { sameTerminalOwner, findLiveTerminal } = require("../services/terminal/terminal-ownership.js");
 const { appendTerminalOutput } = require("../services/terminal/active-terminal-catalog.js");
+const { createTerminalOutputBatcher } = require("../services/terminal/terminal-output-batcher.js");
 const { HIDDEN_COMMAND_REVEAL_MS, createHiddenCommandReveal } = require("../services/terminal/agent-terminal-reveal.js");
 const { createAgentTerminalHost } = require("../services/terminal/agent-terminal-host.js");
 const { defaultRegistry } = require("../../agent/special-skills/registry.js");
@@ -27,6 +28,7 @@ const { buildIntruderRequests, createSecurityHttpWorkbench } = require("../../in
 const { createProxyListenerService } = require("../../interceptor/proxy-listener.js");
 const { runAgentTurn } = require("../../agent/controller/agent-controller.js");
 const { createRuntimeDelegationProvider } = require("../../agent/runtime/delegation-provider.js");
+const { computeOrchestrationHold } = require("../../agent/runtime/orchestration-hold.js");
 const { createSubagentCoordinator, DEFAULT_MAX_ACTIVE_CHILDREN } = require("../../agent/runtime/subagent-coordinator.js");
 const { normalizeProfile } = require("../../agent/modes/mode-registry.js");
 const { evaluateToolScopeAsync } = require("../../agent/authority/scope/scope-policy.js");
@@ -301,12 +303,209 @@ const llmControllers = ollamaControllers;
 const pendingOperatorQuestions = container.pendingOperatorQuestions;
 const webClonePreviewDocuments = container.webClonePreviewDocuments;
 const agentRunControllers = new Map();
+const sessionAgentSenders = new Map();
+const resumeInFlight = new Set();
+let powerSaveBlockerId = null;
+function syncPowerSaveBlocker() {
+  const live = agentRunControllers.size > 0;
+  if (live && (powerSaveBlockerId == null || powerSaveBlockerId === false)) {
+    try { powerSaveBlockerId = powerSaveBlocker?.start?.("prevent-app-suspension"); }
+    catch { powerSaveBlockerId = null; }
+  } else if (!live && powerSaveBlockerId != null && powerSaveBlockerId !== false) {
+    try { powerSaveBlocker?.stop?.(powerSaveBlockerId); } catch { /* best effort */ }
+    powerSaveBlockerId = null;
+  }
+}
+function bindAgentSender(sessionId, sender) {
+  if (sender) sessionAgentSenders.set(String(sessionId || "__default__"), sender);
+}
+function senderForSession(sessionId, fallback) {
+  const bound = sessionAgentSenders.get(String(sessionId || "__default__"));
+  if (bound && !bound.isDestroyed?.()) return bound;
+  return fallback;
+}
+function sessionRunKey(sessionId, background = false) {
+  const session = String(sessionId || "__default__");
+  return background ? `session:${session}::background` : `session:${session}`;
+}
+function liveRunForSession(sessionId) {
+  const session = String(sessionId || "__default__");
+  return agentRunControllers.has(sessionRunKey(session)) || agentRunControllers.has(sessionRunKey(session, true));
+}
 // The main process owns parent re-entry after a child result is ready. The
 // descriptor keeps the latest parent context/settings available even when the
 // renderer is busy or is being reloaded; the renderer remains an observer and
 // recovery surface, not the FIFO scheduler.
 const parentRunDescriptors = new Map();
 const parentContinuationTasks = new Map();
+const delegatedQuestionWaiters = new Map();
+
+function parentContinuationInFlight(parentKey) {
+  const descriptor = parentRunDescriptors.get(String(parentKey || ""));
+  return parentContinuationTasks.has(String(parentKey || "")) || Boolean(descriptor?.scheduled);
+}
+
+function refreshParentOrchestrationFlags(parentKey) {
+  const key = String(parentKey || "");
+  const descriptor = parentRunDescriptors.get(key);
+  if (!descriptor) return { orchestrationHold: false, pendingEndTurn: false };
+  const previousHold = descriptor.orchestrationHold;
+  descriptor.orchestrationHold = computeOrchestrationHold(subagentCoordinator, key, {
+    parentContinuationScheduled: parentContinuationInFlight(key),
+    descriptor,
+  });
+  if (descriptor.pendingEndTurn && previousHold && !descriptor.orchestrationHold) {
+    scheduleReleasePendingEndTurn(key);
+  }
+  return descriptor;
+}
+
+function buildSubagentQuestionHeadPrompt(head) {
+  if (!head) return "";
+  return [
+    "Oldest unresolved delegated sub-agent question (FIFO head). Use delegate_agent operation=resolve_question with answer, skip, or escalate.",
+    JSON.stringify({
+      questionRequestId: head.questionRequestId,
+      childInvocationId: head.childInvocationId,
+      childSessionId: head.childSessionId,
+      reason: head.payload?.reason || "",
+      questions: head.payload?.questions || [],
+      escalated: Boolean(head.escalated),
+    }).slice(0, 8_000),
+  ].join("\n\n");
+}
+
+function resolveDelegatedQuestionWaiter(resolved = {}, input = {}) {
+  const requestId = String(resolved.questionRequestId || "");
+  const pending = delegatedQuestionWaiters.get(requestId);
+  if (!pending) return false;
+  delegatedQuestionWaiters.delete(requestId);
+  try {
+    pending.resolve({
+      answers: Array.isArray(input?.answers) ? input.answers : [],
+      skipped: resolved.resolution === "skipped" || resolved.resolution === "cancelled",
+      resolution: resolved.resolution,
+    });
+  } catch { /* best effort */ }
+  return true;
+}
+
+function registerDelegatedQuestion(proposal = {}) {
+  const requestId = String(proposal.requestId || "");
+  return new Promise((resolve) => {
+    delegatedQuestionWaiters.set(requestId, {
+      resolve,
+      childInvocationId: proposal.childInvocationId,
+      parentKey: proposal.parentKey,
+      parentSessionId: proposal.parentSessionId,
+    });
+  });
+}
+
+function scheduleReleasePendingEndTurn(parentKey) {
+  return scheduleParentContinuationKind(parentKey, "release_pending_end_turn", async () => {
+    const descriptor = parentRunDescriptors.get(parentKey);
+    if (!descriptor || descriptor.aborted || !descriptor.pendingEndTurn) return;
+    if (computeOrchestrationHold(subagentCoordinator, parentKey, { parentContinuationScheduled: false, descriptor })) {
+      return;
+    }
+    const continuationPayload = {
+      ...(descriptor.payload || {}),
+      userMessage: "",
+      releasePendingEndTurn: true,
+      chatHistory: Array.isArray(descriptor.payload?.chatHistory) ? descriptor.payload.chatHistory : [],
+    };
+    await handleAgentRun(descriptor.event, continuationPayload, { automaticContinuation: true, releasePendingEndTurn: true });
+  });
+}
+
+function scheduleParentQuestionContinuation(parentKey, questionRequestId = "") {
+  const key = String(parentKey || "");
+  return scheduleParentContinuationKind(key, "question_head", async () => {
+    const descriptor = parentRunDescriptors.get(key);
+    if (!descriptor || descriptor.aborted || !descriptor.event || descriptor.event.sender?.isDestroyed?.()) return;
+    const head = subagentCoordinator.peekQuestionHead(key);
+    if (!head) return;
+    const targetId = String(questionRequestId || head.questionRequestId || "");
+    const continuationPayload = {
+      ...(descriptor.payload || {}),
+      userMessage: "",
+      continuation: { questionRequestId: targetId },
+      chatHistory: Array.isArray(descriptor.payload?.chatHistory) ? descriptor.payload.chatHistory : [],
+    };
+    const result = await handleAgentRun(descriptor.event, continuationPayload, { automaticContinuation: true, questionContinuation: true });
+    if (result?.code === "PARENT_BUSY" && !descriptor.aborted) {
+      setTimeout(() => scheduleParentQuestionContinuation(key, targetId), 150);
+    } else {
+      const nextHead = subagentCoordinator.peekQuestionHead(key);
+      if (nextHead && nextHead.questionRequestId !== targetId) {
+        scheduleParentQuestionContinuation(key, nextHead.questionRequestId);
+      }
+    }
+  });
+}
+
+function scheduleParentContinuationKind(parentKey, kind, runner) {
+  const key = String(parentKey || "");
+  const descriptor = parentRunDescriptors.get(key);
+  if (!key || !descriptor || descriptor.aborted || typeof runner !== "function") return false;
+  if (parentContinuationInFlight(key)) return true;
+  descriptor.scheduled = true;
+  descriptor.continuationKind = kind;
+  const task = new Promise((resolve) => setTimeout(resolve, 25)).then(runner).finally(() => {
+    parentContinuationTasks.delete(key);
+    const current = parentRunDescriptors.get(key);
+    if (current) {
+      current.scheduled = false;
+      current.continuationKind = "";
+    }
+    refreshParentOrchestrationFlags(key);
+  });
+  parentContinuationTasks.set(key, task);
+  return true;
+}
+
+function emitParentSessionAgentEvent(parentKey, data = {}) {
+  const descriptor = parentRunDescriptors.get(String(parentKey || ""));
+  const sender = descriptor?.event?.sender;
+  if (!sender || sender.isDestroyed?.()) return;
+  const sessionId = String(data.sessionId || descriptor.payload?.sessionId || "");
+  sender.send("agent:event", { ...data, sessionId });
+}
+
+function afterDelegatedQuestionResolved(parentKey, resolved = {}, input = {}) {
+  if (resolved.resolution === "escalate") {
+    const head = subagentCoordinator.peekQuestionHead(parentKey);
+    const child = subagentCoordinator.getChild(resolved.childInvocationId, parentKey);
+    const subagentLabel = String(child?.summary || child?.task || "").trim()
+      || String(resolved.childSessionId || "").slice(0, 48);
+    emitParentSessionAgentEvent(parentKey, {
+      type: "subagent_question_escalated",
+      questionRequestId: resolved.questionRequestId,
+      childInvocationId: resolved.childInvocationId,
+      childSessionId: resolved.childSessionId,
+      subagentLabel,
+      reason: head?.payload?.reason || "",
+      questions: head?.payload?.questions || [],
+    });
+    refreshParentOrchestrationFlags(parentKey);
+    return;
+  }
+  resolveDelegatedQuestionWaiter(resolved, input);
+  emitParentSessionAgentEvent(parentKey, {
+    type: "subagent_question_resolved",
+    questionRequestId: resolved.questionRequestId,
+    childInvocationId: resolved.childInvocationId,
+    childSessionId: resolved.childSessionId,
+    resolution: resolved.resolution,
+  });
+  if (resolved.nextHead) {
+    scheduleParentQuestionContinuation(parentKey, resolved.nextHead.questionRequestId);
+  } else if (subagentCoordinator.peekQuestionHead(parentKey)) {
+    scheduleParentQuestionContinuation(parentKey);
+  }
+  refreshParentOrchestrationFlags(parentKey);
+}
 const parentContinuationOutbox = new Map();
 const subagentCoordinator = createSubagentCoordinator({ maxActiveChildren: DEFAULT_MAX_ACTIVE_CHILDREN });
 // Parent run key → child sessions started by delegate_agent. Aborting the
@@ -334,20 +533,29 @@ function abortChildrenOfRun(runKey) {
   }
 }
 function abortAllChildrenOfSender(senderId) {
+  const ownedSessions = [...sessionAgentSenders.entries()]
+    .filter(([, sender]) => sender?.id === senderId)
+    .map(([sessionId]) => sessionId);
   for (const [runKey, children] of parentRunChildren.entries()) {
-    if (runKey.startsWith(`${senderId}::`)) {
-      for (const controller of children.values()) {
-        try { controller.abort("PARENT_AGENT_ABORTED"); } catch { /* best effort */ }
-      }
+    const matchesSender = runKey.startsWith(`${senderId}::`);
+    const matchesSession = ownedSessions.some((sessionId) => runKey === sessionRunKey(sessionId) || runKey.startsWith(`${sessionRunKey(sessionId)}::`));
+    if (!matchesSender && !matchesSession) continue;
+    for (const controller of children.values()) {
+      try { controller.abort("PARENT_AGENT_ABORTED"); } catch { /* best effort */ }
     }
   }
 }
 function matchesAgentRunKey(key, senderId, sessionId = "") {
   const sender = String(senderId);
   const session = String(sessionId || "");
-  if (!session) return key === sender || key.startsWith(`${sender}::`);
-  const prefix = `${sender}::${session}`;
-  return key === prefix || key.startsWith(`${prefix}::`);
+  if (session) {
+    const sessionKey = sessionRunKey(session);
+    const prefix = `${sender}::${session}`;
+    return key === sessionKey || key.startsWith(`${sessionKey}::`) || key === prefix || key.startsWith(`${prefix}::`);
+  }
+  if (key === sender || key.startsWith(`${sender}::`)) return true;
+  const owned = [...sessionAgentSenders.entries()].filter(([, bound]) => bound?.id === senderId).map(([sid]) => sid);
+  return owned.some((sid) => key === sessionRunKey(sid) || key.startsWith(`${sessionRunKey(sid)}::`));
 }
 function abortPendingOperatorQuestions({ senderId, sessionId = "" } = {}) {
   const owner = Number(senderId);
@@ -367,17 +575,26 @@ function abortAgentSession(senderId, sessionId = "") {
       try { controller.abort("OPERATOR_STOPPED"); } catch { /* best effort */ }
     }
   };
+  // Mark this orchestrator aborted before its children finish, so a child
+  // completion cannot schedule a new turn. Other parents keep their descriptors.
+  for (const [key, descriptor] of parentRunDescriptors.entries()) {
+    if (!matchesAgentRunKey(key, senderId, sessionId)) continue;
+    descriptor.aborted = true;
+    descriptor.scheduled = false;
+    descriptor.orchestrationHold = false;
+    descriptor.pendingEndTurn = false;
+  }
   abortMatching(agentRunControllers);
   abortMatching(ollamaControllers);
   for (const key of [...parentRunChildren.keys()]) {
     if (matchesAgentRunKey(key, senderId, sessionId)) abortChildrenOfRun(key);
   }
-  for (const [key, descriptor] of parentRunDescriptors.entries()) {
-    if (!matchesAgentRunKey(key, senderId, sessionId)) continue;
-    descriptor.aborted = true;
-    descriptor.scheduled = false;
-  }
   abortPendingOperatorQuestions({ senderId, sessionId });
+  for (const [requestId, waiter] of delegatedQuestionWaiters.entries()) {
+    if (!matchesAgentRunKey(waiter.parentKey || "", senderId, sessionId)) continue;
+    delegatedQuestionWaiters.delete(requestId);
+    try { waiter.resolve({ answers: [], skipped: true, aborted: true }); } catch { /* best effort */ }
+  }
   if (sessionId) {
     subagentCoordinator.cancelChildBySession(sessionId);
     for (const key of subagentCoordinator.parents.keys()) {
@@ -407,9 +624,12 @@ async function shutdownAgentRuntime() {
     }
   }
   const result = await subagentCoordinator.shutdown({ reason: "APP_SHUTDOWN", timeoutMs: 5_000 });
+  await container.longHorizonRunStore?.flush?.().catch(() => {});
   parentContinuationTasks.clear();
   parentRunDescriptors.clear();
   parentContinuationOutbox.clear();
+  sessionAgentSenders.clear();
+  syncPowerSaveBlocker();
   return result;
 }
 const webClonePreviewState = container.webClonePreviewState;
@@ -1504,18 +1724,20 @@ ipcMain.handle("terminal:create", (event, { id, cwd, profileId }) => {
     });
 
     const ownerId = event.sender.id;
-    terminals.set(id, { pty: term, ownerId, profileId: profile.id, agent: false, outputTail: "", exited: false });
+    const outputBatch = createTerminalOutputBatcher((data) => {
+      if (!event.sender.isDestroyed()) event.sender.send("terminal:data", { id, data });
+    });
+    terminals.set(id, { pty: term, ownerId, profileId: profile.id, agent: false, outputTail: "", exited: false, flushTerminalOutput: () => outputBatch.flush() });
 
     term.onData((data) => {
       const record = terminals.get(id);
       if (record) appendTerminalOutput(record, data);
-      if (!event.sender.isDestroyed()) {
-        event.sender.send("terminal:data", { id, data });
-      }
+      outputBatch.push(data);
     });
 
     term.onExit(({ exitCode, signal }) => {
       const record = terminals.get(id);
+      record?.flushTerminalOutput?.();
       if (record) {
         record.exited = true;
         record.exitCode = exitCode;
@@ -1980,7 +2202,7 @@ async function getOpenRouterModelContexts(modelId) {
     modelMeta: catalogMeta ? ContextBudget.normalizeModelMetadata(catalogMeta, model) : null,
   };
 }
-async function runOpenRouterChat(event, { messages, model, reasoningEffort, tools, contextPlan, maxCompletionTokens, signal = null }, hooks = {}, controllerKey = event.sender.id) {
+async function runOpenRouterChat(event, { messages, model, reasoningEffort, tools, contextPlan, maxCompletionTokens, signal = null, idleTimeoutMs, totalTimeoutMs } = {}, hooks = {}, controllerKey = event.sender.id) {
   const senderId = event.sender.id; const previous = llmControllers.get(controllerKey); if (previous) previous.abort(); const controller = new AbortController(); llmControllers.set(controllerKey, controller); let fullText = "", toolCalls = [];
   const abortBridge = () => { if (!controller.signal.aborted) controller.abort(signal?.reason || "AGENT_RUN_ABORTED"); };
   if (signal?.aborted) abortBridge();
@@ -1990,6 +2212,7 @@ async function runOpenRouterChat(event, { messages, model, reasoningEffort, tool
     if (llmControllers.get(controllerKey) === controller) llmControllers.delete(controllerKey);
   };
   const send = (channel, value) => { if (!event.sender.isDestroyed()) event.sender.send(channel, value); };
+  let streamHeartbeat = null;
   try {
     const request = buildChatRequest({
       baseUrl: getOpenRouterBaseUrl(),
@@ -2017,7 +2240,11 @@ async function runOpenRouterChat(event, { messages, model, reasoningEffort, tool
       } catch { /* preserve the status when the body is not JSON */ }
       return { error: `OpenRouter error: ${response.status} ${response.statusText}${detail ? `: ${detail}` : ""}`, code: /context[_ -]?length[_ -]?exceeded/i.test(detail) ? "CONTEXT_LENGTH_EXCEEDED" : "OPENROUTER_CHAT_FAILED", provider: "openrouter" };
     }
-    const captured = await captureOpenRouterStream(response.body, { onEvent: (streamEvent) => hooks.onStreamEvent?.(streamEvent), onThinking: (token, streamEvent) => { hooks.onThinking?.(token, streamEvent); send("ollama:thinking", token); }, onContent: (token, streamEvent) => { fullText += token; const control = hooks.onToken?.(token, streamEvent); if (control?.abort && !controller.signal.aborted) controller.abort(control.code || "MODEL_OUTPUT_REJECTED"); send("ollama:token", token); }, onToolCalls: (calls, streamEvent) => { toolCalls = calls; hooks.onToolCalls?.(calls, streamEvent); send("ollama:toolcall", calls); } });
+    streamHeartbeat = startStreamHeartbeat(hooks);
+    const captured = await captureOpenRouterStream(response.body, { onEvent: (streamEvent) => hooks.onStreamEvent?.(streamEvent), onThinking: (token, streamEvent) => { hooks.onThinking?.(token, streamEvent); send("ollama:thinking", token); }, onContent: (token, streamEvent) => { fullText += token; const control = hooks.onToken?.(token, streamEvent); if (control?.abort && !controller.signal.aborted) controller.abort(control.code || "MODEL_OUTPUT_REJECTED"); send("ollama:token", token); }, onToolCalls: (calls, streamEvent) => { toolCalls = calls; hooks.onToolCalls?.(calls, streamEvent); send("ollama:toolcall", calls); } }, {
+      idleTimeoutMs,
+      totalTimeoutMs,
+    });
     fullText = captured.fullText;
     toolCalls = captured.toolCalls;
     const payload = {
@@ -2034,11 +2261,18 @@ async function runOpenRouterChat(event, { messages, model, reasoningEffort, tool
   } catch (error) {
     if (controller.signal.aborted) { const payload = { fullText, toolCalls, aborted: true, provider: "openrouter" }; send("ollama:done", payload); return { ok: false, ...payload }; }
     return { error: error.message, code: error.code || "OPENROUTER_CHAT_FAILED", fullText, toolCalls, provider: "openrouter" };
-  } finally { cleanupAgentRound(); }
+  } finally {
+    streamHeartbeat?.stop?.();
+    cleanupAgentRound();
+  }
 }
 async function runOpenRouterAgentRound(senderId, payload, hooks = {}, controllerKey = senderId) {
   const event = { sender: { id: senderId, isDestroyed: () => false, send: () => {} } };
-  return runOpenRouterChat(event, payload, hooks, controllerKey);
+  return runOpenRouterChat(event, {
+    ...payload,
+    idleTimeoutMs: payload?.idleTimeoutMs ?? Tunables.OPENROUTER_AGENT_IDLE_TIMEOUT_MS,
+    totalTimeoutMs: payload?.totalTimeoutMs ?? 0,
+  }, hooks, controllerKey);
 }
 async function runOpenRouterJson({ model, messages, temperature = 0, maxCompletionTokens, reasoningEffort, contextPlan, timeoutMs = 0, responseFormat = { type: "json_object" } }) {
   const request = buildChatRequest({
@@ -2239,6 +2473,7 @@ ipcMain.handle("ollama:abort", async (event, { sessionId = "" } = {}) => {
 // in the coordinator's FIFO queue. The queue is authoritative; this endpoint
 // only exposes results owned by the requesting Electron sender.
 ipcMain.handle("agent:pendingSubagentResults", (event, { sessionIds = [] } = {}) => {
+  rebindLiveAgentSender(event.sender, sessionIds);
   const requested = new Set((Array.isArray(sessionIds) ? sessionIds : [])
     .map((value) => String(value || ""))
     .filter(Boolean));
@@ -2261,27 +2496,107 @@ ipcMain.handle("agent:pendingSubagentResults", (event, { sessionIds = [] } = {})
 // A main-owned continuation can finish while the renderer is reloading. Keep
 // its bounded result in a sender-scoped outbox until the new renderer renders
 // and acknowledges it, so consuming the child FIFO never loses parent output.
-ipcMain.handle("agent:pendingParentContinuations", (event, { sessionIds = [] } = {}) => {
+function rebindLiveAgentSender(sender, sessionIds = []) {
+  const requested = new Set((Array.isArray(sessionIds) ? sessionIds : []).map((value) => String(value || "")).filter(Boolean));
+  for (const sid of [...sessionAgentSenders.keys()]) {
+    if (requested.size && sid !== "__default__" && !requested.has(sid)) continue;
+    sessionAgentSenders.set(sid, sender);
+  }
+  for (const [key, descriptor] of parentRunDescriptors.entries()) {
+    const sid = String(descriptor.payload?.sessionId || descriptor.payload?.memorySessionId || "");
+    if (requested.size && sid && !requested.has(sid)) continue;
+    descriptor.event = { ...(descriptor.event || {}), sender };
+    if (sid) sessionAgentSenders.set(sid, sender);
+    const parent = subagentCoordinator.parents.get(key);
+    if (parent) parent.senderId = String(sender.id);
+    if (descriptor.pendingResultId) {
+      const pendingId = descriptor.pendingResultId;
+      descriptor.pendingResultId = "";
+      scheduleParentContinuation(key, { resultId: pendingId });
+    }
+  }
+}
+
+function objectiveFromRun(run = {}) {
+  const workflow = run?.checkpoint?.workflow || run?.checkpoint?.currentWorkflow || "";
+  if (typeof workflow === "string" && workflow.trim()) return workflow.trim().slice(0, 4000);
+  if (workflow && typeof workflow === "object") {
+    const text = String(workflow.objective || workflow.summary || workflow.goal || "").trim();
+    if (text) return text.slice(0, 4000);
+  }
+  return String(run?.objective || "").slice(0, 4000);
+}
+
+async function resumeInterruptedRuns(event, sessionIds = []) {
+  const store = container.longHorizonRunStore;
+  if (!store) return [];
+  const workspaces = new Set(store.known?.() || []);
+  for (const descriptor of parentRunDescriptors.values()) {
+    const workspace = String(descriptor.payload?.workspace || "");
+    if (workspace) workspaces.add(workspace);
+  }
+  const started = [];
+  for (const workspace of workspaces) {
+    await store.reconcile(workspace, { staleAfterMs: Tunables.LONG_HORIZON_STALE_RUN_MS }).catch(() => {});
+    for (const run of store.listResumeEligible(workspace, sessionIds)) {
+      if (!run?.sessionId || liveRunForSession(run.sessionId) || resumeInFlight.has(run.runId)) continue;
+      const resumed = await store.resume(workspace, run.runId).catch(() => null);
+      if (!resumed) continue;
+      const payload = {
+        workspace,
+        sessionId: run.sessionId,
+        userMessage: objectiveFromRun(run) || "Continue the interrupted long-horizon run from the last checkpoint.",
+        model: run.model,
+        mode: run.mode || "agent",
+        modeFamily: "xekute",
+        authorityProfile: run.authorityProfile,
+        chatHistory: [],
+      };
+      started.push(run.runId);
+      resumeInFlight.add(run.runId);
+      setImmediate(() => {
+        handleAgentRun(event, payload, { automaticContinuation: true })
+          .catch(() => {})
+          .finally(() => resumeInFlight.delete(run.runId));
+      });
+    }
+  }
+  return started;
+}
+
+ipcMain.handle("agent:pendingParentContinuations", async (event, { sessionIds = [] } = {}) => {
+  rebindLiveAgentSender(event.sender, sessionIds);
+  const resumed = await resumeInterruptedRuns(event, sessionIds).catch(() => []);
   const requested = new Set((Array.isArray(sessionIds) ? sessionIds : [])
     .map((value) => String(value || ""))
     .filter(Boolean));
   const results = [];
   for (const [runKey, entries] of parentContinuationOutbox.entries()) {
-    if (!runKey.startsWith(`${event.sender.id}::`)) continue;
+    const sessionMatch = requested.size && [...requested].some((sid) => runKey === sessionRunKey(sid) || runKey.startsWith(`${sessionRunKey(sid)}::`));
+    const senderMatch = runKey.startsWith(`${event.sender.id}::`);
+    if (!sessionMatch && !senderMatch && !runKey.startsWith("session:")) continue;
     for (const entry of Array.isArray(entries) ? entries : []) {
       if (!requested.size || requested.has(String(entry.parentSessionId || ""))) results.push(entry);
     }
   }
-  return { ok: true, results };
+  return { ok: true, results, resumed };
 });
 
 ipcMain.handle("agent:ackParentContinuation", (event, { sessionId = "", resultId = "" } = {}) => {
-  let runKey = `${event.sender.id}::${String(sessionId || "") || "__default__"}`;
+  const session = String(sessionId || "") || "__default__";
+  let runKey = sessionRunKey(session);
   let entries = parentContinuationOutbox.get(runKey);
   if (!entries) {
+    runKey = `${event.sender.id}::${session}`;
+    entries = parentContinuationOutbox.get(runKey);
+  }
+  if (!entries) {
     const suffix = String(sessionId || "");
-    const match = [...parentContinuationOutbox.entries()].find(([key, values]) => key.startsWith(`${event.sender.id}::`)
-      && (!suffix || values.some((entry) => String(entry.parentSessionId || "") === suffix)));
+    const match = [...parentContinuationOutbox.entries()].find(([key, values]) => (
+      key === sessionRunKey(suffix)
+      || key.startsWith(`${sessionRunKey(suffix)}::`)
+      || key.startsWith(`${event.sender.id}::`)
+    ) && (!suffix || values.some((entry) => String(entry.parentSessionId || "") === suffix)));
     if (match) {
       runKey = match[0];
       entries = match[1];
@@ -2293,6 +2608,20 @@ ipcMain.handle("agent:ackParentContinuation", (event, { sessionId = "", resultId
   else parentContinuationOutbox.delete(runKey);
   return { ok: true, removed: remaining.length !== entries.length };
 });
+
+function startStreamHeartbeat(hooks = {}) {
+  const intervalMs = Math.max(0, Number(Tunables.LONG_HORIZON_HEARTBEAT_MS) || 0);
+  if (!intervalMs || typeof hooks.onHeartbeat !== "function") return { stop() {} };
+  const timer = setInterval(() => {
+    try { hooks.onHeartbeat({ phase: "stream" }); } catch { /* heartbeat is best-effort */ }
+  }, intervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+  return { stop() { clearInterval(timer); } };
+}
+
+function ollamaKeepAlive() {
+  return Tunables.OLLAMA_KEEP_ALIVE;
+}
 
 /** Stream chat tokens from Ollama back to the renderer. */
 ipcMain.handle("ollama:chat", async (event, { messages, model, numCtx, thinking, reasoningEffort, mode, modeFamily, contextPlan, maxCompletionTokens }) => {
@@ -2316,6 +2645,7 @@ ipcMain.handle("ollama:chat", async (event, { messages, model, numCtx, thinking,
     model: mdl,
     messages: sanitizeOllamaMessages(messages),
     stream: true,
+    keep_alive: ollamaKeepAlive(),
     ...(Object.keys(options).length ? { options } : {}),
     ...(includeThinkOption(thinking) ? { think: thinking } : {}),
     ...(tools?.length ? { tools } : {}),
@@ -2423,6 +2753,7 @@ async function runOllamaAgentRound(senderId, payload, hooks = {}, controllerKey 
     model: mdl,
     messages: sanitizeOllamaMessages(messages),
     stream: true,
+    keep_alive: ollamaKeepAlive(),
     ...(Object.keys(options).length ? { options } : {}),
     ...(includeThinkOption(thinking) ? { think: thinking } : {}),
     ...(tools?.length ? { tools } : {}),
@@ -2455,6 +2786,7 @@ async function runOllamaAgentRound(senderId, payload, hooks = {}, controllerKey 
     return { error: `Ollama error: ${res.status} ${res.statusText}${detail ? `\n${detail}` : ""}` };
   }
 
+  const streamHeartbeat = startStreamHeartbeat(hooks);
   try {
     const captured = await captureOllamaStream(res.body, {
       onEvent(streamEvent) {
@@ -2497,6 +2829,7 @@ async function runOllamaAgentRound(senderId, payload, hooks = {}, controllerKey 
       thinking: fullThinking,
     };
   } finally {
+    streamHeartbeat.stop();
     cleanupAgentRound();
   }
 
@@ -2513,6 +2846,7 @@ async function runOllamaJson(payload) {
       messages: sanitizeOllamaMessages(messages),
       stream: false,
       format: "json",
+      keep_alive: ollamaKeepAlive(),
       options: {
         num_ctx: Math.max(2048, Math.min(Number(numCtx) || 4096, 32768)),
         temperature,
@@ -2589,6 +2923,24 @@ ipcMain.handle("agent:verifyFinding", async (_event, { workspace, model, candida
 
 ipcMain.handle("agent:resolveQuestions", async (event, { requestId, answers, skipped } = {}) => {
   const pending = pendingOperatorQuestions.get(String(requestId || ""));
+  const delegated = delegatedQuestionWaiters.get(String(requestId || ""));
+  if (delegated) {
+    const head = subagentCoordinator.peekQuestionHead(delegated.parentKey);
+    if (!head || head.questionRequestId !== String(requestId || "")) {
+      return { error: "Question request is no longer the FIFO head", code: "QUESTION_NOT_HEAD" };
+    }
+    if (head.resolved) {
+      return { error: "Question was already resolved", code: "QUESTION_ALREADY_RESOLVED" };
+    }
+    const resolved = subagentCoordinator.resolveQuestion({
+      parentKey: delegated.parentKey,
+      questionRequestId: requestId,
+      resolution: skipped ? "skip" : "answer",
+    });
+    if (!resolved.ok) return { error: resolved.error, code: resolved.code };
+    afterDelegatedQuestionResolved(delegated.parentKey, resolved, { answers });
+    return { ok: true };
+  }
   if (!pending || pending.ownerId !== event.sender.id) return { error: "Question request is no longer active", code: "QUESTIONS_NOT_FOUND" };
   clearTimeout(pending.timer);
   pendingOperatorQuestions.delete(String(requestId));
@@ -2691,7 +3043,14 @@ function rememberParentRunDescriptor(runKey, event, payload, continuationResultI
   delete incoming.continuation;
   const existing = parentRunDescriptors.get(key);
   if (!existing || !continuationResultId) {
-    const descriptor = { event, payload: incoming, scheduled: false, updatedAt: Date.now() };
+    const descriptor = {
+      event,
+      payload: incoming,
+      scheduled: false,
+      orchestrationHold: false,
+      pendingEndTurn: false,
+      updatedAt: Date.now(),
+    };
     parentRunDescriptors.set(key, descriptor);
     return descriptor;
   }
@@ -2725,30 +3084,32 @@ function scheduleParentContinuation(runKey, readyResult) {
   const key = String(runKey || "");
   const resultId = String(readyResult?.resultId || "");
   const descriptor = parentRunDescriptors.get(key);
-  if (!key || !resultId || !descriptor || !descriptor.event || descriptor.event.sender?.isDestroyed?.()) return false;
-  if (parentContinuationTasks.has(key) || descriptor.scheduled) return true;
-  descriptor.scheduled = true;
-  const task = new Promise((resolve) => setTimeout(resolve, 25)).then(async () => {
-    descriptor.scheduled = false;
+  if (!key || !resultId || !descriptor) return false;
+  if (!descriptor.event || descriptor.event.sender?.isDestroyed?.()) {
+    descriptor.pendingResultId = resultId;
+    return false;
+  }
+  return scheduleParentContinuationKind(key, "result_fifo", async () => {
     const current = parentRunDescriptors.get(key);
-    if (!current || current.aborted || current.event?.sender?.isDestroyed?.()) return;
+    if (!current || current.aborted) return;
+    if (current.event?.sender?.isDestroyed?.()) {
+      current.pendingResultId = resultId;
+      return;
+    }
     const continuationPayload = {
       ...(current.payload || {}),
       userMessage: "",
-      continuation: { resultId },
+      continuation: {
+        resultId,
+        controlOnly: subagentCoordinator.hasActiveChildren(key),
+      },
       chatHistory: Array.isArray(current.payload?.chatHistory) ? current.payload.chatHistory : [],
     };
     const result = await handleAgentRun(current.event, continuationPayload, { automaticContinuation: true });
-    // A real user turn can win the boundary race. The coordinator keeps the
-    // FIFO head announced, so retry the same id after that turn completes.
     if (result?.code === "PARENT_BUSY" && !current.aborted) {
       setTimeout(() => scheduleParentContinuation(key, readyResult), 150);
     }
-  }).catch(() => {}).finally(() => {
-    parentContinuationTasks.delete(key);
   });
-  parentContinuationTasks.set(key, task);
-  return true;
 }
 
 function tier1BlockId(rawBlockId, runKey, prompt = "") {
@@ -2801,10 +3162,11 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
 async function handleAgentRun(event, payload = {}, options = {}) {
   const sender = event.sender;
   const sessionId = String(payload.sessionId || payload.memorySessionId || "");
-  const foregroundRunKey = `${event.sender.id}::${sessionId || "__default__"}`;
+  bindAgentSender(sessionId, sender);
+  const foregroundRunKey = sessionRunKey(sessionId);
   const backgroundRuntime = Boolean(payload.backgroundRuntime || options.automaticContinuation);
   const runKey = backgroundRuntime
-    ? `${foregroundRunKey}::background`
+    ? sessionRunKey(sessionId, true)
     : foregroundRunKey;
   // Main-owned delegated-result continuations still claim their FIFO packet
   // from the foreground parent coordinator even though execution is hidden.
@@ -2835,6 +3197,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }
   }
   const continuationResultId = String(payload.continuation?.resultId || "");
+  const continuationQuestionId = String(payload.continuation?.questionRequestId || "");
   const parentDescriptor = rememberParentRunDescriptor(coordinationKey, event, payload, continuationResultId);
   if (parentDescriptor?.aborted && (options.automaticContinuation || payload.backgroundRuntime)) {
     return { ok: false, aborted: true, error: "The agent turn was stopped." };
@@ -2845,15 +3208,19 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   if (continuationResultId && !claimedContinuation?.ok) {
     return { ok: false, error: claimedContinuation?.error || "The delegated result is no longer ready.", code: claimedContinuation?.code || "SUBAGENT_RESULT_NOT_READY" };
   }
-  const parentTurn = subagentCoordinator.beginParentTurn(coordinationKey, { continuation: Boolean(continuationResultId) });
+  const questionHead = continuationQuestionId || options.questionContinuation
+    ? subagentCoordinator.peekQuestionHead(coordinationKey)
+    : null;
+  const parentTurn = subagentCoordinator.beginParentTurn(coordinationKey, { continuation: Boolean(continuationResultId || continuationQuestionId || options.releasePendingEndTurn) });
   if (!parentTurn.ok) {
     return { ok: false, error: parentTurn.error || "The parent agent is already processing a turn.", code: parentTurn.code || "PARENT_BUSY" };
   }
   const sendAgentEvent = (data) => {
-    if (!sender.isDestroyed()) {
+    const target = senderForSession(sessionId, sender);
+    if (target && !target.isDestroyed()) {
       const routedSessionId = String(data?.sessionId || sessionId);
       // Parent-only event shape: sender.send("agent:event", { ...data, sessionId })
-      sender.send("agent:event", {
+      target.send("agent:event", {
         ...data,
         sessionId: routedSessionId,
         ...(options.automaticContinuation ? {
@@ -2876,6 +3243,11 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     displayExecCommand,
     agentTerminalRunner,
   });
+  const listRunningCommands = ({ workspace: commandWorkspace, sessionId: commandSessionId } = {}) => {
+    const manager = container.durableProcessManager;
+    if (typeof manager?.runningCommands !== "function") return [];
+    return manager.runningCommands(commandWorkspace || payload.workspace || "", String(commandSessionId || ""));
+  };
   const delegationProvider = createRuntimeDelegationProvider({
     senderId: event.sender.id,
     runKey: coordinationKey,
@@ -2906,6 +3278,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       approvalProvider: (proposal) => requestToolApproval(event.sender, { ...proposal, sessionId: proposal?.sessionId || sessionId }),
       durableRunId: request?.durableRunId || durableRunId,
     }),
+    listRunningCommands,
     beginChildSession: (childDeps) => (payload.workspace
       ? container.v3SessionStore.begin(payload.workspace, {
         sessionId: childDeps.childSessionId,
@@ -2993,6 +3366,18 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }) || null,
     getBrowserTarget,
     onResultReady: (readyResult) => scheduleParentContinuation(coordinationKey, readyResult),
+    onQuestionEnqueued: (info) => {
+      sendAgentEvent({
+        type: "subagent_question_enqueued",
+        questionRequestId: info.questionRequestId,
+        childInvocationId: info.childInvocationId,
+        childSessionId: info.childSessionId,
+        head: info.head,
+      });
+      scheduleParentQuestionContinuation(coordinationKey, info.questionRequestId);
+    },
+    registerDelegatedQuestion,
+    onDelegatedQuestionResolved: (resolved, input) => afterDelegatedQuestionResolved(coordinationKey, resolved, input),
   });
   let assessmentRun = null;
   if (payload.workspace && !backgroundRuntime) {
@@ -3027,6 +3412,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   if (previousRun) previousRun.abort();
   const runController = new AbortController();
   agentRunControllers.set(runKey, runController);
+  syncPowerSaveBlocker();
   const leasedTools = container.mcpRuntime?.definitionsForSession?.(sessionId, { workspace: payload.workspace, mode: requestedProfile.key }) || [];
   const knownToolNames = new Set(selectedCatalog.tools.map((tool) => tool?.function?.name).filter(Boolean));
   for (const definition of leasedTools) {
@@ -3047,6 +3433,8 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     await container.longHorizonRunStore.begin(payload.workspace, {
       runId: durableRunId,
       sessionId,
+      workspace: payload.workspace,
+      model: String(payload.model || ""),
       objective: continuationResultId ? buildSubagentResultPrompt(claimedContinuation.result) : payload.userMessage || "",
       mode: requestedProfile.key,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
@@ -3054,7 +3442,25 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   }
   const workingReferences = Array.isArray(payload.workingReferences) ? [...payload.workingReferences] : [];
   let result;
+  const subagentQuestionHeadText = buildSubagentQuestionHeadPrompt(questionHead);
+  const orchestrationControlOnly = Boolean(
+    payload.continuation?.controlOnly
+    || (continuationResultId && subagentCoordinator.hasActiveChildren(coordinationKey)),
+  );
   try {
+    if (options.releasePendingEndTurn || payload.releasePendingEndTurn) {
+      result = await runAgentTurn({
+        workspace: payload.workspace,
+        sessionId,
+        signal: runController.signal,
+        sendEvent: sendAgentEvent,
+        releasePendingEndTurn: true,
+        chatHistory: payload.chatHistory || [],
+        runModelRound: async () => ({ ok: false, error: "release pending end turn" }),
+        executeToolCall: async () => ({ ok: false, error: "release pending end turn" }),
+      });
+      if (parentDescriptor) parentDescriptor.pendingEndTurn = false;
+    } else {
     result = await runAgentTurn({
     workspace: payload.workspace,
     model: payload.model,
@@ -3077,7 +3483,16 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     activeFile: payload.activeFile || null,
     extraFiles: payload.extraFiles || [],
     subagentModel: payload.subagentModel || "",
-    userMessage: continuationResultId ? buildSubagentResultPrompt(claimedContinuation.result) : payload.userMessage || "",
+    userMessage: continuationResultId
+      ? [
+        buildSubagentResultPrompt(claimedContinuation.result),
+        orchestrationControlOnly
+          ? "Other delegated children are still queued or working. Use delegate_agent only (list, inspect, steer, stop, follow_up, resolve_question). Do not spawn again and do not write the final user-facing answer until every child has finished."
+          : "",
+      ].filter(Boolean).join("\n\n")
+      : continuationQuestionId
+        ? subagentQuestionHeadText
+        : payload.userMessage || "",
     specialSkill: activeSpecialSkill,
     intelligence: container.assessmentIntelligence,
     projectId: tier1ProjectId,
@@ -3119,6 +3534,9 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       onToken: roundPayload.onToken,
       onToolCalls: roundPayload.onToolCalls,
       onStreamEvent: roundPayload.onStreamEvent,
+      onHeartbeat: () => payload.workspace
+        ? container.longHorizonRunStore.heartbeat(payload.workspace, durableRunId, { phase: "stream" }).catch(() => {})
+        : null,
     }, runKey),
     executeToolCall: (request) => executeToolCall({
       ...request,
@@ -3133,19 +3551,57 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       durableRunId,
       delegationProvider,
     }),
+    listRunningCommands,
     checkpointRun: (patch) => payload.workspace
       ? container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(() => {})
       : Promise.resolve(),
+    persistTurnProgress: async (patch = {}) => {
+      if (payload.workspace) {
+        await container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(() => {});
+      }
+      if (!tier1ProjectId || !container.v3SessionStore?.record) return;
+      const transcriptPrompt = continuationResultId
+        ? buildSubagentResultPrompt(claimedContinuation?.result || {})
+        : String(payload.userMessage || "");
+      const transcriptMessages = [
+        ...(transcriptPrompt ? [{ role: "user", content: transcriptPrompt }] : []),
+        ...(Array.isArray(patch.appendedMessages) ? patch.appendedMessages : []),
+      ];
+      await container.v3SessionStore.record(payload.workspace, {
+        type: "outcome",
+        sessionId: tier1SessionId,
+        blockId: replyBlockId,
+        transcript: transcriptMessages,
+        toolEvents: [],
+        outcome: patch.status === "completed" ? "completed" : "running",
+        sessionMeta: {
+          model: String(payload.model || "").slice(0, 240),
+          provider: String(payload.provider || getActiveProvider() || "ollama").slice(0, 120),
+        },
+      }).catch(() => {});
+    },
     getBrowserTarget,
     toolMetadataForName: (name) => container.mcpRuntime?.metadata?.(name, { workspace: payload.workspace, sessionId, mode: requestedProfile.key }) || null,
     requestQuestions: (proposal) => requestOperatorQuestions(event.sender, { ...proposal, sessionId }),
     findWorkspaceFiles,
     searchWorkspaceIndex,
+    orchestrationHold: () => computeOrchestrationHold(subagentCoordinator, coordinationKey, {
+      parentContinuationScheduled: parentContinuationInFlight(coordinationKey),
+      descriptor: parentDescriptor,
+    }),
+    setPendingEndTurn: (value) => {
+      if (parentDescriptor) parentDescriptor.pendingEndTurn = Boolean(value);
+    },
+    releasePendingEndTurn: Boolean(options.releasePendingEndTurn || payload.releasePendingEndTurn),
+    subagentQuestionHeadText,
+    orchestrationControlOnly,
     });
+    }
   } catch (error) {
     result = { ok: false, error: error.message, code: error.code || "AGENT_RUN_FAILED", runState: { status: "failed" } };
   } finally {
     if (agentRunControllers.get(runKey) === runController) agentRunControllers.delete(runKey);
+    syncPowerSaveBlocker();
     if (payload.workspace) {
       const status = result?.aborted ? "stopped" : result?.runState?.status || (result?.ok ? "completed" : "failed");
       await container.longHorizonRunStore.finish(payload.workspace, durableRunId, status, {
@@ -3200,6 +3656,14 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     });
   }
   appendParentRunHistory(coordinationKey, payload, result);
+  const flags = refreshParentOrchestrationFlags(coordinationKey);
+  const response = {
+    ...(result && typeof result === "object" ? result : { ok: false }),
+    orchestrationHold: Boolean(flags?.orchestrationHold),
+    pendingEndTurn: Boolean(flags?.pendingEndTurn),
+    pendingSubagentResults: subagentCoordinator.pendingResultsForSender(event.sender.id).map((item) => item.resultId),
+    continuationOwner: "main",
+  };
   if (options.automaticContinuation) {
     const pending = parentContinuationOutbox.get(coordinationKey) || [];
     pending.push({
@@ -3217,7 +3681,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       result,
     });
   }
-  return result;
+  return response;
 }
 
 ipcMain.handle("agent:run", handleAgentRun);

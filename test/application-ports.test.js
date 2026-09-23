@@ -7,6 +7,7 @@ const { runAgentTurn } = require("../src/agent/controller/agent-controller.js");
 const { normalizeProfile } = require("../src/agent/modes/mode-registry.js");
 const { createChatPort } = require("../src/agent/llm/common/chat-port.js");
 const ToolPort = require("../src/contracts/tool/tool-port.js");
+const { endTurnCall } = require("./helpers/end-turn-call.js");
 
 test("controller consumes the canonical tool contract without importing concrete adapters directly", () => {
   for (const key of ["MODE_TOOL_GROUPS", "TOOL_GROUPS", "TOOL_META", "LOADABLE_PACK_NAMES", "toolsForProfile", "hotToolNamesForProfile", "compactTools", "buildToolCatalog", "normalizeToolCall", "parseArguments", "targetForTool", "isMutating", "validateToolCall", "deriveErrorClass", "estimateTokenCount", "clampWaitMs"]) {
@@ -63,7 +64,7 @@ test("runAgentTurn is callable with a fake executeToolCall (no concrete adapter)
     dirMap: "ROOT/\n",
     userMessage: "hi",
     sendEvent: () => {},
-    runModelRound: async () => ({ error: null, aborted: false, fullText: "hi back", toolCalls: [] }),
+    runModelRound: async () => ({ error: null, aborted: false, fullText: "hi back", toolCalls: [endTurnCall()] }),
     executeToolCall: async (call) => { called += 1; return { ok: true, toolName: call.function?.name || "" }; },
     findWorkspaceFiles: async () => [],
     searchWorkspaceIndex: async () => [],

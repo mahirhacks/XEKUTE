@@ -101,7 +101,7 @@ export function syncWorkHeaderAffordance(header) {
 }
 
 function createWorkHeader({
-  label = "Working for a moment",
+  label = "Worked for a moment",
   startedAt = 0,
   final = false,
   state = "",
@@ -140,7 +140,9 @@ export function setWorkFoldExpanded(fold, expanded) {
 }
 
 export function toggleWorkFold(fold) {
-  return setWorkFoldExpanded(fold, fold?.dataset?.expanded === "false");
+  if (!isWorkFold(fold)) return fold;
+  fold.dataset.userToggled = "true";
+  return setWorkFoldExpanded(fold, fold.dataset.expanded === "false");
 }
 
 export function createWorkFold({
@@ -205,16 +207,32 @@ export function ensureTurnWorkFold(turn, { startedAt = 0, label } = {}) {
   return adoptIntoWorkFold(turn, fold);
 }
 
-// The reply that closed the run is the only thing left visible once the fold
-// collapses. Idempotent: with an answer already on the turn, nothing further is
-// pulled out of the body.
+function replyHasFollowingWork(node) {
+  for (let sibling = node?.nextElementSibling; sibling; sibling = sibling.nextElementSibling) {
+    if (isWorkNode(sibling)) return true;
+  }
+  return false;
+}
+
+function isStopRoundReply(node) {
+  return node?.dataset?.stopRound === "true";
+}
+
+// The visible answer is the last pre-stop reply with no later tool work.
+// Text from the stop round itself stays inside Worked for when an earlier
+// answer already exists.
 export function promoteFinalAnswer(turn) {
   const fold = turnWorkFold(turn);
   const body = workFoldBody(fold);
   if (!body) return null;
   const promoted = children(turn).find((child) => isReplyNode(child) && !isEmptyReply(child));
   if (promoted) return promoted;
-  const answer = children(body).findLast((child) => isReplyNode(child) && !isEmptyReply(child));
+  const eligible = children(body).filter((child) => (
+    isReplyNode(child) && !isEmptyReply(child) && !replyHasFollowingWork(child)
+  ));
+  const answer = eligible.findLast((child) => !isStopRoundReply(child))
+    || eligible.findLast(isStopRoundReply)
+    || null;
   if (!answer) return null;
   fold.after(answer);
   return answer;

@@ -15,6 +15,7 @@ const {
 const { createDelegateAgentTool } = require("../src/agent/tools/process/delegate-agent.js");
 const { createExecutionContext, projectExecutionContext } = require("../src/contracts/tool/execution-context");
 const { createAssessmentIntelligenceService } = require("../src/app/services/assessment/intelligence/assessment-intelligence-service.js");
+const { endTurnCall } = require("./helpers/end-turn-call.js");
 
 function execContext(root, overrides = {}) {
   return projectExecutionContext(createExecutionContext({
@@ -82,7 +83,7 @@ test("child tools exclude delegate_agent and include the rest", async () => {
       received.signal = payload.signal;
       return { ok: true, finalText: "child report", executedTools: true, evidenceIds: ["e1"], aborted: false };
     },
-    runModelRound: async () => ({ fullText: "ok", toolCalls: [], error: null }),
+    runModelRound: async () => ({ fullText: "ok", toolCalls: [endTurnCall()], error: null }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async (deps) => ({ ok: true, sessionId: deps.childSessionId }),
     sendToRenderer: () => {},
@@ -126,7 +127,7 @@ test("main-owned result handoff marks renderer events observational and invokes 
     coordinator: { registerParent: (_key, options) => { registration = options; } },
     onResultReady: () => { scheduled += 1; return true; },
     runAgentTurn: async () => ({ ok: true, finalText: "child report", runState: { status: "completed" } }),
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child" }),
     sendToRenderer: (event) => events.push(event),
@@ -176,7 +177,7 @@ test("child runs inherit tool metadata, browser scope, and checkpoints", async (
       await payload.checkpointRun({ round: 1 });
       return { ok: true, finalText: "policy-aware", executedTools: true, runState: { status: "completed" } };
     },
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async (request) => { executed.push(request); return { ok: true }; },
     beginChildSession: async () => ({ ok: true, sessionId: "child-policy" }),
     sendToRenderer: () => {},
@@ -212,7 +213,7 @@ test("child project context is finalized before the delegated result returns", a
       appendedMessages: [{ role: "tool", tool_name: "replay_request", content: JSON.stringify({ ok: true, summary: "Verified child result", evidenceIds: ["e-child"] }) }],
       runState: { status: "completed" },
     }),
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child-shared", blockId: "block_1" }),
     recordChildSession: async () => { order.push("persisted"); return { ok: true }; },
@@ -272,7 +273,7 @@ test("tool-less child cannot report a requested file mutation as completed", asy
       executedTools: false,
       runState: { status: "completed" },
     }),
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child-no-write" }),
     sendToRenderer: (event) => events.push(event),
@@ -306,7 +307,7 @@ test("unavailable dedicated model falls back once to the working parent model be
       }
       return { ok: true, finalText: "fallback completed", executedTools: false, runState: { status: "completed" } };
     },
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child-fallback" }),
     sendToRenderer: () => {},
@@ -343,7 +344,7 @@ test("parent abort aborts the child controller", async () => {
       });
       return { ok: false, aborted: true, finalText: "", executedTools: false, evidenceIds: [] };
     },
-    runModelRound: async () => ({ fullText: "", toolCalls: [], error: null }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()], error: null }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child-1" }),
     sendToRenderer: () => {},
@@ -383,7 +384,7 @@ test("an aborted child exception is rendered as stopped", async () => {
     sessionId: "parent-session-1",
     tools: PARENT_TOOLS,
     runAgentTurn: async () => { throw new Error("stream closed"); },
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child-aborted" }),
     sendToRenderer: (event) => events.push(event),
@@ -414,7 +415,7 @@ test("inconclusive child runs fail closed while preserving the runtime status", 
       finalText: "The context could not fit.",
       runState: { status: "inconclusive", stopReason: "Context budget exceeded." },
     }),
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child-inconclusive" }),
     sendToRenderer: (event) => events.push(event),
@@ -447,7 +448,7 @@ test("rejected follow-up does not replace the live child abort registration", as
     tools: PARENT_TOOLS,
     coordinator,
     runAgentTurn: async () => ({ ok: true }),
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child-live" }),
     sendToRenderer: () => {},
@@ -477,7 +478,7 @@ test("provider error is thrown and mapped by the adapter to DELEGATE_AGENT_DELEG
     sessionId: "parent-session-1",
     tools: PARENT_TOOLS,
     runAgentTurn: async () => { throw new Error("OpenRouter 404: no endpoints"); },
-    runModelRound: async () => ({ fullText: "", toolCalls: [], error: null }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()], error: null }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async () => ({ ok: true, sessionId: "child-err" }),
     sendToRenderer: () => {},
@@ -528,7 +529,7 @@ test("child runs apply_patch through the provided executeToolCall and the file l
       seenToolCalls.push(first);
       return { ok: true, finalText: "Created test3.txt", executedTools: true, evidenceIds: [], aborted: false };
     },
-    runModelRound: async () => ({ fullText: "", toolCalls: [], error: null }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()], error: null }),
     executeToolCall: async ({ toolCall }) => {
       const args = JSON.parse(toolCall.function.arguments);
       const { createApplyPatchTool } = require("../src/agent/tools/workspace/apply-patch.js");
@@ -579,7 +580,7 @@ test("coordinated children run in the background and raw child events stay out o
       payload.sendEvent({ type: "content", delta: "private child output" });
       return { ok: true, finalText: "child report", executedTools: false, appendedMessages: [{ role: "assistant", content: "child report" }] };
     },
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async (deps) => ({ ok: true, sessionId: deps.childSessionId, blockId: "block-1" }),
     sendToRenderer: (event) => events.push(event),
@@ -620,7 +621,7 @@ test("follow_up resumes the same coordinated child session with its prior histor
       round += 1;
       return { ok: true, finalText: `report ${round}`, appendedMessages: [{ role: "assistant", content: `report ${round}` }] };
     },
-    runModelRound: async () => ({ fullText: "", toolCalls: [] }),
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
     executeToolCall: async () => ({ ok: true }),
     beginChildSession: async (deps) => ({ ok: true, sessionId: deps.childSessionId, blockId: `block-${round + 1}` }),
     sendToRenderer: () => {},

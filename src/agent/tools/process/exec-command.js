@@ -8,7 +8,7 @@ const { denyUserTerminalControl } = require("../../../app/services/terminal/acti
 
 const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
   type: "object",
-  description: "Run an arbitrary shell command or launch an executable in the active workspace. On Windows, command mode defaults to PowerShell and supports pipelines, redirects, variables, quoting, and multiline scripts.",
+  description: "Run an arbitrary shell command or launch an executable in the active workspace. On Windows, command mode defaults to PowerShell and supports pipelines, redirects, variables, quoting, and multiline scripts. A chat can have at most 3 run or start commands active. If one response asks for more run or start commands than there are free slots, none of those commands start.",
   properties: {
     operation: { type: "string", enum: ["run", "start", "status", "stop", "list"], description: "run waits until the command exits, then returns stdout/stderr/exit to the agent. start creates a durable background job immediately; status, stop, and list are secondary inspect, cancel, and list operations." },
     command: { type: "string", description: "Complete shell command or multiline script. Prefer this for PowerShell/cmd syntax, pipelines, redirection, and compound commands." },

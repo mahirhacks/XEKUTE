@@ -31,23 +31,71 @@ function oneLiner(task, fallback = "") {
   return (value || String(fallback || "")).slice(0, 160);
 }
 
-function buildChildContextText(input, executionContext) {
+function jsonSection(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value || "");
+  }
+}
+
+function appendSteeringUpdate(contextText, steeringSections = []) {
+  if (!Array.isArray(steeringSections) || !steeringSections.length) return contextText;
+  const blocks = steeringSections.map((section, index) => `### Steering update ${index + 1}\n${String(section || "").trim()}`);
+  return `${contextText}\n\n## Steering update\n${blocks.join("\n\n")}`;
+}
+
+function buildChildContextText(input, executionContext, steeringSections = []) {
   const contextPackage = input?.contextPackage && typeof input.contextPackage === "object"
     ? { ...input.contextPackage }
     : {};
+  const task = String(input?.task || "").slice(0, MAX_TASK_CHARS);
+  const expectedOutput = input?.expectedOutput && typeof input.expectedOutput === "object"
+    ? input.expectedOutput
+    : {};
   const safeContext = redactStructuredValue({
-    task: String(input?.task || "").slice(0, MAX_TASK_CHARS),
-    context: contextPackage,
-    expectedOutput: input?.expectedOutput || {},
+    scope: contextPackage.scope || {},
+    identity: contextPackage.identity || {},
+    resources: contextPackage.resources || {},
     inheritedRuntime: {
       mode: executionContext?.mode || executionContext?.role || "agent",
       workspace: executionContext?.workspace?.root || "",
       parentInvocationId: executionContext?.invocationId || "",
     },
   });
-  let contextText = JSON.stringify(safeContext, null, 2);
+  const sections = [
+    "## Objective",
+    task,
+    "",
+    "## Role",
+    String(contextPackage.role || "").slice(0, MAX_TASK_CHARS),
+    "",
+    "## Authority",
+    String(contextPackage.authority || "").slice(0, MAX_TASK_CHARS),
+    "",
+    "## Scope",
+    jsonSection(safeContext.scope || {}),
+    "",
+    "## Identity",
+    jsonSection(safeContext.identity || {}),
+    "",
+    "## Resources",
+    jsonSection(safeContext.resources || {}),
+    "",
+    "## Inherited runtime",
+    jsonSection(safeContext.inheritedRuntime || {}),
+    "",
+    "## Expected output",
+    String(expectedOutput.description || "").slice(0, MAX_TASK_CHARS),
+    "",
+    "## Return format (required)",
+    String(expectedOutput.format || "").slice(0, MAX_TASK_CHARS),
+    "",
+    "You must return output that matches the return format above.",
+  ];
+  let contextText = sections.join("\n");
   if (contextText.length > MAX_CONTEXT_CHARS) contextText = `${contextText.slice(0, MAX_CONTEXT_CHARS)}\n[bounded by XEKUTE]`;
-  return contextText;
+  return appendSteeringUpdate(contextText, steeringSections);
 }
 
 function requestedWorkspaceMutation(input = {}) {
@@ -113,6 +161,7 @@ function createRuntimeDelegationProvider({
   runAgentTurn,
   runModelRound,
   executeToolCall,
+  listRunningCommands = async () => [],
   beginChildSession,
   sendToRenderer,
   registerChildRun,
@@ -133,6 +182,9 @@ function createRuntimeDelegationProvider({
   getBrowserTarget = () => "",
   checkpointRun = () => Promise.resolve(),
   onResultReady = null,
+  onQuestionEnqueued = null,
+  registerDelegatedQuestion = null,
+  onDelegatedQuestionResolved = null,
 } = {}) {
   if (typeof runAgentTurn !== "function") throw new TypeError("runAgentTurn is required");
   if (typeof runModelRound !== "function") throw new TypeError("runModelRound is required");
@@ -321,14 +373,47 @@ function createRuntimeDelegationProvider({
     return binding;
   }
 
-  function buildRun({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation, operation, previousHistory = [], model = "" }) {
+  function buildRun({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation, operation, previousHistory = [], model = "", steeringSections = [] }) {
     const mutation = requestedWorkspaceMutation(input);
     const inheritedContext = executionContext || { mode, role: mode, workspace: { root: workspace }, invocationId: childInvocationId };
-    const contextText = buildChildContextText(input, inheritedContext);
+    const contextText = buildChildContextText(input, inheritedContext, steeringSections);
     const childModel = String(model || subagentModel || parentModel || "").trim();
     const childTools = currentTools();
-    const childContextText = contextText;
     const childActions = [];
+    const delegatedQuestionProvider = typeof registerDelegatedQuestion === "function"
+      ? async (proposal) => {
+        if (!coordinator?.enqueueQuestion) {
+          throw Object.assign(new Error("Delegated question routing is unavailable."), { code: "DELEGATE_AGENT_PROVIDER_UNAVAILABLE" });
+        }
+        const requestId = String(proposal.requestId || "");
+        const enqueued = coordinator.enqueueQuestion({
+          parentKey: runKey,
+          questionRequestId: requestId,
+          childInvocationId,
+          childSessionId,
+          parentSessionId: sessionId,
+          payload: proposal,
+        });
+        if (!enqueued.ok) {
+          throw Object.assign(new Error(enqueued.error || "Could not enqueue delegated question."), { code: enqueued.code || "DELEGATION_FAILED" });
+        }
+        sendChildEvent(childSessionId, childInvocationId, {
+          type: "questions_required",
+          ...proposal,
+          delegatedChild: true,
+          childSessionId,
+          parentSessionId: sessionId,
+        });
+        try { onQuestionEnqueued?.({ ...enqueued, proposal, childInvocationId, childSessionId, parentKey: runKey }); } catch { /* best effort */ }
+        return registerDelegatedQuestion({
+          ...proposal,
+          childInvocationId,
+          childSessionId,
+          parentKey: runKey,
+          parentSessionId: sessionId,
+        });
+      }
+      : null;
     const executeChildToolCall = async (request) => {
       const toolName = String(request?.toolCall?.function?.name || request?.toolCall?.toolName || "");
       let toolResult;
@@ -340,6 +425,7 @@ function createRuntimeDelegationProvider({
           nested: true,
           authorityProfile,
           childInvocationId,
+          ...(toolName === "ask_questions" && delegatedQuestionProvider ? { questionProvider: delegatedQuestionProvider } : {}),
         });
       } catch (error) {
         childActions.push({ toolName, target: targetFromToolCall(request), ok: false, code: String(error?.code || "TOOL_EXECUTION_FAILED") });
@@ -351,45 +437,76 @@ function createRuntimeDelegationProvider({
         ok: Boolean(toolResult?.ok && !toolResult?.error),
         code: String(toolResult?.error?.code || toolResult?.errorCode || toolResult?.code || ""),
       });
+      if (coordinator?.drainSteerQueue) {
+        coordinator.drainSteerQueue(childInvocationId, runKey);
+      }
       return toolResult;
     };
     return {
       mutation,
       childActions,
-      run: () => runAgentTurn({
-        workspace,
-        model: childModel,
-        numCtx: Math.max(4_096, Number(numCtx) || 8_192),
-        contextBudget: Math.max(4_096, Number(contextPlan?.promptBudgetTokens || numCtx) || 8_192),
-        contextPlan: contextPlan || null,
-        thinking,
-        reasoningEffort,
-        tools: childTools,
-        mode,
-        modeFamily,
-        projectProfile,
-        intelligence,
-        tier1Context,
-        workingReferences,
-        authorityProfile,
-        sessionId: childSessionId,
-        memorySessionId: memorySessionIdFor(childSessionId, childInvocationId),
-        userMessage: String(input?.task || ""),
-        chatHistory: Array.isArray(previousHistory) ? previousHistory : [],
-        signal: childController.signal,
-        sendEvent: (event) => sendChildEvent(childSessionId, childInvocationId, event),
-        runModelRound: (roundPayload) => runModelRound(senderId, roundPayload, {
-          onThinking: roundPayload.onThinking,
-          onToken: roundPayload.onToken,
-          onToolCalls: roundPayload.onToolCalls,
-          onStreamEvent: roundPayload.onStreamEvent,
-        }, `${runKey}::${childInvocationId}::${generation || operation || "run"}`),
-        executeToolCall: executeChildToolCall,
-        toolMetadataForName: (name) => toolMetadataForName(name, childSessionId),
-        getBrowserTarget,
-        checkpointRun: (patch) => checkpointRun(patch, { childSessionId, childInvocationId, generation, operation }),
-        nested: true,
-      }),
+      run: async () => {
+        let chatHistory = Array.isArray(previousHistory) ? [...previousHistory] : [];
+        let lastResult = null;
+        for (let roundIndex = 0; roundIndex < 256; roundIndex += 1) {
+          const steers = coordinator?.drainSteerQueue?.(childInvocationId, runKey) || [];
+          if (steers.length) {
+            chatHistory.push({
+              role: "user",
+              content: appendSteeringUpdate("", steers.map((item) => item.instruction)),
+            });
+          }
+          lastResult = await runAgentTurn({
+            workspace,
+            model: childModel,
+            numCtx: Math.max(4_096, Number(numCtx) || 8_192),
+            contextBudget: Math.max(4_096, Number(contextPlan?.promptBudgetTokens || numCtx) || 8_192),
+            contextPlan: contextPlan || null,
+            thinking,
+            reasoningEffort,
+            tools: childTools,
+            mode,
+            modeFamily,
+            projectProfile,
+            intelligence,
+            tier1Context,
+            workingReferences,
+            authorityProfile,
+            sessionId: childSessionId,
+            memorySessionId: memorySessionIdFor(childSessionId, childInvocationId),
+            userMessage: roundIndex === 0 ? String(input?.task || "") : "",
+            chatHistory,
+            signal: childController.signal,
+            sendEvent: (event) => sendChildEvent(childSessionId, childInvocationId, event),
+            runModelRound: (roundPayload) => runModelRound(senderId, roundPayload, {
+              onThinking: roundPayload.onThinking,
+              onToken: roundPayload.onToken,
+              onToolCalls: roundPayload.onToolCalls,
+              onStreamEvent: roundPayload.onStreamEvent,
+            }, `${runKey}::${childInvocationId}::${generation || operation || "run"}::${roundIndex}`),
+            executeToolCall: executeChildToolCall,
+            listRunningCommands,
+            toolMetadataForName: (name) => toolMetadataForName(name, childSessionId),
+            getBrowserTarget,
+            checkpointRun: (patch) => checkpointRun(patch, { childSessionId, childInvocationId, generation, operation }),
+            nested: true,
+            maxAgentRounds: 1,
+          });
+          if (Array.isArray(lastResult?.appendedMessages) && lastResult.appendedMessages.length) {
+            chatHistory = [...chatHistory, ...lastResult.appendedMessages];
+          }
+          if (childController.signal.aborted || lastResult?.aborted) break;
+          const runtimeStatus = String(lastResult?.runState?.status || "").toLowerCase();
+          const terminal = ["completed", "stopped", "failed"].includes(runtimeStatus);
+          const pendingSteers = coordinator?.getChild?.(childInvocationId, runKey)?.steerQueue?.length || 0;
+          if (terminal && !pendingSteers) break;
+          if (terminal && pendingSteers) {
+            continue;
+          }
+          if (!terminal && runtimeStatus !== "inconclusive") break;
+        }
+        return lastResult;
+      },
     };
   }
 
@@ -587,8 +704,101 @@ function createRuntimeDelegationProvider({
     }
   }
 
+  function acceptancePayload({ childInvocationId, childSessionId = "", status = "queued", operation = "spawn", summary = "", format = "text", extra = {} }) {
+    return {
+      ok: true,
+      acceptance: true,
+      childInvocationId,
+      childSessionId,
+      status,
+      operation,
+      output: { text: "", format, summary },
+      metadata: { sessionId: childSessionId, operation, ...extra },
+      ...extra,
+    };
+  }
+
   return async function delegate(input, executionContext, runtime = {}) {
-    const operation = String(input?.operation || "spawn").toLowerCase() === "follow_up" ? "follow_up" : "spawn";
+    const operation = String(input?.operation || "spawn").toLowerCase();
+    if (!coordinator) {
+      if (operation !== "spawn" && operation !== "follow_up") {
+        throw Object.assign(new Error("Delegation coordinator is unavailable."), { code: "DELEGATE_AGENT_PROVIDER_UNAVAILABLE" });
+      }
+    } else if (operation === "list") {
+      return acceptancePayload({
+        childInvocationId: "list",
+        status: "completed",
+        operation: "list",
+        summary: "Roster listed.",
+        format: "json",
+        children: coordinator.listChildren(runKey),
+      });
+    } else if (operation === "inspect") {
+      const entry = coordinator.getRosterEntry(runKey, input?.childInvocationId);
+      if (!entry) throw Object.assign(new Error("The delegated child no longer exists."), { code: "UNKNOWN_SUBAGENT" });
+      return acceptancePayload({
+        childInvocationId: entry.childInvocationId,
+        childSessionId: entry.childSessionId,
+        status: entry.status,
+        operation: "inspect",
+        summary: entry.taskSummary,
+        roster: entry,
+      });
+    } else if (operation === "stop") {
+      const existing = coordinator.getChild(input?.childInvocationId, runKey);
+      if (!existing) throw Object.assign(new Error("The delegated child no longer exists."), { code: "UNKNOWN_SUBAGENT" });
+      if (existing.status === "completed" || existing.status === "stopped" || existing.status === "failed") {
+        return acceptancePayload({
+          childInvocationId: existing.childInvocationId,
+          childSessionId: existing.childSessionId,
+          status: existing.status,
+          operation: "stop",
+          summary: "Child already terminal.",
+        });
+      }
+      coordinator.cancelChild(existing.childInvocationId, runKey);
+      return acceptancePayload({
+        childInvocationId: existing.childInvocationId,
+        childSessionId: existing.childSessionId,
+        status: "stopped",
+        operation: "stop",
+        summary: "Stop accepted.",
+      });
+    } else if (operation === "steer") {
+      const instruction = buildChildContextText(input, executionContext);
+      const steered = coordinator.enqueueSteer({
+        parentKey: runKey,
+        childInvocationId: input?.childInvocationId,
+        instruction,
+      });
+      if (!steered.ok) throw Object.assign(new Error(steered.error || "Steer rejected."), { code: steered.code || "DELEGATION_FAILED" });
+      return acceptancePayload({
+        childInvocationId: steered.childInvocationId,
+        childSessionId: steered.childSessionId,
+        status: steered.status,
+        operation: "steer",
+        summary: "Steer queued.",
+        steerQueueLength: steered.steerQueueLength,
+      });
+    } else if (operation === "resolve_question") {
+      const resolution = String(input?.resolution || "").toLowerCase();
+      const resolved = coordinator.resolveQuestion({
+        parentKey: runKey,
+        questionRequestId: input?.questionRequestId || "",
+        resolution,
+      });
+      if (!resolved.ok) throw Object.assign(new Error(resolved.error || "Question could not be resolved."), { code: resolved.code || "DELEGATION_FAILED" });
+      try { onDelegatedQuestionResolved?.(resolved, input); } catch { /* best effort */ }
+      return {
+        ok: true,
+        questionRequestId: resolved.questionRequestId,
+        childInvocationId: resolved.childInvocationId,
+        childSessionId: resolved.childSessionId,
+        resolution: resolved.resolution,
+        escalated: resolved.escalated,
+      };
+    }
+
     if (coordinator && operation === "follow_up") {
       const existing = coordinator.getChild(input?.childInvocationId, runKey);
       if (!existing) throw Object.assign(new Error("The delegated child no longer exists."), { code: "UNKNOWN_SUBAGENT" });
@@ -651,20 +861,48 @@ function createRuntimeDelegationProvider({
         task: String(prepared.input?.task || ""),
         summary: oneLiner(input?.task || "", "Working on delegated follow-up"),
       });
-      return { childInvocationId: existing.childInvocationId, output: { text: "", format: String(prepared.input.expectedOutput?.format || "text"), summary: "Follow-up accepted." }, status: queued.status, metadata: { sessionId: childSessionId, operation, generation: queued.generation, memoryDispatch: prepared.dispatch ? { packetId: prepared.dispatch.packet?.packet_id || "", packetHash: prepared.dispatch.packetHash || "" } : null, memoryAssignment: prepared.assignment?.lease ? { leaseId: prepared.assignment.lease.lease_id } : null } };
+      return acceptancePayload({
+        childInvocationId: existing.childInvocationId,
+        childSessionId,
+        status: queued.status,
+        operation: "follow_up",
+        summary: "Follow-up accepted.",
+        format: String(prepared.input.expectedOutput?.format || "text"),
+        generation: queued.generation,
+        memoryDispatch: prepared.dispatch ? { packetId: prepared.dispatch.packet?.packet_id || "", packetHash: prepared.dispatch.packetHash || "" } : null,
+        memoryAssignment: prepared.assignment?.lease ? { leaseId: prepared.assignment.lease.lease_id } : null,
+      });
     }
 
+    const spawnAgents = Array.isArray(input?.agents) && input.agents.length
+      ? input.agents
+      : [{
+        task: input?.task,
+        contextPackage: input?.contextPackage,
+        expectedOutput: input?.expectedOutput,
+      }];
+
+    if (coordinator && operation === "spawn") {
+      const admission = coordinator.validateSpawnAdmission?.(runKey, spawnAgents.length);
+      if (admission && !admission.ok) {
+        throw Object.assign(new Error(admission.error || "Spawn rejected."), { code: admission.code || "DELEGATION_FAILED" });
+      }
+    }
+
+    const acceptedChildren = [];
+    for (const agentSpec of spawnAgents) {
+      const spawnInput = { ...input, ...agentSpec, operation: "spawn" };
     const childInvocationId = `subagent-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
     const childSessionSeed = `subagent-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
     const childSession = await beginSession({
       childSessionId: childSessionSeed,
       childInvocationId,
-      task: input?.task,
+      task: spawnInput?.task,
       model: String(subagentModel || parentModel || ""),
       operation,
     });
     const childSessionId = childSession.sessionId;
-    const prepared = await prepareDelegation({ input, executionContext, childInvocationId, childSessionId, operation });
+    const prepared = await prepareDelegation({ input: spawnInput, executionContext, childInvocationId, childSessionId, operation });
     const childControllerState = createChildController(runtime);
     const childController = childControllerState.controller;
     registerChildRun?.({ parentRunKey: runKey, childSessionId, controller: childController });
@@ -691,7 +929,7 @@ function createRuntimeDelegationProvider({
             status: "stopped",
             operation,
             model: String(subagentModel || parentModel || "").trim(),
-            task: String(input?.task || ""),
+            task: String(spawnInput?.task || ""),
             summary: "Stopped before the child started.",
           });
           Promise.resolve(recordChildSession?.({
@@ -702,7 +940,7 @@ function createRuntimeDelegationProvider({
             operation,
             model: String(subagentModel || parentModel || "").trim(),
             status: "stopped",
-            output: { text: "", format: String(input?.expectedOutput?.format || "text"), summary: "Stopped before the child started." },
+            output: { text: "", format: String(spawnInput?.expectedOutput?.format || "text"), summary: "Stopped before the child started." },
             metadata: { sessionId: childSessionId, model: String(subagentModel || parentModel || "").trim(), error: "Stopped before the child started." },
           })).catch(() => {});
           releaseAssignment(prepared.assignment).catch(() => {});
@@ -726,7 +964,13 @@ function createRuntimeDelegationProvider({
         task: String(prepared.input?.task || ""),
         summary,
       });
-      return { childInvocationId, output: { text: "", format: String(prepared.input?.expectedOutput?.format || "text"), summary: "Child accepted and running in the background." }, status: started.status, metadata: { sessionId: childSessionId, operation, generation: started.generation, memoryDispatch: prepared.dispatch ? { packetId: prepared.dispatch.packet?.packet_id || "", packetHash: prepared.dispatch.packetHash || "" } : null, memoryAssignment: prepared.assignment?.lease ? { leaseId: prepared.assignment.lease.lease_id } : null } };
+      acceptedChildren.push({
+        childInvocationId,
+        childSessionId,
+        status: started.status,
+        generation: started.generation,
+      });
+      continue;
     }
 
     try {
@@ -735,6 +979,25 @@ function createRuntimeDelegationProvider({
     } finally {
       unregisterChildRun?.(childSessionId);
     }
+    }
+
+    if (coordinator && acceptedChildren.length) {
+      const head = acceptedChildren[0];
+      return acceptancePayload({
+        childInvocationId: head.childInvocationId,
+        childSessionId: head.childSessionId,
+        status: head.status,
+        operation: "spawn",
+        summary: acceptedChildren.length === 1
+          ? "Child accepted and running in the background."
+          : `${acceptedChildren.length} delegated children accepted and running in the background.`,
+        format: String(spawnAgents[0]?.expectedOutput?.format || "text"),
+        generation: head.generation,
+        children: acceptedChildren.map(({ childInvocationId, childSessionId, status }) => ({ childInvocationId, childSessionId, status })),
+      });
+    }
+
+    throw Object.assign(new Error("Delegation coordinator is unavailable."), { code: "DELEGATE_AGENT_PROVIDER_UNAVAILABLE" });
   };
 }
 
@@ -745,6 +1008,7 @@ module.exports = {
   WORKSPACE_MUTATION_TOOLS,
   oneLiner,
   buildChildContextText,
+  appendSteeringUpdate,
   requestedWorkspaceMutation,
   isModelAvailabilityFailure,
   childResultStatus,
