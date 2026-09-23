@@ -1,7 +1,7 @@
 "use strict";
 
 const { readdirSync, lstatSync, realpathSync } = require("node:fs");
-const { readFile } = require("node:fs").promises;
+const { open } = require("node:fs/promises");
 const {
   join: joinPath,
   relative: relativePath,
@@ -300,22 +300,20 @@ function takeLimited(value, max = 1000) {
 }
 
 async function searchTextInFile(file, query, mode, { caseSensitive, maxResults, workspaceRoot, compiledPattern }) {
-  let stat;
-  try {
-    stat = lstatSync(file);
-  } catch {
-    return { matches: [], skipped: true, reason: "stat_failed" };
-  }
-  if (!stat.isFile()) return { matches: [], skipped: true, reason: "not_file" };
-  if (stat.size > MAX_SEARCH_FILE_BYTES) return { matches: [], skipped: true, reason: "too_large" };
-
+  let handle;
   let content;
   try {
-    const buffer = await readFile(file);
+    handle = await open(file, "r");
+    const stat = await handle.stat();
+    if (!stat.isFile()) return { matches: [], skipped: true, reason: "not_file" };
+    if (stat.size > MAX_SEARCH_FILE_BYTES) return { matches: [], skipped: true, reason: "too_large" };
+    const buffer = await handle.readFile();
     if (buffer.includes(0)) return { matches: [], skipped: true, reason: "binary" };
     content = buffer.toString("utf8").replace(/\r\n/g, "\n");
   } catch {
     return { matches: [], skipped: true, reason: "read_failed" };
+  } finally {
+    if (handle) await handle.close().catch(() => {});
   }
 
   const rel = normalizeSeparators(relativePath(workspaceRoot, file));
