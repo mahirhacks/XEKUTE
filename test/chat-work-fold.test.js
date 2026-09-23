@@ -41,6 +41,7 @@ test("the work fold is a container with a single collapse point", async () => {
   toggleWorkFold(fold);
   assert.equal(fold.dataset.expanded, "true");
   assert.equal(header.getAttribute("aria-expanded"), "true");
+  assert.equal(fold.dataset.userToggled, "true");
 });
 
 // Tool rows force their own display with !important, so hiding them one by one
@@ -83,6 +84,56 @@ test("only the reply that closed the run leaves the fold", async () => {
   // Running again must not peel a second reply out of the body.
   assert.equal(promoteFinalAnswer(turn), answer);
   assert.equal(middle.parentElement, body);
+});
+
+test("progress replies that still have work after them stay inside the fold", async () => {
+  const { ensureTurnWorkFold, workFoldBody, promoteFinalAnswer } = await load();
+  const opening = node("assistant-reply", { text: "Let me look." });
+  const firstCard = node("agent-file-row tool-card", { text: "Read ." });
+  const middle = node("assistant-reply", { text: "Found a targets directory." });
+  const secondCard = node("agent-file-row tool-card", { text: "Read targets" });
+  const turn = assistantTurn(opening, firstCard, middle, secondCard);
+
+  const fold = ensureTurnWorkFold(turn);
+  const body = workFoldBody(fold);
+  assert.equal(promoteFinalAnswer(turn), null);
+  assert.deepEqual([...turn.children], [fold]);
+  for (const child of [opening, firstCard, middle, secondCard]) {
+    assert.equal(child.parentElement, body);
+  }
+});
+
+test("the reply before a stop-round recap is the visible answer", async () => {
+  const { ensureTurnWorkFold, workFoldBody, promoteFinalAnswer } = await load();
+  const opening = node("assistant-reply", { text: "Let me look." });
+  const card = node("agent-file-row tool-card", { text: "Read notes" });
+  const answer = node("assistant-reply", { text: "Here is the gathered inventory." });
+  const recap = node("assistant-reply", { text: "Yes — I can see everything. Short recap." });
+  recap.dataset.stopRound = "true";
+  const turn = assistantTurn(opening, card, answer, recap);
+
+  const fold = ensureTurnWorkFold(turn);
+  const body = workFoldBody(fold);
+  assert.equal(promoteFinalAnswer(turn), answer);
+  assert.equal(answer.previousElementSibling, fold);
+  assert.equal(recap.parentElement, body);
+  assert.equal(opening.parentElement, body);
+  assert.equal(card.parentElement, body);
+});
+
+test("the last real reply stays the visible answer even if an empty segment follows later work", async () => {
+  const { ensureTurnWorkFold, workFoldBody, promoteFinalAnswer } = await load();
+  const opening = node("assistant-reply", { text: "Checking the workspace." });
+  const card = node("agent-file-row tool-card", { text: "Read README.md" });
+  const answer = node("assistant-reply", { text: "The start script is electron ." });
+  const emptyAfterStop = node("assistant-reply", { hidden: true });
+  const turn = assistantTurn(opening, card, answer, emptyAfterStop);
+
+  ensureTurnWorkFold(turn);
+  assert.equal(promoteFinalAnswer(turn), answer);
+  assert.equal(answer.previousElementSibling, turn.querySelector(".agent-work-fold"));
+  assert.equal(opening.parentElement, workFoldBody(turn.querySelector(".agent-work-fold")));
+  assert.equal(card.parentElement, workFoldBody(turn.querySelector(".agent-work-fold")));
 });
 
 test("blank reply placeholders are never promoted as the answer", async () => {
@@ -142,7 +193,7 @@ test("a flat snapshot migrates into a fold and keeps its recorded duration", asy
 
 test("a finished label makes the fold foldable and carries a caret", async () => {
   const { createWorkFold, workFoldHeader } = await load();
-  const live = createWorkFold({ label: "Working for 3s" });
+  const live = createWorkFold({ label: "Worked for 3s" });
   assert.equal(workFoldHeader(live).dataset.foldable, "true");
   assert.ok(workFoldHeader(live).querySelector(".agent-work-caret"));
 

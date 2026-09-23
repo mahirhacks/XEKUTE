@@ -4,6 +4,7 @@
 // this module owns names, categories, mutation flags, and mode surfaces.
 const TOOL_REGISTRY_NAMES = Object.freeze([
   "ask_questions",
+  "end_turn",
   "exec_command",
   "view_active_terminal",
   "read_file",
@@ -18,6 +19,7 @@ const TOOL_REGISTRY_NAMES = Object.freeze([
 
 const TOOL_METADATA = Object.freeze({
   ask_questions: Object.freeze({ mutating: false, reversible: true, interactive: true, targetTypes: ["operator", "interaction"] }),
+  end_turn: Object.freeze({ mutating: false, reversible: true, interactive: false, targetTypes: ["operator", "interaction"] }),
   exec_command: Object.freeze({ mutating: true, reversible: false, targetTypes: ["process", "workspace"] }),
   view_active_terminal: Object.freeze({ mutating: false, reversible: true, targetTypes: ["process", "workspace"] }),
   read_file: Object.freeze({ mutating: false, reversible: true, targetTypes: ["file", "workspace"] }),
@@ -26,12 +28,17 @@ const TOOL_METADATA = Object.freeze({
   manage_identity: Object.freeze({ mutating: true, reversible: true, targetTypes: ["identity", "session", "workspace"] }),
   replay_request: Object.freeze({ mutating: false, reversible: false, targetTypes: ["network", "request"] }),
   browser_action: Object.freeze({ mutating: false, reversible: false, targetTypes: ["browser", "network"] }),
-  delegate_agent: Object.freeze({ mutating: false, reversible: false, targetTypes: ["delegated-resource", "agent"] }),
+  delegate_agent: Object.freeze({
+    mutating: false,
+    reversible: false,
+    targetTypes: ["delegated-resource", "agent"],
+    operations: ["spawn", "follow_up", "steer", "stop", "list", "inspect", "resolve_question"],
+  }),
   web_research: Object.freeze({ mutating: false, reversible: false, targetTypes: ["research", "public-web"] }),
 });
 
 const ALL_MODE_TOOLS = Object.freeze([...TOOL_REGISTRY_NAMES]);
-const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "read_file", "search_workspace", "view_active_terminal"]);
+const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal"]);
 const MODE_TOOL_GROUPS = Object.freeze({
   ask: SAFE_READ_TOOLS,
   agent: ALL_MODE_TOOLS,

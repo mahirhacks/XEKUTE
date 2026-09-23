@@ -6,12 +6,13 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { resolveShellInvocation } = require("../../../agent/tools/process/exec-command.js");
+const { MAX_COMMAND_SLOTS, queueRejectionResult } = require("../../../agent/tools/process/command-queue.js");
 const { redactSecrets } = require("../../../shared/secret-redaction.js");
 const { sampleProcessTree } = require("./process-tree-sampler.js");
 
 const DEFAULT_MONITOR_INTERVAL_MS = 30_000;
 const DEFAULT_OUTPUT_POLL_MS = 250;
-const DEFAULT_REVIEW_INTERVAL_MS = 30 * 60 * 1000;
+const DEFAULT_REVIEW_INTERVAL_MS = 15 * 60 * 1000;
 const MAX_STREAM_CHUNK = 50_000;
 
 function createDurableProcessManager({
@@ -30,6 +31,7 @@ function createDurableProcessManager({
 } = {}) {
   const live = new Map();
   const records = new Map();
+  const pendingSlots = new Map();
 
   function rootFor(workspace) {
     const digest = crypto.createHash("sha256").update(pathImpl.resolve(workspace)).digest("hex").slice(0, 16);
@@ -296,7 +298,7 @@ function createDurableProcessManager({
       stderr: value.stderr,
       cursor: value.cursor,
       outputCompleteness: value.outputCompleteness,
-      instruction: "Review the live process. Continue it if healthy, or stop it with exec_command operation=stop and this process_id.",
+      instruction: "Review the live process. It still holds a queue slot. Leave it running, or stop it with exec_command operation=stop and this process_id. Another live status is sent at the next review if it is still running.",
     };
   }
   function clearEntryTimers(entry) {
@@ -384,6 +386,12 @@ function createDurableProcessManager({
     entry.reviewTimer = setInterval(() => {
       if (entry.finished) return;
       const report = reviewReport(entry);
+      if (typeof entry.foregroundReview === "function") {
+        const deliver = entry.foregroundReview;
+        entry.foregroundReview = null;
+        deliver(report);
+        return;
+      }
       entry.runtime?.heartbeat?.({ kind: "process_review_checkpoint", processId: entry.record.id, elapsedMs: report.elapsedMs });
       emit(entry.runtime, { type: "terminal_checkpoint", ...report });
       try { entry.runtime?.onReview?.(report); } catch { /* best effort */ }
@@ -436,7 +444,64 @@ function createDurableProcessManager({
       observe();
     });
   }
+  function sessionKey(workspace, sessionId = "") {
+    return `${pathImpl.resolve(String(workspace || ""))}::${String(sessionId || "")}`;
+  }
+  function runningEntries(workspace, sessionId = "") {
+    const root = pathImpl.resolve(String(workspace || ""));
+    const wantSession = String(sessionId || "");
+    const found = [];
+    for (const entry of live.values()) {
+      if (!entry || entry.finished) continue;
+      if (pathImpl.resolve(String(entry.workspace || "")) !== root) continue;
+      if (String(entry.record?.sessionId || "") !== wantSession) continue;
+      found.push(entry);
+    }
+    return found;
+  }
+  function describeRunning(entries) {
+    return entries.map((entry) => ({
+      processId: String(entry.record?.id || ""),
+      command: String(entry.record?.command || ""),
+    }));
+  }
+  function runningCommands(workspace, sessionId = "") {
+    return describeRunning(runningEntries(workspace, sessionId));
+  }
+  function reserveCommandSlot(workspace, sessionId = "") {
+    const key = sessionKey(workspace, sessionId);
+    const running = runningEntries(workspace, sessionId);
+    const pending = pendingSlots.get(key) || 0;
+    const occupied = running.length + pending;
+    if (occupied >= MAX_COMMAND_SLOTS) {
+      return {
+        ok: false,
+        result: queueRejectionResult({
+          running: describeRunning(running),
+          freeSlots: Math.max(0, MAX_COMMAND_SLOTS - running.length),
+          requested: 1,
+        }, "manager"),
+      };
+    }
+    pendingSlots.set(key, pending + 1);
+    return { ok: true, key };
+  }
+  function releaseCommandSlot(key) {
+    if (!key) return;
+    const next = (pendingSlots.get(key) || 1) - 1;
+    if (next <= 0) pendingSlots.delete(key);
+    else pendingSlots.set(key, next);
+  }
   async function start(workspace, input = {}, runtime = {}) {
+    const reservation = reserveCommandSlot(workspace, runtime?.sessionId);
+    if (!reservation.ok) return reservation.result;
+    try {
+      return await launchProcess(workspace, input, runtime);
+    } finally {
+      releaseCommandSlot(reservation.key);
+    }
+  }
+  async function launchProcess(workspace, input = {}, runtime = {}) {
     const resolved = resolveWorkspaceTarget(workspace, input.cwd || "");
     if (resolved.error) return { ok: false, error: { code: "WORKSPACE_OUT_OF_SCOPE", message: resolved.error, retryable: false } };
     const selected = invocation(input);
@@ -467,6 +532,7 @@ function createDurableProcessManager({
     writeRecord(workspace, record);
     const entry = makeEntry(workspace, record, child, runtime);
     live.set(id, entry);
+    runtime.claimForegroundReview?.(entry);
     attachChild(entry);
     runtime.childProcess?.({ processId: id, pid: child.pid, terminalId: runtime.terminalId || "", detached: launchDetached });
     runtime.onStarted?.({ processId: id, pid: child.pid, terminalId: runtime.terminalId || "", command: record.command, cwd: record.cwd, startedAt: stamp });
@@ -482,15 +548,25 @@ function createDurableProcessManager({
     return projectResult({ ok: true, value: { mode: "process_start", processId: id, pid: child.pid, status: "running", command: record.command, cwd: record.cwd, startedAt: stamp, terminalId: runtime.terminalId || "", detached: launchDetached, resumable: launchDetached } });
   }
   async function run(workspace, input = {}, runtime = {}) {
-    const started = await start(workspace, input, runtime);
+    const waitSpecified = Object.prototype.hasOwnProperty.call(input, "wait_ms");
+    const waitMs = waitSpecified ? Math.max(0, Number(input.wait_ms) || 0) : null;
+    let reviewResolve = null;
+    const reviewPromise = new Promise((resolve) => { reviewResolve = resolve; });
+    const startRuntime = waitMs == null
+      ? {
+        ...runtime,
+        claimForegroundReview(entry) {
+          entry.foregroundReview = (report) => reviewResolve({ kind: "review", report });
+        },
+      }
+      : runtime;
+    const started = await start(workspace, input, startRuntime);
     if (!started.ok) return started;
     const processId = started.value.processId;
     const entry = live.get(processId);
     if (!entry) return { ok: false, error: { code: "PROCESS_START_FAILED", message: "The process started but could not be supervised.", retryable: true } };
     let abortWait = null;
     const onAbort = () => abortWait?.();
-    const waitSpecified = Object.prototype.hasOwnProperty.call(input, "wait_ms");
-    const waitMs = waitSpecified ? Math.max(0, Number(input.wait_ms) || 0) : null;
     const finishWith = (completed) => {
       runtime.signal?.removeEventListener?.("abort", onAbort);
       return projectResult({ ok: completed.status === "complete" && completed.exitCode === 0, value: { ...completed, mode: "command" } });
@@ -511,6 +587,24 @@ function createDurableProcessManager({
       emit(runtime, { type: "terminal_wait", processId, terminalId: value.terminalId, command: record.command, ...value });
       return projectResult({ ok: true, value });
     };
+    const detachWithLiveStatus = (report = {}) => {
+      runtime.signal?.removeEventListener?.("abort", onAbort);
+      const record = readRecord(workspace, processId) || entry.record;
+      const value = snapshot(workspace, record, { tail_chars: 8_000 }, entry);
+      value.mode = "terminal_wait";
+      value.status = "running";
+      value.processId = processId;
+      value.terminalId = record.terminalId || "";
+      value.startedAt = new Date(record.startedAt).getTime();
+      value.elapsedMs = Number(report.elapsedMs) || (Date.now() - value.startedAt);
+      value.outputCompleteness = "partial";
+      value.waiting = true;
+      value.health = report.health || value.metrics;
+      value.instruction = report.instruction || "This command is still running and still holds a queue slot. Stop it with exec_command operation=stop and this process_id, or leave it running.";
+      runtime.onDetached?.(value);
+      emit(runtime, { type: "terminal_wait", processId, terminalId: value.terminalId, command: record.command, ...value });
+      return projectResult({ ok: true, value });
+    };
     if (waitMs === 0) return detachWithPartial();
     const abortPromise = new Promise((resolve) => { abortWait = () => resolve("aborted"); });
     if (runtime.signal?.aborted) onAbort();
@@ -518,8 +612,10 @@ function createDurableProcessManager({
     const done = entry.donePromise.then((value) => (value ? { kind: "done", value } : { kind: "detach" }));
     const aborted = abortPromise.then(() => ({ kind: "abort" }));
     if (waitMs == null) {
-      const completed = await Promise.race([done, aborted]);
+      const completed = await Promise.race([done, aborted, reviewPromise]);
+      entry.foregroundReview = null;
       if (completed.kind === "done") return finishWith(completed.value);
+      if (completed.kind === "review") return detachWithLiveStatus(completed.report);
       return detachWithPartial();
     }
     let timer;
@@ -642,7 +738,7 @@ function createDurableProcessManager({
     }
     return changed;
   }
-  return { list, reconcile, start, run, status, stop, sampleTree };
+  return { list, reconcile, start, run, status, stop, sampleTree, runningCommands };
 }
 
 module.exports = { createDurableProcessManager };

@@ -19,6 +19,7 @@ const { createExecCommandTool } = require("../src/agent/tools/process/exec-comma
 
 const EXPECTED_TOOLS = [
   "ask_questions",
+  "end_turn",
   "exec_command", "view_active_terminal", "read_file", "search_workspace", "apply_patch",
   "manage_identity", "replay_request",
   "browser_action", "delegate_agent", "web_research",

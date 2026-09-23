@@ -43,7 +43,7 @@ test("skills are model guidance, not runtime gates", () => {
 test("agent skill teaches run waits for exit and status as secondary", () => {
   const agentSkill = read("src/prompts/skills/modes/agent-skill.js");
   assert.match(agentSkill, /waits until the command exits/);
-  assert.match(agentSkill, /one at a time/);
+  assert.match(agentSkill, /at most 3/);
   assert.match(agentSkill, /wait_ms:\s*0/);
   assert.match(agentSkill, /timeout_ms/);
   assert.match(agentSkill, /terminal_complete/);

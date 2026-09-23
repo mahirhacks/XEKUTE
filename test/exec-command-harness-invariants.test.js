@@ -13,7 +13,7 @@ test("exec_command harness invariants keep review timer, PTY channels, and check
   const terminalIpc = read("src/app/ipc/terminal.js");
   const bootstrap = read("src/ui/bootstrap.js");
 
-  assert.match(durableSource, /DEFAULT_REVIEW_INTERVAL_MS = 30 \* 60 \* 1000/);
+  assert.match(durableSource, /DEFAULT_REVIEW_INTERVAL_MS = 15 \* 60 \* 1000/);
   assert.match(durableSource, /reviewTimer/);
 
   assert.match(terminalIpc, /terminal:create/);

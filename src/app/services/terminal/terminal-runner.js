@@ -2,6 +2,7 @@
 
 const { spawn } = require("node:child_process");
 const { resolveShellInvocation } = require("../../../agent/tools/process/exec-command.js");
+const { createTerminalOutputBatcher } = require("./terminal-output-batcher.js");
 
 const ANSI_RE = /[\u001B\u009B][[\]()#;?]*(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?[?-??-??-??-?a-zA-Z\d])|\u001B\][^\x07]*(?:\x07|\u001B\\)/g;
 
@@ -57,10 +58,12 @@ function createAgentTerminalRunner({
   }
 
   function attachBuffer(term, webContents, id, record) {
+    const batch = createTerminalOutputBatcher((data) => sendTerminalData(webContents, id, data));
+    record.flushTerminalOutput = () => batch.flush();
     term.onData((data) => {
       record.buffer = takeLimited(String(record.buffer || "") + data, 50000);
       record.stdout = record.buffer;
-      sendTerminalData(webContents, id, data);
+      batch.push(data);
     });
   }
 
@@ -104,6 +107,7 @@ function createAgentTerminalRunner({
     exitCode,
     signal,
   }) {
+    record.flushTerminalOutput?.();
     terminals.delete(id);
     sendTerminalExit(webContents, id, exitCode, signal);
     announceAgentTerminal(webContents, sendAgentEvent, {
@@ -249,15 +253,18 @@ function createAgentTerminalRunner({
           });
         }
         const append = (current, chunk) => takeLimited(`${current}${chunk.toString()}`, 50000);
+        const outputBatch = exposeTerminal
+          ? createTerminalOutputBatcher((data) => sendTerminalData(webContents, id, data))
+          : null;
         child.stdout?.on("data", (chunk) => {
           stdout = append(stdout, chunk);
           onProgress?.({ stream: "stdout", bytes: chunk.length || Buffer.byteLength(String(chunk)) });
-          if (exposeTerminal) sendTerminalData(webContents, id, chunk.toString());
+          if (outputBatch) outputBatch.push(chunk.toString());
         });
         child.stderr?.on("data", (chunk) => {
           stderr = append(stderr, chunk);
           onProgress?.({ stream: "stderr", bytes: chunk.length || Buffer.byteLength(String(chunk)) });
-          if (exposeTerminal) sendTerminalData(webContents, id, chunk.toString());
+          if (outputBatch) outputBatch.push(chunk.toString());
         });
         const requestedTimeout = Number(timeoutMs);
         const timer = requestedTimeout > 0 ? setTimeout(() => {
@@ -268,6 +275,7 @@ function createAgentTerminalRunner({
           if (settled) return;
           if (timer) clearTimeout(timer);
           signal?.removeEventListener("abort", abortProcess);
+          outputBatch?.flush();
           terminals.delete(id);
           if (exposeTerminal) {
             sendTerminalExit(webContents, id, null, "START_FAILED");
@@ -279,6 +287,7 @@ function createAgentTerminalRunner({
           if (settled) return;
           if (timer) clearTimeout(timer);
           signal?.removeEventListener("abort", abortProcess);
+          outputBatch?.flush();
           terminals.delete(id);
           const cleanStdout = sanitizeOutput(stdout);
           const cleanStderr = sanitizeOutput(stderr);

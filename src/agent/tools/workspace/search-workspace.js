@@ -1,6 +1,7 @@
 "use strict";
 
-const { readdirSync, readFileSync, lstatSync, realpathSync } = require("node:fs");
+const { readdirSync, lstatSync, realpathSync } = require("node:fs");
+const { readFile } = require("node:fs").promises;
 const {
   join: joinPath,
   relative: relativePath,
@@ -16,6 +17,13 @@ const DEFAULT_MAX_RESULTS = 100;
 const MAX_RESULTS = 500;
 const DEFAULT_MAX_FILES = 8000;
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024;
+const SEARCH_YIELD_EVERY = 24;
+
+function yieldEventLoop() {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
 
 const SEARCH_WORKSPACE_INPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -162,13 +170,14 @@ function isTextFile(filePath) {
   return SEARCH_TEXT_BASENAMES.has(basename(filePath).toLowerCase());
 }
 
-function collectFiles(searchRoot, workspaceRoot, { includeHidden = false, maxFiles = DEFAULT_MAX_FILES } = {}) {
+async function collectFiles(searchRoot, workspaceRoot, { includeHidden = false, maxFiles = DEFAULT_MAX_FILES } = {}) {
   const files = [];
   let directoriesScanned = 0;
   let inaccessibleEntries = 0;
   let truncated = false;
+  let visited = 0;
 
-  function walk(dir) {
+  async function walk(dir) {
     if (files.length >= maxFiles) {
       truncated = true;
       return;
@@ -193,6 +202,8 @@ function collectFiles(searchRoot, workspaceRoot, { includeHidden = false, maxFil
         truncated = true;
         return;
       }
+      visited += 1;
+      if (visited % SEARCH_YIELD_EVERY === 0) await yieldEventLoop();
       if (entry.isSymbolicLink()) continue;
       if (!includeHidden && isHiddenName(entry.name)) continue;
 
@@ -201,14 +212,14 @@ function collectFiles(searchRoot, workspaceRoot, { includeHidden = false, maxFil
 
       if (entry.isDirectory()) {
         if (SEARCH_SKIP_DIRS.has(entry.name)) continue;
-        walk(full);
+        await walk(full);
       } else if (entry.isFile()) {
         files.push(full);
       }
     }
   }
 
-  walk(searchRoot);
+  await walk(searchRoot);
   return { files, directoriesScanned, inaccessibleEntries, truncated };
 }
 
@@ -288,7 +299,7 @@ function takeLimited(value, max = 1000) {
   return text.length > max ? `${text.slice(0, max)}â€¦` : text;
 }
 
-function searchTextInFile(file, query, mode, { caseSensitive, maxResults, workspaceRoot, compiledPattern }) {
+async function searchTextInFile(file, query, mode, { caseSensitive, maxResults, workspaceRoot, compiledPattern }) {
   let stat;
   try {
     stat = lstatSync(file);
@@ -300,7 +311,7 @@ function searchTextInFile(file, query, mode, { caseSensitive, maxResults, worksp
 
   let content;
   try {
-    const buffer = readFileSync(file);
+    const buffer = await readFile(file);
     if (buffer.includes(0)) return { matches: [], skipped: true, reason: "binary" };
     content = buffer.toString("utf8").replace(/\r\n/g, "\n");
   } catch {
@@ -412,7 +423,7 @@ function createSearchWorkspaceTool() {
       const includeHidden = Boolean(input.includeHidden);
       const caseSensitive = Boolean(input.caseSensitive);
       const maxResults = input.maxResults || DEFAULT_MAX_RESULTS;
-      const scan = collectFiles(searchRoot, workspaceRoot, { includeHidden });
+      const scan = await collectFiles(searchRoot, workspaceRoot, { includeHidden });
 
       let matches = [];
       let skippedBinary = 0;
@@ -426,11 +437,14 @@ function createSearchWorkspaceTool() {
           ? new RegExp(input.query, caseSensitive ? "g" : "gi")
           : null;
 
+        let scanned = 0;
         for (const file of scan.files) {
           if (matches.length >= maxResults) break;
+          scanned += 1;
+          if (scanned % SEARCH_YIELD_EVERY === 0) await yieldEventLoop();
           if (!isTextFile(file)) continue;
 
-          const result = searchTextInFile(file, input.query, input.mode, {
+          const result = await searchTextInFile(file, input.query, input.mode, {
             caseSensitive,
             maxResults: maxResults - matches.length,
             workspaceRoot,

@@ -444,5 +444,101 @@ test("run abort does not call manager.stop for agent_cancelled", () => {
   const source = fs.readFileSync(path.join(__dirname, "../src/app/services/terminal/durable-process-manager.js"), "utf8");
   const runSlice = source.slice(source.indexOf("async function run("), source.indexOf("async function status("));
   assert.doesNotMatch(runSlice, /agent_cancelled/);
-  assert.match(runSlice, /Promise\.race\(\[done, aborted\]\)/);
+  assert.match(runSlice, /Promise\.race\(\[done, aborted, reviewPromise\]\)/);
+});
+
+test("a session cannot start a fourth command and a free slot opens when one stops", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-command-slots-"));
+  const children = [];
+  const manager = makeManager({
+    spawnProcess() {
+      const child = createFakeChild(910000 + children.length);
+      children.push(child);
+      return child;
+    },
+  });
+  const ids = [];
+  t.after(async () => {
+    for (const id of ids) await manager.stop(workspace, { process_id: id }).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    try { fs.rmSync(workspace, { recursive: true, force: true }); } catch { /* temp workspace */ }
+  });
+  const runtime = { sessionId: "chat-a" };
+  for (let index = 0; index < 3; index += 1) {
+    const started = await manager.start(workspace, {
+      executable: process.execPath,
+      args: ["-e", ""],
+      command: `cmd ${index + 1}`,
+    }, runtime);
+    assert.equal(started.ok, true, started.error?.message || "");
+    ids.push(started.value.processId);
+  }
+  assert.equal(manager.runningCommands(workspace, "chat-a").length, 3);
+  const rejected = await manager.start(workspace, {
+    executable: process.execPath,
+    args: ["-e", ""],
+    command: "cmd 4",
+  }, runtime);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.error.code, "COMMAND_QUEUE_REJECTED");
+  assert.match(rejected.error.message, /still running/);
+  assert.match(rejected.error.message, /queue is full/);
+  assert.equal(children.length, 3);
+
+  const other = await manager.start(workspace, {
+    executable: process.execPath,
+    args: ["-e", ""],
+    command: "other chat",
+  }, { sessionId: "chat-b" });
+  assert.equal(other.ok, true, other.error?.message || "");
+  ids.push(other.value.processId);
+  assert.equal(children.length, 4);
+
+  await manager.stop(workspace, { process_id: ids[0] });
+  const reopened = await manager.start(workspace, {
+    executable: process.execPath,
+    args: ["-e", ""],
+    command: "cmd after stop",
+  }, runtime);
+  assert.equal(reopened.ok, true, reopened.error?.message || "");
+  ids.push(reopened.value.processId);
+  assert.equal(manager.runningCommands(workspace, "chat-a").length, 3);
+});
+
+test("a foreground run returns live status at the review interval and keeps its slot", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-review-slot-"));
+  const child = createFakeChild(910100);
+  const reviews = [];
+  const manager = makeManager({
+    spawnProcess: () => child,
+    reviewIntervalMs: 40,
+  });
+  let processId = "";
+  t.after(async () => {
+    if (processId) await manager.stop(workspace, { process_id: processId }).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    try { fs.rmSync(workspace, { recursive: true, force: true }); } catch { /* temp workspace */ }
+  });
+  const result = await Promise.race([
+    manager.run(workspace, {
+      executable: process.execPath,
+      args: ["-e", ""],
+      command: "long job",
+    }, {
+      sessionId: "chat-a",
+      onReview: (report) => reviews.push(report),
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("run did not return at the review interval")), 2000)),
+  ]);
+  processId = result.value.processId;
+  assert.equal(result.ok, true);
+  assert.equal(result.value.mode, "terminal_wait");
+  assert.equal(result.value.status, "running");
+  assert.equal(result.value.waiting, true);
+  assert.match(String(result.value.instruction || ""), /still holds a queue slot/);
+  assert.equal(manager.runningCommands(workspace, "chat-a").length, 1);
+  assert.equal(reviews.length, 0);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.ok(reviews.length >= 1);
+  assert.equal(reviews[0].processId, processId);
 });

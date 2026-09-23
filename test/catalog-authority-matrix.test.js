@@ -12,6 +12,7 @@ const { createInvocationPipeline } = require("../src/agent/authority/invocation-
 const { MODE_TOOL_GROUPS, TOOL_METADATA, TOOL_REGISTRY_NAMES } = require("../src/agent/tools/config/tool-metadata.js");
 const { evaluateToolScopeAsync } = require("../src/agent/authority/scope/scope-policy.js");
 const { ASK_QUESTIONS_INPUT_SCHEMA } = require("../src/agent/tools/process/ask-questions.js");
+const { END_TURN_INPUT_SCHEMA } = require("../src/agent/tools/process/end-turn.js");
 const { EXEC_COMMAND_INPUT_SCHEMA } = require("../src/agent/tools/process/exec-command.js");
 const { VIEW_ACTIVE_TERMINAL_INPUT_SCHEMA } = require("../src/agent/tools/process/view-active-terminal.js");
 const { READ_FILE_INPUT_SCHEMA } = require("../src/agent/tools/workspace/read-file.js");
@@ -25,6 +26,7 @@ const { WEB_RESEARCH_INPUT_SCHEMA } = require("../src/agent/tools/assessment/web
 
 const SCHEMAS = Object.freeze({
   ask_questions: ASK_QUESTIONS_INPUT_SCHEMA,
+  end_turn: END_TURN_INPUT_SCHEMA,
   exec_command: EXEC_COMMAND_INPUT_SCHEMA,
   view_active_terminal: VIEW_ACTIVE_TERMINAL_INPUT_SCHEMA,
   read_file: READ_FILE_INPUT_SCHEMA,
@@ -41,6 +43,7 @@ const VALID_ARGS = Object.freeze({
   ask_questions: {
     questions: [{ question: "Which file should change?", choices: [{ choice: "src/math.js" }, { choice: "src/todo.js" }] }],
   },
+  end_turn: { status: "stop" },
   exec_command: { command: "echo ok", context: "print marker" },
   view_active_terminal: {},
   read_file: { path: "README.md" },
@@ -146,7 +149,7 @@ test("agent full_authority executes local catalog tools and hard-denies unscoped
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "README.md"), "# Catalog\n");
 
-  for (const toolName of ["ask_questions", "read_file", "search_workspace", "view_active_terminal", "apply_patch", "exec_command", "manage_identity", "delegate_agent", "web_research"]) {
+  for (const toolName of ["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal", "apply_patch", "exec_command", "manage_identity", "delegate_agent", "web_research"]) {
     const { result, executions } = await invoke(root, { toolName, args: VALID_ARGS[toolName], authority: "full_authority" });
     assert.equal(result.ok, true, `${toolName} should succeed: ${result.code || result.error || ""}`);
     assert.equal(executions, 1, toolName);

@@ -35,8 +35,9 @@ const { createActiveTerminalCatalog } = require("../../app/services/terminal/act
 const ContextBudget = require("../../agent/runtime/context-budget.js");
 
 // Tool registry + raw adapters (the canonical tools).
-const { createToolRegistry, registerAskQuestions, registerExecCommand, registerViewActiveTerminal, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerManageIdentity, registerReplayRequest, registerBrowserAction, registerDelegateAgent, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
+const { createToolRegistry, registerAskQuestions, registerEndTurn, registerExecCommand, registerViewActiveTerminal, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerManageIdentity, registerReplayRequest, registerBrowserAction, registerDelegateAgent, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
 const { createAskQuestionsTool } = require("../../agent/tools/process/ask-questions.js");
+const { createEndTurnTool } = require("../../agent/tools/process/end-turn.js");
 const { createExecCommandTool } = require("../../agent/tools/process/exec-command.js");
 const { createViewActiveTerminalTool } = require("../../agent/tools/process/view-active-terminal.js");
 const { createReadFileTool } = require("../../agent/tools/workspace/read-file.js");
@@ -164,6 +165,7 @@ function createContainer({
   });
   const toolRegistry = createToolRegistry();
   registerAskQuestions(toolRegistry, createAskQuestionsTool());
+  registerEndTurn(toolRegistry, createEndTurnTool());
   registerExecCommand(toolRegistry, createExecCommandTool({ processManager: durableProcessManager }));
   registerViewActiveTerminal(toolRegistry, createViewActiveTerminalTool({ catalog: activeTerminalCatalog }));
   registerReadFile(toolRegistry, createReadFileTool());

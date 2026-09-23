@@ -127,18 +127,38 @@ test("long-horizon run state checkpoints atomically, reconciles stale work, and 
   await store.finish(workspace, "run-1", "completed", { evidenceIds: ["e-1"] });
   assert.equal(store.get(workspace, "run-1").status, "completed");
   await store.flush();
-  assert.equal(fs.existsSync(store.fileFor(workspace)), false);
+  assert.equal(fs.existsSync(store.fileFor(workspace)), true);
+  const persisted = JSON.parse(fs.readFileSync(store.fileFor(workspace), "utf8"));
+  assert.equal(persisted.runs["run-1"].status, "completed");
+  assert.equal(persisted.runs["run-1"].resumeEligible, false);
 });
 
-test("long-horizon checkpoints stay in memory without workspace files", async (t) => {
+test("long-horizon checkpoints persist workspace files and resume after stale heartbeats", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-run-recovery-"));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
-  const store = createLongHorizonRunStore();
-  await store.begin(workspace, { runId: "run-recovery", objective: "week-long assessment" });
+  let clock = new Date("2026-08-01T00:00:00.000Z");
+  const store = createLongHorizonRunStore({ now: () => new Date(clock) });
+  await store.begin(workspace, { runId: "run-recovery", sessionId: "session-recovery", objective: "week-long assessment" });
   await store.checkpoint(workspace, "run-recovery", { round: 2, actionCount: 3 });
-  assert.equal(fs.existsSync(store.fileFor(workspace)), false);
-  assert.equal(fs.existsSync(store.backupFor(workspace)), false);
+  assert.equal(fs.existsSync(store.fileFor(workspace)), true);
+  clock = new Date("2026-08-03T00:00:00.000Z");
+  const reconciled = await store.reconcile(workspace, { staleAfterMs: Tunables.LONG_HORIZON_STALE_RUN_MS });
+  assert.deepEqual(reconciled, ["run-recovery"]);
   const recovered = store.get(workspace, "run-recovery");
   assert.equal(recovered.runId, "run-recovery");
-  assert.equal(recovered.status, "running");
+  assert.equal(recovered.status, "interrupted");
+  assert.equal(recovered.resumeEligible, true);
+  await store.resume(workspace, "run-recovery");
+  assert.equal(store.get(workspace, "run-recovery").status, "running");
+});
+
+test("long-horizon tunables keep the loop unlimited and raise child/retry limits", () => {
+  assert.equal(Tunables.MAX_CONTINUE_INTENTS, 0);
+  assert.equal(Tunables.LONG_HORIZON_STALE_RUN_MS, 24 * 60 * 60 * 1000);
+  assert.equal(Tunables.MODEL_ROUND_RETRIES, 3);
+  assert.equal(Tunables.MAX_ACTIVE_CHILDREN, 8);
+  assert.equal(Tunables.OLLAMA_KEEP_ALIVE, -1);
+  assert.equal(Tunables.OPENROUTER_AGENT_IDLE_TIMEOUT_MS, 0);
+  const { DEFAULT_MAX_ACTIVE_CHILDREN } = require("../src/agent/runtime/subagent-coordinator.js");
+  assert.equal(DEFAULT_MAX_ACTIVE_CHILDREN, 8);
 });

@@ -115,6 +115,22 @@ function registerAskQuestions(toolRegistry, adapter) {
   });
 }
 
+function registerEndTurn(toolRegistry, adapter) {
+  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
+  return toolRegistry.register({
+    name: "end_turn",
+    adapter,
+    inputSchema: adapter.inputSchema,
+    description: adapter.description,
+    metadata: {
+      targetTypes: ["operator", "interaction"],
+      mutating: false,
+      reversible: true,
+      interactive: false,
+    },
+  });
+}
+
 function registerReadFile(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
@@ -230,6 +246,7 @@ module.exports = {
   toOpenAITool,
   toOpenAITools,
   registerAskQuestions,
+  registerEndTurn,
   registerExecCommand,
   registerViewActiveTerminal,
   registerReadFile,

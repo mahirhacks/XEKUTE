@@ -58,10 +58,10 @@
   const READ_ONLY_CAPABILITIES = new Set(["observe"]);
 
   const AGENT_TOOLS = Object.freeze([
-    "ask_questions", "exec_command", "view_active_terminal", "read_file", "search_workspace", "apply_patch",
+    "ask_questions", "end_turn", "exec_command", "view_active_terminal", "read_file", "search_workspace", "apply_patch",
     "manage_identity", "replay_request", "browser_action", "delegate_agent", "web_research",
   ]);
-  const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "read_file", "search_workspace", "view_active_terminal"]);
+  const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal"]);
   const MODE_TOOL_GROUPS = Object.freeze({ ask: SAFE_READ_TOOLS, agent: AGENT_TOOLS });
 
   function normalizeProfile(familyOrProfile = "agent", mode = "agent") {

@@ -268,6 +268,41 @@ test("cancelChildrenForParent aborts working and queued children", async () => {
   assert.equal(coordinator.getChild("queued", "p").status, "stopped");
 });
 
+test("stopping one parent does not stop another parent's children", async () => {
+  const stoppedController = new AbortController();
+  const otherController = new AbortController();
+  const coordinator = createSubagentCoordinator({ maxActiveChildren: 2 });
+  const stopped = deferred();
+  const other = deferred();
+  coordinator.submitChild({
+    parentKey: "orchestrator-a",
+    parentSessionId: "session-a",
+    childInvocationId: "child-a",
+    childSessionId: "child-a-session",
+    controller: stoppedController,
+    start: () => stopped.promise,
+  });
+  coordinator.submitChild({
+    parentKey: "orchestrator-b",
+    parentSessionId: "session-b",
+    childInvocationId: "child-b",
+    childSessionId: "child-b-session",
+    controller: otherController,
+    start: () => other.promise,
+  });
+  await tick();
+  const cancelled = coordinator.cancelChildrenForParent("orchestrator-a", "OPERATOR_STOPPED");
+  assert.equal(cancelled.cancelled, 1);
+  assert.equal(stoppedController.signal.aborted, true);
+  assert.equal(otherController.signal.aborted, false);
+  assert.equal(coordinator.getChild("child-b", "orchestrator-b").status, "working");
+  stopped.resolve({ status: "stopped", output: { text: "", summary: "stopped" }, metadata: { error: "Stopped by operator" } });
+  other.resolve({ status: "completed", output: { text: "still running" } });
+  await tick();
+  assert.equal(coordinator.getChild("child-a", "orchestrator-a").status, "stopped");
+  assert.equal(coordinator.getChild("child-b", "orchestrator-b").status, "completed");
+});
+
 test("shutdown aborts active children, stops queued children, and closes admission", async () => {
   const activeController = new AbortController();
   const activeResult = new Promise((resolve) => {
@@ -329,4 +364,70 @@ test("pending result recovery returns only unclaimed results for the requested s
   const claim = coordinator.claimResult("sender::parent", pending[0].resultId);
   assert.equal(claim.ok, true);
   assert.equal(coordinator.pendingResultsForSender("sender").length, 0, "claimed results are in-flight, not recoverable duplicates");
+});
+
+test("question FIFO head, roster pendingQuestion, steer queue, and hold predicates", async () => {
+  const coordinator = createSubagentCoordinator();
+  coordinator.submitChild({
+    parentKey: "parent-key",
+    parentSessionId: "parent",
+    childInvocationId: "child-a",
+    childSessionId: "child-session-a",
+    start: async () => new Promise(() => {}),
+  });
+  coordinator.enqueueQuestion({
+    parentKey: "parent-key",
+    questionRequestId: "q-1",
+    childInvocationId: "child-a",
+    childSessionId: "child-session-a",
+    payload: { reason: "first" },
+  });
+  coordinator.enqueueQuestion({
+    parentKey: "parent-key",
+    questionRequestId: "q-2",
+    childInvocationId: "child-a",
+    childSessionId: "child-session-a",
+    payload: { reason: "second" },
+  });
+  const head = coordinator.peekQuestionHead("parent-key");
+  assert.equal(head.questionRequestId, "q-1");
+  const roster = coordinator.listChildren("parent-key");
+  assert.equal(roster.length, 1);
+  assert.equal(typeof roster[0].pendingQuestion, "boolean");
+  assert.equal(roster[0].pendingQuestion, true);
+  const wrong = coordinator.resolveQuestion({ parentKey: "parent-key", questionRequestId: "q-2", resolution: "skip" });
+  assert.equal(wrong.code, "QUESTION_NOT_HEAD");
+  const skipped = coordinator.resolveQuestion({ parentKey: "parent-key", resolution: "skip" });
+  assert.equal(skipped.ok, true);
+  assert.equal(coordinator.peekQuestionHead("parent-key").questionRequestId, "q-2");
+  const steered = coordinator.enqueueSteer({ parentKey: "parent-key", childInvocationId: "child-a", instruction: "focus on tests" });
+  assert.equal(steered.ok, true);
+  assert.equal(coordinator.drainSteerQueue("child-a", "parent-key").length, 1);
+  coordinator.finishParentTurn("parent-key");
+  assert.equal(coordinator.listChildren("parent-key").length, 1);
+  assert.equal(coordinator.hasActiveChildren("parent-key"), true);
+  coordinator.completeChild("child-a", { status: "completed", output: { text: "done" } });
+  assert.equal(coordinator.hasUnconsumedResults("parent-key"), true);
+  assert.equal(coordinator.getRosterEntry("parent-key", "child-a").pendingQuestion, false);
+});
+
+test("spawn admission accepts up to five children and rejects a sixth batch", () => {
+  const coordinator = createSubagentCoordinator({ maxActiveChildren: 5 });
+  assert.equal(coordinator.validateSpawnAdmission("parent-key", 5).ok, true);
+  assert.equal(coordinator.validateSpawnAdmission("parent-key", 6).code, "TOO_MANY_SUBAGENTS");
+});
+
+test("spawn admission rejects a second spawn while children are active", () => {
+  const coordinator = createSubagentCoordinator({ maxActiveChildren: 5 });
+  const start = () => Promise.resolve({ status: "completed", output: { text: "ok" } });
+  coordinator.submitChild({
+    parentKey: "parent-key",
+    childInvocationId: "child-1",
+    childSessionId: "session-1",
+    start,
+  });
+  assert.equal(coordinator.openChildCount("parent-key"), 1);
+  const second = coordinator.validateSpawnAdmission("parent-key", 1);
+  assert.equal(second.ok, false);
+  assert.equal(second.code, "SPAWN_WHILE_CHILDREN_ACTIVE");
 });

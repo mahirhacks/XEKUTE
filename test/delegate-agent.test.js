@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createDelegateAgentTool, defaultDelegationProvider } = require("../src/agent/tools/process/delegate-agent.js");
+const { createDelegateAgentTool, defaultDelegationProvider, validateInput } = require("../src/agent/tools/process/delegate-agent.js");
 const { createToolRegistry, registerDelegateAgent } = require("../src/agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../src/contracts/tool/execution-context");
 
@@ -225,4 +225,73 @@ test("delegate_agent makes no authority or permission-expansion decision", async
   assert.equal("approval" in result.value, false);
   assert.equal("permissionExpansion" in result.value, false);
   assert.equal("role" in result.value, true); // reports the bounded parent role, never widens it
+});
+
+test("delegate_agent list operation does not require instruction fields", () => {
+  const validation = validateInput({ operation: "list" });
+  assert.equal(validation.ok, true);
+});
+
+test("delegate_agent maps queued acceptance without failure", async () => {
+  const tool = createDelegateAgentTool({
+    delegationProvider: async () => ({
+      ok: true,
+      acceptance: true,
+      childInvocationId: "child-1",
+      childSessionId: "session-1",
+      status: "queued",
+      output: { text: "", format: "text", summary: "accepted" },
+    }),
+  });
+  const result = await run(tool, { ...VALID_INPUT, operation: "spawn" });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.status, "queued");
+  assert.equal(result.value.acceptance, true);
+});
+
+test("delegate_agent rejects more than five spawn agents in one call", () => {
+  const agents = Array.from({ length: 6 }, (_, index) => ({
+    ...VALID_INPUT,
+    task: `task-${index}`,
+  }));
+  const validation = validateInput({ operation: "spawn", agents });
+  assert.equal(validation.ok, false);
+  assert.equal(validation.error.code, "TOO_MANY_SUBAGENTS");
+});
+
+test("delegate_agent batch spawn maps children acceptance from provider", async () => {
+  const tool = createDelegateAgentTool({
+    delegationProvider: async (input) => ({
+      ok: true,
+      acceptance: true,
+      childInvocationId: "child-a",
+      childSessionId: "session-a",
+      status: "queued",
+      children: [
+        { childInvocationId: "child-a", childSessionId: "session-a", status: "queued" },
+        { childInvocationId: "child-b", childSessionId: "session-b", status: "queued" },
+      ],
+      output: { text: "", format: "text", summary: "accepted" },
+    }),
+  });
+  const result = await run(tool, {
+    operation: "spawn",
+    agents: [
+      VALID_INPUT,
+      { ...VALID_INPUT, task: "second task" },
+    ],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.children.length, 2);
+});
+
+test("delegate_agent resolve_question rejects non-head ids", async () => {
+  const tool = createDelegateAgentTool({
+    delegationProvider: async () => {
+      throw Object.assign(new Error("not head"), { code: "QUESTION_NOT_HEAD" });
+    },
+  });
+  const result = await run(tool, { operation: "resolve_question", resolution: "skip", questionRequestId: "wrong" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "QUESTION_NOT_HEAD");
 });

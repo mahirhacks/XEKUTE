@@ -11,8 +11,8 @@ test("ask and agent are the only operating modes", () => {
   }
   const ask = ModeRegistry.MODE_TOOL_GROUPS.ask;
   const agent = ModeRegistry.MODE_TOOL_GROUPS.agent;
-  assert.equal(ask.length, 4);
-  assert.equal(agent.length, 11);
+  assert.equal(ask.length, 5);
+  assert.equal(agent.length, 12);
   assert.equal(ask.includes("manage_plan"), false);
   assert.equal(ask.includes("ingest_traffic"), false);
   assert.equal(ask.includes("exec_command"), false);

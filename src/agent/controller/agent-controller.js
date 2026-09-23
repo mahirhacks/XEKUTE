@@ -23,6 +23,9 @@ const { redactSecrets } = require("../../shared/secret-redaction.js");
 const { isMemoryId } = require("../../contracts/memory/index.js");
 const RequestIntentRules = require("../../prompts/rules/request-intent-rules");
 const Tier1TokenAccounting = require("../runtime/tier1-token-accounting.js");
+const { createExecutionBudget } = require("../runtime/execution-budget.js");
+const { END_TURN_TOOL_NAME, isEndTurnStop, executeEndTurn } = require("../tools/process/end-turn.js");
+const { MAX_COMMAND_SLOTS, consumesCommandSlot, queueRejectionResult } = require("../tools/process/command-queue.js");
 
 const MAX_AGENT_ROUNDS = Tunables.MAX_AGENT_ROUNDS;
 const READ_ONLY_TOOL_NAMES = new Set(ToolMap.READ_ONLY_TOOL_NAMES);
@@ -155,6 +158,40 @@ function partitionProviderTools(tools = []) {
     (name.startsWith("mcp__") ? mcp : native).push(tool);
   }
   return { native, mcp };
+}
+
+const CONTINUE_NUDGE_CONTENT = [
+  "No end_turn(status=stop) was called.",
+  "Continue the objective with tools, or write a clear answer and call end_turn with status stop if the work is complete.",
+].join(" ");
+
+function createContinueNudgeMessage() {
+  return {
+    role: "user",
+    content: CONTINUE_NUDGE_CONTENT,
+    __xekuteInternalOutputContinuation: true,
+  };
+}
+
+function isTransientModelError(result = {}) {
+  if (result?.aborted) return false;
+  const code = String(result?.code || "").toUpperCase();
+  const error = String(result?.error || "");
+  if (["MODEL_ROUND_FAILED", "OPENROUTER_CHAT_FAILED", "OPENROUTER_JSON_FAILED"].includes(code) && /401|403|404|api key|unauthorized/i.test(error)) {
+    return false;
+  }
+  return /STREAM|TIMEOUT|IDLE|NETWORK|ECONNRESET|ENOTFOUND|ECONNREFUSED|UNAVAILABLE|FETCH|CANNOT REACH/i.test(`${code} ${error}`);
+}
+
+function keepNativeAndRecentTools(tools = [], recentNames = []) {
+  const recent = new Set((Array.isArray(recentNames) ? recentNames : []).map((name) => String(name || "")));
+  const list = Array.isArray(tools) ? tools : [];
+  const native = list.filter((tool) => !String(tool?.function?.name || "").startsWith("mcp__"));
+  const keptMcp = list.filter((tool) => {
+    const name = String(tool?.function?.name || "");
+    return name.startsWith("mcp__") && recent.has(name);
+  });
+  return [...native, ...keptMcp];
 }
 
 function fitMessagesToContext({ baseMessages = [], history = [], tools = [], promptBudget = 8192 } = {}) {
@@ -359,6 +396,7 @@ function buildPromptMessages({
   editContext,
   specialSkillPrompt = "",
   useTier1 = false,
+  subagentQuestionHeadText = "",
 }) {
   const depth = contextRoute.kind === "conversation" ? "compact" : "operational";
   const systemParts = buildSystemContextParts({
@@ -409,7 +447,9 @@ function buildPromptMessages({
       system_prompt: systemParts.systemPrompt,
       rules: [systemParts.rules, projectRules, editRules].filter(Boolean),
       active_skills: skillContext ? [skillContext] : [],
-      active_subagent_instructions: [],
+      active_subagent_instructions: subagentQuestionHeadText
+        ? [String(subagentQuestionHeadText).slice(0, 8_000)]
+        : [],
     },
   };
 }
@@ -485,14 +525,21 @@ async function runAgentTurn({
   sendEvent = EMPTY_SEND_EVENT,
   runModelRound,
   executeToolCall = EMPTY_EXECUTE_TOOL,
+  listRunningCommands = async () => [],
   toolMetadataForName = () => null,
   getBrowserTarget = () => "",
   checkpointRun = () => Promise.resolve(),
+  persistTurnProgress = () => Promise.resolve(),
   nested = false,
   maxAgentRounds = MAX_AGENT_ROUNDS,
   // A preview assembles Tier 1 for the context meter and returns before any
   // model call, tool execution, or ledger mutation.
   previewOnly = false,
+  orchestrationHold = null,
+  setPendingEndTurn = null,
+  releasePendingEndTurn = false,
+  subagentQuestionHeadText = "",
+  orchestrationControlOnly = false,
 } = {}) {
   const profile = normalizeProfile(modeFamily, mode);
   const runId = String(suppliedRunId || "agent-" + Date.now().toString(36) + "-" + crypto.randomBytes(3).toString("hex"));
@@ -548,6 +595,10 @@ async function runAgentTurn({
     }
   }
   let allowedNames = new Set(availableTools.map((tool) => tool?.function?.name).filter(Boolean));
+  if (orchestrationControlOnly) {
+    availableTools = availableTools.filter((tool) => tool?.function?.name === "delegate_agent");
+    allowedNames = new Set(availableTools.length ? ["delegate_agent"] : []);
+  }
   const initialToolPartitions = partitionProviderTools(availableTools);
   let tier1Assembly = null;
   let tier1AssemblyFailure = null;
@@ -603,6 +654,7 @@ async function runAgentTurn({
     editContext,
     specialSkillPrompt: specialSkill?.prompt || "",
     useTier1,
+    subagentQuestionHeadText,
   });
   if (useTier1) {
     // Build Block A from the same authoritative prompt components used for
@@ -674,6 +726,12 @@ async function runAgentTurn({
     ...archivedTurnMessages,
     ...workingHistory.slice(promptHistoryBaseline),
   ].filter((message) => !message?.__xekuteInternalOutputContinuation);
+  const persistProgress = (patch = {}) => persistTurnProgress({
+    ...patch,
+    appendedMessages: appendedMessages(),
+    finalText,
+    limitations: [...runState.limitations],
+  }).catch(() => {});
 
   // V3 keeps a local exact ledger for the current user-facing block.  The
   // coordinator receives the same messages for durability, but checkpointing
@@ -682,7 +740,6 @@ async function runAgentTurn({
   const tier1Active = tier1Assembly ? tier1ConversationSeed.map((message) => ({ ...message })) : [];
   const tier1ToolEvents = [];
   let tier1CheckpointInFlight = null;
-  let wrapUpPressureResumed = false;
   const refreshTier1Prompt = ({ resetHistory = true } = {}) => {
     if (!useTier1) return tier1Assembly;
     const next = tier1Context.assemble({
@@ -767,7 +824,9 @@ async function runAgentTurn({
   };
   const appendTier1Messages = (messages) => {
     if (!useTier1) return;
-    const list = (Array.isArray(messages) ? messages : [messages]).filter(Boolean).map((message) => ({ ...message }));
+    const list = (Array.isArray(messages) ? messages : [messages])
+      .filter((message) => message && typeof message === "object" && !message.__xekuteInternalOutputContinuation)
+      .map((message) => ({ ...message }));
     if (!list.length) return;
     tier1Active.push(...list);
     try { tier1Context.appendConversation(tier1ProjectId, resolvedTier1SessionId, list); } catch { /* in-memory ledger remains authoritative for this turn */ }
@@ -851,6 +910,85 @@ async function runAgentTurn({
     return tier1CheckpointInFlight;
   };
 
+  const noteLimitation = (text) => {
+    const value = String(text || "").trim();
+    if (value && !runState.limitations.includes(value)) runState.limitations.push(value);
+  };
+
+  const recentToolNames = () => {
+    const names = [];
+    for (const result of actionResults) {
+      const name = String(result?.toolName || result?.value?.toolName || "");
+      if (name) names.push(name);
+    }
+    return [...allowedNames, ...names];
+  };
+
+  const applyToolCatalog = (nextTools) => {
+    availableTools = Array.isArray(nextTools) ? nextTools : availableTools;
+    allowedNames = new Set(availableTools.map((tool) => tool?.function?.name).filter(Boolean));
+    const partitions = partitionProviderTools(availableTools);
+    tier1Input.tool_definitions = partitions.native;
+    tier1Input.mcp_definitions = partitions.mcp;
+    if (useTier1) refreshTier1Prompt({ resetHistory: false });
+  };
+
+  const compactForNextRound = async ({ reason = "context_overflow" } = {}) => {
+    if (useTier1) {
+      const checkpoint = await checkpointTier1IfNeeded({ force: true, reason });
+      if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
+    }
+    const dropUnusedMcpIfProtectedOverflow = () => {
+      const pressure = useTier1 ? measureTier1Pressure() : { ok: true, pressure: null };
+      if (pressure?.pressure?.protectedOverflow || pressure?.code === "MEMORY_PROTECTED_CONTEXT_OVERFLOW") {
+        applyToolCatalog(keepNativeAndRecentTools(availableTools, recentToolNames()));
+        noteLimitation("Unused MCP tool definitions were dropped so the protected prompt fits the model window.");
+        return true;
+      }
+      return false;
+    };
+    dropUnusedMcpIfProtectedOverflow();
+    if (useTier1) {
+      while (tier1Active.length > 1) {
+        const fittedNow = fitMessagesToContext({
+          baseMessages: prompt.base,
+          history: workingHistory,
+          tools: availableTools,
+          promptBudget,
+        });
+        if (fittedNow.ok) break;
+        tier1Active.shift();
+        try { tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1Active); } catch { /* local ledger remains authoritative */ }
+        refreshTier1Prompt({ resetHistory: true });
+      }
+    }
+    dropUnusedMcpIfProtectedOverflow();
+    let fitted = fitMessagesToContext({
+      baseMessages: prompt.base,
+      history: workingHistory,
+      tools: availableTools,
+      promptBudget,
+    });
+    if (!fitted.ok && workingHistory.length > 2) {
+      const kept = workingHistory.filter((message) => !message?.__xekuteInternalOutputContinuation).slice(-4);
+      workingHistory.splice(0, workingHistory.length, ...kept);
+      if (useTier1) {
+        const live = kept.filter((message) => !message?.__xekuteInternalOutputContinuation);
+        tier1Active.splice(0, tier1Active.length, ...live.map((message) => ({ ...message })));
+        try { tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1Active); } catch { /* local ledger remains authoritative */ }
+        refreshTier1Prompt({ resetHistory: true });
+      }
+      fitted = fitMessagesToContext({
+        baseMessages: prompt.base,
+        history: workingHistory,
+        tools: availableTools,
+        promptBudget,
+      });
+      noteLimitation("Oldest live conversation was compacted so the turn can continue.");
+    }
+    return fitted;
+  };
+
   if (previewOnly) {
     // The meter shows what Tier 1 holds right now. It is deliberately not a
     // prediction of the next prompt: routing depends on the message the user
@@ -866,6 +1004,32 @@ async function runAgentTurn({
 
   sendEvent({ type: "run_state", runId, state: { ...runState } });
   if (useTier1) publishTier1Meter();
+
+  if (releasePendingEndTurn) {
+    AgentRuntime.finalize(runState, {
+      status: "completed",
+      reason: "Orchestration hold released; deferred end_turn finalized.",
+    });
+    sendEvent({ type: "run_state", runId, state: { ...runState } });
+    await persistProgress({
+      round: 0,
+      actionCount: actionResults.length,
+      status: "completed",
+      checkpoint: { phase: runState.phase, endTurn: true, releasePendingEndTurn: true },
+    }).catch(() => {});
+    return {
+      ok: true,
+      finalText,
+      appendedMessages: appendedMessages(),
+      executedTools,
+      runState,
+      contextRoute,
+      releasePendingEndTurn: true,
+      evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+      failureRecords,
+    };
+  }
+
   if (availableTools.length) {
     sendEvent({
       type: "activity",
@@ -886,8 +1050,11 @@ async function runAgentTurn({
     };
   }
 
-  const operationalRoundLimit = Number.isInteger(maxAgentRounds) && maxAgentRounds > 0 ? maxAgentRounds : null;
-  for (let round = 0; operationalRoundLimit === null || round < operationalRoundLimit; round += 1) {
+  const executionBudget = createExecutionBudget({
+    maxRounds: maxAgentRounds,
+    wallClockMs: Tunables.TURN_WALL_CLOCK_MS,
+  });
+  for (let round = 0; executionBudget.canContinue(round); round += 1) {
     await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, toolCount: runState.toolCount, failedToolCount: runState.failedToolCount, ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
     if (signal?.aborted) {
       AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
@@ -897,50 +1064,60 @@ async function runAgentTurn({
     if (useTier1) {
       const refreshed = refreshTier1Prompt({ resetHistory: false });
       if (!refreshed) {
-        AgentRuntime.finalize(runState, { status: "failed", reason: "Tier 1 context assembly failed." });
-        return { ok: false, error: "Tier 1 context assembly failed before the next model call.", code: "MEMORY_TIER1_ASSEMBLY_FAILED", finalText, runState, contextRoute, appendedMessages: appendedMessages() };
-      }
-      const tier1Pressure = tier1PressureFor(refreshed);
-      if (tier1Pressure.protectedOverflow) {
-        AgentRuntime.finalize(runState, { status: "inconclusive", reason: "Protected Tier 1 context exceeds the selected model window." });
-        return { ok: false, error: "The protected Tier 1 context exceeds the selected model context window.", code: "MEMORY_PROTECTED_CONTEXT_OVERFLOW", finalText, runState, contextRoute, contextUsage: { source: "estimate", promptTokens: tier1Pressure.totalTokens }, appendedMessages: appendedMessages() };
-      }
-      // A large existing summary/workflow can also cross the pressure
-      // boundary after a previous rotation.  Permit one checkpoint while the
-      // protected prompt has not yet been represented, even when the active
-      // message buffer is empty; subsequent checks are naturally suppressed
-      // until new live messages arrive.
-      if (tier1Pressure.shouldCheckpoint && tier1Active.length) {
-        const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call" });
-        if (checkpoint?.ok === false) {
-          AgentRuntime.finalize(runState, { status: "inconclusive", reason: "Tier 1 checkpoint failed." });
-          return { ok: false, error: "The active conversation could not be checkpointed safely.", code: checkpoint.code || "MEMORY_CHECKPOINT_FAILED", finalText, runState, contextRoute, appendedMessages: appendedMessages() };
+        noteLimitation("Tier 1 context assembly failed before the next model call; retrying with the live ledger.");
+      } else {
+        const tier1Pressure = tier1PressureFor(refreshed);
+        if (tier1Pressure.protectedOverflow) {
+          applyToolCatalog(keepNativeAndRecentTools(availableTools, recentToolNames()));
+          noteLimitation("Protected context overflowed; unused MCP tools were dropped.");
+        }
+        if (tier1Pressure.shouldCheckpoint && tier1Active.length) {
+          const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call" });
+          if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
         }
       }
     }
     // Tier 1 owns the complete active conversation and its checkpoint
     // boundary. The controller never creates a second compressed history.
     const projected = { history: workingHistory, ledgerMessage: null, compacted: false, representedMessages: workingHistory.length };
-    const fitted = fitMessagesToContext({
+    let fitted = fitMessagesToContext({
       baseMessages: prompt.base,
       history: projected.history,
       tools: availableTools,
       promptBudget,
     });
+    if (!fitted.ok) fitted = await compactForNextRound({ reason: "before_model_call" });
+    if (!fitted.ok) {
+      applyToolCatalog(keepNativeAndRecentTools(availableTools, recentToolNames()));
+      fitted = fitMessagesToContext({
+        baseMessages: prompt.base,
+        history: workingHistory.slice(-2),
+        tools: availableTools,
+        promptBudget,
+      });
+      noteLimitation("Emergency compact kept the system prompt and the newest live messages.");
+    }
     const provider = contextPlan?.provider || "ollama";
     const preflightPromptTokens = useTier1
       ? Math.max(0, Number(currentTier1Usage()?.promptTokens) || fitted.usedTokens)
       : Tier1TokenAccounting.calibratedPromptTokens(fitted.usedTokens, { provider, model });
     if (!fitted.ok || (!useTier1 && preflightPromptTokens > promptBudget)) {
-      AgentRuntime.finalize(runState, { status: "inconclusive", reason: "Context budget exceeded." });
-      return {
-        ok: false,
-        error: "The request and required context exceed the configured model context budget.",
-        finalText,
-        runState,
-        contextRoute,
-        contextUsage: { source: "estimate", promptTokens: preflightPromptTokens, localPromptTokens: fitted.usedTokens, toolNames: [...allowedNames] },
-      };
+      const compacted = await compactForNextRound({ reason: "prompt_budget" });
+      if (compacted.ok) {
+        fitted = compacted;
+      } else {
+        noteLimitation("Prompt still over budget after compaction; sending a truncated prompt.");
+        fitted = {
+          ok: true,
+          messages: [
+            ...(Array.isArray(prompt.base) ? prompt.base.slice(0, 1) : []),
+            ...workingHistory.filter((message) => !message?.__xekuteInternalOutputContinuation).slice(-1),
+            createContinueNudgeMessage(),
+          ],
+          usedTokens: promptBudget,
+          overflow: true,
+        };
+      }
     }
     const messages = [...fitted.messages];
     const contextUsage = currentTier1Usage() || Tier1TokenAccounting.reconcileUsage({
@@ -964,21 +1141,30 @@ async function runAgentTurn({
       },
     }, preflightPromptTokens, { source: "estimate" });
     sendEvent({ type: "context_usage", usage: contextUsage });
-    const result = await runModelRound({
-      messages,
-      tools: availableTools,
-      model,
-      numCtx,
-      thinking,
-      reasoningEffort,
-      contextPlan,
-      contextUsage,
-      signal,
-      onThinking: (token) => sendEvent({ type: "thinking", token: String(token || "") }),
-      onToken: (token) => sendEvent({ type: "token", token }),
-      onToolCalls: (calls) => sendEvent({ type: "tool_call", tools: calls }),
-      onStreamEvent: (event) => sendEvent({ type: "stream", event }),
-    });
+    const maxRoundAttempts = Math.max(1, Number(Tunables.MODEL_ROUND_RETRIES) || 1);
+    let result = null;
+    for (let attempt = 1; attempt <= maxRoundAttempts; attempt += 1) {
+      result = await runModelRound({
+        messages,
+        tools: availableTools,
+        model,
+        numCtx,
+        thinking,
+        reasoningEffort,
+        contextPlan,
+        contextUsage,
+        signal,
+        onThinking: (token) => sendEvent({ type: "thinking", token: String(token || "") }),
+        onToken: (token) => sendEvent({ type: "token", token }),
+        onToolCalls: (calls) => sendEvent({ type: "tool_call", tools: calls }),
+        onStreamEvent: (event) => sendEvent({ type: "stream", event }),
+      });
+      if (result?.ok || result?.aborted || !isTransientModelError(result)) break;
+      if (attempt < maxRoundAttempts) {
+        noteLimitation(`Transient model error; retrying round (${attempt}/${maxRoundAttempts}).`);
+        await persistProgress({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: "retry", attempt } }).catch(() => {});
+      }
+    }
     lastUsage = result?.usage || null;
     const promptTokens = Tier1TokenAccounting.positiveMeasuredTokens(result?.usage?.promptTokens);
     const completionTokens = Number(result?.usage?.completionTokens);
@@ -1062,6 +1248,29 @@ async function runAgentTurn({
       stop: isStopModelRound(result, rawCalls.length > 0),
     });
     if (!rawCalls.length) {
+      if (orchestrationControlOnly) {
+        const interim = cleanAssistantText(`${outputSegments.join("")}${rawText}`);
+        if (interim) finalText = interim;
+        await persistProgress({
+          round,
+          actionCount: actionResults.length,
+          status: "running",
+          checkpoint: { phase: runState.phase, orchestrationControlOnly: true },
+        }).catch(() => {});
+        return {
+          ok: true,
+          finalText,
+          appendedMessages: appendedMessages(),
+          executedTools,
+          runState,
+          contextRoute,
+          orchestrationHold: true,
+          orchestrationControlOnly: true,
+          evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+          failureRecords,
+          lastUsage,
+        };
+      }
       if (reachedOutputBoundary(result) && rawOutput) {
         outputSegments.push(rawOutput);
         outputContinuationCount += 1;
@@ -1085,8 +1294,7 @@ async function runAgentTurn({
         appendTier1Messages(workingHistory.slice(-2));
         const continuationPressure = measureTier1Pressure();
         if (!continuationPressure.ok) {
-          AgentRuntime.finalize(runState, { status: "inconclusive", reason: continuationPressure.error });
-          return { ok: false, error: continuationPressure.error, code: continuationPressure.code, finalText, runState, contextRoute, appendedMessages: appendedMessages() };
+          await compactForNextRound({ reason: "output_continuation" });
         }
         sendEvent({
           type: "output_continuation",
@@ -1113,82 +1321,28 @@ async function runAgentTurn({
       });
       if (claimCheck.text && claimCheck.text !== finalText) finalText = claimCheck.text;
       if (workingHistory.at(-1)?.role === "assistant") workingHistory[workingHistory.length - 1].content = finalText;
-      // `validateFinalClaims` and workflow artifact handling can replace the
-      // text that was initially streamed by the provider.  Tier 1 owns a
-      // cloned exact ledger, so update that ledger (and its coordinator
-      // state) to the same user-visible response before checkpointing; the
-      // durable checkpoint must never retain prose that the user did not see.
       if (useTier1 && tier1Active.at(-1)?.role === "assistant") {
         tier1Active[tier1Active.length - 1].content = finalText;
         try { tier1Context.setActiveConversation(tier1ProjectId, resolvedTier1SessionId, tier1Active); } catch { /* local ledger remains authoritative */ }
         publishTier1Meter();
       }
       const tier1Checkpoint = useTier1 ? await checkpointTier1IfNeeded({ reason: "block_complete" }) : null;
-      const completedContextUsage = currentTier1Usage() || publishedUsage;
-      if (useTier1) {
-        if (tier1Checkpoint?.ok === false) {
-          AgentRuntime.finalize(runState, { status: "inconclusive", reason: "Tier 1 checkpoint failed." });
-          sendEvent({ type: "run_state", runId, state: { ...runState } });
-          return {
-            ok: false,
-            error: "The active conversation could not be checkpointed safely.",
-            code: tier1Checkpoint.code || "MEMORY_CHECKPOINT_FAILED",
-            finalText,
-            appendedMessages: appendedMessages(),
-            executedTools,
-            runState,
-            contextRoute,
-            contextUsage: completedContextUsage,
-            evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
-            failureRecords,
-            lastUsage,
-          };
-        }
-        if (signal?.aborted) {
-          AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
-          sendEvent({ type: "run_state", runId, state: { ...runState } });
-          return {
-            ok: false,
-            error: "The agent turn was stopped.",
-            finalText,
-            appendedMessages: appendedMessages(),
-            runState,
-            contextRoute,
-            contextUsage: completedContextUsage,
-            aborted: true,
-            evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
-          };
-        }
-        if (tier1Checkpoint.checkpointed === true && !wrapUpPressureResumed) {
-          wrapUpPressureResumed = true;
-          // The wrap-up round paused at the pressure boundary; refund it so a
-          // finite maxAgentRounds cannot drop the resume into post-loop exit.
-          round -= 1;
-          continue;
-        }
-        if (tier1Checkpoint.ok === true && tier1Checkpoint.checkpointed === false) {
-          wrapUpPressureResumed = false;
-        }
+      if (tier1Checkpoint?.ok === false) noteLimitation(tier1Checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
+      if (signal?.aborted) {
+        AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
+        sendEvent({ type: "run_state", runId, state: { ...runState } });
+        return { ok: false, error: "The agent turn was stopped.", finalText, appendedMessages: appendedMessages(), runState, contextRoute, aborted: true, evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults) };
       }
+      const completedContextUsage = currentTier1Usage() || publishedUsage;
       if (useTier1 && completedContextUsage) sendEvent({ type: "context_usage", usage: completedContextUsage });
-      AgentRuntime.finalize(runState, {
-        status: "completed",
-        reason: claimCheck.warnings.join(" "),
-      });
-      sendEvent({ type: "run_state", runId, state: { ...runState } });
-      return {
-        ok: true,
-        finalText,
-        appendedMessages: appendedMessages(),
-        executedTools,
-        runState,
-        contextRoute,
-        contextUsage: completedContextUsage,
-        evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
-        failureRecords,
-        lastUsage,
-        ...(tier1Checkpoint ? { tier1Checkpoint } : {}),
-      };
+      workingHistory.push(createContinueNudgeMessage());
+      await persistProgress({
+        round,
+        actionCount: actionResults.length,
+        status: "running",
+        checkpoint: { phase: runState.phase, continueNudge: true },
+      }).catch(() => {});
+      continue;
     }
 
     const normalizedCalls = [];
@@ -1234,6 +1388,7 @@ async function runAgentTurn({
     const seenThisRound = new Set();
     let tier1ExecutedThisRound = false;
     let tier1ToolResponseStored = false;
+    let requestedEndTurn = null;
 
     const abortTurnResult = () => {
       AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
@@ -1252,11 +1407,11 @@ async function runAgentTurn({
     };
 
     const sealToolOutcome = async ({ tool, toolForEvent, toolName, signature, actionId, toolResult, toolWasExecuted }) => {
-      await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, lastTool: toolName, lastToolOk: Boolean(toolResult?.ok && !toolResult?.error), evidenceIds: AgentRuntime.evidenceIdsFromResults([toolResult]), ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
       emitToolActivity(sendEvent, "tool_result", {
         tool: { ...toolForEvent, executed: toolWasExecuted },
         result: toolResult,
       });
+      await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, lastTool: toolName, lastToolOk: Boolean(toolResult?.ok && !toolResult?.error), evidenceIds: AgentRuntime.evidenceIdsFromResults([toolResult]), ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
       const modelToolResultMessage = {
         role: "tool",
         content: toolResultContentForModel(toolResult),
@@ -1301,19 +1456,8 @@ async function runAgentTurn({
         // is complete so provider tool-call/result pairing stays valid.
         const toolResultPressure = measureTier1Pressure();
         if (!toolResultPressure.ok) {
-          AgentRuntime.finalize(runState, { status: "inconclusive", reason: toolResultPressure.error });
-          return {
-            stop: {
-              ok: false,
-              error: toolResultPressure.error,
-              code: toolResultPressure.code,
-              finalText,
-              runState,
-              contextRoute,
-              appendedMessages: appendedMessages(),
-              failureRecords,
-            },
-          };
+          await compactForNextRound({ reason: "after_tool_result" });
+          noteLimitation(toolResultPressure.error || "Context overflow after a tool result was compacted.");
         }
         const liveUsage = currentTier1Usage();
         if (liveUsage) sendEvent({ type: "context_usage", usage: liveUsage });
@@ -1325,47 +1469,101 @@ async function runAgentTurn({
       return { stop: null };
     };
 
-    for (const tool of normalizedCalls) {
-      if (signal?.aborted) return abortTurnResult();
+    const slotCalls = normalizedCalls.filter((tool) => consumesCommandSlot(tool));
+    let slotRejection = null;
+    if (slotCalls.length) {
+      let running = null;
+      try {
+        const listed = await listRunningCommands({ workspace, sessionId });
+        if (Array.isArray(listed)) {
+          running = listed.filter((item) => item && typeof item === "object").map((item) => ({
+            processId: String(item.processId || item.id || ""),
+            command: String(item.command || ""),
+          }));
+        }
+      } catch {
+        running = null;
+      }
+      if (!running) {
+        slotRejection = {
+          ok: false,
+          error: "The command queue could not be read, so no command was started.",
+          errorCode: "COMMAND_QUEUE_UNAVAILABLE",
+          retryable: true,
+          value: { limit: MAX_COMMAND_SLOTS, requested: slotCalls.length },
+        };
+      } else {
+        const freeSlots = Math.max(0, MAX_COMMAND_SLOTS - running.length);
+        if (slotCalls.length > freeSlots) {
+          slotRejection = queueRejectionResult({
+            running,
+            freeSlots,
+            requested: slotCalls.length,
+          });
+        }
+      }
+    }
+
+    function beginTool(tool, forcedResult = null) {
       const toolName = String(tool.toolName || tool.action || "");
       const signature = toolCallSignature(tool);
       const actionId = String(tool.callId || signature).slice(0, 200);
       const toolForEvent = { ...tool, args: tool.args || {}, toolName, actionId };
-      emitToolActivity(sendEvent, "tool_start", { tool: toolForEvent });
-      const preview = tool.args?.path || tool.args?.url || tool.args?.target || "";
-      sendEvent({
-        type: "activity",
-        text: "Running " + toolName + (preview ? ": " + String(preview).slice(0, 240) : ""),
-        kind: "tool",
+      const immediate = (toolResult, toolWasExecuted) => ({
+        immediate: true,
+        tool,
+        toolForEvent,
+        toolName,
+        signature,
+        actionId,
+        toolResult,
+        toolWasExecuted,
       });
-
-      let toolResult;
-      let toolWasExecuted = false;
+      emitToolActivity(sendEvent, "tool_start", { tool: toolForEvent });
+      if (toolName !== END_TURN_TOOL_NAME) {
+        const preview = tool.args?.path || tool.args?.url || tool.args?.target || tool.args?.command || "";
+        sendEvent({
+          type: "activity",
+          text: "Running " + toolName + (preview ? ": " + String(preview).slice(0, 240) : ""),
+          kind: "tool",
+        });
+      }
+      if (forcedResult) return immediate(forcedResult, false);
+      if (toolName === END_TURN_TOOL_NAME) {
+        seenThisRound.add(signature);
+        executedTools = true;
+        const toolResult = executeEndTurn(tool.args || {});
+        if (isEndTurnStop({ toolName, args: tool.args }) && toolResult?.ok) requestedEndTurn = toolResult;
+        return immediate(toolResult, true);
+      }
       if (!allowedNames.has(toolName)) {
-        toolResult = {
+        return immediate({
           ok: false,
           error: toolName + " is not available for this turn.",
           errorCode: "TOOL_UNAVAILABLE",
           retryable: false,
-        };
-      } else if (seenThisRound.has(signature)) {
-        toolResult = {
+        }, false);
+      }
+      if (seenThisRound.has(signature)) {
+        return immediate({
           ok: false,
           error: "Duplicate tool call in the same model response was ignored.",
           errorCode: "DUPLICATE_TOOL_CALL",
           retryable: false,
-        };
-      } else if ((failureCounts.get(signature) || 0) >= 1) {
-        toolResult = {
+        }, false);
+      }
+      if ((failureCounts.get(signature) || 0) >= Math.max(1, Number(Tunables.REPEAT_CLASS_LIMIT) || 1)) {
+        return immediate({
           ok: false,
           error: "The identical failed tool call was suppressed. Change the arguments or choose a different action.",
           errorCode: "REPEATED_FAILED_CALL",
           retryable: false,
-        };
-      } else {
-        seenThisRound.add(signature);
-        executedTools = true;
-        toolWasExecuted = true;
+        }, false);
+      }
+      seenThisRound.add(signature);
+      executedTools = true;
+      const promise = (async () => {
+        let toolResult;
         try {
           toolResult = normalizeFailure(await executeToolCall({
             workspace,
@@ -1383,7 +1581,35 @@ async function runAgentTurn({
             retryable: false,
           };
         }
+        return {
+          tool,
+          toolForEvent,
+          toolName,
+          signature,
+          actionId,
+          toolResult,
+          toolWasExecuted: true,
+        };
+      })();
+      return { immediate: false, promise };
+    }
+
+    const prepared = new Map();
+    for (const tool of normalizedCalls) {
+      if (!consumesCommandSlot(tool)) continue;
+      if (slotRejection) {
+        prepared.set(tool, beginTool(tool, { ...slotRejection, value: slotRejection.value ? { ...slotRejection.value } : undefined }));
+        continue;
       }
+      if (signal?.aborted) break;
+      prepared.set(tool, beginTool(tool));
+    }
+
+    for (const tool of normalizedCalls) {
+      if (signal?.aborted && !prepared.has(tool)) return abortTurnResult();
+      const begun = prepared.has(tool) ? prepared.get(tool) : beginTool(tool);
+      const outcome = begun.immediate ? begun : await begun.promise;
+      const { toolForEvent, toolName, signature, actionId, toolResult, toolWasExecuted } = outcome;
       const workflowUpdate = toolResult?.current_workflow || toolResult?.currentWorkflow || toolResult?.value?.current_workflow || toolResult?.value?.currentWorkflow || toolResult?.workflow;
       if (workflowUpdate && typeof workflowUpdate === "object" && !Array.isArray(workflowUpdate)) currentWorkflow = { ...workflowUpdate };
       actionResults.push(toolResult);
@@ -1404,17 +1630,107 @@ async function runAgentTurn({
         const record = failureRecordFor(tool, toolResult);
         if (record) failureRecords.push(record);
       }
-      const outcome = { tool, toolForEvent, toolName, signature, actionId, toolResult, toolWasExecuted };
-      const sealed = await sealToolOutcome(outcome);
+      const sealed = await sealToolOutcome({ tool, toolForEvent, toolName, signature, actionId, toolResult, toolWasExecuted });
       if (sealed.stop) return sealed.stop;
     }
     if (useTier1 && tier1ExecutedThisRound) {
       const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results" });
-      if (checkpoint?.ok === false) {
-        AgentRuntime.finalize(runState, { status: "inconclusive", reason: "Tier 1 checkpoint failed." });
-        return { ok: false, error: "The active conversation could not be checkpointed safely.", code: checkpoint.code || "MEMORY_CHECKPOINT_FAILED", finalText, appendedMessages: appendedMessages(), runState, contextRoute, failureRecords };
-      }
+      if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
     }
+    if (signal?.aborted) return abortTurnResult();
+    const holdActive = typeof orchestrationHold === "function" ? Boolean(orchestrationHold()) : false;
+    if (holdActive) {
+      const combined = cleanAssistantText(`${outputSegments.join("")}${rawText}`);
+      if (combined) finalText = combined;
+      await persistProgress({
+        round,
+        actionCount: actionResults.length,
+        status: "running",
+        checkpoint: { phase: runState.phase, orchestrationHold: true },
+      }).catch(() => {});
+      return {
+        ok: true,
+        finalText,
+        appendedMessages: appendedMessages(),
+        executedTools,
+        runState,
+        contextRoute,
+        orchestrationHold: true,
+        reason: "ORCHESTRATION_HOLD",
+        evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+        failureRecords,
+        lastUsage,
+      };
+    }
+    if (requestedEndTurn) {
+      const combined = cleanAssistantText(`${outputSegments.join("")}${rawText}`);
+      if (combined) finalText = combined;
+      const holdActive = typeof orchestrationHold === "function" ? Boolean(orchestrationHold()) : false;
+      if (holdActive) {
+        if (typeof setPendingEndTurn === "function") {
+          try { setPendingEndTurn(true); } catch { /* best effort */ }
+        }
+        await persistProgress({
+          round,
+          actionCount: actionResults.length,
+          status: "running",
+          checkpoint: { phase: runState.phase, pendingEndTurn: true },
+        }).catch(() => {});
+        return {
+          ok: true,
+          finalText,
+          appendedMessages: appendedMessages(),
+          executedTools,
+          runState,
+          contextRoute,
+          deferredEndTurn: true,
+          endTurn: true,
+          reason: "ORCHESTRATION_HOLD",
+          evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+          failureRecords,
+        };
+      }
+      const claimCheck = AgentRuntime.validateFinalClaims(finalText, {
+        executedTools,
+        evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+        actionResults,
+      });
+      if (claimCheck.text && claimCheck.text !== finalText) finalText = claimCheck.text;
+      const tier1Checkpoint = useTier1 ? await checkpointTier1IfNeeded({ reason: "block_complete" }) : null;
+      if (tier1Checkpoint?.ok === false) noteLimitation(tier1Checkpoint.error || "Tier 1 checkpoint failed after end_turn.");
+      const completedContextUsage = currentTier1Usage() || publishedUsage;
+      if (useTier1 && completedContextUsage) sendEvent({ type: "context_usage", usage: completedContextUsage });
+      AgentRuntime.finalize(runState, {
+        status: "completed",
+        reason: claimCheck.warnings.join(" ") || "The model ended the turn.",
+      });
+      sendEvent({ type: "run_state", runId, state: { ...runState } });
+      await persistProgress({
+        round,
+        actionCount: actionResults.length,
+        status: "completed",
+        checkpoint: { phase: runState.phase, endTurn: true },
+      }).catch(() => {});
+      return {
+        ok: true,
+        finalText,
+        appendedMessages: appendedMessages(),
+        executedTools,
+        runState,
+        contextRoute,
+        contextUsage: completedContextUsage,
+        evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+        failureRecords,
+        lastUsage,
+        ...(tier1Checkpoint ? { tier1Checkpoint } : {}),
+      };
+    }
+    await persistProgress({
+      round,
+      actionCount: actionResults.length,
+      status: "running",
+      checkpoint: { phase: runState.phase, toolCount: runState.toolCount },
+    }).catch(() => {});
   }
 
   AgentRuntime.finalize(runState, {

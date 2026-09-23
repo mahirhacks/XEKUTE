@@ -239,6 +239,7 @@ const composerEl       = inputBar?.querySelector(".composer") || null;
 const composerQuestionsEl = $("composer-questions");
 const composerTaskListEl = $("composer-task-list");
 const pendingComposerQuestionsBySession = new Map();
+const pendingOrchestratorEscalatedQuestions = new Map();
 let activeComposerTaskList = null;
 const slashCommandSuggestions = $("slash-command-suggestions");
 const selectedSlashCommandEl = $("selected-slash-command");
@@ -1054,7 +1055,7 @@ function isStubToolStatusLabel(label = "") {
   return /^(Working|Queued|Completed|Done)(?:\.{0,3}|\u2026)?$/i.test(String(label || "").trim());
 }
 
-const KEEPABLE_TOOL_LABEL = /^(Reading page|Read page|Searching web|Searched web|Creating folder|Created folder|Updating identity|Updated identity|Running Command|Ran Command|Viewing terminal|Viewed terminal|Reading|Read|Editing|Edited|Searching|Searched|Deleting|Deleted|Creating|Created|Moving|Moved|Browsing|Browsed|Replaying|Replayed|Delegating|Delegated)\b/i;
+const KEEPABLE_TOOL_LABEL = /^(Reading page|Read page|Searching workspace|Searched workspace|Searching web|Searched web|Creating folder|Created folder|Updating identity|Updated identity|Running Command|Ran Command|Viewing terminal|Viewed terminal|Reading|Read|Editing|Edited|Searching|Searched|Deleting|Deleted|Creating|Created|Moving|Moved|Browsing|Browsed|Replaying|Replayed|Delegating|Delegated)\b/i;
 
 const KEEPABLE_TOOL_ACTIONS = new Set([
   "read_file",
@@ -1075,6 +1076,7 @@ const RUNNING_TOOL_VERBS = [
   ["Viewing terminal", "Viewed terminal"],
   ["Updating identity", "Updated identity"],
   ["Creating folder", "Created folder"],
+  ["Searching workspace", "Searched workspace"],
   ["Searching web", "Searched web"],
   ["Reading page", "Read page"],
   ["Delegating", "Delegated"],
@@ -1461,6 +1463,28 @@ function clearScheduledChatPersistence() {
   chatPersistenceTimers.clear();
 }
 
+const liveChatSnapshotTimers = new Map();
+const LIVE_CHAT_SNAPSHOT_MS = 1200;
+
+function cancelLiveChatSnapshot(run) {
+  const key = String(run?.session?.id || run?.sessionId || "");
+  const timer = liveChatSnapshotTimers.get(key);
+  if (!timer) return;
+  clearTimeout(timer);
+  liveChatSnapshotTimers.delete(key);
+}
+
+function scheduleLiveChatSnapshot(run) {
+  if (!run?.session) return;
+  const key = String(run.session.id || run.sessionId || "");
+  if (!key || liveChatSnapshotTimers.has(key)) return;
+  const timer = setTimeout(() => {
+    liveChatSnapshotTimers.delete(key);
+    syncChatRunSession(run);
+  }, LIVE_CHAT_SNAPSHOT_MS);
+  liveChatSnapshotTimers.set(key, timer);
+}
+
 function schedulePersistChatSessions(session = activeChatSession()) {
   if (!activeChatPersistenceScope || !session) return;
   const scope = activeChatPersistenceScope;
@@ -1839,6 +1863,19 @@ function sealExploredFolds(host) {
   });
 }
 
+function isPlaceholderTarget(value = "") {
+  const raw = String(value || "").replace(/\\/g, "/").trim();
+  return !raw || raw === "." || raw === "./" || raw === "workspace";
+}
+
+function fileRowDisplayDetail(row) {
+  const labeled = String(row?.querySelector?.(".agent-tool-detail")?.textContent || "").trim();
+  if (labeled && !isPlaceholderTarget(labeled)) return labeled;
+  const raw = String(row?.dataset?.file || row?.dataset?.path || "").trim();
+  if (isPlaceholderTarget(raw)) return "";
+  return toolTargetBasename({ args: { path: raw } }, {}) || raw;
+}
+
 function stackVerbForLabel(verb = "") {
   const value = String(verb || "").trim();
   const completed = completedToolLabelFromRunning(value);
@@ -1876,16 +1913,10 @@ function syncFileRowPresentation(row) {
   if (!row) return;
   const fileEl = row.querySelector(".tool-card-file");
   if (!fileEl) return;
-  const inStack = Boolean(row.closest(".agent-file-stack-body"));
   const verb = fileRowVerb(row);
-  const detail = String(
-    row.dataset.file
-    || row.dataset.path
-    || fileEl.querySelector(".agent-tool-detail")?.textContent
-    || "",
-  ).trim();
-  if (inStack) renderToolStatusLabel(fileEl, "", detail || verb);
-  else renderToolStatusLabel(fileEl, verb, detail);
+  const detail = fileRowDisplayDetail(row);
+  // Keep the verb on stacked rows too (`Read recon`), matching the finished layout.
+  renderToolStatusLabel(fileEl, verb, detail);
 }
 
 function updateFileStackLabel(stack) {
@@ -1972,13 +2003,21 @@ function appendChatStreamNode(host, node) {
 
 // The fold owns the turn's work, so a turn that needs one gets it here and
 // every existing row and interim reply is adopted into its body.
-function ensureAssistantWorkFold(turn, { startedAt = 0 } = {}) {
+function turnHasWorkVerdict(turn) {
+  return [...(turn?.children || [])].some((child) => (
+    child.classList.contains("assistant-reply") && child.dataset.workVerdict === "true"
+  ));
+}
+
+function ensureAssistantWorkFold(turn, { startedAt = 0, label } = {}) {
   if (!turn || turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return null;
   turn.classList.add("has-agent-run", "agent-stream");
-  const fold = ensureTurnWorkFold(turn, { startedAt });
-  // Keep the section open while the run is live so streamed work is not hidden
-  // behind a click the operator has not made yet.
-  if (fold && turn.getAttribute("aria-busy") === "true") setWorkFoldExpanded(fold, true);
+  const fold = ensureTurnWorkFold(turn, { startedAt, label });
+  // Keep work visible while tools are running. Collapse only after the
+  // stop-round answer sits beside the fold.
+  if (fold && turn.getAttribute("aria-busy") === "true" && !turnHasWorkVerdict(turn) && fold.dataset.userToggled !== "true") {
+    setWorkFoldExpanded(fold, true);
+  }
   return fold;
 }
 
@@ -2242,20 +2281,16 @@ function createRestoredWorkFold(run = {}) {
   const startedAt = Date.parse(run.started_at || "");
   const endedAt = Date.parse(run.ended_at || "");
   const duration = formatAgentWorkDuration(0, workedForMs);
-  const label = run.status === "stopped"
-    ? "Stopped"
-    : run.status === "inconclusive"
-      ? `Finished in ${duration}`
-      : `Worked for ${duration}`;
   const fold = createWorkFold({
-    label,
+    label: `Worked for ${duration}`,
     startedAt: Number.isFinite(startedAt) ? startedAt : Date.now(),
     final: true,
-    state: run.status === "stopped" ? "stopped" : "complete",
+    state: "complete",
     expanded: false,
   });
   const header = workFoldHeader(fold);
   header.dataset.workedForMs = String(workedForMs);
+  if (run.status) header.dataset.runOutcome = String(run.status);
   if (Number.isFinite(endedAt)) header.dataset.endedAt = String(endedAt);
   return fold;
 }
@@ -2358,6 +2393,47 @@ function appendTranscriptEvent(host, event) {
   for (const item of event.items || []) appendTranscriptEvent(host, item);
 }
 
+function replyEndsWithStopped(reply) {
+  const raw = String(reply?.dataset?.rawMd || reply?.textContent || "").trim();
+  return /(?:^|\n)Stopped$/.test(raw);
+}
+
+function appendStoppedPlainText(turn, segments = []) {
+  if (!turn) return;
+  let reply = [...turn.children].reverse().find((node) => (
+    node.classList?.contains("assistant-reply") && !node.hidden && String(node.textContent || node.dataset?.rawMd || "").trim()
+  ));
+  if (!reply) {
+    reply = document.createElement("div");
+    reply.className = "assistant-reply";
+    reply.dataset.workVerdict = "true";
+    const fold = turnWorkFold(turn);
+    if (fold) fold.after(reply);
+    else turn.appendChild(reply);
+  }
+  if (replyEndsWithStopped(reply)) return;
+  const raw = String(reply.dataset.rawMd || "").trim();
+  const next = raw ? `${raw}\n\nStopped` : "Stopped";
+  reply.dataset.rawMd = next;
+  const segment = segments.find((item) => item?.el === reply);
+  if (segment) segment.raw = next;
+  renderMarkdown(reply, next);
+  reply.dataset.rawMd = next;
+  reply.hidden = false;
+}
+
+function isDurationWorkLabel(text = "") {
+  return /^(Working for|Worked for)\b/i.test(String(text || "").trim());
+}
+
+function commandResultFailed(result = {}) {
+  const status = String(result?.status || result?.value?.status || "").toLowerCase();
+  const exit = result?.exitCode ?? result?.exit_code ?? result?.value?.exitCode;
+  if (result?.error || result?.ok === false) return true;
+  if (["failed", "stopped", "timeout", "finished_unknown", "error"].includes(status)) return true;
+  return exit != null && exit !== "" && Number(exit) !== 0;
+}
+
 function renderTranscriptRun(run, container) {
   if (run.user?.message) {
     const userTurn = document.createElement("div");
@@ -2388,6 +2464,7 @@ function renderTranscriptRun(run, container) {
     const answer = promoteFinalAnswer(turn);
     if (answer) answer.dataset.workVerdict = "true";
   }
+  if (String(run.status || "") === "stopped") appendStoppedPlainText(turn);
   if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event")) return;
   appendChatTurn(turn, { container });
   wrapAssistantInRunChunk(turn);
@@ -2424,7 +2501,10 @@ function syncChatEmptyState() {
 }
 
 function isChatSessionRunning(sessionId) {
-  return activeChatRuns.get(String(sessionId || ""))?.state === "running";
+  const run = activeChatRuns.get(String(sessionId || ""));
+  if (!run) return false;
+  if (run.orchestrationHold) return true;
+  return run.state === "running";
 }
 
 function isRunningChatActive() {
@@ -2529,6 +2609,7 @@ function discardAssistantDraft(run, assistant = run?.assistant) {
 }
 
 function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
+  cancelLiveChatSnapshot(run);
   const session = run?.session;
   if (!session) return;
   syncAssistantDraftToHistory(run, run.assistant, { persist: false });
@@ -2538,6 +2619,7 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
   run.history = session.history;
   const assistant = run.assistant;
   if (assistant?.turn) {
+    if (run.delegated) coalesceDelegatedAssistantReplyFragments(assistant);
     const rows = [...assistant.turn.querySelectorAll(".subagent-run-card")].map((card) => ({
       childInvocationId: String(card.dataset.childInvocationId || ""),
       childSessionId: String(card.dataset.childSessionId || ""),
@@ -14317,7 +14399,16 @@ const FILE_READ_TOOL_NAMES = new Set([
 ]);
 
 function toolActionName(tool = {}) {
-  return String(tool.toolName || tool.action || "").toLowerCase();
+  const raw = String(tool.toolName || tool.action || "").toLowerCase().trim();
+  if (!raw) return "";
+  // Catalog names are bare (`search_workspace`). Streamed calls may arrive as
+  // `workspace/search_workspace`.
+  return raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+}
+
+function isSearchWorkspaceTool(tool = {}) {
+  const action = toolActionName(tool);
+  return action === "search_workspace" || action.endsWith(".search_workspace");
 }
 
 function isFileMutationTool(tool = {}) {
@@ -14337,7 +14428,7 @@ function toolCardKey(tool = {}) {
   if (callId) return `call:${callId}`;
   return [
     toolActionName(tool),
-    String(ToolMap.targetForTool(tool) || "workspace"),
+    toolCardFileKey(tool),
     String(tool.args?.name || ""),
   ].join("\u0000");
 }
@@ -14379,18 +14470,63 @@ function compactUrlDetail(url = "") {
   }
 }
 
-function compactSearchNeedle(tool = {}) {
+function compactSearchNeedle(tool = {}, result = {}) {
   const args = toolArgsOf(tool);
-  return compactText(args.query || args.pattern || args.filename || args.text || args.symbol || tool.query || "");
+  const value = result && typeof result === "object" ? result : {};
+  return compactText(
+    args.query
+    || args.pattern
+    || args.filename
+    || args.text
+    || args.symbol
+    || tool.query
+    || value.query
+    || value.pattern
+    || "",
+  );
+}
+
+function toolDisplayName(tool = {}, result = {}) {
+  if (isSearchWorkspaceTool(tool) || (isSearchTool(tool) && toolActionName(tool) !== "web_research")) {
+    return compactSearchNeedle(tool, result);
+  }
+  const base = toolTargetBasename(tool, result);
+  if (base && !isPlaceholderTarget(base)) return base;
+  const fallback = String(ToolMap.targetForTool(tool) || "").trim();
+  if (isPlaceholderTarget(fallback)) return "";
+  return toolTargetBasename({ args: { path: fallback } }, {}) || fallback;
+}
+
+function toolCardFileKey(tool = {}, result = {}) {
+  if (isSearchWorkspaceTool(tool) || (isSearchTool(tool) && toolActionName(tool) !== "web_research")) {
+    return compactSearchNeedle(tool, result) || toolActionName(tool) || "search";
+  }
+  const path = toolTargetPath(tool, result);
+  if (!isPlaceholderTarget(path)) return path;
+  const display = toolDisplayName(tool, result);
+  if (display) return display;
+  return toolActionName(tool) || "workspace";
 }
 
 function isAskQuestionsTool(tool = {}) {
   return toolActionName(tool) === "ask_questions";
 }
 
+function isEndTurnTool(tool = {}) {
+  return toolActionName(tool) === "end_turn";
+}
+
+function applyEndTurnStopToUi(assistant, result = {}) {
+  if (!assistant || result?.error || result?.ok === false) return;
+  assistant.finalizeThinking?.({ collapse: true });
+  const current = assistant.currentContentSegment?.()?.el;
+  if (current && !isEmptyAssistantReply(current)) current.dataset.stopRound = "true";
+  assistant.openStopSection?.({ collapse: true, allowEmpty: false });
+}
+
 function isSearchTool(tool = {}) {
   const action = toolActionName(tool);
-  return action === "search_workspace" || (action !== "web_research" && /search|grep|find/.test(action));
+  return isSearchWorkspaceTool(tool) || (action !== "web_research" && /search|grep|find/.test(action));
 }
 
 function applyPatchOperations(tool = {}) {
@@ -14512,6 +14648,8 @@ const TOOL_STATUS_VERBS = [
   "Updated identity",
   "Creating folder",
   "Created folder",
+  "Searching workspace",
+  "Searched workspace",
   "Searching web",
   "Searched web",
   "Reading page",
@@ -14551,7 +14689,7 @@ function isBareToolVerbLabel(label = "") {
 
 function recoveredToolTargetName(card) {
   const file = String(card?.dataset?.file || "").trim();
-  if (!file) return "";
+  if (isPlaceholderTarget(file)) return "";
   return toolTargetBasename({ args: { path: file } }, {});
 }
 
@@ -14633,8 +14771,11 @@ function exploredToolParts(tool = {}, result = {}, phase = "success") {
   if (action === "create_guidance") {
     return { verb: running ? "Creating" : "Created", detail: guidanceDetail(tool, result) };
   }
+  if (isSearchWorkspaceTool(tool)) {
+    return { verb: running ? "Searching workspace" : "Searched workspace", detail: compactSearchNeedle(tool, result) || file };
+  }
   if (isSearchTool(tool)) {
-    return { verb: running ? "Searching" : "Searched", detail: compactSearchNeedle(tool) || file };
+    return { verb: running ? "Searching" : "Searched", detail: compactSearchNeedle(tool, result) || file };
   }
   if (action === "apply_patch") {
     const kind = applyPatchKind(tool, result);
@@ -14698,11 +14839,11 @@ function createToolCard(tool, { pending = false } = {}) {
   const fileAction = isFileActionTool(tool);
   card.className = `agent-file-row tool-card${pending ? " pending" : ""}${fileAction ? " file-action" : ""}`;
   card.dataset.lane = "activity";
-  const label = ToolMap.targetForTool(tool);
+  const displayName = toolDisplayName(tool);
   const callId = String(tool.callId || "").trim();
   const path = toolTargetPath(tool);
-  card.dataset.file = label;
-  if (path) card.dataset.path = path;
+  card.dataset.file = displayName;
+  if (path && !isPlaceholderTarget(path)) card.dataset.path = path;
   card.dataset.toolAction = toolActionName(tool);
   card.dataset.toolKey = toolCardKey(tool);
   if (callId) card.dataset.callId = callId;
@@ -14813,16 +14954,20 @@ function toolCardMountHost(turn, contentEl, assistant) {
 }
 
 function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
-  if (!tool || isAskQuestionsTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) return null;
+  if (!tool || isAskQuestionsTool(tool) || isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) return null;
   const assistant = markAssistantToolUse(turn);
-  const fileKey = ToolMap.targetForTool(tool);
+  const fileKey = toolCardFileKey(tool);
   const action = toolActionName(tool);
   const callId = String(tool.callId || "").trim();
   const key = toolCardKey(tool);
+  const targetPath = toolTargetPath(tool);
   const cards = [...(turn?.closest?.(".chat-exchange") || assistant?.workHostTurn?.() || turn).querySelectorAll(".tool-card")];
   let card = cards.find((candidate) => callId && candidate.dataset.callId === callId)
     || cards.find((candidate) => candidate.dataset.toolKey === key)
-    || cards.find((candidate) => candidate.dataset.toolAction === action && candidate.dataset.file === fileKey)
+    || cards.find((candidate) => candidate.dataset.toolAction === action && (
+      candidate.dataset.file === fileKey
+      || (targetPath && candidate.dataset.path === targetPath)
+    ))
     || (action === "create_guidance" ? cards.find((candidate) => candidate.dataset.toolAction === action) : null);
   const runningLabel = exploredToolLabel(tool, {}, "running");
   const completedLabel = exploredToolLabel(tool, {}, "success");
@@ -14838,11 +14983,10 @@ function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
     appendChatStreamNode(host, card);
     mounted = true;
   }
-  card.dataset.file = fileKey;
+  card.dataset.file = toolDisplayName(tool) || (!isPlaceholderTarget(fileKey) ? toolTargetBasename({ args: { path: fileKey } }, {}) : "");
   card.dataset.toolAction = action;
   card.dataset.toolKey = key;
-  const targetPath = toolTargetPath(tool);
-  if (targetPath) card.dataset.path = targetPath;
+  if (targetPath && !isPlaceholderTarget(targetPath)) card.dataset.path = targetPath;
   card.dataset.fileActionKind = card.dataset.fileActionKind || fileActionKindForTool(tool);
   if (callId) card.dataset.callId = callId;
   card.dataset.runningLabel = runningLabel;
@@ -15223,7 +15367,7 @@ function updateCommandTimelineLabel(identity, label) {
 }
 
 async function applyToolResultToUi(tool, result, turn, contentEl) {
-  if (isAskQuestionsTool(tool) || isTaskListTool(tool)) return;
+  if (isAskQuestionsTool(tool) || isEndTurnTool(tool) || isTaskListTool(tool)) return;
   const card = ensureToolCard(turn, contentEl, tool);
   if (!card) return;
 
@@ -15241,7 +15385,10 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
   let successText = minimalToolSuccessLabel(tool, result);
   const uiResult = toolUiResult(result);
   const resultPath = toolTargetPath(tool, uiResult);
-  if (resultPath) card.dataset.file = resultPath;
+  if (resultPath && !isPlaceholderTarget(resultPath)) card.dataset.path = resultPath;
+  const displayName = toolDisplayName(tool, uiResult)
+    || (!isPlaceholderTarget(resultPath) ? toolTargetBasename({ args: { path: resultPath } }, {}) : "");
+  if (displayName) card.dataset.file = displayName;
   card.dataset.completedLabel = successText;
   if (result?.terminalId && result.showInTerminal !== false) {
     successText = result.mode === "terminal_wait" || result.mode === "subagent_wait" ? "waiting" : "Terminal ready";
@@ -15311,6 +15458,7 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
   }
 
   syncActiveChatSession();
+  restackFileRows(turn);
   scrollMessages();
 }
 
@@ -15397,6 +15545,10 @@ bindScrollbarHoverLane(chatHistoryBody);
 function animateStreamDelta(container, delta) {
   if (!container || !String(delta || "").trim()) return;
   if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const now = Date.now();
+  if (now - Number(container.dataset.streamRevealAt || 0) < 80) return;
+  if (String(container.textContent || "").length > 12000) return;
+  container.dataset.streamRevealAt = String(now);
 
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
   let candidate = null;
@@ -15753,6 +15905,7 @@ function showComposerQuestionsPanel({
   approval = null,
   questionnaire = null,
   sessionId = activeChatSessionId,
+  subagentLabel = "",
   onLiveState = null,
 } = {}) {
   const ownerSessionId = composerQuestionSessionId(sessionId);
@@ -15808,7 +15961,11 @@ function showComposerQuestionsPanel({
     `;
   }).join("");
 
+  const subagentLabelHtml = String(subagentLabel || "").trim()
+    ? `<div class="agent-questions-subagent-label">${escapeHtml(String(subagentLabel).trim())}</div>`
+    : "";
   block.innerHTML = `
+    ${subagentLabelHtml}
     <div class="agent-questions-header">
       <span class="agent-questions-icon codicon codicon-question" aria-hidden="true"></span>
       <strong class="agent-questions-title">${escapeHtml(isToolQuestionnaire ? `1. ${visibleQuestions[0]?.prompt || "Need your input"}` : visibleQuestions[0]?.prompt || "Need your input")}</strong>
@@ -15984,6 +16141,7 @@ function showComposerQuestionsPanel({
 
   pendingComposerQuestionsBySession.set(ownerSessionId, {
     sessionId: ownerSessionId,
+    requestId: String(requestId || ""),
     block,
     promise,
     finish,
@@ -15996,6 +16154,88 @@ function showComposerQuestionsPanel({
   });
   syncComposerQuestionsForActiveSession();
   return promise;
+}
+
+function dismissEscalatedQuestionSurfaces(payload = {}) {
+  const requestId = String(payload.questionRequestId || "");
+  const parentSessionId = chatSessionIdForRuntimeId(payload.sessionId || payload.parentSessionId || "");
+  const childSessionId = String(payload.childSessionId || "");
+  if (parentSessionId) {
+    const orchestratorPending = pendingOrchestratorEscalatedQuestions.get(parentSessionId);
+    if (orchestratorPending && (!requestId || orchestratorPending.requestId === requestId)) {
+      orchestratorPending.abort?.();
+      pendingOrchestratorEscalatedQuestions.delete(parentSessionId);
+    }
+  }
+  if (childSessionId) {
+    const ownerId = composerQuestionSessionId(childSessionId);
+    const childPending = pendingComposerQuestionsBySession.get(ownerId);
+    if (childPending && (!requestId || childPending.requestId === requestId)) {
+      childPending.abort?.();
+    }
+  }
+}
+
+async function presentOrchestratorEscalatedQuestion(payload = {}) {
+  const parentSessionId = chatSessionIdForRuntimeId(payload.sessionId || "");
+  const requestId = String(payload.questionRequestId || "");
+  if (!parentSessionId || !requestId) return;
+  const existing = pendingOrchestratorEscalatedQuestions.get(parentSessionId);
+  if (existing?.requestId === requestId) return existing.handling;
+  if (existing) existing.abort?.();
+
+  const handling = (async () => {
+    const responsePromise = showComposerQuestionsPanel({
+      reason: payload.reason || "A delegated sub-agent needs your input before continuing.",
+      questions: payload.questions || [],
+      requestId,
+      sessionId: parentSessionId,
+      subagentLabel: payload.subagentLabel || "",
+    });
+    const composerPending = pendingComposerQuestionsBySession.get(parentSessionId);
+    pendingOrchestratorEscalatedQuestions.set(parentSessionId, {
+      requestId,
+      childSessionId: String(payload.childSessionId || ""),
+      abort: () => composerPending?.abort?.(),
+      handling,
+    });
+    const response = await responsePromise;
+    pendingOrchestratorEscalatedQuestions.delete(parentSessionId);
+    if (response?.aborted || response?.requestId !== requestId) return;
+    await window.api.agentResolveQuestions?.({
+      requestId,
+      answers: response?.answers || [],
+      skipped: Boolean(response?.skipped),
+    });
+  })();
+
+  handling.catch(() => {}).finally(() => {
+    if (pendingOrchestratorEscalatedQuestions.get(parentSessionId)?.requestId === requestId) {
+      pendingOrchestratorEscalatedQuestions.delete(parentSessionId);
+    }
+  });
+  return handling;
+}
+
+function dismissOrchestratorEscalatedForChild(childSessionId = "") {
+  const childId = String(childSessionId || "");
+  if (!childId) return;
+  for (const [parentSessionId, pending] of pendingOrchestratorEscalatedQuestions.entries()) {
+    if (pending.childSessionId === childId) {
+      pending.abort?.();
+      pendingOrchestratorEscalatedQuestions.delete(parentSessionId);
+    }
+  }
+}
+
+function dismissOrchestratorEscalatedQuestionsForStop(run) {
+  for (const sessionId of chatStopIdsForRun(run)) {
+    const parentSessionId = chatSessionIdForRuntimeId(sessionId);
+    const pending = pendingOrchestratorEscalatedQuestions.get(parentSessionId);
+    pending?.abort?.();
+    pendingOrchestratorEscalatedQuestions.delete(parentSessionId);
+    dismissOrchestratorEscalatedForChild(sessionId);
+  }
 }
 
 function agentStateIcon(kind = "working") {
@@ -16200,6 +16440,24 @@ function finalizeSubagentSessionTab(payload = {}) {
   schedulePersistChatSessions();
 }
 
+// Detached view hosts (delegated child tabs) keep nodes in a fragment tree where
+// isConnected is false even though streaming should continue on the same block.
+function streamingNodeLive(node) {
+  if (!node) return false;
+  if (node.isConnected) return true;
+  return Boolean(node.parentNode);
+}
+
+function coalesceDelegatedAssistantReplyFragments(assistant) {
+  if (!assistant?.turn) return;
+  const host = typeof assistant.workHostTurn === "function" ? assistant.workHostTurn() : assistant.turn;
+  if (!host) return;
+  const fold = turnWorkFold(host);
+  const body = fold ? workFoldBody(fold) : null;
+  if (body) coalesceAdjacentReplyRuns(body);
+  coalesceAdjacentReplyRuns(host);
+}
+
 function createAssistantTurn({ container = messages, sessionId = activeChatSessionId } = {}) {
   const turn = document.createElement("div");
   turn.className = "chat-turn assistant agent-stream";
@@ -16242,6 +16500,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     workFoldEl: null,
     workFoldBodyEl: null,
     workTimer: null,
+    modelEmitting: false,
     exploredFoldEl: null,
     exploredBodyEl: null,
     verdictOpen: false,
@@ -16326,7 +16585,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     ensureThinkingFold() {
       const work = this.ensureWorkFold();
-      if (this.thinkingFoldEl?.isConnected && this.thinkingFoldEl.dataset.final !== "true") {
+      if (streamingNodeLive(this.thinkingFoldEl) && this.thinkingFoldEl.dataset.final !== "true") {
         this.thinkingContentEl = thinkingContentOf(this.thinkingFoldEl);
         return this.thinkingFoldEl;
       }
@@ -16341,6 +16600,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     appendThinking(token) {
       const value = String(token || "");
+      this.noteModelOutput();
       this.showPrivateReasoning();
       const fold = this.ensureThinkingFold();
       if (!fold) return;
@@ -16358,7 +16618,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     finishThinking({ collapse = true } = {}) {
       const folds = [];
-      if (this.thinkingFoldEl?.isConnected) folds.push(this.thinkingFoldEl);
+      if (streamingNodeLive(this.thinkingFoldEl)) folds.push(this.thinkingFoldEl);
       const host = this.workHostTurn();
       host?.querySelectorAll?.(".agent-thinking-fold:not([data-final='true'])").forEach((fold) => {
         if (!folds.includes(fold)) folds.push(fold);
@@ -16376,7 +16636,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
       const host = this.conversationMount();
       const current = this.currentContentSegment()?.el;
-      if (current?.isConnected && !current.closest(".agent-explored-fold") && !current.closest(".agent-thinking-fold")) {
+      if (streamingNodeLive(current) && !current.closest(".agent-explored-fold") && !current.closest(".agent-thinking-fold")) {
         // Streamed text keeps flowing into the current block. The only things
         // that may break it are tool work landing after it, or the block being
         // mounted in the wrong place (inside the fold once the verdict opened,
@@ -16422,7 +16682,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
     },
     startWorkTimer() {
-      this.stopWorkTimer();
+      if (!this.modelEmitting || this.finalOutcome || this.workTimer) return;
       const tick = () => {
         const label = `Working for ${formatAgentWorkDuration(this.startedAt)}`;
         let live = false;
@@ -16430,9 +16690,15 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
           if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) continue;
           for (const block of turn.querySelectorAll(":scope > .agent-work-fold > .agent-work-header")) {
             if (block.dataset.final === "true") continue;
+            if (block.dataset.state === "question" || block.dataset.state === "error") continue;
             live = true;
             const textEl = block.querySelector(".agent-status-text");
             if (textEl) textEl.textContent = label;
+            // Planning/thinking leftover on this header would hide the caret
+            // and swallow clicks even after the label is Working for.
+            if (block.dataset.state === "planning" || block.dataset.state === "thinking") {
+              block.dataset.state = "working";
+            }
             syncWorkHeaderAffordance(block);
           }
         }
@@ -16441,11 +16707,32 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       tick();
       this.workTimer = setInterval(tick, 1000);
     },
+    paintPlanningHeader(header = this.liveStateEl) {
+      if (!header || this.modelEmitting || header.dataset.final === "true") return header;
+      header.dataset.state = "planning";
+      header.dataset.final = "false";
+      const textEl = header.querySelector(".agent-status-text");
+      if (textEl) textEl.textContent = "Planning\u2026";
+      syncWorkHeaderAffordance(header);
+      return header;
+    },
+    showPlanning() {
+      if (this.modelEmitting || this.finalOutcome || this.liveStateEl?.dataset.final === "true") return;
+      this.ensureWorkFold();
+    },
+    noteModelOutput() {
+      if (this.modelEmitting || this.finalOutcome || this.liveStateEl?.dataset.final === "true") return;
+      this.modelEmitting = true;
+      this.ensureWorkFold();
+    },
     // Creating the fold adopts whatever the run already wrote, so narration
     // that arrived before the first tool call moves inside the section it
     // belongs to instead of being stranded above it.
     ensureWorkFold() {
-      const fold = ensureAssistantWorkFold(this.workHostTurn(), { startedAt: this.startedAt });
+      const fold = ensureAssistantWorkFold(this.workHostTurn(), {
+        startedAt: this.startedAt,
+        label: this.modelEmitting ? undefined : "Planning\u2026",
+      });
       if (!fold) return null;
       const header = workFoldHeader(fold);
       if (this.startedAt && header) header.dataset.startedAt = String(this.startedAt);
@@ -16455,7 +16742,9 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       this.statusEl = header;
       this.exploredFoldEl = null;
       this.exploredBodyEl = null;
-      this.startWorkTimer();
+      if (this.finalOutcome) return fold;
+      if (this.modelEmitting) this.startWorkTimer();
+      else this.paintPlanningHeader(header);
       return fold;
     },
     splitAtContextCheckpoint(notice) {
@@ -16525,8 +16814,8 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       segment.el.classList.remove("streaming");
     },
     setRawContent(value) {
-      this.ensureConversationSegment();
       const next = String(value ?? "");
+      this.ensureConversationSegment();
       const previous = this.rawContent;
       const segment = this.currentContentSegment();
       if (segment && next.startsWith(previous)) {
@@ -16539,6 +16828,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       (this.rootTurn || this.turn).dataset.rawAssistant = next;
     },
     markToolUse() {
+      this.noteModelOutput();
       this.pendingVerdictBreak = false;
       if (this.verdictOpen) {
         this.verdictOpen = false;
@@ -16559,8 +16849,16 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       if (this.turn) this.turn.dataset.finishReason = reason;
       this.finishThinking({ collapse: true });
       sealExploredFolds(this.workHostTurn());
-      if (!stop) return;
-      this.openStopSection({ collapse: true, allowEmpty: true });
+      this.sealCurrentContentSegment();
+      // A no-tool round that did not call end_turn still wrote the answer.
+      // Later stop-round text must not append onto that block.
+      if (stop) this.breakConversationSegment();
+    },
+    breakConversationSegment() {
+      const current = this.currentContentSegment()?.el;
+      if (!current || isEmptyAssistantReply(current)) return;
+      this.sealCurrentContentSegment();
+      this.createContentSegment();
     },
     // Make `el` the block that further streamed text appends to.
     makeCurrentSegment(el) {
@@ -16586,14 +16884,14 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         .join("");
       const first = replies[0];
       replies.slice(1).forEach((el) => el.remove());
-      this.contentSegments = this.contentSegments.filter((item) => item.el?.isConnected);
+      this.contentSegments = this.contentSegments.filter((item) => streamingNodeLive(item.el));
       const segment = this.makeCurrentSegment(first);
       if (raw) segment.raw = raw;
       this.renderContentSegment(segment, { streaming: false });
       first.dataset.workVerdict = "true";
     },
-    // Closing a run: the answer moves out beside the fold so it survives the
-    // collapse, and any remaining text streams into it there.
+    // Closing a run: the answer written before end_turn sits beside the fold.
+    // Stop-round recap text stays inside Worked for.
     openStopSection({ collapse = false, allowEmpty = true } = {}) {
       if (!this.turn || this.turn.classList.contains("agent-run-stop") || this.turn.closest(".agent-run-stop")) return;
       const turn = this.workHostTurn();
@@ -16601,13 +16899,15 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       this.sealCurrentContentSegment();
       this.verdictOpen = true;
       const fold = turnWorkFold(turn);
+      const current = this.currentContentSegment()?.el;
+      if (current && !isEmptyAssistantReply(current)) current.dataset.stopRound = "true";
       const answer = promoteFinalAnswer(turn)
         || (allowEmpty ? this.createContentSegment({ after: fold }).el : null);
       if (answer) {
         answer.dataset.workVerdict = "true";
         this.makeCurrentSegment(answer);
+        this.coalesceLiveVerdict();
       }
-      this.coalesceLiveVerdict();
       this.pendingVerdictBreak = Boolean(String(this.currentContentSegment()?.raw || "").trim());
       if (collapse && fold) setWorkFoldExpanded(fold, false);
     },
@@ -16629,7 +16929,25 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       scrollMessages();
       return row;
     },
+    failRunningCommand(tool, result = {}) {
+      const processId = String(tool?.args?.process_id || result?.processId || result?.value?.processId || "").trim();
+      if (!processId) return;
+      for (const row of commandTimelineRows()) {
+        if (!commandTimelineRowIds(row).has(processId)) continue;
+        if (row.dataset.state === "running" || row.dataset.waiting === "true") {
+          updateCommandTimelineRow(row, "error");
+        }
+      }
+    },
     completeCommandEvent(tool, result = {}) {
+      const operation = String(tool?.args?.operation || "run");
+      if (operation === "stop") {
+        const stopStatus = String(result?.status || result?.value?.status || "").toLowerCase();
+        const halted = (!result?.error && result?.ok !== false) || ["stopped", "failed", "timeout"].includes(stopStatus);
+        if (halted) this.failRunningCommand(tool, result);
+        return null;
+      }
+      if (operation === "status" || operation === "list") return null;
       const key = commandTimelineKey(tool);
       const entries = this.commandEntries.get(key) || [];
       const row = [...entries].reverse().find((entry) => entry.dataset.state === "running") || entries[entries.length - 1];
@@ -16649,7 +16967,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
       const resultMode = result?.mode || result?.value?.mode;
       const resultStatus = String(result?.status || result?.value?.status || "").toLowerCase();
-      const waiting = !result?.error && result?.ok !== false && (resultMode === "terminal_wait"
+      const waiting = !commandResultFailed(result) && (resultMode === "terminal_wait"
         || (resultMode === "process_start" && (!resultStatus || resultStatus === "running")));
       if (waiting) {
         if (row) {
@@ -16661,7 +16979,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         }
         return row;
       }
-      const failed = Boolean(result?.error || result?.ok === false);
+      const failed = commandResultFailed(result);
       if (row) {
         row.dataset.endedAt = String(Date.now());
         const start = Number(row.dataset.startedAt);
@@ -16693,7 +17011,19 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     setLiveState({ kind = "working", title = "Working", detail = "", meta = "LIVE" } = {}) {
       const label = conciseAgentStatus(detail || title, kind);
       if (/^Writing response/i.test(label)) return;
-      if (this.workFoldEl?.isConnected && this.liveStateEl?.dataset.final !== "true") {
+      if (this.liveStateEl?.dataset.final === "true") return;
+      const currentLabel = this.liveStateEl?.querySelector?.(".agent-status-text")?.textContent || "";
+      if (isDurationWorkLabel(currentLabel)) {
+        if (this.modelEmitting) this.startWorkTimer();
+        return;
+      }
+      if (kind === "error" || kind === "question") this.stopWorkTimer();
+      else if (!this.modelEmitting) {
+        this.showPlanning();
+        this.turn?.setAttribute("aria-busy", "true");
+        (this.rootTurn || this.turn)?.setAttribute("aria-busy", "true");
+        return;
+      } else if (this.workFoldEl?.isConnected && this.liveStateEl?.dataset.final !== "true") {
         this.startWorkTimer();
         this.turn?.setAttribute("aria-busy", "true");
         (this.rootTurn || this.turn)?.setAttribute("aria-busy", "true");
@@ -16768,11 +17098,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
       if (this.hadToolActivity()) this.ensureWorkFold();
       const duration = formatAgentWorkDuration(this.startedAt);
-      const label = stopped
-        ? "Stopped"
-        : outcome === "inconclusive"
-          ? `Finished in ${duration}`
-          : `Worked for ${duration}`;
+      const label = `Worked for ${duration}`;
       const blocks = [];
       for (const turn of this.assistantTurns()) {
         if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) continue;
@@ -16788,7 +17114,8 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const endedAt = Date.now();
       const workedForMs = Math.max(0, endedAt - Number(this.startedAt || endedAt));
       for (const block of blocks) {
-        block.dataset.state = stopped ? "stopped" : "complete";
+        block.dataset.state = "complete";
+        block.dataset.runOutcome = outcome;
         block.dataset.final = "true";
         block.dataset.stateKey = `${outcome}|${label}`;
         block.querySelector(".agent-status-icon")?.remove();
@@ -16810,10 +17137,12 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         if (turn.getAttribute("aria-busy") === "true") continue;
         const fold = turnWorkFold(turn);
         if (!fold) continue;
+        restackFileRows(turn);
         const answer = promoteFinalAnswer(turn);
         if (answer) answer.dataset.workVerdict = "true";
         if (isFinishedWorkFold(fold)) setWorkFoldExpanded(fold, false);
       }
+      if (stopped) appendStoppedPlainText(this.workHostTurn() || this.turn, this.contentSegments);
     },
     requestQuestions({
       reason = "The agent needs your input before continuing.",
@@ -16903,6 +17232,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     appendContent(token) {
       let value = String(token || "");
+      this.noteModelOutput();
       this.ensureConversationSegment();
       const segment = this.currentContentSegment();
       if (this.pendingVerdictBreak) {
@@ -16980,6 +17310,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
   };
 
+  assistant.showPlanning();
   return assistant;
 }
 
@@ -17647,7 +17978,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       }
       assistant.appendContent(delta);
       run.activeStreamContent = assistant.rawContent;
-      syncAssistantDraftToHistory(run, assistant);
+      syncAssistantDraftToHistory(run, assistant, { persist: false });
       if (runIsVisible()) activeStreamContent = run.activeStreamContent;
       lastAgentText = assistant.rawContent;
       return;
@@ -17704,13 +18035,15 @@ async function sendMessageWithAgentRuntime(options = {}) {
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
       if (!tools.length) return;
       assistant.finalizeThinking();
-      for (const tool of tools) {
-        if (!isAgentTerminalTool(tool) && !isTaskListTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
+      const workTools = tools.filter((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool));
+      if (workTools.length) assistant.noteModelOutput();
+      for (const tool of workTools) {
+        if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
       }
-      if (tools.length === 1) {
-        assistant.setStatus(ToolParser.toolStatusLabel(tools[0]));
-      } else if (tools.length > 1) {
-        assistant.setStatus(`Using ${tools.length} tools...`);
+      if (workTools.length === 1) {
+        assistant.setStatus(ToolParser.toolStatusLabel(workTools[0]));
+      } else if (workTools.length > 1) {
+        assistant.setStatus(`Using ${workTools.length} tools...`);
       }
       scrollRunMessages();
       return;
@@ -17729,6 +18062,10 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "tool_start" && payload.tool) {
+      if (isEndTurnTool(payload.tool)) {
+        assistant.finalizeThinking();
+        return;
+      }
       const toolHistoryWrite = queueChatHistoryEvent({
         type: "tool_usage",
         toolName: payload.tool.toolName || payload.tool.action || payload.tool.name || "tool",
@@ -17737,22 +18074,27 @@ async function sendMessageWithAgentRuntime(options = {}) {
       assistant.finalizeThinking();
       if (isTaskListTool(payload.tool)) {
         assistant.setStatus("Organizing the task list…");
-        await toolHistoryWrite;
+        toolHistoryWrite.catch(() => {});
         return;
       }
       if (isAgentTerminalTool(payload.tool)) {
-        assistant.ensureCommandEvent(payload.tool);
+        const operation = String(payload.tool.args?.operation || "run");
+        if (operation === "run" || operation === "start") assistant.ensureCommandEvent(payload.tool);
         assistant.setStatus("Running command…");
       } else {
         ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
         assistant.setStatus(ToolParser.toolStatusLabel(payload.tool));
       }
       scrollRunMessages();
-      await toolHistoryWrite;
+      toolHistoryWrite.catch(() => {});
       return;
     }
 
     if (payload.type === "tool_result" && payload.tool && payload.result) {
+      if (isEndTurnTool(payload.tool)) {
+        applyEndTurnStopToUi(assistant, payload.result);
+        return;
+      }
       if (isTaskListTool(payload.tool)) {
         assistant.setStatus(payload.result?.error ? "Task list update failed" : "Task list updated");
         return;
@@ -17786,7 +18128,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       agentEventQueue = agentEventQueue
         .then(async () => {
           await handleAgentEvent(payload);
-          syncChatRunSession(run);
+          scheduleLiveChatSnapshot(run);
         })
         .catch(() => {});
     });
@@ -17815,6 +18157,13 @@ async function sendMessageWithAgentRuntime(options = {}) {
        internalSkillId: internal ? String(options?.internalSkillId || "") : "",
        continuation: internal ? (options?.continuation || null) : null,
     });
+    if (run.stopRequested) {
+      run.orchestrationHold = false;
+      run.pendingEndTurn = false;
+    } else if (agentRunResult && typeof agentRunResult === "object") {
+      run.orchestrationHold = Boolean(agentRunResult.orchestrationHold);
+      run.pendingEndTurn = Boolean(agentRunResult.pendingEndTurn);
+    }
     const result = agentRunResult;
     // Drain serialized UI events so the last tokens/tool cards land before
     // we finalize the transcript.
@@ -17843,6 +18192,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
 
     if (run.stopRequested) {
       assistant.setRawContent(assistant.rawContent.trim() || lastAgentText.trim());
+      assistant.finalOutcome = "stopped";
       assistant.completeTaskBrief("stopped");
       assistant.finalizeContent();
       updateRunContextUsage();
@@ -17865,11 +18215,13 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     const finalText = String(result?.finalText || "").trim();
-    if (finalText) {
-      const streamedText = assistant.rawContent.trim();
-      if (!streamedText) assistant.setRawContent(finalText);
-      else if (!streamedText.endsWith(finalText)) assistant.setRawContent(`${streamedText}\n\n${finalText}`);
-    } else if (!assistant.displayContent().trim() && lastAgentText.trim()) {
+    const hasStopVerdict = [...(assistant.workHostTurn?.()?.children || [])].some((child) => (
+      child.classList.contains("assistant-reply")
+      && child.dataset.workVerdict === "true"
+      && !isEmptyAssistantReply(child)
+    ));
+    if (finalText && !assistant.rawContent.trim() && !hasStopVerdict) assistant.setRawContent(finalText);
+    else if (!assistant.displayContent().trim() && !hasStopVerdict && lastAgentText.trim()) {
       assistant.setRawContent(lastAgentText);
     }
 
@@ -17896,22 +18248,31 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
     syncChatRunSession(run);
   } finally {
-    await finalizeChatHistory(run.stopRequested ? "stopped" : "failed");
-    unsubscribeAgentEvent();
-    if (assistant?.turn && assistant.turn.getAttribute("aria-busy") === "true") {
+    if (run.stopRequested) {
+      run.orchestrationHold = false;
+      run.pendingEndTurn = false;
+    }
+    const holdActive = Boolean(run?.orchestrationHold) && !run.stopRequested;
+    if (!holdActive) unsubscribeAgentEvent();
+    if (assistant?.turn && assistant.turn.getAttribute("aria-busy") === "true" && !holdActive) {
       assistant.finishLiveState(run.stopRequested ? "stopped" : assistant.finalOutcome || "complete");
     }
     run.activeStreamContent = "";
-    assistant?.pruneIfEmpty();
+    if (!holdActive) assistant?.pruneIfEmpty();
     syncChatRunSession(run);
     const completedInBackground = activeChatSessionId !== runSession.id;
-    run.state = "complete";
-    if (run.taskList?.source === "agent" && activeChatSessionId === runSession.id) clearComposerTaskList();
+    if (holdActive) {
+      run.state = "running";
+      activeChatRuns.set(runSession.id, run);
+    } else {
+      run.state = "complete";
+      if (activeChatRuns.get(runSession.id) === run) activeChatRuns.delete(runSession.id);
+    }
+    if (!holdActive && run.taskList?.source === "agent" && activeChatSessionId === runSession.id) clearComposerTaskList();
     if (completedInBackground) chatSessionsNeedingAttention.add(runSession.id);
     else chatSessionsNeedingAttention.delete(runSession.id);
-    if (activeChatRuns.get(runSession.id) === run) activeChatRuns.delete(runSession.id);
-    if (activeChatSessionId === runSession.id) activeStreamContent = "";
-    if (activeChatSessionId === runSession.id) setAgentStatus(`${modeLabel()} ready`);
+    if (activeChatSessionId === runSession.id && !holdActive) activeStreamContent = "";
+    if (activeChatSessionId === runSession.id) setAgentStatus(holdActive ? `${modeLabel()} orchestrating…` : `${modeLabel()} ready`);
     updateSendBtn();
     renderChatSessionSelect();
     if (activeChatSessionId === runSession.id) {
@@ -17919,7 +18280,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       refreshStoredContextCapacity();
     }
     if (activeChatSessionId === runSession.id) syncActiveChatSession();
-    if (activeChatSessionId === runSession.id && !contextCheckpointing) {
+    if (activeChatSessionId === runSession.id && !contextCheckpointing && !holdActive) {
       chatInput.disabled = false;
       chatInput.readOnly = false;
       chatInput.removeAttribute("aria-disabled");
@@ -17934,9 +18295,34 @@ async function sendMessageWithAgentRuntime(options = {}) {
   }
 }
 
+function settleStoppedRun(run) {
+  if (!run) return;
+  run.stopRequested = true;
+  run.orchestrationHold = false;
+  run.pendingEndTurn = false;
+  run.state = "complete";
+  run.activeStreamContent = "";
+  run.assistant?.finishLiveState?.("stopped");
+  run.assistant?.turn?.setAttribute("aria-busy", "false");
+  if (activeChatRuns.get(run.sessionId) === run) activeChatRuns.delete(run.sessionId);
+}
+
+function settleDelegatedChildrenOf(run) {
+  const parentIds = new Set(chatStopIdsForRun(run));
+  if (!parentIds.size) return;
+  for (const [sessionId, childRun] of [...activeChatRuns.entries()]) {
+    if (!childRun?.delegated || childRun === run) continue;
+    const parentId = String(childRun.session?.parentSessionId || "");
+    const mappedParentId = chatSessionIdForRuntimeId(parentId);
+    if (!parentId || (!parentIds.has(parentId) && !parentIds.has(mappedParentId))) continue;
+    settleStoppedRun(childRun);
+    if (activeChatRuns.get(sessionId) === childRun) activeChatRuns.delete(sessionId);
+  }
+}
+
 function stopGeneration() {
   const run = activeSessionRun();
-  if (!run || run.state !== "running") return;
+  if (!run || (run.state !== "running" && !run.orchestrationHold)) return;
   run.stopRequested = true;
   markChatSessionStoppedByOperator(run);
   dismissComposerQuestionsForStop(run);
@@ -17944,9 +18330,15 @@ function stopGeneration() {
   dropAutoContinuationsForSession(run.memorySessionId || run.session?.memorySessionId || "");
   syncAssistantDraftToHistory(run, run.assistant, { persist: false });
   void persistChatHistorySnapshot(activeChatPersistenceScope, run.session);
-  run.activeStreamContent = "";
   activeStreamContent = "";
-  setAgentStatus("Stopping...");
+  settleDelegatedChildrenOf(run);
+  settleStoppedRun(run);
+  if (chatInput && activeChatSessionId === run.sessionId) {
+    chatInput.disabled = false;
+    chatInput.readOnly = false;
+    chatInput.removeAttribute("aria-disabled");
+  }
+  setAgentStatus(`${modeLabel()} ready`);
   abortActiveChatRun(run);
   updateSendBtn();
   updateContextUsage();
@@ -17991,6 +18383,7 @@ function dismissComposerQuestionsForStop(run) {
     const pending = pendingComposerQuestionsBySession.get(composerQuestionSessionId(sessionId));
     pending?.abort?.();
   }
+  dismissOrchestratorEscalatedQuestionsForStop(run);
 }
 
 function dropAutoContinuationsForSession(sessionId = "") {
@@ -18116,6 +18509,63 @@ function childAssistant(run) {
   if (!run.assistant) {
     run.assistant = createAssistantTurn({ container: chatRunContainer(run), sessionId: run.sessionId });
     run.assistant.contentEl.classList.add("streaming");
+    if (run.delegated) {
+      const baseEnsure = run.assistant.ensureThinkingFold.bind(run.assistant);
+      run.assistant.ensureThinkingFold = function delegatedEnsureThinkingFold() {
+        if (run.thinkingFoldEl && run.thinkingFoldEl.dataset.final !== "true") {
+          if (!streamingNodeLive(run.thinkingFoldEl)) {
+            const work = this.ensureWorkFold();
+            const host = workFoldBody(work) || this.conversationMount();
+            if (host) appendChatStreamNode(host, run.thinkingFoldEl);
+          }
+          this.thinkingFoldEl = run.thinkingFoldEl;
+          this.thinkingContentEl = thinkingContentOf(run.thinkingFoldEl);
+          this.thinkingRaw = run.thinkingRaw || "";
+          return run.thinkingFoldEl;
+        }
+        const fold = baseEnsure();
+        run.thinkingFoldEl = this.thinkingFoldEl;
+        run.thinkingRaw = this.thinkingRaw;
+        return fold;
+      };
+      run.assistant.appendThinking = function delegatedAppendThinking(token) {
+        const value = String(token || "");
+        this.noteModelOutput();
+        this.showPrivateReasoning();
+        const fold = this.ensureThinkingFold();
+        if (!fold) return;
+        setThinkingFoldLabel(fold, { live: true });
+        setCollapsibleFoldExpanded(fold, true);
+        if (value) {
+          this.thinkingRaw = `${this.thinkingRaw || ""}${value}`;
+          const content = thinkingContentOf(fold) || this.thinkingContentEl;
+          if (content) {
+            content.hidden = false;
+            scheduleDelegatedMarkdownRender(`${run.sessionId}:thinking`, content, this.thinkingRaw, { streaming: true });
+          }
+        }
+        run.thinkingFoldEl = this.thinkingFoldEl;
+        run.thinkingRaw = this.thinkingRaw;
+        if (runIsChildVisible(run.sessionId)) scrollMessages();
+      };
+      run.assistant.syncDisplay = function delegatedSyncDisplay(options = {}) {
+        const segment = this.currentContentSegment();
+        if (!segment) return;
+        const raw = String(segment.raw || "");
+        const text = ToolParser.cleanReplyForDisplay(raw, { streaming: true }) || raw.trim();
+        if (text) {
+          segment.el.hidden = false;
+          scheduleDelegatedMarkdownRender(
+            `${run.sessionId}:content`,
+            segment.el,
+            text,
+            { streaming: segment.el.classList.contains("streaming") },
+          );
+          if (options.animateToken) animateStreamDelta(segment.el, options.animateToken);
+        }
+        if (runIsChildVisible(run.sessionId)) scrollMessages();
+      };
+    }
   }
   return run.assistant;
 }
@@ -18177,6 +18627,7 @@ function handleDelegatedChildEvent(payload = {}) {
   }
 
   if (type === "subagent_completed" || type === "subagent_stopped" || type === "subagent_failed") {
+    dismissOrchestratorEscalatedForChild(childSessionId);
     if (assistant) {
       if (!assistant.rawContent.trim()) assistant.setRawContent(String(payload.summary || "").trim() || "Sub-agent finished.");
       assistant.finalizeContent();
@@ -18314,10 +18765,21 @@ function handleParentSubagentLifecycle(payload = {}) {
 async function handleDelegatedChildRuntimeEvent(payload = {}) {
   const childSessionId = String(payload.childSessionId || "");
   if (!childSessionId || String(payload.sessionId || "") !== childSessionId) return;
+  enqueueDelegatedChildEvent(childSessionId, async () => {
   const run = ensureDelegatedChildRun(payload);
   const assistant = childAssistant(run);
   if (!assistant) return;
   const type = String(payload.type || "");
+  if (type === "questions_required") {
+    const response = await assistant.requestQuestions(payload);
+    await window.api.agentResolveQuestions?.({
+      requestId: payload.requestId,
+      answers: response?.answers || [],
+      skipped: Boolean(response?.skipped),
+    });
+    assistant.setStatus(response?.skipped ? "Clarification skipped" : "Clarification answers submitted");
+    return;
+  }
   if (type === "thinking") {
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
     assistant.appendThinking(payload.token || payload.delta || "");
@@ -18329,7 +18791,7 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
       assistant.finalizeThinking();
       assistant.appendContent(delta);
       run.activeStreamContent = assistant.rawContent;
-      syncAssistantDraftToHistory(run, assistant);
+      syncAssistantDraftToHistory(run, assistant, { persist: false });
     }
   } else if (type === "status" || type === "activity") {
     if (payload.text || payload.summary) assistant.setStatus(String(payload.text || payload.summary));
@@ -18337,17 +18799,28 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
     const phase = String(payload.state?.phase || "working").replace(/-/g, " ");
     assistant.setStatus(phase);
   } else if (type === "tool_call") {
-    for (const tool of Array.isArray(payload.tools) ? payload.tools : []) {
-      if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
+    const tools = Array.isArray(payload.tools) ? payload.tools : [];
+    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteModelOutput();
+    for (const tool of tools) {
+      if (isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) continue;
+      ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
     }
   } else if (type === "tool_start" && payload.tool) {
-    assistant.markToolUse();
-    if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
-    else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
+    if (isEndTurnTool(payload.tool)) {
+      assistant.finalizeThinking();
+    } else {
+      assistant.markToolUse();
+      if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
+      else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
+    }
   } else if (type === "tool_result" && payload.tool && payload.result) {
-    const uiResult = toolUiResult(payload.result);
-    if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
-    else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+    if (isEndTurnTool(payload.tool)) {
+      applyEndTurnStopToUi(assistant, payload.result);
+    } else {
+      const uiResult = toolUiResult(payload.result);
+      if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
+      else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+    }
   } else if (type === "context_checkpoint") {
     applyCheckpointToSession(run.session, payload);
     applyContextCheckpointUi(run, payload);
@@ -18356,8 +18829,9 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
     storeLastContextUsage(payload.usage, { session: run.session, model: run.model || selectedModel, contextPlan: run.contextPlan });
     if (runIsChildVisible(childSessionId)) updateContextUsage();
   }
-  syncChatRunSession(run);
+  scheduleDelegatedLiveSnapshot(run);
   if (runIsChildVisible(childSessionId)) scrollMessages();
+  });
 }
 
 function scheduleSubagentResultDrain(delay = 0) {
@@ -18432,6 +18906,38 @@ function drainPendingSubagentResults() {
 }
 
 const parentContinuationEventQueues = new Map();
+const childEventLanes = new Map();
+const delegatedMarkdownFrames = new Map();
+const delegatedSnapshotTimers = new Map();
+
+function enqueueDelegatedChildEvent(childSessionId, handler) {
+  const key = String(childSessionId || "");
+  const prior = childEventLanes.get(key) || Promise.resolve();
+  const next = prior.then(() => handler()).catch(() => {});
+  childEventLanes.set(key, next);
+  next.finally(() => {
+    if (childEventLanes.get(key) === next) childEventLanes.delete(key);
+  });
+}
+
+function scheduleDelegatedMarkdownRender(childSessionId, contentEl, raw, options = {}) {
+  const key = String(childSessionId || "");
+  if (delegatedMarkdownFrames.has(key)) cancelAnimationFrame(delegatedMarkdownFrames.get(key));
+  const frame = requestAnimationFrame(() => {
+    delegatedMarkdownFrames.delete(key);
+    renderMarkdown(contentEl, raw, options);
+  });
+  delegatedMarkdownFrames.set(key, frame);
+}
+
+function scheduleDelegatedLiveSnapshot(run) {
+  const key = String(run?.sessionId || "");
+  if (delegatedSnapshotTimers.has(key)) return;
+  delegatedSnapshotTimers.set(key, setTimeout(() => {
+    delegatedSnapshotTimers.delete(key);
+    scheduleLiveChatSnapshot(run);
+  }, 150));
+}
 
 function ensureParentContinuationRun(payload = {}) {
   const parentSessionId = chatSessionIdForRuntimeId(payload.parentSessionId || payload.sessionId || "");
@@ -18509,7 +19015,7 @@ async function renderParentContinuationEvent(payload = {}) {
       assistant.finalizeThinking();
       assistant.appendContent(delta);
       run.activeStreamContent = assistant.rawContent;
-      syncAssistantDraftToHistory(run, assistant);
+      syncAssistantDraftToHistory(run, assistant, { persist: false });
     }
   } else if (type === "status") {
     assistant.setStatus(payload.text || "Working...");
@@ -18538,18 +19044,29 @@ async function renderParentContinuationEvent(payload = {}) {
     assistant.setStatus(response?.skipped ? "Clarification skipped" : "Clarification answers submitted");
   } else if (type === "tool_call") {
     assistant.finalizeThinking();
-    for (const tool of Array.isArray(payload.tools) ? payload.tools : []) {
-      if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
+    const tools = Array.isArray(payload.tools) ? payload.tools : [];
+    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteModelOutput();
+    for (const tool of tools) {
+      if (isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) continue;
+      ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
     }
   } else if (type === "tool_start" && payload.tool) {
-    assistant.markToolUse();
-    assistant.finalizeThinking();
-    if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
-    else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
+    if (isEndTurnTool(payload.tool)) {
+      assistant.finalizeThinking();
+    } else {
+      assistant.markToolUse();
+      assistant.finalizeThinking();
+      if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
+      else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
+    }
   } else if (type === "tool_result" && payload.tool && payload.result) {
-    const uiResult = toolUiResult(payload.result);
-    if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
-    else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+    if (isEndTurnTool(payload.tool)) {
+      applyEndTurnStopToUi(assistant, payload.result);
+    } else {
+      const uiResult = toolUiResult(payload.result);
+      if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
+      else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+    }
   } else if (type === "parent_continuation_complete") {
     const result = payload.result && typeof payload.result === "object" ? payload.result : {};
     if (Array.isArray(result.appendedMessages) && result.appendedMessages.length) {
@@ -18583,7 +19100,7 @@ async function renderParentContinuationEvent(payload = {}) {
     }
     return;
   }
-  syncChatRunSession(run);
+  scheduleLiveChatSnapshot(run);
   if (visible) scrollMessages();
 }
 
@@ -18600,7 +19117,12 @@ function queueParentContinuationEvent(payload = {}) {
 
 function handleHiddenBackgroundRuntimeEvent(payload = {}) {
   if (payload?.type === "questions_required") {
-    window.api.agentResolveQuestions?.({ requestId: payload.requestId, answers: [], skipped: true });
+    const delegated = Boolean(payload.delegatedChild)
+      || Boolean(payload.childSessionId)
+      || String(payload.source || "") === "subagent";
+    if (!delegated) {
+      window.api.agentResolveQuestions?.({ requestId: payload.requestId, answers: [], skipped: true });
+    }
     return;
   }
   if (payload?.type !== "parent_continuation_complete") return;
@@ -18645,6 +19167,14 @@ window.api?.onAgentEvent?.((payload) => {
   if (type === "subagent_queued" || type === "subagent_started" || type === "subagent_activity"
     || type === "subagent_completed" || type === "subagent_stopped" || type === "subagent_failed") {
     handleDelegatedChildEvent(payload);
+    return;
+  }
+  if (type === "subagent_question_escalated") {
+    presentOrchestratorEscalatedQuestion(payload).catch(() => {});
+    return;
+  }
+  if (type === "subagent_question_resolved") {
+    dismissEscalatedQuestionSurfaces(payload);
     return;
   }
   if (payload?.source === "subagent" && payload?.childSessionId) handleDelegatedChildRuntimeEvent(payload).catch(() => {});
@@ -18746,7 +19276,7 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
           healthSummary,
           clipped ? `Current terminal log:\n\`\`\`\n${clipped}\n\`\`\`` : "No terminal transcript was captured yet.",
           errClipped ? `stderr:\n\`\`\`\n${errClipped}\n\`\`\`` : "",
-          "Decide whether the command looks healthy. Leave it running, or stop it with exec_command operation=stop using the process ID above. The harness will resume you again when it exits.",
+          "Decide whether the command looks healthy. This command still holds a queue slot. Leave it running, or stop it with exec_command operation=stop using the process ID above. The harness reports this live status again every 15 minutes while it is running, and resumes you when it exits.",
         ]).filter(Boolean).join("\n\n")
       : (kind === "subagent"
         ? [
@@ -19198,7 +19728,7 @@ messages.addEventListener("click", (e) => {
 
   const workHeader = e.target.closest(".agent-work-header");
   if (workHeader) {
-    if (workHeader.dataset.foldable === "false" || workHeader.dataset.state === "planning") return;
+    if (workHeader.dataset.foldable === "false") return;
     toggleWorkFold(workHeader.closest(".agent-work-fold"));
     return;
   }

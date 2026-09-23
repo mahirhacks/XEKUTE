@@ -97,6 +97,13 @@ test("agent terminal runner announces start, streams output, and resolves when t
   assert.ok(dataEvent);
   assert.match(dataEvent.payload.data, /ok 1 test/);
 
+  record.pty.emit("data", "more");
+  assert.equal(events.filter((entry) => entry.channel === "terminal:data").length, 1);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const batched = events.filter((entry) => entry.channel === "terminal:data");
+  assert.equal(batched.length, 2);
+  assert.match(batched[1].payload.data, /more/);
+
   record.pty.emit("exit", { exitCode: 0, signal: 0 });
   const result = await pending;
   assert.equal(result.ok, true);
@@ -197,7 +204,7 @@ test("canonical agent exec projects terminal output only when explicitly request
 
   assert.doesNotMatch(main, /function createAgentTerminalHost/);
   assert.match(hostSource, /const wantVisible = input\.show_in_terminal !== false/);
-  assert.match(hostSource, /if \(decision\.live\) sendTerminalData/);
+  assert.match(hostSource, /if \(decision\.live\) outputBatch\.push/);
   assert.match(hostSource, /result\.value\.showInTerminal = revealed/);
   assert.match(hostSource, /createSupervisedTerminal/);
   assert.doesNotMatch(hostSource, /createProcessCommandQueue/);
@@ -220,7 +227,7 @@ test("canonical agent exec projects terminal output only when explicitly request
   assert.doesNotMatch(main, /name === "exec_command" \? Boolean\(terminalHost\?\.runExecutable\)/);
   assert.match(runner, /function runShellCommand/);
   assert.match(runner, /exposeTerminal = false/);
-  assert.match(runner, /if \(exposeTerminal\) sendTerminalData/);
+  assert.match(runner, /if \(outputBatch\) outputBatch\.push/);
   assert.match(runner, /if \(exposeTerminal\) \{[\s\S]*?announceAgentTerminal/);
   assert.doesNotMatch(hostSource, /artifactProvenance/, "terminal supervision must not reference tool-only provenance outside its scope");
   assert.match(hostSource, /type: "terminal_complete"[\s\S]{0,300}commandCallId[\s\S]{0,100}commandInvocationId/);

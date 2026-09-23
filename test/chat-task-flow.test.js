@@ -16,7 +16,7 @@ test("Agent tasks keep the two-mode catalog without a temporary checklist tool",
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_list"/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
   assert.match(modes, /const AGENT_TOOLS = Object\.freeze\(\[/);
-  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "read_file", "search_workspace", "view_active_terminal"\]\)/);
+  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal"\]\)/);
   assert.match(modes, /const MODE_TOOL_GROUPS = Object\.freeze\(\{ ask: SAFE_READ_TOOLS, agent: AGENT_TOOLS \}\)/);
   assert.doesNotMatch(modes, /"update_project_artifacts"/);
   assert.doesNotMatch(modes, /"query_knowledge"/);
@@ -423,7 +423,7 @@ test("stopped streamed responses enter history before the durable outcome is wri
   const stopBody = renderer.slice(stopStart, stopEnd);
 
   assert.match(renderer, /function syncAssistantDraftToHistory\([\s\S]*?history\.push\(message\)[\s\S]*?schedulePersistChatSessions\(session\)/);
-  assert.match(renderer, /assistant\.appendContent\(delta\);[\s\S]*?syncAssistantDraftToHistory\(run, assistant\)/);
+  assert.match(renderer, /assistant\.appendContent\(delta\);[\s\S]*?syncAssistantDraftToHistory\(run, assistant, \{ persist: false \}\)/);
   assert.match(finalizeBody, /syncAssistantDraftToHistory\(run, assistant, \{ persist: false \}\)[\s\S]*?syncChatRunSession\(run, \{ persist: false \}\)[\s\S]*?finishChatHistoryBlock/);
   assert.match(stopBody, /syncAssistantDraftToHistory\(run, run\.assistant, \{ persist: false \}\)[\s\S]*?persistChatHistorySnapshot\(activeChatPersistenceScope, run\.session\)/);
   assert.match(stopBody, /abortActiveChatRun\(run\)/);
@@ -435,6 +435,17 @@ test("stopped streamed responses enter history before the durable outcome is wri
   assert.match(main, /if \(!current \|\| current\.aborted/);
   assert.doesNotMatch(stopBody, /manager\.stop|agent_cancelled/);
   assert.doesNotMatch(renderer, /runHistory\.splice\(historyStart\)/);
+});
+
+test("successful agent runs are not finalized as failed in finally", () => {
+  const renderer = read("src/ui/bootstrap.js");
+  const sendStart = renderer.indexOf("async function sendMessageWithAgentRuntime");
+  const sendEnd = renderer.indexOf("function stopGeneration()", sendStart);
+  const sendBody = renderer.slice(sendStart, sendEnd);
+  const finallyStart = sendBody.indexOf("} finally {");
+  const finallyBody = sendBody.slice(finallyStart);
+  assert.match(sendBody, /await finalizeChatHistory\(assistant\.rawContent\.trim\(\) \? "completed" : "incomplete"\)/);
+  assert.doesNotMatch(finallyBody, /finalizeChatHistory\(run\.stopRequested \? "stopped" : "failed"\)/);
 });
 
 test("encrypted V3 chat sessions preserve the exact sanitized display transcript separately from model history", async () => {
@@ -517,9 +528,11 @@ test("every rendered agent event refreshes the durable display transcript", () =
   assert.match(renderer, /function renderStructuredChatTranscript/);
   assert.match(renderer, /from "\.\/features\/chat\/chat-transcript\.js"/);
   assert.match(renderer, /captureChatTranscript\(/);
-  assert.match(renderer, /await handleAgentEvent\(payload\);\s*syncChatRunSession\(run\)/);
+  assert.match(renderer, /await handleAgentEvent\(payload\);\s*scheduleLiveChatSnapshot\(run\)/);
+  assert.match(renderer, /function scheduleLiveChatSnapshot/);
+  assert.match(renderer, /LIVE_CHAT_SNAPSHOT_MS = 1200/);
   assert.match(renderer, /function hydratePersistedChatTranscript/);
-  assert.match(renderer, /syncChatRunSession\(run\);\s*if \(runIsChildVisible/);
+  assert.match(renderer, /scheduleDelegatedLiveSnapshot\(run\);\s*if \(runIsChildVisible/);
   assert.match(renderer, /function persistCommandTimelineRowState/);
   assert.match(store, /display_html: messageContent\(source\.display_html \|\| source\.displayHtml \|\| ""\)/);
   assert.match(store, /ui_transcript: normalizeUiTranscript/);
@@ -538,7 +551,8 @@ test("agent turns retain tool and command rows without a redundant progress chec
   assert.match(renderer, /querySelectorAll\("\.agent-progress-feed"\).*node\.remove/);
   assert.match(renderer, /ensureToolCard\(assistant\.turn, assistant\.contentEl, payload\.tool, \{ pending: true \}\)/);
   assert.match(renderer, /KEEPABLE_TOOL_ACTIONS\.has\(action\)/);
-  assert.match(renderer, /if \(!streamedText\) assistant\.setRawContent\(finalText\)/);
+  assert.match(renderer, /if \(finalText && !assistant\.rawContent\.trim\(\) && !hasStopVerdict\) assistant\.setRawContent\(finalText\)/);
+  assert.doesNotMatch(renderer, /streamedText\.endsWith\(finalText\)/);
   assert.match(renderer, /payload\.type === "output_continuation"/);
   assert.match(renderer, /Continuing the response/);
   assert.doesNotMatch(chatStyles, /\.agent-progress-(?:feed|entry|icon|text)/);
@@ -564,6 +578,9 @@ test("command execution renders as sequential collapsed chat events without ente
   assert.match(renderer, /row\.open = false/);
   assert.doesNotMatch(renderer, /createCommandTimelineRow[\s\S]*?codicon-terminal agent-command-shell/);
   assert.match(renderer, /if \(state === "success"\) return "Ran Command"/);
+  assert.match(renderer, /if \(state === "error"\) return "Command failed"/);
+  assert.match(renderer, /function commandResultFailed/);
+  assert.match(renderer, /failRunningCommand\(tool, result\)/);
   assert.match(renderer, /sealCurrentContentSegment\(\);[\s\S]*?appendChatStreamNode\(this\.toolWorkMount\(\), row\)[\s\S]*?ensurePostToolContentSegment\(/);
   assert.match(renderer, /assistant\.ensureCommandEvent\(payload\.tool\)/);
   assert.match(renderer, /assistant\.completeCommandEvent\(payload\.tool, uiResult\)/);

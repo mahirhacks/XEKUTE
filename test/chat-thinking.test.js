@@ -48,18 +48,27 @@ test("content and tool events replace thinking and completion settles to elapsed
   assert.match(renderer, /hadToolActivity\(\)/);
   assert.match(renderer, /if \(!stopped && !this\.hadToolActivity\(\)\) \{[\s\S]*?this\.dismissLiveState\(\)/);
   assert.doesNotMatch(renderer, /if \(payload\.type === "tool_call"\)[\s\S]{0,220}?assistant\.markToolUse\(\)/);
+  assert.match(renderer, /`Working for \$\{formatAgentWorkDuration\(this\.startedAt\)\}`/);
+  assert.doesNotMatch(renderer, /`Worked for \$\{formatAgentWorkDuration\(this\.startedAt\)\}`/);
+  assert.match(renderer, /assistant\.showPlanning\(\)/);
+  assert.match(renderer, /noteModelOutput\(\)/);
+  assert.match(renderer, /textContent = "Planning\\u2026"/);
   assert.match(renderer, /`Worked for \$\{duration\}`/);
-  assert.match(renderer, /`Finished in \$\{duration\}`/);
   assert.match(renderer, /const stopped = outcome === "stopped"/);
-  assert.match(renderer, /const label = stopped[\s\S]*\? "Stopped"/);
+  assert.match(renderer, /const label = `Worked for \$\{duration\}`/);
+  assert.match(renderer, /if \(stopped\) appendStoppedPlainText/);
+  assert.doesNotMatch(renderer, /const label = stopped[\s\S]*\? "Stopped"/);
+  assert.match(renderer, /isDurationWorkLabel\(currentLabel\)/);
   assert.doesNotMatch(renderer, /if \(outcome === "error" \|\| outcome === "stopped"\) \{[\s\S]{0,220}?this\.liveStateEl\?\.remove\(\)/);
   assert.match(renderer, /if \(kind === "planning"\) return "Planning/);
   assert.match(workFold, /export function isFoldableWorkLabel/);
   assert.match(workFold, /export function syncWorkHeaderAffordance/);
-  assert.match(renderer, /if \(workHeader\.dataset\.foldable === "false" \|\| workHeader\.dataset\.state === "planning"\) return/);
+  assert.match(renderer, /if \(workHeader\.dataset\.foldable === "false"\) return/);
+  assert.match(renderer, /block\.dataset\.state === "planning" \|\| block\.dataset\.state === "thinking"/);
+  assert.match(renderer, /fold\.dataset\.userToggled !== "true"/);
   assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\] \{[\s\S]*font-size: 12px/);
   assert.match(chatStyles, /#messages \.agent-work-header\[data-foldable="false"\] \.agent-work-caret/);
-  assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\] \.agent-work-caret/);
+  assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\]:not\(\.is-foldable\) \.agent-work-caret/);
   assert.match(renderer, /isTransientToolCardLabel/);
   assert.match(renderer, /isPlaceholderToolCardLabel/);
   assert.match(chatStyles, /#messages \.agent-status-line\[data-final="true"\] \{[\s\S]*font-weight: 400/);
@@ -149,7 +158,7 @@ test("large Agent work uses a temporary collapsible composer checklist", () => {
   assert.match(renderer, /payload\.clear \|\| payload\.completed/);
   assert.match(renderer, /class="composer-task-list-card" aria-expanded=/);
   assert.match(renderer, /if \(!activeComposerTaskList\?\.expanded \|\| composerTaskListEl\?\.contains\(event\.target\)\) return/);
-  assert.match(renderer, /if \(!isAgentTerminalTool\(tool\) && !isTaskListTool\(tool\)\)/);
+  assert.match(renderer, /const workTools = tools\.filter\(\(tool\) => !isEndTurnTool\(tool\) && !isTaskListTool\(tool\)\)/);
   assert.match(chatStyles, /\.composer-task-list-card \{[\s\S]*?border-radius: 10px/);
   assert.match(chatStyles, /\.composer-task-list-row\[data-task-status="completed"\] \.composer-task-list-title \{[\s\S]*?text-decoration: line-through/);
 });
@@ -184,6 +193,14 @@ test("tool activity sits in a two-lane stream under a Worked for header", () => 
   assert.match(chatStyles, /#messages \.agent-work-fold\[data-expanded="false"\] > \.agent-work-fold-body/);
   assert.match(workFold, /assets\/icons\/chat_fold_caret\.svg/);
   assert.match(renderer, /className = "agent-file-stack"/);
+  assert.match(renderer, /function fileRowDisplayDetail/);
+  assert.match(renderer, /function isPlaceholderTarget/);
+  assert.match(renderer, /function toolDisplayName/);
+  assert.match(renderer, /Keep the verb on stacked rows too/);
+  assert.doesNotMatch(renderer, /if \(inStack\) renderToolStatusLabel\(fileEl, "", detail \|\| verb\)/);
+  assert.match(renderer, /renderToolStatusLabel\(fileEl, verb, detail\)/);
+  assert.match(renderer, /compactSearchNeedle\(tool, result\) \|\| file/);
+  assert.match(renderer, /if \(resultPath && !isPlaceholderTarget\(resultPath\)\) card\.dataset\.path = resultPath/);
   assert.match(renderer, /agent-file-row tool-card/);
   assert.match(renderer, /function lastReusableExploredFold/);
   assert.match(renderer, /ensureExploredGroup\(\)/);
@@ -203,7 +220,19 @@ test("tool activity sits in a two-lane stream under a Worked for header", () => 
   assert.match(workFold, /export function unwrapWorkFold/);
   assert.match(renderer, /dataset\.workVerdict = "true"/);
   assert.match(renderer, /this\.verdictOpen = true/);
-  assert.match(renderer, /openStopSection\(\{ collapse: true, allowEmpty: true \}\)/);
+  assert.doesNotMatch(renderer, /beginLiveVerdictIfNeeded/);
+  assert.doesNotMatch(renderer, /function endTurnStopMessage/);
+  assert.match(renderer, /dataset\.stopRound = "true"/);
+  assert.match(renderer, /if \(stop\) this\.breakConversationSegment\(\)/);
+  assert.match(renderer, /breakConversationSegment\(\)/);
+  assert.match(renderer, /openStopSection\?\.\(\{ collapse: true, allowEmpty: false \}\)/);
+  assert.match(renderer, /function turnHasWorkVerdict/);
+  assert.match(renderer, /!turnHasWorkVerdict\(turn\)/);
+  assert.match(renderer, /function isSearchWorkspaceTool/);
+  assert.match(renderer, /workspace\/search_workspace/);
+  assert.match(renderer, /action === "search_workspace" \|\| action\.endsWith\("\.search_workspace"\)/);
+  assert.match(chatStyles, /#messages \.agent-work-header \{[\s\S]{0,280}opacity: 0\.6/);
+  assert.doesNotMatch(renderer, /openStopSection\(\{ collapse: true, allowEmpty: true \}\)/);
   assert.match(renderer, /function workFollowingReply/);
   assert.match(renderer, /const followingWork = workFollowingReply\(current\);\s*if \(!followingWork\) return current;/);
   assert.match(renderer, /const misplaced = this\.verdictOpen \? inWorkFold : current\.parentElement !== host;/);
@@ -218,12 +247,14 @@ test("tool activity sits in a two-lane stream under a Worked for header", () => 
   assert.match(chatStyles, /#messages \.agent-work-fold-body > \.assistant-reply \{[\s\S]{0,80}padding: 0/);
   assert.match(chatStyles, /#messages \.agent-work-fold \+ \.assistant-reply \{[\s\S]{0,80}padding: 0/);
   assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line\[data-final="true"\] \{[\s\S]{0,80}font-weight: 400[\s\S]{0,40}opacity: 0\.6/);
-  assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line \{[\s\S]{0,160}font: 400 14px/);
+  assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line \{[\s\S]{0,280}font: 400 14px[\s\S]{0,80}opacity: 0\.6/);
   assert.match(renderer, /assistant\?\.sealCurrentContentSegment\?\.\(\)/);
   assert.doesNotMatch(renderer, /exploredMount\(\) \{[\s\S]{0,180}?agent-run-stop[\s\S]{0,80}?return this\.turn/);
   assert.match(chatStyles, /#messages \.agent-explored-fold \.tool-card\.tool-card-fade \{/);
   assert.match(renderer, /if \(!shouldAutoFadeToolCard\(card\)\) return/);
   assert.match(renderer, /running \? "Reading" : "Read"/);
+  assert.match(renderer, /if \(isSearchWorkspaceTool\(tool\)\)/);
+  assert.match(renderer, /running \? "Searching workspace" : "Searched workspace"/);
   assert.match(renderer, /running \? "Searching" : "Searched"/);
   assert.match(renderer, /running \? "Editing" : "Edited"/);
   assert.match(renderer, /running \? "Browsing" : "Browsed"/);
@@ -234,6 +265,9 @@ test("tool activity sits in a two-lane stream under a Worked for header", () => 
   assert.match(renderer, /running \? "Updating identity" : "Updated identity"/);
   assert.match(renderer, /"Ran Command"/);
   assert.match(renderer, /function isAskQuestionsTool/);
+  assert.match(renderer, /function isEndTurnTool/);
+  assert.match(renderer, /function applyEndTurnStopToUi/);
+  assert.match(renderer, /isEndTurnTool\(payload\.tool\)/);
   assert.match(renderer, /KEEPABLE_TOOL_ACTIONS/);
   assert.doesNotMatch(chatStyles, /#messages \.agent-work-caret::before/);
   assert.match(chatStyles, /#messages \.agent-work-caret \{[\s\S]{0,180}?transform: none;/);
@@ -264,10 +298,11 @@ test("the Worked for section is one container, not a lane of stamped siblings", 
   // The flattener used to tear the container back into siblings on every pass.
   assert.doesNotMatch(renderer, /flattenNestedChatLayout/);
 
-  // Interim work streams into the body; the closing answer sits beside it.
+  // Interim work streams into the body; the answer written before stop sits beside it.
   assert.match(renderer, /return workFoldBody\(turnWorkFold\(host\)\) \|\| host;/);
   assert.match(renderer, /const fold = this\.ensureWorkFold\(\);\s*return workFoldBody\(fold\) \|\| this\.workHostTurn\(\);/);
-  assert.match(workFold, /const answer = children\(body\)\.findLast\(\(child\) => isReplyNode\(child\) && !isEmptyReply\(child\)\);/);
+  assert.match(workFold, /!replyHasFollowingWork\(child\)/);
+  assert.match(workFold, /!isStopRoundReply\(child\)/);
   assert.match(workFold, /fold\.after\(answer\);/);
   assert.match(workFold, /child\.dataset\.workVerdict === "true"\) continue;/);
   assert.match(chatStyles, /#messages \.agent-work-fold-body > \.assistant-reply \{[\s\S]{0,60}color: #9a9a9a/);
@@ -313,7 +348,48 @@ test("chat auto-follow pauses when the operator scrolls up", () => {
 test("every agent failure path restores the composer", () => {
   assert.match(renderer, /let assistant = null;[\s\S]*?try \{[\s\S]*?await refreshDirMap\(\)/);
   assert.match(renderer, /catch \(error\) \{[\s\S]*?addErrorMessage\(error\?\.message/);
-  assert.match(renderer, /finally \{[\s\S]*?activeChatRuns\.delete\(runSession\.id\)[\s\S]*?chatInput\.disabled = false;[\s\S]*?chatInput\.readOnly = false;[\s\S]*?chatInput\.focus\(\)/);
+  assert.match(renderer, /finally \{[\s\S]*?(holdActive|orchestrationHold)[\s\S]*?chatInput\.focus\(\)/);
+});
+
+test("send button stays disabled while orchestration hold keeps parent running", () => {
+  assert.match(renderer, /if \(run\.orchestrationHold\) return true/);
+  assert.match(renderer, /const holdActive = Boolean\(run\?\.orchestrationHold\) && !run\.stopRequested/);
+  assert.match(renderer, /run\.orchestrationHold = Boolean\(agentRunResult\.orchestrationHold\)/);
+  assert.match(renderer, /delegatedEnsureThinkingFold/);
+  assert.match(renderer, /childEventLanes/);
+  assert.match(renderer, /scheduleDelegatedMarkdownRender/);
+});
+
+test("stopping the orchestrator clears the hold so the send button returns", () => {
+  const settleStart = renderer.indexOf("function settleStoppedRun(");
+  const stopEnd = renderer.indexOf("function chatStopIdsForRun", settleStart);
+  const stopBody = renderer.slice(settleStart, stopEnd);
+  assert.match(stopBody, /orchestrationHold = false/);
+  assert.match(stopBody, /pendingEndTurn = false/);
+  assert.match(stopBody, /settleDelegatedChildrenOf\(run\)/);
+  assert.match(stopBody, /activeChatRuns\.delete\(run\.sessionId\)/);
+  assert.match(stopBody, /childRun\.session\?\.parentSessionId/);
+  assert.match(stopBody, /updateSendBtn\(\)/);
+});
+
+test("detached delegated streams reuse the same reply block via streamingNodeLive", () => {
+  assert.match(renderer, /function streamingNodeLive\(node\)/);
+  assert.match(renderer, /streamingNodeLive\(current\)/);
+  assert.match(renderer, /streamingNodeLive\(this\.thinkingFoldEl\)/);
+  assert.match(renderer, /coalesceDelegatedAssistantReplyFragments/);
+  const thinkingBlock = chatStyles.match(/#messages \.agent-thinking-content \{[\s\S]*?\}/);
+  assert.ok(thinkingBlock, "expected #messages .agent-thinking-content rule");
+  assert.match(thinkingBlock[0], /overflow-wrap: break-word/);
+  assert.match(thinkingBlock[0], /word-break: normal/);
+});
+
+test("delegated child thinking and content batch markdown through scheduleDelegatedMarkdownRender", () => {
+  const childAssistantStart = renderer.indexOf("function childAssistant(run)");
+  const childAssistantEnd = renderer.indexOf("function handleDelegatedChildEvent", childAssistantStart);
+  const childAssistantBody = renderer.slice(childAssistantStart, childAssistantEnd);
+  assert.match(childAssistantBody, /function delegatedAppendThinking\(token\)[\s\S]*?scheduleDelegatedMarkdownRender\(\`\$\{run\.sessionId\}:thinking\`/);
+  assert.match(childAssistantBody, /function delegatedSyncDisplay[\s\S]*?scheduleDelegatedMarkdownRender[\s\S]*?:content/);
+  assert.doesNotMatch(childAssistantBody, /baseAppendThinking\(token\)/);
 });
 
 test("agent errors toast above the composer instead of staying in chat", () => {

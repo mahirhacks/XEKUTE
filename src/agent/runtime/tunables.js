@@ -1,10 +1,10 @@
 /** Central agent-loop tunables — single place to adjust runtime behavior. */
 const Tunables = {
   // Zero is the explicit unlimited sentinel. Multi-day work is stopped by the
-  // operator, scope/policy denial, provider failure, or an explicitly supplied
-  // operation deadline—not by an arbitrary model/tool round count.
+  // operator, end_turn(status=stop), scope/policy denial, or provider failure
+  // after retries—not by an arbitrary model/tool round count.
   MAX_AGENT_ROUNDS: 0,
-  MAX_CONTINUE_INTENTS: 8,
+  MAX_CONTINUE_INTENTS: 0,
   MAX_EDIT_RETRIES_WITHOUT_TOOLS: 1,
   MAX_PLAN_RETRIES_WITHOUT_FILE: 3,
   MAX_VERIFICATION_REMINDERS: 1,
@@ -14,7 +14,8 @@ const Tunables = {
   TURN_PROMPT_TOKEN_BUDGET_RATIO: 0.85,
   TURN_WALL_CLOCK_MS: 0,
   LONG_HORIZON_CHECKPOINT_EVERY_ROUNDS: 1,
-  LONG_HORIZON_STALE_RUN_MS: 30 * 60 * 1000,
+  LONG_HORIZON_STALE_RUN_MS: 24 * 60 * 60 * 1000,
+  LONG_HORIZON_HEARTBEAT_MS: 60 * 1000,
   FAILURE_RECORD_TTL_MS: 24 * 60 * 60 * 1000,
   OPERATOR_QUESTIONS_TIMEOUT_MS: 0,
   TEMPERATURE_AGENT: 0.1,
@@ -22,6 +23,10 @@ const Tunables = {
   TEMPERATURE_SUMMARY: 0,
   ROUNDS_LEFT_WARNING_THRESHOLD: 3,
   TASK_BRIEF_UPDATE_AFTER_ROUND: 1,
+  MODEL_ROUND_RETRIES: 3,
+  MAX_ACTIVE_CHILDREN: 8,
+  OLLAMA_KEEP_ALIVE: -1,
+  OPENROUTER_AGENT_IDLE_TIMEOUT_MS: 0,
 };
 
 if (typeof module !== "undefined" && module.exports) {

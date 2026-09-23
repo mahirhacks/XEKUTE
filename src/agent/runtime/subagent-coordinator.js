@@ -4,7 +4,9 @@
 // Model execution remains injected by the delegation provider; this module
 // owns only admission, lifecycle, and the FIFO result hand-off contract.
 
-const DEFAULT_MAX_ACTIVE_CHILDREN = 3;
+const Tunables = require("./tunables.js");
+const DEFAULT_MAX_ACTIVE_CHILDREN = Math.max(1, Number(Tunables.MAX_ACTIVE_CHILDREN) || 8);
+const MAX_SPAWN_BATCH = 5;
 
 function boundedText(value, maximum = 2_000) {
   return String(value || "").slice(0, maximum);
@@ -34,6 +36,8 @@ function createSubagentCoordinator({
         activeCount: 0,
         spawnQueue: [],
         resultQueue: [],
+        questionQueue: [],
+        escalatedRequestId: "",
         announcedResultId: "",
         processingResultId: "",
         pausedResultId: "",
@@ -167,6 +171,9 @@ function createSubagentCoordinator({
       cancelled: false,
       controller,
       onCancel: typeof onCancel === "function" ? onCancel : null,
+      steerQueue: [],
+      pendingQuestionRequestId: "",
+      startInstructionSnapshot: "",
       createdAt: new Date(now()).toISOString(),
       updatedAt: new Date(now()).toISOString(),
     };
@@ -305,9 +312,251 @@ function createSubagentCoordinator({
     return { ok: true, result, state: "PROCESSING_RESULT" };
   }
 
+  function projectRosterEntry(child) {
+    const pendingQuestionRequestId = String(child.pendingQuestionRequestId || "");
+    return {
+      childInvocationId: child.childInvocationId,
+      childSessionId: child.childSessionId,
+      status: child.status,
+      taskSummary: boundedText(child.summary || child.task, 240),
+      model: String(child.model || ""),
+      pendingQuestion: pendingQuestionRequestId.length > 0,
+      generation: Number(child.generation || 0),
+      updatedAt: child.updatedAt || child.createdAt || "",
+    };
+  }
+
+  function listChildren(parentKey) {
+    const key = String(parentKey || "");
+    const parent = parents.get(key);
+    if (!parent) return [];
+    return [...children.values()]
+      .filter((child) => child.parentKey === key)
+      .map((child) => projectRosterEntry(child));
+  }
+
+  function getRosterEntry(parentKey, childInvocationId) {
+    const child = getChild(childInvocationId, parentKey);
+    if (!child) return null;
+    return projectRosterEntry(child);
+  }
+
+  function openChildCount(parentKey) {
+    const key = String(parentKey || "");
+    return [...children.values()].filter((child) => (
+      child.parentKey === key
+      && (child.status === "queued" || child.status === "working")
+    )).length;
+  }
+
+  function validateSpawnAdmission(parentKey, batchSize = 1) {
+    const size = Math.max(0, Number(batchSize) || 0);
+    const open = openChildCount(parentKey);
+    if (open > 0) {
+      return {
+        ok: false,
+        code: "SPAWN_WHILE_CHILDREN_ACTIVE",
+        error: "A delegated spawn is already in progress. Wait until every child is completed, stopped, or failed.",
+      };
+    }
+    if (size < 1 || size > MAX_SPAWN_BATCH) {
+      return {
+        ok: false,
+        code: "TOO_MANY_SUBAGENTS",
+        error: `At most ${MAX_SPAWN_BATCH} sub-agents may be started in one spawn call.`,
+      };
+    }
+    return { ok: true };
+  }
+
+  function batchStillRunning(parentKey) {
+    return openChildCount(parentKey) > 0;
+  }
+
+  function hasActiveChildren(parentKey) {
+    const key = String(parentKey || "");
+    return [...children.values()].some((child) => (
+      child.parentKey === key
+      && (child.status === "queued" || child.status === "working")
+    ));
+  }
+
+  function hasUnconsumedResults(parentKey) {
+    const parent = parents.get(String(parentKey || ""));
+    if (!parent || !parent.resultQueue.length) return false;
+    const processingId = String(parent.processingResultId || "");
+    return parent.resultQueue.some((result) => String(result.resultId) !== processingId);
+  }
+
+  function peekQuestionHead(parentKey) {
+    const parent = parents.get(String(parentKey || ""));
+    if (!parent || !parent.questionQueue.length) return null;
+    const head = parent.questionQueue.find((item) => !item.resolved);
+    return head || null;
+  }
+
+  function dequeueOwnedQuestionsForChild(child, resolution = "cancelled") {
+    const parent = parents.get(child.parentKey);
+    if (!parent) return;
+    for (const item of parent.questionQueue) {
+      if (item.resolved) continue;
+      if (item.childInvocationId !== child.childInvocationId) continue;
+      item.resolved = true;
+      item.resolution = resolution;
+    }
+    if (String(child.pendingQuestionRequestId || "")) {
+      child.pendingQuestionRequestId = "";
+      child.updatedAt = new Date(now()).toISOString();
+    }
+    const head = peekQuestionHead(parent.parentKey);
+    parent.escalatedRequestId = head?.escalated && !head.resolved ? head.questionRequestId : "";
+  }
+
+  function enqueueQuestion({
+    parentKey,
+    questionRequestId,
+    childInvocationId,
+    childSessionId,
+    parentSessionId = "",
+    payload = {},
+  } = {}) {
+    if (closed) return { ok: false, code: "SUBAGENT_COORDINATOR_CLOSED", error: "The sub-agent coordinator is shutting down." };
+    const parent = parentFor(parentKey);
+    const child = getChild(childInvocationId, parentKey);
+    if (!child) return { ok: false, code: "UNKNOWN_SUBAGENT", error: "The delegated child no longer exists." };
+    const requestId = String(questionRequestId || "");
+    if (!requestId) return { ok: false, code: "INVALID_QUESTION", error: "questionRequestId is required." };
+    const item = {
+      questionRequestId: requestId,
+      childInvocationId: String(childInvocationId || ""),
+      childSessionId: String(childSessionId || child.childSessionId || ""),
+      parentKey: parent.parentKey,
+      parentSessionId: String(parentSessionId || parent.parentSessionId || ""),
+      enqueuedAt: new Date(now()).toISOString(),
+      payload: payload && typeof payload === "object" ? payload : {},
+      escalated: false,
+      resolved: false,
+    };
+    parent.questionQueue.push(item);
+    child.pendingQuestionRequestId = requestId;
+    child.updatedAt = new Date(now()).toISOString();
+    return { ok: true, questionRequestId: requestId, head: peekQuestionHead(parent.parentKey) };
+  }
+
+  function resolveQuestion({
+    parentKey,
+    questionRequestId = "",
+    resolution = "",
+    escalated = false,
+  } = {}) {
+    if (closed) return { ok: false, code: "SUBAGENT_COORDINATOR_CLOSED", error: "The sub-agent coordinator is shutting down." };
+    const parent = parents.get(String(parentKey || ""));
+    if (!parent) return { ok: false, code: "NO_PENDING_QUESTION", error: "No pending delegated question." };
+    const head = peekQuestionHead(parent.parentKey);
+    if (!head) return { ok: false, code: "NO_PENDING_QUESTION", error: "No pending delegated question." };
+    const requestedId = String(questionRequestId || "");
+    if (requestedId && requestedId !== head.questionRequestId) {
+      return { ok: false, code: "QUESTION_NOT_HEAD", error: "The question is not the current FIFO head." };
+    }
+    if (head.resolved) {
+      return { ok: false, code: "QUESTION_ALREADY_RESOLVED", error: "The question was already resolved." };
+    }
+    const normalized = String(resolution || "").toLowerCase();
+    if (!["answer", "answered", "skip", "skipped", "cancelled", "escalate"].includes(normalized)) {
+      return { ok: false, code: "INVALID_QUESTION_RESOLUTION", error: "Invalid question resolution." };
+    }
+    const child = getChild(head.childInvocationId, parent.parentKey);
+    if (normalized === "escalate") {
+      head.escalated = true;
+      parent.escalatedRequestId = head.questionRequestId;
+      return {
+        ok: true,
+        questionRequestId: head.questionRequestId,
+        childInvocationId: head.childInvocationId,
+        childSessionId: head.childSessionId,
+        resolution: "escalate",
+        escalated: true,
+        nextHead: peekQuestionHead(parent.parentKey),
+      };
+    }
+    const storedResolution = normalized === "answer" || normalized === "answered"
+      ? "answered"
+      : normalized === "skip" || normalized === "skipped"
+        ? "skipped"
+        : "cancelled";
+    head.resolved = true;
+    head.resolution = storedResolution;
+    if (child) {
+      child.pendingQuestionRequestId = "";
+      child.updatedAt = new Date(now()).toISOString();
+    }
+    parent.escalatedRequestId = parent.escalatedRequestId === head.questionRequestId ? "" : parent.escalatedRequestId;
+    return {
+      ok: true,
+      questionRequestId: head.questionRequestId,
+      childInvocationId: head.childInvocationId,
+      childSessionId: head.childSessionId,
+      resolution: storedResolution,
+      escalated: Boolean(head.escalated),
+      nextHead: peekQuestionHead(parent.parentKey),
+    };
+  }
+
+  function enqueueSteer({ parentKey, childInvocationId, instruction = "" } = {}) {
+    if (closed) return { ok: false, code: "SUBAGENT_COORDINATOR_CLOSED", error: "The sub-agent coordinator is shutting down." };
+    const child = getChild(childInvocationId, parentKey);
+    if (!child) return { ok: false, code: "UNKNOWN_SUBAGENT", error: "The delegated child no longer exists." };
+    if (child.status !== "queued" && child.status !== "working") {
+      return { ok: false, code: "SUBAGENT_NOT_ACTIVE", error: "Steer is only allowed for queued or working children." };
+    }
+    const text = String(instruction || "").trim();
+    if (!text) return { ok: false, code: "INVALID_STEER", error: "Steer instruction is required." };
+    child.steerQueue.push({
+      enqueuedAt: new Date(now()).toISOString(),
+      instruction: boundedText(text, 12_000),
+      operation: "steer",
+    });
+    child.updatedAt = new Date(now()).toISOString();
+    return {
+      ok: true,
+      childInvocationId: child.childInvocationId,
+      childSessionId: child.childSessionId,
+      status: child.status,
+      steerQueueLength: child.steerQueue.length,
+    };
+  }
+
+  function drainSteerQueue(childInvocationId, parentKey = "") {
+    const child = getChild(childInvocationId, parentKey);
+    if (!child || !child.steerQueue.length) return [];
+    const drained = child.steerQueue.splice(0, child.steerQueue.length);
+    child.updatedAt = new Date(now()).toISOString();
+    return drained;
+  }
+
+  function cancelPendingQuestionsForParent(parentKey, reason = "cancelled") {
+    const parent = parents.get(String(parentKey || ""));
+    if (!parent) return { ok: true, cancelled: 0 };
+    let cancelled = 0;
+    for (const item of parent.questionQueue) {
+      if (item.resolved) continue;
+      item.resolved = true;
+      item.resolution = reason;
+      cancelled += 1;
+      const child = getChild(item.childInvocationId, parent.parentKey);
+      if (child && child.pendingQuestionRequestId === item.questionRequestId) {
+        child.pendingQuestionRequestId = "";
+        child.updatedAt = new Date(now()).toISOString();
+      }
+    }
+    parent.escalatedRequestId = "";
+    return { ok: true, cancelled };
+  }
+
   function cancelChild(childInvocationId, parentKey = "", reason = "OPERATOR_STOPPED") {
     const child = getChild(childInvocationId, parentKey);
     if (!child) return { ok: false, code: "UNKNOWN_SUBAGENT", error: "The delegated child no longer exists." };
+    dequeueOwnedQuestionsForChild(child, "cancelled");
     const shutdown = String(reason || "") === "APP_SHUTDOWN";
     const stopError = shutdown ? "Application shutdown" : "Stopped by operator";
     if (child.status === "queued") {
@@ -344,6 +593,7 @@ function createSubagentCoordinator({
       && (child.status === "queued" || child.status === "working")
     ));
     for (const child of open) cancelChild(child.childInvocationId, parent.parentKey, reason);
+    cancelPendingQuestionsForParent(parent.parentKey, "cancelled");
     return { ok: true, cancelled: open.length };
   }
 
@@ -429,10 +679,24 @@ function createSubagentCoordinator({
     pendingResultsForSender,
     shutdown,
     snapshot,
+    listChildren,
+    getRosterEntry,
+    enqueueQuestion,
+    peekQuestionHead,
+    resolveQuestion,
+    enqueueSteer,
+    drainSteerQueue,
+    hasActiveChildren,
+    hasUnconsumedResults,
+    validateSpawnAdmission,
+    batchStillRunning,
+    openChildCount,
+    MAX_SPAWN_BATCH,
+    cancelPendingQuestionsForParent,
     parents,
     children,
     DEFAULT_MAX_ACTIVE_CHILDREN,
   };
 }
 
-module.exports = { DEFAULT_MAX_ACTIVE_CHILDREN, createSubagentCoordinator };
+module.exports = { DEFAULT_MAX_ACTIVE_CHILDREN, MAX_SPAWN_BATCH, createSubagentCoordinator };

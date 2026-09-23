@@ -10,6 +10,7 @@ const ModeRegistry = require("../src/agent/modes/mode-registry.js");
 const { BROWSER_ACTION_INPUT_SCHEMA } = require("../src/agent/tools/assessment/browser-action.js");
 const ToolPort = require("../src/contracts/tool/tool-port.js");
 const RequestIntentRules = require("../src/prompts/rules/request-intent-rules.js");
+const { endTurnCall } = require("./helpers/end-turn-call.js");
 
 function catalog() {
   return ToolPort.REGISTRY_TOOL_NAMES.map((name) => ({
@@ -37,7 +38,7 @@ async function captureTools({ userMessage, mode = "agent" }) {
           const browser = tools.find((tool) => tool.function.name === "browser_action");
           captured.browserEnum = browser?.function?.parameters?.properties?.action?.enum || null;
         }
-        return { fullText: mode === "ask" ? "ask reply" : "done", toolCalls: [] };
+        return { fullText: mode === "ask" ? "ask reply" : "done", toolCalls: [endTurnCall()] };
       },
       executeToolCall: async () => ({ ok: true }),
     });
@@ -64,7 +65,7 @@ test("Agent turns expose probe tools without a first-turn strip", async () => {
 
 test("Ask catalog is the local read surface", () => {
   assert.deepEqual([...ModeRegistry.MODE_TOOL_GROUPS.ask], [
-    "ask_questions", "read_file", "search_workspace", "view_active_terminal",
+    "ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal",
   ]);
   assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("exec_command"), false);
   assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("query_knowledge"), false);

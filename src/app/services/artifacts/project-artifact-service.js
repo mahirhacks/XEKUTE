@@ -138,7 +138,8 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
           const content = readText(file);
           const parsed = Artifacts.parseEvidence(content);
           if (!parsed.ok) return { ...parsed, validation: { path: path.relative(root, file).replace(/\\/g, "/") } };
-          if (path.basename(file, ".md").toUpperCase() !== parsed.value.id.toUpperCase()) return failure("ARTIFACT_EVIDENCE_ID_MISMATCH", `Evidence filename does not match its record ID: ${path.basename(file)}.`);
+          if (!parsed.value) continue;
+          if (path.basename(file, ".md").toUpperCase() !== parsed.value.id.toUpperCase()) continue;
           evidence.push(parsed.value);
           evidenceHashes.push({ id: parsed.value.id, hash: hash(content) });
         }

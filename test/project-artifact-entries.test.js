@@ -187,8 +187,39 @@ test("bootstrap rebuilds the project index without creating evidence files", () 
 
   fs.writeFileSync(engagement, "# broken\n");
   const again = artifacts.bootstrap(root);
-  assert.equal(again.ok, false);
+  assert.equal(again.ok, true, again.error);
   assert.equal(fs.readFileSync(engagement, "utf8"), "# broken\n");
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("freeform project notes are accepted and do not block the workspace", () => {
+  const note = "# Anything\n\n## Summary\n\n- ASTRA (Astronaut System for Tracking and Requesting Appearances) is a NASA system for submitting and managing astronaut appearance requests (in-person, virtual, recorded greeting).\n";
+  const parsed = Artifacts.parseProjectDocument("engagement", note);
+  assert.equal(parsed.ok, true, parsed.error);
+  assert.equal(parsed.code, undefined);
+  assert.ok(parsed.value.some((fact) => String(fact.value).includes("Astronaut System for Tracking and Requesting Appearances")));
+  assert.match(Artifacts.renderProjectDocument("engagement", parsed.value), /Astronaut System for Tracking and Requesting Appearances/);
+
+  assert.equal(Artifacts.parseHypotheses("# notes\n\nnot a template\n").ok, true);
+  assert.deepEqual(Artifacts.parseHypotheses("# notes\n\nnot a template\n").value, []);
+  assert.equal(Artifacts.parseChecklist("hello\n").ok, true);
+  assert.deepEqual(Artifacts.parseChecklist("hello\n").value, []);
+  assert.equal(Artifacts.parseEvidence("just a note\n").ok, true);
+  assert.equal(Artifacts.parseEvidence("just a note\n").value, null);
+
+  const root = tempRoot();
+  const artifacts = createProjectArtifactService({ fs, path });
+  const workspace = createAssessmentWorkspace({ fs, path, projectArtifacts: artifacts });
+  const repaired = workspace.repair(root, { createRoot: true });
+  assert.equal(repaired.error, undefined);
+  const engagement = path.join(root, ".xekute/project_info/engagement.md");
+  fs.writeFileSync(engagement, note);
+  const verification = workspace.verify(root);
+  assert.equal(verification.missing.some((issue) => String(issue.path || "").includes("engagement.md")), false);
+  const boot = artifacts.bootstrap(root);
+  assert.equal(boot.ok, true, boot.error);
+  assert.equal(fs.readFileSync(engagement, "utf8"), note);
+  assert.match(fs.readFileSync(path.join(root, ".xekute/project_info/index.md"), "utf8"), /Astronaut System for Tracking and Requesting Appearances/);
   fs.rmSync(root, { recursive: true, force: true });
 });
 

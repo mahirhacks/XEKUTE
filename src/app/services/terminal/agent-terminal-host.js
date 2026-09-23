@@ -2,6 +2,7 @@
 
 const revealDefaults = require("./agent-terminal-reveal.js");
 const { appendTerminalOutput } = require("./active-terminal-catalog.js");
+const { createTerminalOutputBatcher } = require("./terminal-output-batcher.js");
 
 function createAgentTerminalHost({
   webContents,
@@ -73,6 +74,7 @@ function createAgentTerminalHost({
       },
     };
     terminals.set(terminalId, record);
+    const outputBatch = createTerminalOutputBatcher((data) => sendTerminalData(terminalId, data));
     const announce = (phase, extra = {}) => {
       sendAgentEvent?.({
         type: "agent_terminal",
@@ -93,7 +95,8 @@ function createAgentTerminalHost({
       record.hidden = false;
       announce("start");
       if (processId) announce("started", { pid: record.pid });
-      for (const chunk of replay) sendTerminalData(terminalId, chunk);
+      for (const chunk of replay) outputBatch.push(chunk);
+      outputBatch.flush();
     };
     reveal.start({ wantVisible, onReveal: revealToUi });
     const supervisedRuntime = {
@@ -111,7 +114,7 @@ function createAgentTerminalHost({
       onOutput: (payload) => {
         appendTerminalOutput(record, payload?.data);
         const decision = reveal.pushOutput(payload?.data);
-        if (decision.live) sendTerminalData(terminalId, payload?.data);
+        if (decision.live) outputBatch.push(payload?.data);
         runtime.onOutput?.(payload);
       },
       onDetached: (payload) => {
@@ -128,6 +131,7 @@ function createAgentTerminalHost({
       },
       onComplete: (payload) => {
         closing = true;
+        outputBatch.flush();
         const waiting = Boolean(record.waiting);
         const { revealed } = reveal.complete();
         record.exited = true;
