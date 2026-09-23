@@ -1642,6 +1642,31 @@ async function runAgentTurn({
     if (holdActive) {
       const combined = cleanAssistantText(`${outputSegments.join("")}${rawText}`);
       if (combined) finalText = combined;
+      if (requestedEndTurn) {
+        if (typeof setPendingEndTurn === "function") {
+          try { setPendingEndTurn(true); } catch { /* best effort */ }
+        }
+        await persistProgress({
+          round,
+          actionCount: actionResults.length,
+          status: "running",
+          checkpoint: { phase: runState.phase, pendingEndTurn: true },
+        }).catch(() => {});
+        return {
+          ok: true,
+          finalText,
+          appendedMessages: appendedMessages(),
+          executedTools,
+          runState,
+          contextRoute,
+          deferredEndTurn: true,
+          endTurn: true,
+          reason: "ORCHESTRATION_HOLD",
+          evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+          failureRecords,
+          lastUsage,
+        };
+      }
       await persistProgress({
         round,
         actionCount: actionResults.length,
