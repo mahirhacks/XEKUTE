@@ -6396,12 +6396,14 @@ html.panel-resizing iframe {
 .app-settings-body textarea { border:1px solid #3d3d3d; border-radius:5px; background:#151515; color:#ddd; padding:7px; outline:none; }
 .primary-button,.secondary-button { padding:7px 12px; border:1px solid #555; border-radius:5px; color:#eee; background:#333; }.primary-button { background:#0e639c; border-color:#0e639c; }.app-settings-body { padding:16px; }.app-settings-body label { display:flex; flex-direction:column; gap:5px; color:#ccc; }.app-settings-body small { color:#888; }.app-settings-body textarea { min-height:220px; margin-top:8px; resize:vertical; font:12px/1.5 var(--font-mono); }
 
-.slash-command-suggestions { position:absolute; left:0; right:auto; bottom:calc(100% + 7px); z-index:80; width:min(300px,calc(100% - 8px)); max-height:min(420px,calc(100vh - 180px)); padding:5px; border:1px solid #3b3b3b; border-radius:10px; background:#191919; box-shadow:0 10px 30px rgba(0,0,0,.55); overflow-x:hidden; overflow-y:auto; }
+.slash-command-suggestions { position:absolute; left:0; right:auto; bottom:calc(100% + 7px); z-index:80; width:min(300px,calc(100% - 8px)); max-height:292px; padding:5px; border:1px solid #3b3b3b; border-radius:10px; background:#191919; box-shadow:0 10px 30px rgba(0,0,0,.55); overflow-x:hidden; overflow-y:auto; }
 .slash-command-suggestions[hidden] { display:none; }
 .slash-command-group-label { margin:0 -5px; padding:8px 11px 5px; color:#9a9a9a; font:500 12px/16px var(--font-ui); }
 .slash-command-group-label:not(:first-child) { margin-top:5px; padding-top:10px; border-top:1px solid #303030; }
 .slash-command-option { width:100%; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-height:42px; padding:5px 7px; border:0; border-radius:5px; background:transparent; color:#d4d4d4; text-align:left; cursor:pointer; }
 .slash-command-option:hover,.slash-command-option.selected { background:#292929; color:#fff; }
+.slash-command-more { width:100%; min-height:32px; padding:6px 7px; border:0; border-radius:5px; background:transparent; color:#9a9a9a; font:500 12px/16px var(--font-ui); text-align:left; cursor:pointer; }
+.slash-command-more:hover { background:#292929; color:#fff; }
 .slash-command-name { width:100%; overflow:hidden; color:currentColor; font:600 13px/16px var(--font-ui); white-space:nowrap; text-overflow:ellipsis; }
 .slash-command-description { width:100%; min-width:0; overflow:hidden; color:#9a9a9a; font:12px/15px var(--font-ui); white-space:nowrap; text-overflow:ellipsis; }
 .slash-command-option.selected .slash-command-description { color:#bdbdbd; }

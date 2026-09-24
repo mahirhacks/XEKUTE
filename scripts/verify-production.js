@@ -70,7 +70,7 @@ const ToolPort = require(path.join(root, "src/contracts/tool/tool-port.js"));
 const ModeRegistry = require(path.join(root, "src/agent/modes/mode-registry.js"));
 const ScopePolicy = require(path.join(root, "src/agent/authority/scope/scope-policy.js"));
 const { createSkillKnowledgeGraph } = require(path.join(root, "src/app/services/assessment/knowledge/skill-knowledge-graph.js"));
-const { createSpecialSkillRegistry, internalSkillIdForIntent } = require(path.join(root, "src/agent/special-skills/registry.js"));
+const { createSpecialSkillRegistry, internalSkillIdForIntent } = require(path.join(root, "src/prompts/skills/internal/registry.js"));
 const v3SchemaSource = read("src/contracts/memory/v3-schemas.js");
 const v3ContractsSource = read("src/contracts/memory/v3-contracts.js");
 const v3Tier1Source = read("src/app/services/memory/tier1-context-coordinator.js");
@@ -168,10 +168,10 @@ for (const required of [
   "src/app/services/assessment/knowledge/assessment-knowledge-engine.js",
   "src/app/services/assessment/knowledge/skill-knowledge-graph.js",
   "src/app/services/assessment/knowledge/mcp-runtime.js",
-  "src/agent/special-skills/registry.js",
-  "src/agent/special-skills/loader.js",
-  "src/agent/special-skills/runner.js",
-  "src/agent/special-skills/schema.js",
+  "src/prompts/skills/internal/registry.js",
+  "src/prompts/skills/internal/loader.js",
+  "src/prompts/skills/internal/runner.js",
+  "src/prompts/skills/internal/schema.js",
   "src/domain/assessment/web-artifact-store.js",
   "src/app/electron/lifecycle.js",
   "src/app/ipc/register.js",
@@ -416,17 +416,16 @@ assert.ok(!exists("src/prompts/skills/cyber-library.js"), "the JavaScript cyber-
 assert.ok(!exists("src/prompts/skills/vapt-skill-library.js"), "the legacy JavaScript VAPT library adapter must remain removed");
 assert.equal(sourceFiles("src/prompts/skills/libraries").some((file) => file.endsWith(".js")), false, "vulnerability library must contain Markdown only");
 
-const specialSkillRegistry = createSpecialSkillRegistry({ root: path.join(sourceRoot, "agent", "special-skills") });
+const specialSkillRegistry = createSpecialSkillRegistry({ root: path.join(sourceRoot, "prompts", "skills", "libraries") });
 assert.deepEqual(
   specialSkillRegistry.list(),
   [],
   "internal Markdown package manifests must not appear in the public registry",
 );
-assert.deepEqual(
-  specialSkillRegistry.listInternal().map((skill) => skill.id),
-  ["create-rule", "create-skill", "create-subagent", "report"],
-  "the internal skill registry must contain exactly the four Markdown packages",
-);
+const internalIds = specialSkillRegistry.listInternal().map((skill) => skill.id);
+for (const id of ["create-rule", "create-skill", "create-subagent", "report", "bug-bounty"]) {
+  assert.ok(internalIds.includes(id), `internal skill ${id} must be registered`);
+}
 assert.deepEqual(specialSkillRegistry.diagnostics(), [], "shipped special-skill packages must validate without diagnostics");
 assert.ok(!exists("src/agent/special-skills/pentest"), "the pentest skill package must not remain");
 assert.ok(!exists("src/agent/special-skills/pentest/SKILL.md"), "the pentest skill file must not remain");

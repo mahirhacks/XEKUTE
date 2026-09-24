@@ -17853,12 +17853,15 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
 }
 
 const SYSTEM_SKILL_SLASH_COMMANDS = Object.freeze([
-  Object.freeze({ name: "/report", title: "VAPT report generation", description: "Generate an evidence-linked VAPT report", overview: "Build the current structured report from canonical verified evidence and checklist coverage.", prompt: "", group: "system-skill" }),
-  Object.freeze({ name: "/create-rule", title: "Create a project rule", description: "Create a project or global rule", overview: "Create validated Xekute rule guidance through the protected guidance writer.", prompt: "", group: "system-skill" }),
-  Object.freeze({ name: "/create-skill", title: "Create user guidance skill", description: "Create user-authored guidance", overview: "Create a validated project or global custom guidance skill.", prompt: "", group: "system-skill" }),
-  Object.freeze({ name: "/create-subagent", title: "Create a subagent profile", description: "Create a bounded subagent profile", overview: "Create a validated project or global specialist-agent profile.", prompt: "", group: "system-skill" }),
+  Object.freeze({ name: "/create-rule", title: "Create a project rule", description: "Create a project or global rule", overview: "Create validated Xekute rule guidance through the protected guidance writer.", prompt: "", group: "system-command" }),
+  Object.freeze({ name: "/create-skill", title: "Create user guidance skill", description: "Create user-authored guidance", overview: "Create a validated project or global custom guidance skill.", prompt: "", group: "system-command" }),
+  Object.freeze({ name: "/create-subagent", title: "Create a subagent profile", description: "Create a bounded subagent profile", overview: "Create a validated project or global specialist-agent profile.", prompt: "", group: "system-command" }),
 ]);
 const SYSTEM_SKILL_COMMANDS = new Set(SYSTEM_SKILL_SLASH_COMMANDS.map((command) => command.name));
+const BUG_BOUNTY_COMMANDS = new Set();
+let bugBountySlashCommands = [];
+let bugBountyReveal = 3;
+let slashSuggestionQuery = "";
 const CUSTOM_SKILL_COMMANDS = new Set();
 let customSkillSlashCommands = [];
 
@@ -17881,6 +17884,7 @@ function syncCustomSkillSlashCommands(entries = customGuidanceEntries) {
     .filter((command) => command.name
       && /^\/[a-z0-9][a-z0-9_-]*$/.test(command.name)
       && !SYSTEM_SKILL_COMMANDS.has(command.name)
+      && !BUG_BOUNTY_COMMANDS.has(command.name)
       && !seen.has(command.name)
       && seen.add(command.name));
   CUSTOM_SKILL_COMMANDS.clear();
@@ -17889,10 +17893,34 @@ function syncCustomSkillSlashCommands(entries = customGuidanceEntries) {
 }
 
 function availableSlashCommands() {
-  const commands = [
+  return [
     ...SYSTEM_SKILL_SLASH_COMMANDS,
+    ...bugBountySlashCommands,
     ...customSkillSlashCommands,
+    ...customSlashCommands(),
   ];
+}
+
+async function loadBugBountySlashCommands() {
+  const result = await window.api?.listSlashCatalog?.().catch(() => null);
+  const skills = Array.isArray(result?.skills) ? result.skills : [];
+  bugBountySlashCommands = skills
+    .filter((skill) => skill?.menu === "bug-bounty" && skill.id)
+    .map((skill) => ({
+      name: `/${String(skill.id).toLowerCase()}`,
+      title: skill.title || skill.id,
+      description: skill.description || skill.title || skill.id,
+      overview: skill.description || "",
+      prompt: "",
+      group: "bug-bounty",
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  BUG_BOUNTY_COMMANDS.clear();
+  bugBountySlashCommands.forEach((command) => BUG_BOUNTY_COMMANDS.add(command.name));
+  renderSlashSuggestions();
+}
+function customSlashCommands() {
+  const commands = [];
   for (const line of (localStorage.getItem(CUSTOM_COMMANDS_KEY) || "").split(/\r?\n/)) {
     const match = line.match(/^\s*(\/[\w-]+)\s*=\s*(.+)$/);
     if (match) commands.push({ name: match[1].toLowerCase(), description: match[2], overview: match[2], prompt: match[2], group: "custom-command" });
@@ -18136,18 +18164,27 @@ function renderSlashSuggestions() {
   const value = chatInput.value;
   if (!/^\/[\w-]*$/.test(value)) return closeSlashSuggestions();
   const query = value.toLowerCase();
-  const groupOrder = { "system-skill": 0, "custom-skill": 1, "custom-command": 2 };
+  if (query !== slashSuggestionQuery) {
+    slashSuggestionQuery = query;
+    bugBountyReveal = 3;
+  }
+  const groupOrder = { "system-command": 0, "bug-bounty": 1, "custom-skill": 2, "custom-command": 3 };
   const matchingCommands = availableSlashCommands()
     .map((command) => ({ command, score: command.name.startsWith(query) ? 0 : command.name.includes(query.slice(1)) || command.description.toLowerCase().includes(query.slice(1)) ? 1 : 2 }))
     .filter((item) => item.score < 2)
-    .sort((a, b) => (groupOrder[a.command.group] ?? 99) - (groupOrder[b.command.group] ?? 99) || a.score - b.score || a.command.name.localeCompare(b.command.name));
-  slashSuggestionItems = (query === "/" ? matchingCommands : matchingCommands.slice(0, 8))
+    .sort((a, b) => (groupOrder[a.command.group] ?? 99) - (groupOrder[b.command.group] ?? 99) || a.score - b.score || a.command.name.localeCompare(b.command.name))
     .map((item) => item.command);
-  if (!slashSuggestionItems.length) return closeSlashSuggestions();
-  slashSuggestionIndex = Math.min(slashSuggestionIndex, slashSuggestionItems.length - 1);
+  const systemCommands = matchingCommands.filter((command) => command.group === "system-command");
+  const bountyCommands = matchingCommands.filter((command) => command.group === "bug-bounty");
+  const otherCommands = matchingCommands.filter((command) => command.group !== "system-command" && command.group !== "bug-bounty");
+  const visibleBounty = bountyCommands.slice(0, bugBountyReveal);
+  const bountyRemaining = bountyCommands.length - visibleBounty.length;
+  slashSuggestionItems = [...systemCommands, ...visibleBounty, ...otherCommands];
+  if (!slashSuggestionItems.length && bountyRemaining <= 0) return closeSlashSuggestions();
+  slashSuggestionIndex = Math.min(Math.max(slashSuggestionIndex, 0), Math.max(slashSuggestionItems.length - 1, 0));
   hideSlashCommandOverview();
   slashCommandSuggestions.innerHTML = "";
-  const groupLabels = { "system-skill": "System Skills", "custom-skill": "Custom Skills", "custom-command": "Commands" };
+  const groupLabels = { "system-command": "System Commands", "bug-bounty": "Bug Bounty Skills", "custom-skill": "Custom Skills", "custom-command": "Commands" };
   let previousGroup = "";
   slashSuggestionItems.forEach((command, index) => {
     if (command.group !== previousGroup) {
@@ -18158,9 +18195,17 @@ function renderSlashSuggestions() {
       slashCommandSuggestions.appendChild(label);
       previousGroup = command.group;
     }
-    const button = document.createElement("button"); button.type = "button"; button.className = `slash-command-option${index === slashSuggestionIndex ? " selected" : ""}`; button.setAttribute("role", "option"); button.setAttribute("aria-selected", String(index === slashSuggestionIndex));
-    const name = document.createElement("span"); name.className = "slash-command-name"; name.textContent = command.name;
-    const description = document.createElement("span"); description.className = "slash-command-description"; description.textContent = command.description;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `slash-command-option${index === slashSuggestionIndex ? " selected" : ""}`;
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(index === slashSuggestionIndex));
+    const name = document.createElement("span");
+    name.className = "slash-command-name";
+    name.textContent = command.name;
+    const description = document.createElement("span");
+    description.className = "slash-command-description";
+    description.textContent = command.description;
     button.append(name, description);
     button.addEventListener("mouseenter", () => showSlashCommandOverview(command, button));
     button.addEventListener("mouseleave", hideSlashCommandOverview);
@@ -18168,6 +18213,20 @@ function renderSlashSuggestions() {
     button.addEventListener("blur", hideSlashCommandOverview);
     button.addEventListener("mousedown", (event) => { event.preventDefault(); chooseSlashSuggestion(index, { clicked: true }); });
     slashCommandSuggestions.appendChild(button);
+    if (command.group === "bug-bounty" && bountyRemaining > 0 && command === visibleBounty.at(-1)) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "slash-command-more";
+      const nextCount = Math.min(10, bountyRemaining);
+      more.textContent = `Show ${nextCount} more`;
+      more.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        bugBountyReveal += nextCount;
+        renderSlashSuggestions();
+      });
+      slashCommandSuggestions.appendChild(more);
+    }
   });
   slashCommandSuggestions.hidden = false;
   slashCommandSuggestions.querySelector(".slash-command-option.selected")?.scrollIntoView({ block: "nearest" });
@@ -18177,7 +18236,7 @@ function expandSlashCommand(raw) {
   const text = String(raw || "").trim();
   if (!text.startsWith("/")) return text;
   const [command, ...rest] = text.split(/\s+/); const args = rest.join(" ");
-  if (SYSTEM_SKILL_COMMANDS.has(command.toLowerCase()) || CUSTOM_SKILL_COMMANDS.has(command.toLowerCase())) return text;
+  if (SYSTEM_SKILL_COMMANDS.has(command.toLowerCase()) || BUG_BOUNTY_COMMANDS.has(command.toLowerCase()) || CUSTOM_SKILL_COMMANDS.has(command.toLowerCase())) return text;
   const override = slashCommandOverrides()[command.toLowerCase()];
   const configuredAiFields = override?.role === "ai" ? [
     override.aim && `Aim: ${override.aim}`,
@@ -20310,6 +20369,7 @@ window.addEventListener("beforeunload", (event) => {
 });
 
 resizeChatInput();
+loadBugBountySlashCommands();
 
 if (chatPane && typeof ResizeObserver !== "undefined") {
   new ResizeObserver(() => {

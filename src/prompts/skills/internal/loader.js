@@ -1,0 +1,80 @@
+"use strict";
+
+const fsDefault = require("node:fs");
+const pathDefault = require("node:path");
+const { parseFrontmatter } = require("../../../app/services/assessment/knowledge/skill-knowledge-graph.js");
+const { normalizeManifest, validateManifest } = require("./schema.js");
+
+const MAX_SKILL_FILE_BYTES = 256 * 1024;
+const MAX_PACKAGE_FILES = 32;
+const FORBIDDEN_SYSTEM_FIELDS = Object.freeze(["system", "system_prompt", "systemPrompt", "system_instruction", "systemInstructions"]);
+
+function safeRelative(root, candidate, path = pathDefault) {
+  const absolute = path.resolve(root, candidate);
+  const relative = path.relative(root, absolute);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return "";
+  return relative.replace(/\\/g, "/");
+}
+
+function readText(file, fs = fsDefault) {
+  let handle = null;
+  try {
+    handle = fs.openSync(file, "r");
+    const stat = fs.fstatSync(handle);
+    if (!stat.isFile() || stat.size > MAX_SKILL_FILE_BYTES) throw Object.assign(new Error("Special-skill resource is missing or too large."), { code: "SPECIAL_SKILL_RESOURCE_INVALID" });
+    return fs.readFileSync(handle, "utf8");
+  } finally {
+    if (handle !== null) {
+      try { fs.closeSync(handle); } catch { /* preserve the read or validation result */ }
+    }
+  }
+}
+
+function loadPackage(packageRoot, { fs = fsDefault, path = pathDefault } = {}) {
+  const manifestPath = path.join(packageRoot, "SKILL.md");
+  const source = readText(manifestPath, fs);
+  const parsed = parseFrontmatter(source);
+  if (parsed.error || !source.startsWith("---")) throw Object.assign(new Error(parsed.error || "SKILL.md must start with frontmatter."), { code: "SPECIAL_SKILL_MANIFEST_INVALID" });
+  const forbiddenSystemField = FORBIDDEN_SYSTEM_FIELDS.find((field) => parsed.metadata?.[field] !== undefined);
+  if (forbiddenSystemField || String(parsed.metadata?.role || "").trim().toLowerCase() === "system") {
+    throw Object.assign(new Error("Internal skills cannot define a system prompt or system role; they must use instruction_role: skill-context."), { code: "SPECIAL_SKILL_SYSTEM_FORBIDDEN" });
+  }
+  const packageId = path.basename(packageRoot).toLowerCase();
+  const resourceNames = Array.isArray(parsed.metadata?.resources) ? parsed.metadata.resources : [];
+  const manifest = normalizeManifest(parsed.metadata, { id: packageId, source: path.relative(path.dirname(packageRoot), manifestPath), resources: resourceNames });
+  const errors = validateManifest(manifest);
+  if (manifest.id !== packageId) errors.push("manifest id must match its package directory");
+  if (errors.length) throw Object.assign(new Error(errors.join("; ")), { code: "SPECIAL_SKILL_MANIFEST_INVALID" });
+  const resources = [{ path: "SKILL.md", content: parsed.body }];
+  const declared = [...new Set([manifest.entrypoint, ...manifest.resources].filter((name) => name && name !== "SKILL.md"))];
+  if (declared.length > MAX_PACKAGE_FILES) throw Object.assign(new Error("Special-skill package declares too many resources."), { code: "SPECIAL_SKILL_PACKAGE_TOO_LARGE" });
+  for (const name of declared) {
+    const relative = safeRelative(packageRoot, name, path);
+    if (!relative || !relative.toLowerCase().endsWith(".md")) throw Object.assign(new Error(`Invalid special-skill resource: ${name}`), { code: "SPECIAL_SKILL_RESOURCE_INVALID" });
+    const file = path.join(packageRoot, ...relative.split("/"));
+    resources.push({ path: relative, content: readText(file, fs) });
+  }
+  return Object.freeze({ manifest, packageRoot, resources });
+}
+
+function discoverPackages({ root = pathDefault.resolve(__dirname, "../libraries"), fs = fsDefault, path = pathDefault } = {}) {
+  const packages = [];
+  const diagnostics = [];
+  const groups = ["system-commands", "bug-bounty-skills"];
+  for (const group of groups) {
+    let entries = [];
+    try { entries = fs.readdirSync(path.join(root, group), { withFileTypes: true }); }
+    catch (error) {
+      diagnostics.push({ package: group, code: "SPECIAL_SKILL_ROOT_UNAVAILABLE", error: error.message });
+      continue;
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+      try { packages.push(loadPackage(path.join(root, group, entry.name), { fs, path })); }
+      catch (error) { diagnostics.push({ package: `${group}/${entry.name}`, code: error.code || "SPECIAL_SKILL_INVALID", error: error.message }); }
+    }
+  }
+  return { packages, diagnostics };
+}
+
+module.exports = Object.freeze({ FORBIDDEN_SYSTEM_FIELDS, MAX_PACKAGE_FILES, MAX_SKILL_FILE_BYTES, discoverPackages, loadPackage, safeRelative });

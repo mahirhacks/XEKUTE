@@ -80,6 +80,7 @@ const api = {
   webClonePreviewBounds: (payload) => ipcRenderer.invoke("webclone:previewBounds", payload),
   webCloneHidePreview: () => ipcRenderer.invoke("webclone:hidePreview"),
   parseSlashCommand: (payload) => ipcRenderer.invoke("commands:parse", payload),
+  listSlashCatalog: () => ipcRenderer.invoke("commands:catalog"),
   listCustomScripts: (payload) => ipcRenderer.invoke("commands:customScripts", payload),
   assessmentSettings: (payload) => ipcRenderer.invoke("assessment:settings", payload),
   assessmentWriteSettings: (payload) => ipcRenderer.invoke("assessment:writeSettings", payload),

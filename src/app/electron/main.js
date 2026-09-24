@@ -12,14 +12,14 @@ const { appendTerminalOutput } = require("../services/terminal/active-terminal-c
 const { createTerminalOutputBatcher } = require("../services/terminal/terminal-output-batcher.js");
 const { HIDDEN_COMMAND_REVEAL_MS, createHiddenCommandReveal } = require("../services/terminal/agent-terminal-reveal.js");
 const { createAgentTerminalHost } = require("../services/terminal/agent-terminal-host.js");
-const { defaultRegistry } = require("../../agent/special-skills/registry.js");
-const { selectInternalSkill } = require("../../agent/special-skills/runner.js");
+const { defaultRegistry } = require("../../prompts/skills/internal/registry.js");
+const { selectInternalSkill } = require("../../prompts/skills/internal/runner.js");
 const {
   CREATE_GUIDANCE_TOOL,
   createSpecialSkillToolEntry,
   createSpecialSkillToolDefinitions,
   executeCreateGuidance,
-} = require("../../agent/special-skills/capabilities.js");
+} = require("../../prompts/skills/internal/capabilities.js");
 const { resolveSecurityExecutable } = require("../../agent/tools/process/executable-resolver.js");
 const { normalizeAuthorityProfile } = require("../../agent/authority/profiles/profile-manifest.js");
 const Tunables = require("../../agent/runtime/tunables.js");
@@ -1573,9 +1573,19 @@ function runAssessmentIngestPython(payload = {}) {
   });
 }
 
+function specialSkillMenuCatalog() {
+  return defaultRegistry.listInternal().map((manifest) => ({
+    id: manifest.id,
+    title: manifest.title,
+    description: manifest.description,
+    menu: manifest.menu || (manifest.id === "report" ? "bug-bounty" : "system-command"),
+  }));
+}
+
 function dispatchSlashCommand(action, payload = {}) {
   try {
-    if (action === "parse") return Promise.resolve(parseCommand(payload.command, payload.overrides));
+    if (action === "parse") return Promise.resolve(parseCommand(payload.command, payload.overrides, specialSkillMenuCatalog()));
+    if (action === "catalog") return Promise.resolve({ ok: true, skills: specialSkillMenuCatalog() });
     return Promise.resolve({ ok: false, error: `Unknown command action: ${action}`, code: "COMMAND_ACTION_INVALID" });
   } catch (error) {
     return Promise.resolve({ ok: false, error: error.message || "Command runner failed", code: error.code || "COMMAND_RUNNER_FAILED" });
@@ -1699,6 +1709,7 @@ ipcMain.handle("tools:catalog", async () => {
 });
 
 ipcMain.handle("commands:parse", async (_event, payload = {}) => dispatchSlashCommand("parse", payload));
+ipcMain.handle("commands:catalog", async () => dispatchSlashCommand("catalog"));
 ipcMain.handle("commands:customScripts", async (_event, { path: root } = {}) => {
   if (!root || !fs.existsSync(root)) return { ok: true, scripts: [] };
   const base = path.join(root, "custom_scripts");

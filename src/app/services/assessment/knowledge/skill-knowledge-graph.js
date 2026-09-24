@@ -160,8 +160,12 @@ function validateEntry(entry) {
   if (!entry?.title) errors.push("missing title");
   if (!entry?.phase) errors.push("missing phase");
   if (entry?.source?.startsWith("libraries/")) {
+    const parts = entry.source.split("/");
+    const expected = parts.at(-1).toLowerCase() === "skill.md"
+      ? normalizeSkillId(parts.at(-2))
+      : normalizeSkillId(entry.source);
     if (!entry?.declaredId) errors.push("missing frontmatter id");
-    if (entry?.declaredId && entry.declaredId !== normalizeSkillId(entry.source)) errors.push("frontmatter id must match the Markdown filename");
+    if (entry?.declaredId && entry.declaredId !== expected) errors.push("frontmatter id must match the skill folder or Markdown filename");
     if (!entry?.summary) errors.push("missing summary");
   }
   if (entry?.level && !["standard", "advanced", "specialist"].includes(entry.level)) errors.push("unsupported level");
@@ -189,6 +193,8 @@ function createSkillKnowledgeGraph({ fs = fsDefault, path = pathDefault, library
     const seen = new Set();
     try {
       for (const filePath of walkMarkdown(fs, path, libraryRoot).sort((a, b) => a.localeCompare(b))) {
+        const relative = path.relative(libraryRoot, filePath).replace(/\\/g, "/");
+        if (relative.startsWith("libraries/") && relative.split("/").length > 2 && path.basename(filePath).toLowerCase() !== "skill.md") continue;
         const entry = normalizeEntry(filePath, libraryRoot, fs.readFileSync(filePath, "utf8"));
         const validation = validateEntry(entry);
         if (validation.length) { error = `${entry.source}: ${validation.join("; ")}`; continue; }

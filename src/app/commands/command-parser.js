@@ -32,13 +32,18 @@ function customCommandConfig(name, overrides) {
   return config && typeof config === "object" && !Array.isArray(config) ? config : {};
 }
 
-function parseCommand(raw, overrides = null) {
+function parseCommand(raw, overrides = null, catalog = []) {
   const text = String(raw || "").trim();
   if (!text.startsWith("/")) return { ok: false, error: "Command must start with '/'", code: "NOT_SLASH_COMMAND" };
   const parts = text.split(/\s+/);
   const name = parts[0].toLowerCase();
-  if (INTERNAL_COMMAND_NAMES.has(name)) {
-    const systemSkill = DEFAULT_COMMANDS[name];
+  const listed = (Array.isArray(catalog) ? catalog : []).find((item) => `/${String(item?.id || "").toLowerCase()}` === name);
+  if (INTERNAL_COMMAND_NAMES.has(name) || listed) {
+    const systemSkill = DEFAULT_COMMANDS[name] || {
+      id: listed.id,
+      title: listed.title || listed.id,
+      description: listed.description || "",
+    };
     return {
       ok: true,
       command: name,
