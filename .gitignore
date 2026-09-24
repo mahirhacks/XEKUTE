@@ -101,6 +101,9 @@ temp_test
 # Local third-party trees kept on disk, not in the repo
 /external-tool/
 
+# Vite renderer output is produced by `npm run build:ui`
+/src/ui/dist/
+
 
 # Local throwaway repro scripts and test dumps
 /tmp-electron-chrome-launch.js
