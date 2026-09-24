@@ -98,8 +98,9 @@ $RECYCLE.BIN/
 /version_tracking/
 temp_test
 
-# Vite renderer output is produced by `npm run build:ui`
-/src/ui/dist/
+# Local third-party trees kept on disk, not in the repo
+/external-tool/
+
 
 # Local throwaway repro scripts and test dumps
 /tmp-electron-chrome-launch.js
