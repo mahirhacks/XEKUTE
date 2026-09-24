@@ -877,6 +877,7 @@ async function runAgentTurn({
         protected_refs: Array.isArray(workingReferences) ? workingReferences.map((entry) => entry?.record_id || entry?.recordId || entry?.id || entry).filter(Boolean) : [],
         source_block_refs: precedingBlockId ? [precedingBlockId] : [],
         effective_context_limit: effectiveContextLimit,
+        retain_secrets: projectProfile?.dataHandling?.redactSecrets === false,
         // The active block model is the only semantic checkpoint author.  A
         // missing provider callback safely falls back to the deterministic
         // reducer inside the coordinator.
@@ -1448,7 +1449,9 @@ async function runAgentTurn({
           call_id: String(tool.callId || ""),
           executed: toolWasExecuted,
           outcome,
-          safe_excerpt: redactSecrets(String(toolResult?.error || toolResult?.value?.summary || toolResult?.value?.stdout || "")).slice(0, 1_000),
+          safe_excerpt: (projectProfile?.dataHandling?.redactSecrets === false
+            ? String(toolResult?.error || toolResult?.value?.summary || toolResult?.value?.stdout || "")
+            : redactSecrets(String(toolResult?.error || toolResult?.value?.summary || toolResult?.value?.stdout || ""))).slice(0, 1_000),
           artifact_refs: Array.isArray(toolResult?.artifactRefs || toolResult?.artifact_refs) ? (toolResult.artifactRefs || toolResult.artifact_refs) : [],
         });
         // Measure after every sealed result, not merely at the next model

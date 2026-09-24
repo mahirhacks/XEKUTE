@@ -60,6 +60,12 @@ test("the meter reads Tier 1 for an idle chat instead of waiting for the first s
   assert.match(renderer, /if \(isChatSessionRunning\(session\.id\)\) return;/);
   const previewPayload = renderer.match(/window\.api\.contextTier1Usage\(\{([\s\S]*?)\n\s*\}\);/)?.[1] || "";
   assert.ok(previewPayload);
+  assert.match(previewPayload, /chatHistory:\s*workingHistoryMessages\(session\.history,\s*session\)/);
+  assert.match(main, /chatHistory:\s*Array\.isArray\(payload\.chatHistory\)/);
+  assert.match(main, /ipcMain\.handle\("context:forkTier1Session"/);
+  assert.match(main, /cloneSession\(identity\.projectId, sourceSessionId, destSessionId\)/);
+  assert.match(preload, /forkTier1Session:/);
+  assert.match(renderer, /forkTier1Session\(\{/);
   assert.doesNotMatch(previewPayload, /userMessage|chatInput|draft/);
 });
 
@@ -78,7 +84,7 @@ test("context checkpointing is automatic and renderer-owned compaction is absent
   assert.doesNotMatch(main, /(?:context:compact|CONTEXT_SUMMARY_PROVIDER_TIMEOUT|CONTEXT_COMPACTION_TIMEOUT|CapsuleReducer|summarizeOpenRouterContext)/);
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
   assert.match(renderer, /Chat context being summarized\.\.\./);
-  assert.match(renderer, /Summarized Conversation Updated/);
+  assert.match(renderer, /Chat context summarized/);
   assert.match(renderer, /finishContextCheckpointNotice/);
   assert.match(renderer, /function checkpointNoticeHost/);
   assert.match(renderer, /function wrapAssistantInRunChunk/);

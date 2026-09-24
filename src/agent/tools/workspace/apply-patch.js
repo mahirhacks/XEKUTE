@@ -21,8 +21,6 @@ const {
   sep: pathSeparator,
 } = require("node:path");
 const { isRestrictedToolContext } = require("../../../contracts/tool/execution-context");
-const { isCanonicalInvestigationPath } = require("../../../domain/artifacts/investigation-artifacts.js");
-
 const MAX_OPERATIONS = 50;
 const MAX_DIFF_LINES = 220;
 const REVISION_PATTERN = "^sha256:[0-9a-f]{64}$";
@@ -512,27 +510,6 @@ function createApplyPatchTool() {
         root = realpathSync(configuredRoot);
       } catch (error) {
         return structuredFailure(APPLY_ERROR_CODES.WRITE_FAILED, `unable to resolve workspace root: ${error.message}`);
-      }
-
-      for (const op of input.operations) {
-        if (op.kind === "ensure_dir") continue;
-        const candidates = [op.path];
-        if (op.kind === "move" && op.target) candidates.push(op.target);
-        for (const raw of candidates) {
-          try {
-            const abs = resolveUnderRoot(root, raw);
-            const rel = normalizeSeparators(relativePath(root, abs) || ".");
-            if (isCanonicalInvestigationPath(rel)) {
-              return structuredFailure(APPLY_ERROR_CODES.CANONICAL_ARTIFACT, "apply_patch cannot mutate canonical investigation Markdown", {
-                path: rel,
-                retryable: false,
-              });
-            }
-          } catch (error) {
-            if (error.patchCode === APPLY_ERROR_CODES.OUTSIDE_WORKSPACE) continue;
-            throw error;
-          }
-        }
       }
 
       const dryRun = Boolean(input.dryRun);

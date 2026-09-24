@@ -185,6 +185,7 @@ const api = {
   chat: (payload) => ipcRenderer.invoke("ollama:chat", payload),
   agentRun: (payload) => ipcRenderer.invoke("agent:run", payload),
   contextTier1Usage: (payload = {}) => ipcRenderer.invoke("context:tier1Usage", payload),
+  forkTier1Session: (payload = {}) => ipcRenderer.invoke("context:forkTier1Session", payload),
   pendingSubagentResults: (payload = {}) => ipcRenderer.invoke("agent:pendingSubagentResults", payload),
   pendingParentContinuations: (payload = {}) => ipcRenderer.invoke("agent:pendingParentContinuations", payload),
   ackParentContinuation: (payload = {}) => ipcRenderer.invoke("agent:ackParentContinuation", payload),

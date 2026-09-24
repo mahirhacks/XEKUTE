@@ -598,6 +598,27 @@ body,
   border-radius: 10px !important;
   background: var(--revamp-prompt) !important;
   padding: 8px 12px !important;
+  user-select: none !important;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+#messages .chat-turn.user .chat-box:hover:not(.user-prompt-selectable) {
+  cursor: pointer;
+  border-color: #3f3f3f !important;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+#messages .chat-turn.user .chat-box.user-prompt-selectable,
+#messages .chat-turn.user .chat-box.user-prompt-selectable:hover {
+  cursor: text;
+  user-select: text !important;
+  border-color: var(--revamp-divider) !important;
+  box-shadow: none !important;
+  background: #262626 !important;
+}
+
+#messages .chat-turn.user .chat-box.user-prompt-selectable .chat-box-content {
+  user-select: text !important;
 }
 
 #messages .tool-card .tool-card-file-icon,
@@ -657,14 +678,15 @@ body,
 
 #chat-input {
   min-height: 36px;
+  padding: 10px 13px;
   color: #fff;
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 12px;
+  line-height: 17px;
 }
 
 #chat-input-measure {
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 12px;
+  line-height: 17px;
 }
 
 .composer-toolbar {
@@ -841,8 +863,6 @@ body,
 .chat-history-body {
   overflow-y: scroll;
   scrollbar-gutter: stable;
-  scrollbar-width: thin !important;
-  scrollbar-color: rgba(56, 56, 56, .55) transparent !important;
 }
 
 #messages::-webkit-scrollbar,
@@ -884,6 +904,27 @@ body,
 .app-settings-tabs::-webkit-scrollbar-thumb:hover,
 .chat-history-body::-webkit-scrollbar-thumb:hover {
   background: rgba(66, 66, 66, .7) !important;
+}
+
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:double-button,
+*::-webkit-scrollbar-button:vertical:start:decrement,
+*::-webkit-scrollbar-button:vertical:start:increment,
+*::-webkit-scrollbar-button:vertical:end:decrement,
+*::-webkit-scrollbar-button:vertical:end:increment,
+*::-webkit-scrollbar-button:horizontal:start:decrement,
+*::-webkit-scrollbar-button:horizontal:start:increment,
+*::-webkit-scrollbar-button:horizontal:end:decrement,
+*::-webkit-scrollbar-button:horizontal:end:increment {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background: none !important;
+  border: 0 !important;
+  appearance: none !important;
 }
 
 .app-settings-nav-group {
@@ -3078,7 +3119,7 @@ body,
   }
 
   #chat-input {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .editor-tab,

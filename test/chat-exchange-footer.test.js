@@ -76,17 +76,23 @@ test("assistant footer keeps copy visible and always shows time on the latest ex
   assert.match(source, /border: 1px solid transparent/);
   assert.match(source, /background: transparent/);
   assert.match(source, /\.assistant-reply-time \{[^]*?opacity: 0;[^]*?visibility: hidden/);
-  assert.match(source, /align-self: flex-end/);
+  assert.match(source, /align-self: flex-start/);
+  assert.match(source, /justify-content: flex-start/);
+  assert.match(bootstrapSource, /footer\.appendChild\(button\);\s*footer\.appendChild\(forkButton\);\s*footer\.appendChild\(timeLabel\)/);
+  assert.match(bootstrapSource, /assets\/icons\/fork\.svg/);
+  assert.match(bootstrapSource, /function forkChatSession\(sourceId = activeChatSessionId\)/);
+  assert.match(bootstrapSource, /fork\.memorySessionId = ""/);
+  assert.match(bootstrapSource, /fork\.forkedFromSessionId = forkRootSessionId\(source\)/);
   assert.match(
     source,
-    /\.chat-exchange:hover \.assistant-reply-time,[\s\S]*?opacity: 0\.5;[\s\S]*?visibility: visible/,
+    /\.chat-exchange:hover \.assistant-reply-time,[\s\S]*?opacity: 0\.72;[\s\S]*?visibility: visible/,
   );
   assert.match(
     source,
     /#messages > \.chat-exchange:last-child \.assistant-reply-time/,
   );
   assert.doesNotMatch(source, /\.assistant-reply-time:hover/);
-  assert.match(source, /\.assistant-reply-copy \{[^]*?opacity: 0\.5;/);
+  assert.match(source, /\.assistant-reply-copy \{[^]*?opacity: 0\.72;/);
   assert.match(chatStyles, /#messages \.agent-response-host > \.assistant-reply-footer/);
   assert.match(chatStyles, /#messages \.chat-exchange-body > \.assistant-reply-footer/);
   assert.doesNotMatch(chatStyles, /#messages \.chat-exchange > \.assistant-reply-footer/);

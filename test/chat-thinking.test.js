@@ -34,8 +34,10 @@ test("thinking streams into a Thinking / Thought for fold", () => {
 });
 
 test("content and tool events replace thinking and completion settles to elapsed time", () => {
-  assert.match(renderer, /if \(payload\.type === "content" \|\| payload\.type === "token"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
-  assert.match(renderer, /if \(payload\.type === "tool_call"\)[\s\S]*?assistant\.finalizeThinking\(\)/);
+  assert.doesNotMatch(renderer, /if \(payload\.type === "content" \|\| payload\.type === "token"\)[\s\S]{0,280}?assistant\.finalizeThinking\(\)/);
+  assert.match(renderer, /if \(payload\.type === "model_round"\)[\s\S]{0,120}?assistant\.applyModelRound\(payload\)/);
+  assert.match(renderer, /this\.finishThinking\(\{ collapse: true \}\)/);
+  assert.match(renderer, /if \(payload\.type === "tool_start" && payload\.tool\)[\s\S]{0,280}?assistant\.finalizeThinking\(\)/);
   assert.match(renderer, /dismissLiveState\(\)/);
   assert.doesNotMatch(renderer, /detail: "Writing response"/);
   assert.doesNotMatch(renderer, /if \(payload\.type === "content" \|\| payload\.type === "token"\)[\s\S]*?assistant\.dismissLiveState\(\)/);
@@ -354,6 +356,10 @@ test("every agent failure path restores the composer", () => {
 test("send button stays disabled while orchestration hold keeps parent running", () => {
   assert.match(renderer, /if \(run\.orchestrationHold\) return true/);
   assert.match(renderer, /const holdActive = Boolean\(run\?\.orchestrationHold\) && !run\.stopRequested/);
+  assert.match(renderer, /parentRunStillWorking\(run\)/);
+  assert.match(renderer, /rootHasLiveProcesses/);
+  assert.match(main, /type: "parent_continuation_started"/);
+  assert.match(main, /type: "parent_run_settled"/);
   assert.match(renderer, /run\.orchestrationHold = Boolean\(agentRunResult\.orchestrationHold\)/);
   assert.match(renderer, /delegatedEnsureThinkingFold/);
   assert.match(renderer, /childEventLanes/);
@@ -416,4 +422,16 @@ test("thinking folds persist stored duration and never recompute wall-clock age 
   assert.match(renderer, /renderStructuredChatTranscript\(session\.transcript, messages\)/);
   assert.match(renderer, /agent-work-fold-body/);
   assert.match(renderer, /dataset\.workVerdict = "true"/);
+});
+
+test("delegated sub-agent rows use a circular pause control", () => {
+  assert.match(renderer, /function createSubagentRunCard[\s\S]*?codicon-debug-pause/);
+  assert.match(chatStyles, /\.subagent-run-stop[\s\S]*?border-radius: 50%/);
+});
+
+test("orchestration hold shows a waiting status after delegated sub-agent rows", () => {
+  assert.match(renderer, /function syncSubagentOrchestrationWaitStatus[\s\S]*?Waiting for sub-agents/);
+  assert.match(renderer, /questionQueueDepth/);
+  assert.match(renderer, /run\.orchestrationHold[\s\S]*?syncSubagentOrchestrationWaitStatus\(run\)/);
+  assert.match(chatStyles, /\.subagent-orchestration-wait/);
 });

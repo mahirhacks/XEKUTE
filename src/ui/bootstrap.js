@@ -4,6 +4,7 @@
 import "./core/runtime-modules.js";
 import {
   fitHistoryTitle,
+  groupHistoryByAge,
   paginateRecentHistory,
   sortHistorySessions,
 } from "./features/history/history-model.js";
@@ -1259,8 +1260,10 @@ function normalizePersistedChatSession(value) {
     chatMode: canonicalChatMode(value.mode || value.chatMode),
     selectedModel: typeof (value.model || value.selectedModel) === "string" ? (value.model || value.selectedModel) : "",
     kind: String(value.kind || "chat").slice(0, 40),
+    orchestratorPrompt: String(value.orchestratorPrompt || "").slice(0, 12_000),
     parentSessionId: String(value.parentSessionId || "").slice(0, 240),
     childInvocationId: String(value.childInvocationId || "").slice(0, 240),
+    forkedFromSessionId: String(value.forkedFromSessionId || "").slice(0, 240),
     draftText: "",
     draftSlashCommand: "",
     createdAt: value.createdAt || value.created_at || null,
@@ -1280,8 +1283,10 @@ function serializeChatSession(session) {
     safetyFamily: session.chatFamily || chatFamily,
     model: session.selectedModel || selectedModel,
     kind: session.kind || "chat",
+    orchestratorPrompt: String(session.orchestratorPrompt || "").slice(0, 12_000),
     parentSessionId: session.parentSessionId || "",
     childInvocationId: session.childInvocationId || "",
+    forkedFromSessionId: session.forkedFromSessionId || "",
     createdAt: session.createdAt || null,
     updatedAt: session.updatedAt || null,
     status: isChatSessionRunning(session.id) ? "interrupted" : "complete",
@@ -1577,6 +1582,131 @@ function collapseExpandedUserPrompts(except = null) {
   });
 }
 
+function placeCaretAtClientPoint(clientX, clientY) {
+  const selection = window.getSelection?.();
+  if (!selection) return false;
+  selection.removeAllRanges();
+  if (typeof document.caretRangeFromPoint === "function") {
+    const range = document.caretRangeFromPoint(clientX, clientY);
+    if (range) {
+      selection.addRange(range);
+      return true;
+    }
+  }
+  if (typeof document.caretPositionFromPoint === "function") {
+    const position = document.caretPositionFromPoint(clientX, clientY);
+    if (position) {
+      const range = document.createRange();
+      range.setStart(position.offsetNode, position.offset);
+      range.collapse(true);
+      selection.addRange(range);
+      return true;
+    }
+  }
+  return false;
+}
+
+function focusUserPromptCaretAtEnd(content) {
+  if (!content) return;
+  content.focus({ preventScroll: false });
+  const selection = window.getSelection?.();
+  if (!selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(content);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function userPromptSelectionInside(content) {
+  const selection = window.getSelection?.();
+  if (!selection || selection.rangeCount === 0 || !content) return null;
+  const node = selection.anchorNode;
+  const host = node?.nodeType === 1 ? node : node?.parentElement;
+  if (!host || !content.contains(host) && host !== content) return null;
+  return selection;
+}
+
+function selectWholeUserPrompt(content) {
+  if (!content) return;
+  content.focus({ preventScroll: false });
+  const selection = window.getSelection?.();
+  if (!selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(content);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function enableUserPromptReading(content) {
+  if (!content) return;
+  const text = content.textContent ?? "";
+  content.contentEditable = "true";
+  content.spellcheck = false;
+  content.setAttribute("role", "textbox");
+  content.setAttribute("aria-readonly", "true");
+  if (content.textContent !== text) content.textContent = text;
+}
+
+function disableUserPromptReading(content) {
+  if (!content) return;
+  const text = content.textContent ?? "";
+  content.contentEditable = "false";
+  content.removeAttribute("role");
+  content.removeAttribute("aria-readonly");
+  content.blur();
+  content.textContent = text;
+}
+
+function deactivateUserPromptSelection(except = null) {
+  let clearedSelection = false;
+  messages?.querySelectorAll(".chat-turn.user .chat-box.user-prompt-selectable").forEach((box) => {
+    if (box === except) return;
+    box.classList.remove("user-prompt-selectable");
+    disableUserPromptReading(box.querySelector(".chat-box-content"));
+    if (box.classList.contains("user-prompt-expandable") && box.classList.contains("is-expanded")) {
+      setUserPromptExpanded(box, false);
+    } else {
+      syncUserPromptDisclosure(box);
+    }
+    clearedSelection = true;
+  });
+  if (clearedSelection && !except) window.getSelection?.()?.removeAllRanges();
+}
+
+function dismissUserPromptSelectionIfOutside(target) {
+  if (target?.closest?.(".chat-turn.user .chat-box")) return;
+  if (!messages?.querySelector(".chat-turn.user .chat-box.user-prompt-selectable")) return;
+  deactivateUserPromptSelection();
+  collapseExpandedUserPrompts();
+}
+
+function activateUserPromptSelection(box, clientX = null, clientY = null) {
+  if (!box?.classList.contains("chat-box")) return;
+  const alreadyReading = box.classList.contains("user-prompt-selectable");
+  deactivateUserPromptSelection(box);
+  box.classList.add("user-prompt-selectable");
+  box.removeAttribute("role");
+  box.removeAttribute("tabindex");
+  box.removeAttribute("aria-expanded");
+  if (box.classList.contains("user-prompt-expandable") && !box.classList.contains("is-expanded")) {
+    collapseExpandedUserPrompts(box);
+    setUserPromptExpanded(box, true);
+  }
+  const content = box.querySelector(".chat-box-content");
+  enableUserPromptReading(content);
+  if (alreadyReading) return;
+  const placeCaret = () => {
+    if (!content || userPromptSelectionInside(content)) return;
+    content.focus({ preventScroll: false });
+    const placed = Number.isFinite(clientX) && Number.isFinite(clientY)
+      ? placeCaretAtClientPoint(clientX, clientY)
+      : false;
+    if (!placed) focusUserPromptCaretAtEnd(content);
+  };
+  requestAnimationFrame(() => requestAnimationFrame(placeCaret));
+}
+
 // Streaming appends land in the work body once a fold exists, so ordering
 // questions are answered against whichever container currently holds the run.
 function assistantStreamHost(turn) {
@@ -1829,7 +1959,10 @@ function setThinkingFoldLabel(fold, { live = false, endedAt = Date.now(), durati
 }
 
 function finishThinkingFold(fold, { collapse = true, endedAt = Date.now() } = {}) {
-  if (!fold?.isConnected) return;
+  // A detached sub-agent host is not in the document, but the fold is still the
+  // live passage. Seal it once. Later reasoning in a new round opens a new fold.
+  if (!fold || fold.dataset.final === "true") return;
+  if (typeof streamingNodeLive === "function" ? !streamingNodeLive(fold) : !fold.isConnected && !fold.parentNode) return;
   const start = Number(fold.dataset.startedAt);
   const durationMs = Number.isFinite(start) ? Math.max(0, endedAt - start) : 0;
   fold.dataset.final = "true";
@@ -2382,6 +2515,17 @@ function appendTranscriptEvent(host, event) {
     host.appendChild(createCommandFromRecord(event));
     return;
   }
+  if (event.type === "subagent") {
+    createSubagentRunCard({ turn: host.closest?.(".chat-turn") || host }, {
+      childInvocationId: event.child_invocation_id || event.childInvocationId || "",
+      childSessionId: event.child_session_id || event.childSessionId || "",
+      parentSessionId: event.parent_session_id || event.parentSessionId || "",
+      model: event.model || "",
+      status: event.status || "completed",
+      summary: event.summary || "",
+    }, host);
+    return;
+  }
   if (event.type === "tool") {
     const card = createToolCardFromRecord(event);
     if (!card) return;
@@ -2465,7 +2609,7 @@ function renderTranscriptRun(run, container) {
     if (answer) answer.dataset.workVerdict = "true";
   }
   if (String(run.status || "") === "stopped") appendStoppedPlainText(turn);
-  if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event")) return;
+  if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event, .subagent-run-card")) return;
   appendChatTurn(turn, { container });
   wrapAssistantInRunChunk(turn);
 }
@@ -2481,6 +2625,25 @@ function renderStructuredChatTranscript(transcript, container = messages) {
   container.replaceChildren(fragment);
   syncChatStickyMask();
   syncChatEmptyState();
+}
+
+function restoreHistorySubagentCards(history = []) {
+  if (!messages || messages.querySelector(".subagent-run-card")) return;
+  const rows = [];
+  for (const message of Array.isArray(history) ? history : []) {
+    if (message?.role !== "assistant" || !Array.isArray(message.subagents)) continue;
+    rows.push(...message.subagents);
+  }
+  if (!rows.length) return;
+  const turn = [...messages.querySelectorAll(".chat-turn.assistant")].at(-1);
+  if (!turn) return;
+  const host = turn.querySelector(".agent-work-fold-body") || turn;
+  for (const row of rows) {
+    createSubagentRunCard({ turn }, {
+      ...row,
+      status: row.status || "completed",
+    }, host);
+  }
 }
 
 function hydrateSubagentRunCards(root = messages) {
@@ -2502,9 +2665,101 @@ function syncChatEmptyState() {
 
 function isChatSessionRunning(sessionId) {
   const run = activeChatRuns.get(String(sessionId || ""));
-  if (!run) return false;
+  if (!run || run.stopRequested) return false;
   if (run.orchestrationHold) return true;
+  if (run.awaitingParentContinuation || run.pendingEndTurn) return true;
+  if (rootHasLiveProcesses(runWorkRoot(run))) return true;
   return run.state === "running";
+}
+
+function runWorkRoot(run) {
+  if (!run) return null;
+  if (run.viewHost) return run.viewHost;
+  const turns = run.assistant?.assistantTurns?.() || [];
+  if (turns.length) return turns[0].closest(".chat-exchange") || turns[0].parentElement || turns[0];
+  if (activeChatSessionId === run.sessionId) return messages;
+  return null;
+}
+
+function rootHasLiveProcesses(root) {
+  if (!root?.querySelector) return false;
+  if ([...root.querySelectorAll(".subagent-run-card")].some(subagentCardIsActive)) return true;
+  if (root.querySelector(".agent-command-event[data-waiting='true']")) return true;
+  if (root.querySelector(".tool-card.subagent-wait, .tool-card[data-state='waiting']")) return true;
+  return false;
+}
+
+function parentRunStillWorking(run) {
+  if (!run || run.stopRequested) return false;
+  if (run.modelTurnOpen || run.orchestrationHold || run.pendingEndTurn || run.awaitingParentContinuation) return true;
+  return rootHasLiveProcesses(runWorkRoot(run));
+}
+
+function settleVisibleParentRun(run) {
+  if (!run || run.visibleSettled || run.stopRequested || parentRunStillWorking(run)) return;
+  run.visibleSettled = true;
+  run.modelTurnOpen = false;
+  run.awaitingParentContinuation = false;
+  run.state = "complete";
+  run.activeStreamContent = "";
+  run.assistant?.finishLiveState?.(run.assistant.finalOutcome || "complete");
+  for (const turn of run.assistant?.assistantTurns?.() || [run.assistant?.turn]) {
+    turn?.setAttribute("aria-busy", "false");
+  }
+  syncSubagentOrchestrationWaitStatus(run);
+  if (activeChatRuns.get(run.sessionId) === run) activeChatRuns.delete(run.sessionId);
+  updateSendBtn();
+  renderChatSessionSelect();
+  if (activeChatSessionId === run.sessionId) {
+    activeStreamContent = "";
+    setAgentStatus(`${modeLabel()} ready`);
+    if (!contextCheckpointing) {
+      chatInput.disabled = false;
+      chatInput.readOnly = false;
+      chatInput.removeAttribute("aria-disabled");
+    }
+  }
+}
+
+function keepParentRunOpen(run, { continuation = false } = {}) {
+  if (!run || run.stopRequested) return;
+  run.visibleSettled = false;
+  run.state = "running";
+  if (continuation) run.awaitingParentContinuation = true;
+  run.orchestrationHold = true;
+  activeChatRuns.set(run.sessionId, run);
+  for (const turn of run.assistant?.assistantTurns?.() || [run.assistant?.turn]) {
+    turn?.setAttribute("aria-busy", "true");
+  }
+  run.assistant?.turn?.closest?.(".chat-exchange")?.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
+  syncSubagentOrchestrationWaitStatus(run);
+  updateSendBtn();
+  if (activeChatSessionId === run.sessionId) setAgentStatus(`${modeLabel()} orchestrating…`);
+}
+
+function noteParentContinuationStarted(payload = {}) {
+  const sessionId = chatSessionIdForRuntimeId(payload.parentSessionId || payload.sessionId || "");
+  const run = activeChatRuns.get(sessionId) || ensureParentContinuationRun(payload);
+  if (!run) return;
+  keepParentRunOpen(run, { continuation: true });
+}
+
+function noteParentRunSettled(payload = {}) {
+  const sessionId = chatSessionIdForRuntimeId(payload.parentSessionId || payload.sessionId || "");
+  const run = activeChatRuns.get(sessionId);
+  if (!run || run.stopRequested) return;
+  run.awaitingParentContinuation = false;
+  run.orchestrationHold = Boolean(payload.orchestrationHold);
+  run.pendingEndTurn = Boolean(payload.pendingEndTurn);
+  if (parentRunStillWorking(run)) {
+    run.state = "running";
+    activeChatRuns.set(run.sessionId, run);
+    syncSubagentOrchestrationWaitStatus(run);
+    updateSendBtn();
+    if (activeChatSessionId === run.sessionId) setAgentStatus(`${modeLabel()} orchestrating…`);
+    return;
+  }
+  settleVisibleParentRun(run);
 }
 
 function isRunningChatActive() {
@@ -2710,18 +2965,24 @@ function applyActiveChatSession(session) {
     liveRun.viewHost = null;
   } else if (hasStructuredTranscript(session.transcript)) {
     renderStructuredChatTranscript(session.transcript, messages);
+    restoreHistorySubagentCards(session.history);
     hydratePersistedChatTranscript(messages);
   } else if (session.messagesHtml) {
     messages.innerHTML = session.messagesHtml;
     hydratePersistedChatTranscript(messages);
+    restoreHistorySubagentCards(session.history);
     // Normalize snapshots produced before the V3 checkpoint UI. The cursor is
     // model-only state; it must never hide or remove visible transcript rows.
     if (messages.querySelector(".chat-archive-marker")) {
       renderCanonicalChatHistory(session.history);
     }
   }
-  else renderCanonicalChatHistory(session.history);
+  else {
+    renderCanonicalChatHistory(session.history);
+    restoreHistorySubagentCards(session.history);
+  }
   normalizeChatExchanges();
+  ensureVisibleDelegatedPrompt(session);
   syncChatStickyMask();
   syncChatEmptyState();
   setChatCollapsed(false);
@@ -8068,8 +8329,22 @@ function syncActiveChatSession({ persist = true } = {}) {
   if (persist) schedulePersistChatSessions();
 }
 
+let chatSessionTabSignature = "";
+
 function renderChatSessionSelect() {
   if (!chatSessionSelect) return;
+  const signature = chatSessions.map((session) => [
+    session.id,
+    session.title || "",
+    session.id === activeChatSessionId ? "1" : "0",
+    isChatSessionRunning(session.id) ? "1" : "0",
+    chatSessionsNeedingAttention.has(session.id) ? "1" : "0",
+  ].join("\u001f")).join("\u001e");
+  if (signature === chatSessionTabSignature && chatSessionSelect.childElementCount === chatSessions.length) {
+    chatSessionSelect.classList.toggle("disabled", !chatSessions.length);
+    return;
+  }
+  chatSessionTabSignature = signature;
   chatSessionSelect.innerHTML = "";
   chatSessionSelect.classList.toggle("disabled", !chatSessions.length);
 
@@ -8160,6 +8435,75 @@ function loadChatSession(id) {
   renderChatSessionSelect();
   updateContextUsage();
   schedulePersistChatSessions();
+}
+
+function allKnownChatSessions() {
+  return [...chatSessions, ...closedChatSessions, ...archivedChatSessions];
+}
+
+function forkRootSessionId(session) {
+  return String(session?.forkedFromSessionId || session?.id || "");
+}
+
+function forkBaseTitle(session) {
+  return String(session?.title || "New Agent").replace(/^\(\d+\)\s+/, "").trim() || "New Agent";
+}
+
+function nextForkTitle(source) {
+  const rootId = forkRootSessionId(source);
+  const count = allKnownChatSessions().filter((session) => session?.forkedFromSessionId === rootId).length;
+  return `(${count + 1}) ${forkBaseTitle(source)}`.slice(0, 120);
+}
+
+function cloneSessionValue(value) {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+async function forkChatSession(sourceId = activeChatSessionId) {
+  const source = allKnownChatSessions().find((session) => session.id === sourceId);
+  if (!source) return null;
+  if (source.id === activeChatSessionId) syncActiveChatSession({ persist: false });
+  const fork = createChatSession(nextForkTitle(source));
+  fork.forkedFromSessionId = forkRootSessionId(source);
+  fork.history = cloneSessionValue(source.history || []);
+  fork.messagesHtml = source.messagesHtml || "";
+  fork.transcript = cloneSessionValue(source.transcript || { version: 1, runs: [] });
+  fork.chatMode = source.chatMode;
+  fork.chatFamily = source.chatFamily;
+  fork.selectedModel = source.selectedModel;
+  fork.contextFilesCache = cloneSessionValue(source.contextFilesCache || []);
+  fork.currentWorkflow = cloneSessionValue(source.currentWorkflow);
+  fork.lastContextUsage = cloneSessionValue(source.lastContextUsage);
+  fork.kind = "chat";
+  fork.memoryProjectId = source.memoryProjectId || "";
+  fork.memorySessionId = "";
+  fork.memoryBlockId = "";
+  fork.memoryBlockHistoryStart = -1;
+  const sourceMemoryId = String(source.memorySessionId || "");
+  if (sourceMemoryId && rootPath && typeof window.api?.forkTier1Session === "function") {
+    try {
+      const copied = await window.api.forkTier1Session({
+        workspace: rootPath,
+        projectId: source.memoryProjectId || "",
+        sourceSessionId: sourceMemoryId,
+        destKey: fork.id,
+      });
+      if (copied?.ok && copied.sessionId) {
+        fork.memorySessionId = copied.sessionId;
+        fork.memoryProjectId = copied.projectId || fork.memoryProjectId;
+      }
+    } catch { /* the meter falls back to the copied transcript */ }
+  }
+  chatSessions.push(fork);
+  applyActiveChatSession(fork);
+  contextFilesCache = Array.isArray(fork.contextFilesCache) ? fork.contextFilesCache : [];
+  renderChatSessionSelect();
+  scrollChatSessionIntoView(fork.id);
+  updateContextUsage();
+  schedulePersistChatSessions(fork);
+  chatInput?.focus();
+  return fork;
 }
 
 function newChatSession() {
@@ -8421,7 +8765,13 @@ function renderChatHistory() {
     chatHistoryEmpty.hidden = matchingCount !== 0;
   }
 
-  for (const session of visibleRecent) chatHistoryBody.appendChild(createChatHistorySessionRow(session));
+  for (const group of groupHistoryByAge(visibleRecent)) {
+    const heading = document.createElement("div");
+    heading.className = "chat-history-group-label";
+    heading.textContent = group.label;
+    chatHistoryBody.appendChild(heading);
+    for (const session of group.sessions) chatHistoryBody.appendChild(createChatHistorySessionRow(session));
+  }
 
   if (remainingRecent > 0) {
     const more = document.createElement("button");
@@ -8873,7 +9223,7 @@ function getContextBreakdown() {
 }
 
 const CONTEXT_SUMMARIZING_NOTICE = "Chat context being summarized...";
-const CONTEXT_SUMMARIZED_NOTICE = "Summarized Conversation Updated";
+const CONTEXT_SUMMARIZED_NOTICE = "Chat context summarized";
 
 function pendingContextCheckpointNotice(container = messages) {
   if (contextCheckpointNotice?.isConnected && contextCheckpointNotice.dataset.state === "pending") return contextCheckpointNotice;
@@ -8881,8 +9231,8 @@ function pendingContextCheckpointNotice(container = messages) {
 }
 
 // The notice is a sibling of each agent-run-chunk, not a child of the growing
-// assistant turn. That keeps "Summarized Conversation Updated" at the moment
-// the checkpoint happened instead of sliding under later tokens and tools.
+// assistant turn. That keeps "Chat context summarized" at the moment the
+// checkpoint happened instead of sliding under later tokens and tools.
 function lastAgentRunChunk(root) {
   if (!root?.querySelectorAll) return null;
   const host = root.classList?.contains("agent-response-host")
@@ -8968,8 +9318,13 @@ function applyContextCheckpointUi(run, payload = {}) {
   if (run) run.contextCheckpointPending = active;
   if (session) contextCheckpointingSessionId = active ? session.id : (contextCheckpointingSessionId === session.id ? "" : contextCheckpointingSessionId);
   const container = chatRunContainer(run);
-  if (active) ensureContextCheckpointNotice(container, { assistant: run?.assistant });
-  else finishContextCheckpointNotice(container, status);
+  if (active) {
+    ensureContextCheckpointNotice(container, { assistant: run?.assistant });
+    run?.assistant?.holdPlanningUntilCheckpoint?.();
+  } else {
+    finishContextCheckpointNotice(container, status);
+    run?.assistant?.releasePlanningAfterCheckpoint?.();
+  }
   const visible = Boolean(session && activeChatSessionId === session.id && !run?.viewHost);
   setContextCheckpointUi(active && (visible || contextCheckpointingSessionId === activeChatSessionId));
   if (visible) {
@@ -9243,6 +9598,9 @@ async function refreshTier1ContextPreview(signature) {
       numCtx: plan.provider === "ollama" ? plan.effectiveLimitTokens : null,
       contextBudget: plan.effectiveLimitTokens,
       sessionId: session.memorySessionId || "",
+      // A fork has the transcript locally and no Tier 1 ledger yet. The meter
+      // has to count those messages, not an empty memory session.
+      chatHistory: workingHistoryMessages(session.history, session),
     });
     const usage = response?.usage || response?.value?.usage || null;
     if (!usage) return;
@@ -14321,7 +14679,9 @@ function attachAssistantCopyButton(contentEl) {
   exchange.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
   const assistantStillRunning = [...exchange.querySelectorAll(".chat-turn.assistant")]
     .some((assistantTurn) => assistantTurn.getAttribute("aria-busy") === "true");
-  if (assistantStillRunning) return;
+  const subagentStillRunning = [...exchange.querySelectorAll(".subagent-run-card")]
+    .some((card) => ["queued", "running", "working"].includes(String(card.dataset.state || "")));
+  if (assistantStillRunning || subagentStillRunning) return;
 
   // One timestamp per exchange, taken from the first assistant reply in it.
   const firstAssistantTurn = exchange.querySelector(".chat-turn.assistant");
@@ -14371,10 +14731,23 @@ function attachAssistantCopyButton(contentEl) {
     writeChatClipboardText(text).then(done).catch(fail);
   });
 
+  const forkButton = document.createElement("button");
+  forkButton.type = "button";
+  forkButton.className = "assistant-reply-copy assistant-reply-fork";
+  forkButton.setAttribute("aria-label", "Fork chat");
+  forkButton.title = "Fork chat";
+  forkButton.innerHTML = '<img class="chat-action-icon" src="assets/icons/fork.svg" alt="" aria-hidden="true">';
+  forkButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    forkChatSession(activeChatSessionId);
+  });
+
   const footer = document.createElement("div");
   footer.className = "assistant-reply-footer";
-  footer.appendChild(timeLabel);
   footer.appendChild(button);
+  footer.appendChild(forkButton);
+  footer.appendChild(timeLabel);
   const host = ensureAgentResponseHost(exchange) || chatExchangeBody(exchange);
   host.appendChild(footer);
 }
@@ -15312,6 +15685,9 @@ function updateCommandTimelineRow(row, state = "success") {
   const label = row.querySelector(".agent-command-label");
   if (label) renderCommandTimelineLabel(row, state);
   persistCommandTimelineRowState(row);
+  const sessionId = String(row.dataset.sessionId || activeChatSessionId || "");
+  const run = activeChatRuns.get(sessionId);
+  if (run) settleVisibleParentRun(run);
   return row;
 }
 
@@ -16266,7 +16642,7 @@ function subagentCardStatus(status = "working") {
     running: "Working…",
     working: "Working…",
     completed: "Finished working.",
-    stopped: "Stopped.",
+    stopped: "Stopped",
     failed: "Failed.",
   }[String(status || "working")] || "Working…";
 }
@@ -16279,16 +16655,52 @@ function subagentCardKey(payload = {}) {
   return String(payload.childInvocationId || payload.childSessionId || payload.sessionId || "");
 }
 
+function findSubagentChatSession(card) {
+  const childSessionId = String(card?.dataset?.childSessionId || "");
+  const childInvocationId = String(card?.dataset?.childInvocationId || "");
+  const matches = (session) => session
+    && (
+      (childSessionId && (session.id === childSessionId || session.memorySessionId === childSessionId))
+      || (childInvocationId && session.childInvocationId === childInvocationId)
+    );
+  return allKnownChatSessions().find(matches) || null;
+}
+
+function openSubagentChat(card) {
+  if (!card) return;
+  let session = findSubagentChatSession(card);
+  if (!session) {
+    const childSessionId = String(card.dataset.childSessionId || "");
+    if (!childSessionId) return;
+    ensureSubagentSessionTab({
+      childSessionId,
+      childInvocationId: card.dataset.childInvocationId || "",
+      parentSessionId: card.dataset.parentSessionId || "",
+      model: card.dataset.model || "",
+      task: card.querySelector(".subagent-run-detail")?.textContent || "",
+      status: card.dataset.state || "",
+    });
+    session = chatSessions.find((item) => item.id === childSessionId) || null;
+  }
+  if (!session) return;
+  if (!chatSessions.some((item) => item.id === session.id)) reopenChatSession(session.id, { closePopover: false });
+  else loadChatSession(session.id);
+}
+
 function wireSubagentRunCard(card) {
   if (!card || card.dataset.interactionsBound === "1") return card;
   card.dataset.interactionsBound = "1";
-  const openChild = () => {
-    const childSessionId = card.dataset.childSessionId;
-    if (childSessionId && chatSessions.some((item) => item.id === childSessionId)) loadChatSession(childSessionId);
-  };
+  const openChild = () => openSubagentChat(card);
+  card.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest(".subagent-run-stop")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openChild();
+  });
   card.addEventListener("click", (event) => {
     if (event.target.closest(".subagent-run-stop")) return;
-    openChild();
+    event.preventDefault();
+    event.stopPropagation();
   });
   card.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -16298,13 +16710,15 @@ function wireSubagentRunCard(card) {
   });
   card.querySelector(".subagent-run-stop")?.addEventListener("click", (event) => {
     event.stopPropagation();
-    window.api.abortChat?.({ sessionId: card.dataset.childSessionId || "" });
+    const childSessionId = card.dataset.childSessionId || "";
+    window.api.abortChat?.({ sessionId: childSessionId });
     setSubagentCardState(card, "stopped");
+    activeChatRuns.get(childSessionId)?.assistant?.finishLiveState?.("stopped");
   });
   return card;
 }
 
-function createSubagentRunCard(assistant, payload = {}) {
+function createSubagentRunCard(assistant, payload = {}, mount = null) {
   if (!assistant?.turn) return null;
   const key = subagentCardKey(payload);
   const existing = [...assistant.turn.querySelectorAll(".subagent-run-card")].find(
@@ -16342,7 +16756,7 @@ function createSubagentRunCard(assistant, payload = {}) {
   stop.className = "subagent-run-stop";
   stop.title = "Stop sub-agent";
   stop.setAttribute("aria-label", "Stop sub-agent");
-  stop.textContent = "Stop";
+  stop.innerHTML = '<span class="codicon codicon-debug-pause" aria-hidden="true"></span>';
 
   card.append(body, stop);
 
@@ -16356,9 +16770,10 @@ function createSubagentRunCard(assistant, payload = {}) {
     summary: summarizeSubagentActivity(payload),
   });
   // Keep delegated rows below the parent's prose and tool timeline.
-  assistant.markToolUse();
+  if (typeof assistant.markToolUse === "function") assistant.markToolUse();
   markActivityNode(card);
-  appendChatStreamNode(assistant.toolWorkMount(), card);
+  const host = mount || (typeof assistant.toolWorkMount === "function" ? assistant.toolWorkMount() : assistant.turn);
+  appendChatStreamNode(host, card);
   wireSubagentRunCard(card);
   setSubagentCardState(card, card.dataset.state);
   return card;
@@ -16366,6 +16781,7 @@ function createSubagentRunCard(assistant, payload = {}) {
 
 function setSubagentCardState(card, status = "running", detail = "") {
   if (!card) return;
+  if (card.dataset.state === "stopped" && status !== "stopped" && status !== "failed") return;
   card.dataset.state = status;
   const title = card.querySelector(".subagent-run-title");
   if (title) title.textContent = subagentCardTitle({ model: card.dataset.model || "", status });
@@ -16374,6 +16790,98 @@ function setSubagentCardState(card, status = "running", detail = "") {
   const stop = card.querySelector(".subagent-run-stop");
   if (stop) stop.hidden = !["queued", "running", "working"].includes(String(status));
   card.setAttribute("aria-label", title?.textContent || "Sub-agent");
+  const assistant = findAssistantForTurn(card.closest(".chat-turn"));
+  syncSubagentOrchestrationWaitStatus(assistant);
+  const run = chatRunForAssistant(assistant);
+  if (run && !subagentCardIsActive(card)) settleVisibleParentRun(run);
+}
+
+function chatRunForAssistant(assistant) {
+  if (!assistant) return null;
+  for (const run of activeChatRuns.values()) {
+    if (run.assistant === assistant) return run;
+  }
+  return null;
+}
+
+function findAssistantForTurn(turn) {
+  if (!turn) return null;
+  for (const run of activeChatRuns.values()) {
+    const assistant = run.assistant;
+    if (!assistant) continue;
+    if (assistant.turn === turn || assistant.rootTurn === turn || assistant.assistantTurns?.().includes(turn)) {
+      return assistant;
+    }
+  }
+  return null;
+}
+
+function subagentCardIsActive(card) {
+  return ["queued", "running", "working"].includes(String(card?.dataset?.state || ""));
+}
+
+function markSubagentQuestionWaiting(payload = {}, waiting = false) {
+  const key = subagentCardKey(payload);
+  if (!key || !messages?.querySelectorAll) return;
+  const card = [...messages.querySelectorAll(".subagent-run-card")].find(
+    (item) => (item.dataset.childInvocationId || item.dataset.childSessionId) === key,
+  );
+  if (card) card.dataset.pendingQuestion = waiting ? "true" : "false";
+  const status = card?.parentElement?.querySelector(":scope > .subagent-orchestration-wait");
+  if (status) status.dataset.questionQueueDepth = String(Math.max(0, Number(payload.questionQueueDepth) || (waiting ? 1 : 0)));
+  const assistant = findAssistantForTurn(card?.closest(".chat-turn"));
+  if (assistant) syncSubagentOrchestrationWaitStatus(assistant);
+}
+
+function syncSubagentOrchestrationWaitStatus(source) {
+  let assistant = null;
+  let run = null;
+  if (source?.assistant) {
+    run = source;
+    assistant = run.assistant;
+  } else if (source?.toolWorkMount) {
+    assistant = source;
+    run = chatRunForAssistant(assistant);
+  }
+  if (!assistant?.toolWorkMount) return;
+  const host = assistant.toolWorkMount();
+  if (!host) return;
+
+  const cards = [...host.querySelectorAll(":scope > .subagent-run-card")];
+  const holdActive = Boolean(run?.orchestrationHold) && !run?.stopRequested;
+  const hasActiveCards = cards.some(subagentCardIsActive);
+  const shouldShow = cards.length > 0 && !run?.stopRequested && (holdActive || hasActiveCards);
+
+  let status = host.querySelector(":scope > .subagent-orchestration-wait");
+  if (!shouldShow) {
+    status?.remove();
+    return;
+  }
+
+  if (!status) {
+    status = document.createElement("div");
+    status.className = "subagent-orchestration-wait agent-status-line";
+    status.dataset.state = "waiting";
+    status.dataset.orchestrationRoster = "true";
+    status.setAttribute("role", "status");
+    status.innerHTML = '<span class="agent-status-text"></span>';
+  }
+  const working = cards.filter(subagentCardIsActive).length;
+  const finished = Math.max(0, cards.length - working);
+  const waitingQuestions = cards.filter((card) => card.dataset.pendingQuestion === "true").length
+    || Number(status.dataset.questionQueueDepth || 0);
+  const text = status.querySelector(".agent-status-text");
+  if (text) {
+    const questionLabel = waitingQuestions > 0
+      ? ` · ${waitingQuestions} question${waitingQuestions === 1 ? "" : "s"} waiting`
+      : "";
+    text.textContent = `Waiting for sub-agents · ${working} working · ${finished} finished${questionLabel}`;
+  }
+
+  const anchor = cards.at(-1)
+    || host.querySelector(":scope > .tool-card[data-tool-action='delegate_agent']");
+  if (anchor) anchor.insertAdjacentElement("afterend", status);
+  else host.appendChild(status);
 }
 
 function handleSubagentCardEvent(assistant, payload = {}) {
@@ -16718,7 +17226,28 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     showPlanning() {
       if (this.modelEmitting || this.finalOutcome || this.liveStateEl?.dataset.final === "true") return;
+      if (this.checkpointHeldChunk) return;
       this.ensureWorkFold();
+    },
+    holdPlanningUntilCheckpoint() {
+      const chunk = this.turn?.closest(".agent-run-chunk");
+      const notice = chunk?.previousElementSibling;
+      const prior = notice?.classList?.contains("context-checkpoint-notice")
+        ? notice.previousElementSibling
+        : null;
+      if (!prior?.classList?.contains("agent-run-chunk") || this.checkpointHeldChunk) return;
+      const label = prior.querySelector(".agent-status-text")?.textContent || "";
+      if (!/^Planning/i.test(label)) return;
+      if (prior.querySelector(".tool-card, .subagent-run-card, .command-event, .agent-command")) return;
+      const visibleReply = [...prior.querySelectorAll(".assistant-reply")].some((reply) => !reply.hidden && reply.textContent.trim());
+      if (visibleReply) return;
+      prior.hidden = true;
+      this.checkpointHeldChunk = prior;
+    },
+    releasePlanningAfterCheckpoint() {
+      if (!this.checkpointHeldChunk) return;
+      this.checkpointHeldChunk = null;
+      this.showPlanning();
     },
     noteModelOutput() {
       if (this.modelEmitting || this.finalOutcome || this.liveStateEl?.dataset.final === "true") return;
@@ -17255,8 +17784,17 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
       const subagentRows = this.assistantTurns().flatMap((turn) => [...turn.querySelectorAll(".subagent-run-card")]);
       if (subagentRows.length) {
-        const host = assistantStreamHost(this.workHostTurn()) || this.rootTurn || this.turn;
-        host.append(...subagentRows);
+        const turn = this.workHostTurn() || this.rootTurn || this.turn;
+        this.ensureWorkFold();
+        const body = workFoldBody(turnWorkFold(turn));
+        const before = body
+          ? [...body.children].find((child) => child.classList.contains("assistant-reply") || child.classList.contains("agent-command-event") || child.classList.contains("agent-file-row") || child.classList.contains("tool-card") || child.classList.contains("agent-thinking-fold"))
+          : null;
+        for (const card of subagentRows) {
+          if (!body) break;
+          if (before && before.parentElement === body) body.insertBefore(card, before);
+          else body.appendChild(card);
+        }
       }
       this.finishLiveState(this.finalOutcome || "complete");
       const copyAnchor = this.contentSegments.findLast((segment) => !segment.el.hidden)?.el || this.contentEl;
@@ -17839,6 +18377,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     viewHost: null,
     state: "running",
     stopRequested: false,
+    modelTurnOpen: true,
     assistantDraftFinalized: false,
     contextCheckpointPending: false,
     internal,
@@ -17971,7 +18510,9 @@ async function sendMessageWithAgentRuntime(options = {}) {
     if (payload.type === "content" || payload.type === "token") {
       const delta = String(payload.delta || payload.token || "");
       if (!delta) return;
-      assistant.finalizeThinking();
+      // Reasoning and answer deltas are interleaved. Sealing here opens a new
+      // "Thought for…" fold on the next reasoning token. The passage ends at
+      // model_round or when a tool actually starts.
       if (!contentStarted) {
         contentStarted = true;
         assistant.clearStatus();
@@ -18034,7 +18575,6 @@ async function sendMessageWithAgentRuntime(options = {}) {
     if (payload.type === "tool_call") {
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
       if (!tools.length) return;
-      assistant.finalizeThinking();
       const workTools = tools.filter((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool));
       if (workTools.length) assistant.noteModelOutput();
       for (const tool of workTools) {
@@ -18225,11 +18765,20 @@ async function sendMessageWithAgentRuntime(options = {}) {
       assistant.setRawContent(lastAgentText);
     }
 
-    assistant.completeTaskBrief(result?.runState?.status === "inconclusive" ? "inconclusive" : "complete");
-    assistant.finalizeContent();
-    assistant.pruneIfEmpty();
-    syncChatRunSession(run);
-    await finalizeChatHistory(assistant.rawContent.trim() ? "completed" : "incomplete");
+    if ((run.orchestrationHold || run.pendingEndTurn) && !run.stopRequested) {
+      for (const turn of assistant.assistantTurns?.() || [assistant.turn]) {
+        turn?.setAttribute("aria-busy", "true");
+      }
+      assistant.turn?.closest(".chat-exchange")?.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
+      syncChatRunSession(run);
+      syncSubagentOrchestrationWaitStatus(run);
+    } else {
+      assistant.completeTaskBrief(result?.runState?.status === "inconclusive" ? "inconclusive" : "complete");
+      assistant.finalizeContent();
+      assistant.pruneIfEmpty();
+      syncChatRunSession(run);
+      await finalizeChatHistory(assistant.rawContent.trim() ? "completed" : "incomplete");
+    }
   } catch (error) {
     agentRunResult = {
       ok: false,
@@ -18251,28 +18800,35 @@ async function sendMessageWithAgentRuntime(options = {}) {
     if (run.stopRequested) {
       run.orchestrationHold = false;
       run.pendingEndTurn = false;
+      run.awaitingParentContinuation = false;
     }
+    run.modelTurnOpen = false;
     const holdActive = Boolean(run?.orchestrationHold) && !run.stopRequested;
-    if (!holdActive) unsubscribeAgentEvent();
-    if (assistant?.turn && assistant.turn.getAttribute("aria-busy") === "true" && !holdActive) {
+    const stillWorking = parentRunStillWorking(run);
+    if (!stillWorking) unsubscribeAgentEvent();
+    if (assistant?.turn && assistant.turn.getAttribute("aria-busy") === "true" && !stillWorking) {
       assistant.finishLiveState(run.stopRequested ? "stopped" : assistant.finalOutcome || "complete");
     }
     run.activeStreamContent = "";
-    if (!holdActive) assistant?.pruneIfEmpty();
+    if (!stillWorking) assistant?.pruneIfEmpty();
     syncChatRunSession(run);
     const completedInBackground = activeChatSessionId !== runSession.id;
-    if (holdActive) {
+    if (stillWorking) {
       run.state = "running";
+      run.visibleSettled = false;
       activeChatRuns.set(runSession.id, run);
+      syncSubagentOrchestrationWaitStatus(run);
     } else {
+      syncSubagentOrchestrationWaitStatus(run);
       run.state = "complete";
+      run.visibleSettled = true;
       if (activeChatRuns.get(runSession.id) === run) activeChatRuns.delete(runSession.id);
     }
-    if (!holdActive && run.taskList?.source === "agent" && activeChatSessionId === runSession.id) clearComposerTaskList();
+    if (!stillWorking && run.taskList?.source === "agent" && activeChatSessionId === runSession.id) clearComposerTaskList();
     if (completedInBackground) chatSessionsNeedingAttention.add(runSession.id);
     else chatSessionsNeedingAttention.delete(runSession.id);
-    if (activeChatSessionId === runSession.id && !holdActive) activeStreamContent = "";
-    if (activeChatSessionId === runSession.id) setAgentStatus(holdActive ? `${modeLabel()} orchestrating…` : `${modeLabel()} ready`);
+    if (activeChatSessionId === runSession.id && !stillWorking) activeStreamContent = "";
+    if (activeChatSessionId === runSession.id) setAgentStatus(stillWorking ? `${modeLabel()} orchestrating…` : `${modeLabel()} ready`);
     updateSendBtn();
     renderChatSessionSelect();
     if (activeChatSessionId === runSession.id) {
@@ -18280,7 +18836,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       refreshStoredContextCapacity();
     }
     if (activeChatSessionId === runSession.id) syncActiveChatSession();
-    if (activeChatSessionId === runSession.id && !contextCheckpointing && !holdActive) {
+    if (activeChatSessionId === runSession.id && !contextCheckpointing && !stillWorking) {
       chatInput.disabled = false;
       chatInput.readOnly = false;
       chatInput.removeAttribute("aria-disabled");
@@ -18295,6 +18851,28 @@ async function sendMessageWithAgentRuntime(options = {}) {
   }
 }
 
+function collapseStoppedOrchestratorTurns(run) {
+  const primary = run?.assistant?.rootTurn || run?.assistant?.turn;
+  const exchange = primary?.closest?.(".chat-exchange");
+  if (!primary || !exchange) return;
+  const host = primary.querySelector(".agent-work-fold-body") || primary;
+  for (const turn of [...exchange.querySelectorAll(".chat-turn.assistant")]) {
+    if (turn === primary) continue;
+    for (const card of [...turn.querySelectorAll(".subagent-run-card")]) host.appendChild(card);
+    const chunk = turn.closest(".agent-run-chunk");
+    if (chunk && chunk !== primary.closest(".agent-run-chunk")) chunk.remove();
+    else turn.remove();
+  }
+  const stoppedReplies = [...exchange.querySelectorAll(".assistant-reply")].filter(replyEndsWithStopped);
+  stoppedReplies.slice(1).forEach((node) => node.remove());
+  if (!stoppedReplies.length) appendStoppedPlainText(primary);
+  for (const card of host.querySelectorAll(".subagent-run-card")) {
+    if (["queued", "running", "working"].includes(String(card.dataset.state || ""))) {
+      setSubagentCardState(card, "stopped");
+    }
+  }
+}
+
 function settleStoppedRun(run) {
   if (!run) return;
   run.stopRequested = true;
@@ -18302,8 +18880,12 @@ function settleStoppedRun(run) {
   run.pendingEndTurn = false;
   run.state = "complete";
   run.activeStreamContent = "";
+  for (const turn of run.assistant?.assistantTurns?.() || [run.assistant?.turn]) {
+    turn?.setAttribute("aria-busy", "false");
+  }
   run.assistant?.finishLiveState?.("stopped");
-  run.assistant?.turn?.setAttribute("aria-busy", "false");
+  collapseStoppedOrchestratorTurns(run);
+  syncSubagentOrchestrationWaitStatus(run);
   if (activeChatRuns.get(run.sessionId) === run) activeChatRuns.delete(run.sessionId);
 }
 
@@ -18486,18 +19068,61 @@ function ensureDelegatedChildRun(payload = {}) {
     activeChatRuns.set(childSessionId, run);
   }
   run.delegated = true;
-  if (payload.task && !run.history.some((message) => message?.role === "user" && String(message.content || "") === String(payload.task))) {
-    run.history.push({
-      role: "user",
-      content: String(payload.task),
-      id: `${childSessionId}-task-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-    });
+  const task = String(payload.task || run.session.orchestratorPrompt || "").trim();
+  if (task) {
+    run.session.orchestratorPrompt = task;
+    if (!run.history.some((message) => message?.role === "user")) {
+      run.history.unshift({
+        role: "user",
+        content: task,
+        id: `${childSessionId}-orchestrator-prompt`,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    run.session.history = run.history;
   }
   // Keep a detached view host while the child tab is closed so its transcript
   // is ready when the operator clicks the row.
   childAssistant(run);
+  ensureDelegatedUserPrompt(run, task);
   return run;
+}
+
+function ensureDelegatedUserPrompt(run, task = "") {
+  const text = String(task || run?.session?.orchestratorPrompt || "").trim();
+  if (!text || !run?.session) return;
+  run.session.orchestratorPrompt = text;
+  const container = chatRunContainer(run);
+  if (!container?.querySelector) return;
+  if (container.querySelector(".chat-turn.user")) return;
+  const turn = document.createElement("div");
+  turn.className = "chat-turn user";
+  turn.dataset.createdAt = new Date().toISOString();
+  turn.appendChild(createUserPromptBox(text));
+  const assistantTurn = run.assistant?.turn;
+  const exchange = assistantTurn?.closest?.(".chat-exchange") || currentChatExchange(container);
+  const body = chatExchangeBody(exchange);
+  const host = body?.querySelector?.(":scope > .agent-response-host");
+  if (host) body.insertBefore(turn, host);
+  else body?.prepend?.(turn);
+}
+
+function ensureVisibleDelegatedPrompt(session) {
+  if (!session || session.kind !== "subagent" || !messages) return;
+  if (messages.querySelector(".chat-turn.user")) return;
+  const fromHistory = (Array.isArray(session.history) ? session.history : []).find((message) => message?.role === "user");
+  const text = String(session.orchestratorPrompt || fromHistory?.content || "").trim();
+  if (!text) return;
+  session.orchestratorPrompt = text;
+  const turn = document.createElement("div");
+  turn.className = "chat-turn user";
+  turn.dataset.createdAt = fromHistory?.createdAt || new Date().toISOString();
+  turn.appendChild(createUserPromptBox(text));
+  const exchange = messages.querySelector(".chat-exchange") || createChatExchange(messages);
+  const body = chatExchangeBody(exchange);
+  const host = body?.querySelector?.(":scope > .agent-response-host");
+  if (host) body.insertBefore(turn, host);
+  else body?.prepend?.(turn);
 }
 
 function runIsChildVisible(childSessionId = "") {
@@ -18588,7 +19213,7 @@ function handleDelegatedChildEvent(payload = {}) {
       childAssistant(run)?.setLiveState({ kind: "working", detail: type === "subagent_queued" ? "Queued…" : summarizeSubagentActivity(payload) });
       // Parent card (mirrored payloads carry parentSessionId).
       if (payload.parentSessionId) {
-        const parentRun = activeChatRuns.get(payload.parentSessionId);
+        const parentRun = activeChatRuns.get(chatSessionIdForRuntimeId(payload.parentSessionId)) || activeChatRuns.get(payload.parentSessionId);
         if (parentRun?.assistant) {
           const card = createSubagentRunCard(parentRun.assistant, payload);
           if (card) {
@@ -18617,7 +19242,7 @@ function handleDelegatedChildEvent(payload = {}) {
       syncChatRunSession(run);
     }
     if (payload.parentSessionId) {
-      const parentRun = activeChatRuns.get(payload.parentSessionId);
+      const parentRun = activeChatRuns.get(chatSessionIdForRuntimeId(payload.parentSessionId)) || activeChatRuns.get(payload.parentSessionId);
       if (parentRun?.assistant) {
         handleSubagentCardEvent(parentRun.assistant, payload);
         syncChatRunSession(parentRun);
@@ -18628,9 +19253,16 @@ function handleDelegatedChildEvent(payload = {}) {
 
   if (type === "subagent_completed" || type === "subagent_stopped" || type === "subagent_failed") {
     dismissOrchestratorEscalatedForChild(childSessionId);
+    const stopped = type === "subagent_stopped";
     if (assistant) {
-      if (!assistant.rawContent.trim()) assistant.setRawContent(String(payload.summary || "").trim() || "Sub-agent finished.");
-      assistant.finalizeContent();
+      if (stopped) {
+        assistant.finishLiveState("stopped");
+      } else {
+        if (!assistant.rawContent.trim() && type === "subagent_failed") {
+          assistant.setRawContent(String(payload.summary || "").trim() || "Sub-agent failed.");
+        }
+        assistant.finalizeContent();
+      }
     }
     if (run) {
       if (assistant) {
@@ -18647,7 +19279,7 @@ function handleDelegatedChildEvent(payload = {}) {
       syncChatRunSession(run);
     }
     if (payload.parentSessionId) {
-      const parentRun = activeChatRuns.get(payload.parentSessionId);
+      const parentRun = activeChatRuns.get(chatSessionIdForRuntimeId(payload.parentSessionId)) || activeChatRuns.get(payload.parentSessionId);
       if (parentRun?.assistant) {
         handleSubagentCardEvent(parentRun.assistant, payload);
         syncChatRunSession(parentRun);
@@ -18743,9 +19375,7 @@ function handleParentSubagentLifecycle(payload = {}) {
     syncChatRunSession(parentRun);
     return;
   }
-  if (activeChatSessionId === parentSessionId && updateRenderedSubagentCard(payload)) {
-    syncActiveChatSession();
-  }
+  if (updateRenderedSubagentCard(payload, messages)) syncActiveChatSession();
   const session = [...chatSessions, ...closedChatSessions, ...archivedChatSessions]
     .find((item) => item.id === parentSessionId);
   if (session) {
@@ -18788,7 +19418,6 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
   } else if (type === "content" || type === "token") {
     const delta = String(payload.delta || payload.token || "");
     if (delta) {
-      assistant.finalizeThinking();
       assistant.appendContent(delta);
       run.activeStreamContent = assistant.rawContent;
       syncAssistantDraftToHistory(run, assistant, { persist: false });
@@ -18944,7 +19573,17 @@ function ensureParentContinuationRun(payload = {}) {
   if (!parentSessionId) return null;
   const session = [...chatSessions, ...closedChatSessions, ...archivedChatSessions].find((item) => item.id === parentSessionId);
   if (!session) return null;
+  if (isChatSessionStoppedByOperator(parentSessionId)) return null;
   let run = activeChatRuns.get(parentSessionId);
+  if (run?.assistant?.turn?.isConnected) {
+    run.parentContinuation = true;
+    run.orchestrationHold = true;
+    for (const turn of run.assistant.assistantTurns?.() || [run.assistant.turn]) {
+      turn?.setAttribute("aria-busy", "true");
+    }
+    run.assistant.turn.closest(".chat-exchange")?.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
+    return run;
+  }
   if (!run || !run.parentContinuation) {
     const host = activeChatSessionId === parentSessionId
       ? messages
@@ -19012,7 +19651,6 @@ async function renderParentContinuationEvent(payload = {}) {
   } else if (type === "content" || type === "token") {
     const delta = String(payload.delta || payload.token || "");
     if (delta) {
-      assistant.finalizeThinking();
       assistant.appendContent(delta);
       run.activeStreamContent = assistant.rawContent;
       syncAssistantDraftToHistory(run, assistant, { persist: false });
@@ -19081,27 +19719,49 @@ async function renderParentContinuationEvent(payload = {}) {
     const finalText = String(result.finalText || "").trim();
     if (finalText && !assistant.rawContent.trim()) assistant.setRawContent(finalText);
     if (result.error && !result.aborted) addErrorMessage(result.error, { container: chatRunContainer(run), session: run.session });
-    assistant.completeTaskBrief(result.aborted ? "stopped" : result.ok === false ? "error" : "complete");
+    run.awaitingParentContinuation = true;
+    run.orchestrationHold = Boolean(payload.orchestrationHold || result.orchestrationHold || run.orchestrationHold);
+    run.pendingEndTurn = Boolean(payload.pendingEndTurn || result.pendingEndTurn || run.pendingEndTurn);
     assistant.finalizeContent();
-    assistant.pruneIfEmpty();
-    run.state = "complete";
     run.activeStreamContent = "";
-    assistant.turn.setAttribute("aria-busy", "false");
+    run.visibleSettled = false;
+    run.state = "running";
+    activeChatRuns.set(run.sessionId, run);
+    assistant.turn?.setAttribute("aria-busy", "true");
     syncChatRunSession(run);
+    syncSubagentOrchestrationWaitStatus(run);
+    updateSendBtn();
+    if (visible) setAgentStatus(`${modeLabel()} orchestrating…`);
     window.api.ackParentContinuation?.({
       sessionId: run.session.memorySessionId || run.session.id,
       resultId: payload.continuationResultId || "",
     }).catch?.(() => {});
-    activeChatRuns.delete(run.sessionId);
-    updateSendBtn();
-    if (visible) {
-      scrollMessages();
-      setAgentStatus(`${modeLabel()} ready`);
-    }
+    if (visible) scrollMessages();
     return;
   }
   scheduleLiveChatSnapshot(run);
   if (visible) scrollMessages();
+}
+
+function releaseOrchestratorHold(sessionId = "", { hold = false } = {}) {
+  const ids = new Set([String(sessionId || ""), chatSessionIdForRuntimeId(sessionId)].filter(Boolean));
+  for (const [id, active] of activeChatRuns) {
+    const matches = ids.has(id) || ids.has(active.sessionId) || ids.has(active.memorySessionId);
+    if (!matches || active.parentContinuation) continue;
+    active.orchestrationHold = hold;
+    active.pendingEndTurn = hold ? active.pendingEndTurn : false;
+    if (!hold) {
+      active.state = "complete";
+      if (activeChatRuns.get(id) === active) activeChatRuns.delete(id);
+    }
+    syncSubagentOrchestrationWaitStatus(active);
+  }
+  if (hold) return;
+  messages?.querySelectorAll(".subagent-orchestration-wait").forEach((status) => {
+    const host = status.parentElement;
+    const stillWorking = [...(host?.querySelectorAll(":scope > .subagent-run-card") || [])].some(subagentCardIsActive);
+    if (!stillWorking) status.remove();
+  });
 }
 
 function queueParentContinuationEvent(payload = {}) {
@@ -19137,6 +19797,14 @@ function handleHiddenBackgroundRuntimeEvent(payload = {}) {
 // events (sessionId=childSessionId) never reach it.
 window.api?.onAgentEvent?.((payload) => {
   const type = String(payload?.type || "");
+  if (type === "parent_continuation_started") {
+    noteParentContinuationStarted(payload);
+    return;
+  }
+  if (type === "parent_run_settled") {
+    noteParentRunSettled(payload);
+    return;
+  }
   if (payload?.source === "background_runtime") {
     handleHiddenBackgroundRuntimeEvent(payload);
     return;
@@ -19152,7 +19820,7 @@ window.api?.onAgentEvent?.((payload) => {
     return;
   }
   if (payload?.source === "parent_continuation") {
-    handleHiddenBackgroundRuntimeEvent(payload);
+    queueParentContinuationEvent(payload);
     return;
   }
   if (type === "subagent_result_ready") {
@@ -19170,10 +19838,12 @@ window.api?.onAgentEvent?.((payload) => {
     return;
   }
   if (type === "subagent_question_escalated") {
+    markSubagentQuestionWaiting(payload, true);
     presentOrchestratorEscalatedQuestion(payload).catch(() => {});
     return;
   }
   if (type === "subagent_question_resolved") {
+    markSubagentQuestionWaiting(payload, false);
     dismissEscalatedQuestionSurfaces(payload);
     return;
   }
@@ -19417,17 +20087,35 @@ btnChatCollapse?.addEventListener("click", (e) => {
   setChatCollapsed(true);
 });
 
-chatSessionSelect?.addEventListener("click", (e) => {
+let pressedChatSessionId = "";
+chatSessionSelect?.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest("[data-close-session]")) {
+    pressedChatSessionId = "";
+    return;
+  }
+  pressedChatSessionId = e.target.closest(".chat-session-tab")?.dataset.sessionId || "";
+});
+chatSessionSelect?.addEventListener("pointerup", (e) => {
   const close = e.target.closest("[data-close-session]");
   if (close) {
+    e.preventDefault();
     e.stopPropagation();
+    pressedChatSessionId = "";
     closeChatSession(close.dataset.closeSession);
     return;
   }
-
-  const tab = e.target.closest(".chat-session-tab");
-  if (!tab) return;
-  loadChatSession(tab.dataset.sessionId);
+  const releasedId = e.target.closest(".chat-session-tab")?.dataset.sessionId || "";
+  const sessionId = releasedId || (e.currentTarget.contains(e.target) ? pressedChatSessionId : "");
+  pressedChatSessionId = "";
+  if (!sessionId || sessionId === activeChatSessionId) return;
+  loadChatSession(sessionId);
+});
+chatSessionSelect?.addEventListener("pointercancel", () => {
+  pressedChatSessionId = "";
+});
+chatSessionSelect?.addEventListener("click", (e) => {
+  if (e.target.closest(".chat-session-tab")) e.preventDefault();
 });
 chatHeader?.addEventListener("click", (e) => {
   const button = e.target.closest("button");
@@ -19693,28 +20381,65 @@ document.addEventListener("click", (e) => {
     const inPopover = chatHistoryPopover.contains(e.target) || btnChatHistory?.contains(e.target);
     if (!inPopover) closeChatHistoryPopover();
   }
+  dismissUserPromptSelectionIfOutside(e.target);
 });
 
-chatPane?.addEventListener("click", (e) => {
-  if (e.target.closest(".assistant-reply-footer, .assistant-reply-copy")) return;
-  const promptBox = e.target.closest(".chat-turn.user .chat-box.user-prompt-expandable");
-  if (promptBox) {
-    const willExpand = !promptBox.classList.contains("is-expanded");
-    collapseExpandedUserPrompts(promptBox);
-    setUserPromptExpanded(promptBox, willExpand);
+messages?.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  const promptBox = e.target.closest(".chat-turn.user .chat-box");
+  if (!promptBox) return;
+  activateUserPromptSelection(promptBox, e.clientX, e.clientY);
+});
+
+messages?.addEventListener("dblclick", (e) => {
+  const content = e.target.closest(".chat-turn.user .chat-box .chat-box-content");
+  if (!content) return;
+  activateUserPromptSelection(content.closest(".chat-box"), e.clientX, e.clientY);
+  selectWholeUserPrompt(content);
+});
+
+document.addEventListener("copy", (e) => {
+  const anchor = window.getSelection?.()?.anchorNode;
+  const anchorHost = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+  const content = e.target?.closest?.(".chat-turn.user .chat-box-content")
+    || anchorHost?.closest?.(".chat-turn.user .chat-box-content");
+  const text = userPromptSelectionInside(content)?.toString() || "";
+  if (!text) return;
+  e.preventDefault();
+  e.clipboardData?.setData("text/plain", text);
+  void writeChatClipboardText(text);
+});
+
+messages?.addEventListener("beforeinput", (e) => {
+  if (!e.target.closest(".chat-turn.user .chat-box.user-prompt-selectable .chat-box-content[contenteditable='true']")) return;
+  e.preventDefault();
+});
+
+messages?.addEventListener("paste", (e) => {
+  if (!e.target.closest(".chat-turn.user .chat-box.user-prompt-selectable .chat-box-content[contenteditable='true']")) return;
+  e.preventDefault();
+});
+
+messages?.addEventListener("keydown", (e) => {
+  const content = e.target.closest(".chat-turn.user .chat-box.user-prompt-selectable .chat-box-content[contenteditable='true']");
+  if (content) {
+    if (e.key === "Enter") e.preventDefault();
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) e.preventDefault();
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x") e.preventDefault();
     return;
   }
-  collapseExpandedUserPrompts();
-});
-
-chatPane?.addEventListener("keydown", (e) => {
   if (!["Enter", " "].includes(e.key)) return;
   const promptBox = e.target.closest(".chat-turn.user .chat-box.user-prompt-expandable");
   if (!promptBox) return;
   e.preventDefault();
-  const willExpand = !promptBox.classList.contains("is-expanded");
-  collapseExpandedUserPrompts(promptBox);
-  setUserPromptExpanded(promptBox, willExpand);
+  activateUserPromptSelection(promptBox);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  if (!messages?.querySelector(".chat-turn.user .chat-box.user-prompt-selectable")) return;
+  deactivateUserPromptSelection();
+  collapseExpandedUserPrompts();
 });
 
 messages.addEventListener("click", (e) => {

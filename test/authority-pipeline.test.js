@@ -358,6 +358,9 @@ test("G15 output control redacts secrets and bounds oversized output", () => {
   const bounded = boundValue({ data: "x".repeat(10_000) }, 500);
   assert.equal(bounded.truncated, true);
   assert.equal(bounded.value.truncated, true);
+  const open = boundValue({ cookie: "session=abc123", nested: { authorization: "Bearer abcdefghijklmnop" } }, 10_000, { redact: false });
+  assert.equal(open.value.cookie, "session=abc123");
+  assert.equal(open.value.nested.authorization, "Bearer abcdefghijklmnop");
 });
 
 test("G16/G17/G18 verification, recovery selection, and supported rollback remain separate", async () => {

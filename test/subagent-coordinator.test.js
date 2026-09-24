@@ -49,13 +49,19 @@ test("coordinator admits three children, queues the fourth, and starts it FIFO",
   waits.get("child-2").resolve({ status: "completed", output: { text: "two" }, metadata: {} });
   await tick();
   assert.deepEqual(starts, [1, 2, 3, 4]);
-  assert.equal(results.length, 0, "results wait until the parent turn is idle");
+  assert.equal(results.length, 0, "a single completion does not wake the parent while the wave is open");
   assert.equal(lifecycle.some((event) => event.type === "subagent_queued" && event.childInvocationId === "child-4"), true);
 
   coordinator.finishParentTurn("sender::parent");
+  assert.equal(results.length, 0, "the parent stays quiet until every child in the wave is terminal");
+  waits.get("child-1").resolve({ status: "completed", output: { text: "one" }, metadata: {} });
+  waits.get("child-3").resolve({ status: "failed", output: { text: "three" }, metadata: {} });
+  waits.get("child-4").resolve({ status: "stopped", output: { text: "four" }, metadata: {} });
+  await tick();
   assert.equal(results.length, 1);
-  assert.equal(results[0].childInvocationId, "child-2");
-  assert.equal(results[0].status, "completed");
+  assert.equal(results[0].kind, "batch");
+  assert.equal(results[0].children.length, 4);
+  assert.equal(results[0].children.some((child) => child.childInvocationId === "child-2" && child.status === "completed"), true);
 });
 
 test("result handoff is one-at-a-time and a follow-up reuses the child session/history", async () => {
@@ -80,7 +86,8 @@ test("result handoff is one-at-a-time and a follow-up reuses the child session/h
   await tick();
   coordinator.finishParentTurn("p");
   const firstResult = ready.at(-1);
-  assert.equal(firstResult.childSessionId, "child-session");
+  assert.equal(firstResult.kind, "batch");
+  assert.equal(firstResult.children[0].childSessionId, "child-session");
 
   const claim = coordinator.claimResult("p", firstResult.resultId);
   assert.equal(claim.ok, true);
@@ -185,8 +192,9 @@ test("unknown and inconclusive child outcomes fail closed", async () => {
   await tick();
   coordinator.finishParentTurn("p");
   assert.equal(coordinator.getChild("inconclusive", "p").status, "failed");
-  assert.equal(results[0].status, "failed");
-  assert.equal(results[0].metadata.runtimeStatus, "inconclusive");
+  assert.equal(results[0].kind, "batch");
+  assert.equal(results[0].children[0].status, "failed");
+  assert.equal(results[0].children[0].metadata.runtimeStatus, "inconclusive");
 });
 
 test("a stopped parent continuation leaves the FIFO result available for the next turn", async () => {
@@ -231,7 +239,8 @@ test("operator stop without a claimed result pauses FIFO until the next user tur
   coordinator.beginParentTurn("p");
   coordinator.finishParentTurn("p");
   assert.equal(ready.length, 1);
-  assert.equal(ready[0].childInvocationId, "child-1");
+  assert.equal(ready[0].kind, "batch");
+  assert.equal(ready[0].children[0].childInvocationId, "child-1");
 });
 
 test("cancelChildrenForParent aborts working and queued children", async () => {
@@ -415,6 +424,76 @@ test("spawn admission accepts up to five children and rejects a sixth batch", ()
   const coordinator = createSubagentCoordinator({ maxActiveChildren: 5 });
   assert.equal(coordinator.validateSpawnAdmission("parent-key", 5).ok, true);
   assert.equal(coordinator.validateSpawnAdmission("parent-key", 6).code, "TOO_MANY_SUBAGENTS");
+});
+
+test("spawn admission rejects another wave until the batch is claimed", async () => {
+  const coordinator = createSubagentCoordinator({ maxActiveChildren: 5 });
+  coordinator.submitChild({
+    parentKey: "parent-key",
+    childInvocationId: "child-1",
+    childSessionId: "session-1",
+    start: async () => ({ status: "completed", output: { text: "done" } }),
+  });
+  await tick();
+  const blocked = coordinator.validateSpawnAdmission("parent-key", 1);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, "SPAWN_WHILE_CHILDREN_ACTIVE");
+  const resultId = coordinator.pendingResultsForSender("")[0].resultId;
+  assert.equal(coordinator.claimResult("parent-key", resultId).ok, true);
+  coordinator.finishParentTurn("parent-key", { resultId });
+  assert.equal(coordinator.validateSpawnAdmission("parent-key", 1).ok, true);
+});
+
+test("a reloaded wave restores an open child as blocked and keeps one unconsumed batch", async () => {
+  const original = createSubagentCoordinator({ maxActiveChildren: 2 });
+  const waiting = deferred();
+  original.submitChild({
+    parentKey: "parent-key",
+    parentSessionId: "parent-session",
+    childInvocationId: "done-child",
+    childSessionId: "done-session",
+    start: async () => ({ status: "completed", output: { text: "found it", finding: { status: "done", summary: "found it", evidenceRefs: ["notes.md"], unverified: [] } } }),
+  });
+  original.submitChild({
+    parentKey: "parent-key",
+    parentSessionId: "parent-session",
+    childInvocationId: "open-child",
+    childSessionId: "open-session",
+    start: () => waiting.promise,
+  });
+  await tick();
+  const snapshot = original.exportWave("parent-key");
+  assert.equal(snapshot.wave.pendingIds.includes("open-child"), true);
+  const restored = createSubagentCoordinator();
+  const recovery = restored.restoreWave("parent-key", snapshot);
+  assert.equal(recovery.hold, true);
+  assert.equal(restored.hasActiveChildren("parent-key"), false);
+  assert.equal(restored.hasUnconsumedResults("parent-key"), true);
+  assert.equal(recovery.pendingBatch.kind, "batch");
+  const open = recovery.pendingBatch.children.find((child) => child.childInvocationId === "open-child");
+  assert.equal(open.status, "failed");
+  assert.equal(open.output.finding.status, "blocked");
+  assert.equal(restored.validateSpawnAdmission("parent-key", 1).code, "SPAWN_WHILE_CHILDREN_ACTIVE");
+});
+
+test("a sealed wave retries delivery without waiting for another parent turn", async () => {
+  let calls = 0;
+  const coordinator = createSubagentCoordinator({
+    onResultReady: () => {
+      calls += 1;
+      return calls > 1;
+    },
+  });
+  coordinator.submitChild({
+    parentKey: "p",
+    parentSessionId: "parent",
+    childInvocationId: "child",
+    childSessionId: "child-session",
+    start: async () => ({ status: "stopped", output: { text: "", summary: "Stopped" } }),
+  });
+  await tick();
+  assert.equal(calls, 2);
+  assert.equal(coordinator.hasUnconsumedResults("p"), true);
 });
 
 test("spawn admission rejects a second spawn while children are active", () => {

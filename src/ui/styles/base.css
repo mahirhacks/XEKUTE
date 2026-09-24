@@ -3630,7 +3630,7 @@ html.panel-resizing iframe {
   border: 1px solid #303030;
   border-radius: 8px;
   padding: 11px 12px;
-  user-select: text;
+  user-select: none;
   min-width: 0;
   max-width: 100%;
 }
@@ -3642,6 +3642,11 @@ html.panel-resizing iframe {
   overflow-wrap: break-word;
   word-break: normal;
   color: #f2f2f2;
+  user-select: none;
+}
+
+.chat-turn.user .chat-box.user-prompt-selectable,
+.chat-turn.user .chat-box.user-prompt-selectable .chat-box-content {
   user-select: text;
 }
 
@@ -4613,12 +4618,12 @@ html.panel-resizing iframe {
 .assistant-reply h1, .assistant-reply h2, .assistant-reply h3, .assistant-reply h4 { color: #f1f4f8; }
 
 .assistant-reply-footer {
-  align-self: flex-end;
+  align-self: flex-start;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
-  margin: 2px 2px 0 0;
+  margin: 2px 0 0;
   padding: 2px 3px;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -4639,7 +4644,7 @@ html.panel-resizing iframe {
 .chat-exchange:hover .assistant-reply-time,
 .chat-exchange:focus-within .assistant-reply-time,
 #messages > .chat-exchange:last-child .assistant-reply-time {
-  opacity: 0.5;
+  opacity: 0.72;
   visibility: visible;
 }
 
@@ -4658,7 +4663,7 @@ html.panel-resizing iframe {
   font-family: var(--font-ui);
   cursor: pointer;
   user-select: none;
-  opacity: 0.5;
+  opacity: 0.72;
   pointer-events: auto;
   transition: color .15s ease, opacity .15s ease;
 }
@@ -4951,8 +4956,6 @@ html.panel-resizing iframe {
   line-height: 1.5;
   outline: none;
   user-select: text;
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
 }
 
 #chat-input-measure {
@@ -4976,7 +4979,6 @@ html.panel-resizing iframe {
 
 #chat-input.at-scroll-cap {
   overflow-y: auto;
-  scrollbar-color: rgba(121, 121, 121, 0.45) transparent;
 }
 
 #chat-input::-webkit-scrollbar {
@@ -6296,11 +6298,9 @@ html.panel-resizing iframe {
   box-sizing: border-box;
 }
 
-/* Unified dark, fully rounded scrollbars */
-* {
-  scrollbar-color: #4b4b4b #202020 !important;
-  scrollbar-width: thin !important;
-}
+/* Unified dark, fully rounded scrollbars.
+   Do not set scrollbar-width/scrollbar-color here. On Windows that opts into
+   the native thin scrollbar, whose arrow buttons ignore these rules. */
 
 *::-webkit-scrollbar {
   width: 10px;
@@ -6327,6 +6327,27 @@ html.panel-resizing iframe {
 
 *::-webkit-scrollbar-corner {
   background: #202020;
+}
+
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:double-button,
+*::-webkit-scrollbar-button:vertical:start:decrement,
+*::-webkit-scrollbar-button:vertical:start:increment,
+*::-webkit-scrollbar-button:vertical:end:decrement,
+*::-webkit-scrollbar-button:vertical:end:increment,
+*::-webkit-scrollbar-button:horizontal:start:decrement,
+*::-webkit-scrollbar-button:horizontal:start:increment,
+*::-webkit-scrollbar-button:horizontal:end:decrement,
+*::-webkit-scrollbar-button:horizontal:end:increment {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background: none !important;
+  border: 0 !important;
+  appearance: none !important;
 }
 
 /* Keep terminal scrollback functional without drawing a scrollbar. */

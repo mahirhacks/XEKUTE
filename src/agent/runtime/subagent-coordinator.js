@@ -43,6 +43,8 @@ function createSubagentCoordinator({
         pausedResultId: "",
         parentBusy: false,
         sequence: 0,
+        wave: null,
+        waveSeq: 0,
         onResultReady: typeof options.onResultReady === "function" ? options.onResultReady : onResultReady,
         onLifecycle: typeof options.onLifecycle === "function" ? options.onLifecycle : onLifecycle,
       };
@@ -77,21 +79,29 @@ function createSubagentCoordinator({
   }
 
   function notifyResult(parent) {
-    if (closed || parent.parentBusy || parent.processingResultId || parent.pausedResultId || !parent.resultQueue.length) return;
+    if (closed || parent.parentBusy || parent.processingResultId || parent.pausedResultId || !parent.resultQueue.length) return false;
     const result = parent.resultQueue[0];
-    if (parent.announcedResultId === result.resultId) return;
+    if (parent.announcedResultId === result.resultId) return false;
     parent.announcedResultId = result.resultId;
+    let accepted = false;
     try {
-      const accepted = parent.onResultReady(result, parent);
-      // A scheduler can lose a race with a user turn between notification and
-      // claim. Let the next parent boundary notify the same FIFO head again
-      // instead of leaving an announced-but-unclaimed result stranded.
-      if (accepted === false && parent.announcedResultId === result.resultId) parent.announcedResultId = "";
+      accepted = parent.onResultReady(result, parent) !== false;
     } catch {
-      // Renderer/main delivery is best effort; clearing the announcement lets
-      // the next parent boundary retry the authoritative queue head.
-      if (parent.announcedResultId === result.resultId) parent.announcedResultId = "";
+      accepted = false;
     }
+    // A scheduler can lose a race with a user turn between notification and
+    // claim. Clearing the announcement lets the next pump retry the same head.
+    if (!accepted && parent.announcedResultId === result.resultId) parent.announcedResultId = "";
+    return accepted;
+  }
+
+  function pumpResults(parentKey) {
+    const parent = parents.get(String(parentKey || ""));
+    if (!parent || closed || parent.parentBusy || parent.processingResultId || parent.pausedResultId) return false;
+    if (parent.announcedResultId && parent.resultQueue[0]?.resultId === parent.announcedResultId) {
+      parent.announcedResultId = "";
+    }
+    return notifyResult(parent);
   }
 
   function startNext(parent) {
@@ -151,6 +161,9 @@ function createSubagentCoordinator({
   } = {}) {
     if (closed) return { ok: false, code: "SUBAGENT_COORDINATOR_CLOSED", error: "The sub-agent coordinator is shutting down." };
     const parent = parentFor(parentKey, { parentSessionId, senderId, workspace });
+    if (waveAdmissionBlocked(parent)) {
+      return { ok: false, code: "SPAWN_WHILE_CHILDREN_ACTIVE", error: "Wait until the current wave has been synthesized before spawning again." };
+    }
     const id = String(childInvocationId || "");
     if (!id || typeof start !== "function") throw new TypeError("childInvocationId and start are required");
     if (children.has(id)) return { ok: false, code: "DUPLICATE_SUBAGENT_ID", error: "A sub-agent with this id is already active." };
@@ -178,6 +191,7 @@ function createSubagentCoordinator({
       updatedAt: new Date(now()).toISOString(),
     };
     children.set(id, child);
+    attachChildToWave(parent, child);
     parent.spawnQueue.push(child);
     lifecycle(parent, child, "queued");
     startNext(parent);
@@ -228,11 +242,61 @@ function createSubagentCoordinator({
       metadata: child.metadata,
       queuedAt: new Date(now()).toISOString(),
     };
-    parent.resultQueue.push(result);
-    parent.announcedResultId = parent.announcedResultId === result.resultId ? "" : parent.announcedResultId;
+    recordWaveResult(parent, child, result);
     startNext(parent);
-    notifyResult(parent);
     return result;
+  }
+
+  function ensureOpenWave(parent) {
+    if (!parent.wave || parent.wave.sealed) {
+      parent.waveSeq += 1;
+      parent.wave = {
+        waveId: `wave_${parent.waveSeq}`,
+        childIds: [],
+        pendingIds: new Set(),
+        results: [],
+        sealed: false,
+      };
+    }
+    return parent.wave;
+  }
+
+  function attachChildToWave(parent, child) {
+    const wave = ensureOpenWave(parent);
+    if (!wave.childIds.includes(child.childInvocationId)) wave.childIds.push(child.childInvocationId);
+    wave.pendingIds.add(child.childInvocationId);
+    child.waveId = wave.waveId;
+  }
+
+  function waveAdmissionBlocked(parent) {
+    return Boolean(parent?.wave?.sealed && hasUnconsumedResults(parent.parentKey));
+  }
+
+  function recordWaveResult(parent, child, result) {
+    if (!parent.wave || parent.wave.sealed || parent.wave.waveId !== child.waveId) {
+      attachChildToWave(parent, child);
+    }
+    const wave = parent.wave;
+    wave.pendingIds.delete(child.childInvocationId);
+    if (!wave.results.some((item) => item.childInvocationId === child.childInvocationId && item.generation === result.generation)) {
+      wave.results.push(result);
+    }
+    const members = wave.childIds.map((id) => children.get(id)).filter(Boolean);
+    if (!members.length || members.some((item) => item.status === "queued" || item.status === "working")) return;
+    wave.pendingIds.clear();
+    wave.sealed = true;
+    const batch = {
+      kind: "batch",
+      resultId: `batch:${wave.waveId}:${parent.sequence += 1}`,
+      waveId: wave.waveId,
+      parentKey: parent.parentKey,
+      parentSessionId: parent.parentSessionId,
+      status: "ready",
+      children: wave.results.slice(),
+      queuedAt: new Date(now()).toISOString(),
+    };
+    parent.resultQueue.push(batch);
+    if (!notifyResult(parent)) pumpResults(parent.parentKey);
   }
 
   function getChild(childInvocationId, parentKey = "") {
@@ -245,6 +309,10 @@ function createSubagentCoordinator({
     if (closed) return { ok: false, code: "SUBAGENT_COORDINATOR_CLOSED", error: "The sub-agent coordinator is shutting down." };
     const child = getChild(childInvocationId, parentKey);
     if (!child) return { ok: false, code: "UNKNOWN_SUBAGENT", error: "The delegated child no longer exists." };
+    const followParent = parents.get(child.parentKey);
+    if (followParent && waveAdmissionBlocked(followParent)) {
+      return { ok: false, code: "SPAWN_WHILE_CHILDREN_ACTIVE", error: "Wait until the current wave has been synthesized before spawning again." };
+    }
     if (child.status === "queued" || child.status === "working") {
       return { ok: false, code: "SUBAGENT_ALREADY_RUNNING", error: "The delegated child is already running." };
     }
@@ -258,6 +326,7 @@ function createSubagentCoordinator({
     child.cancelled = false;
     child.status = "queued";
     const parent = parents.get(child.parentKey);
+    attachChildToWave(parent, child);
     parent.spawnQueue.push(child);
     lifecycle(parent, child, "queued", { operation: "follow_up" });
     startNext(parent);
@@ -352,11 +421,13 @@ function createSubagentCoordinator({
   function validateSpawnAdmission(parentKey, batchSize = 1) {
     const size = Math.max(0, Number(batchSize) || 0);
     const open = openChildCount(parentKey);
-    if (open > 0) {
+    if (open > 0 || hasUnconsumedResults(parentKey)) {
       return {
         ok: false,
         code: "SPAWN_WHILE_CHILDREN_ACTIVE",
-        error: "A delegated spawn is already in progress. Wait until every child is completed, stopped, or failed.",
+        error: open > 0
+          ? "A delegated spawn is already in progress. Wait until every child is completed, stopped, or failed."
+          : "Wait until the current wave has been synthesized before spawning again.",
       };
     }
     if (size < 1 || size > MAX_SPAWN_BATCH) {
@@ -656,6 +727,153 @@ function createSubagentCoordinator({
     };
   }
 
+  function pendingQuestionCount(parentKey) {
+    const parent = parents.get(String(parentKey || ""));
+    if (!parent) return 0;
+    return parent.questionQueue.filter((item) => !item.resolved).length;
+  }
+
+  function exportWave(parentKey) {
+    const parent = parents.get(String(parentKey || ""));
+    if (!parent) return null;
+    return {
+      parentKey: parent.parentKey,
+      parentSessionId: parent.parentSessionId,
+      senderId: parent.senderId,
+      workspace: parent.workspace,
+      wave: parent.wave ? {
+        waveId: parent.wave.waveId,
+        sealed: Boolean(parent.wave.sealed),
+        childIds: [...parent.wave.childIds],
+        pendingIds: [...parent.wave.pendingIds],
+      } : null,
+      children: [...children.values()].filter((child) => child.parentKey === parent.parentKey).map((child) => ({
+        childInvocationId: child.childInvocationId,
+        childSessionId: child.childSessionId,
+        status: child.status,
+        task: child.task,
+        summary: child.summary,
+        model: child.model,
+        generation: child.generation,
+        waveId: child.waveId || "",
+        output: child.output || null,
+        metadata: child.metadata && typeof child.metadata === "object" ? { error: child.metadata.error || "" } : {},
+      })),
+      resultQueue: parent.resultQueue.map((result) => ({
+        ...result,
+        children: Array.isArray(result.children) ? result.children.map((child) => ({ ...child })) : undefined,
+      })),
+      processingResultId: parent.processingResultId || "",
+    };
+  }
+
+  function restoreWave(parentKey, snapshot = {}) {
+    const parent = parentFor(parentKey, {
+      parentSessionId: snapshot.parentSessionId || "",
+      senderId: snapshot.senderId || "",
+      workspace: snapshot.workspace || "",
+    });
+    const pending = new Set(Array.isArray(snapshot.wave?.pendingIds) ? snapshot.wave.pendingIds : []);
+    const restored = [];
+    for (const record of Array.isArray(snapshot.children) ? snapshot.children : []) {
+      const id = String(record.childInvocationId || "");
+      if (!id || children.has(id)) continue;
+      const open = pending.has(id) || record.status === "queued" || record.status === "working";
+      const child = {
+        childInvocationId: id,
+        childSessionId: String(record.childSessionId || ""),
+        parentKey: parent.parentKey,
+        parentSessionId: parent.parentSessionId,
+        senderId: parent.senderId,
+        workspace: parent.workspace,
+        model: String(record.model || ""),
+        task: String(record.task || ""),
+        summary: open ? "Interrupted by restart." : String(record.summary || ""),
+        metadata: open ? { error: "Interrupted by restart." } : (record.metadata || {}),
+        start: async () => ({ status: "failed", output: { text: "", summary: "Interrupted by restart." } }),
+        generation: Number(record.generation) || 0,
+        status: open ? "failed" : (record.status || "failed"),
+        cancelled: false,
+        controller: null,
+        onCancel: null,
+        steerQueue: [],
+        pendingQuestionRequestId: "",
+        startInstructionSnapshot: "",
+        waveId: String(record.waveId || snapshot.wave?.waveId || ""),
+        output: open
+          ? {
+            text: "",
+            format: "json",
+            summary: "Interrupted by restart.",
+            finding: {
+              status: "blocked",
+              summary: "Interrupted by restart.",
+              evidenceRefs: [],
+              unverified: ["The child was still open when the session reloaded."],
+            },
+          }
+          : (record.output || { text: "", format: "text", summary: "" }),
+        history: [],
+        createdAt: new Date(now()).toISOString(),
+        updatedAt: new Date(now()).toISOString(),
+      };
+      children.set(id, child);
+      restored.push(child);
+    }
+    const queued = Array.isArray(snapshot.resultQueue) ? snapshot.resultQueue : [];
+    const waveSealed = Boolean(snapshot.wave?.sealed);
+    if (queued.length && !parent.resultQueue.length) {
+      parent.resultQueue = queued.map((result) => ({ ...result }));
+      parent.wave = {
+        waveId: snapshot.wave?.waveId || "wave_restored",
+        childIds: restored.map((child) => child.childInvocationId),
+        pendingIds: new Set(),
+        results: [],
+        sealed: true,
+      };
+    } else if (!waveSealed && restored.length && !parent.resultQueue.length) {
+      parent.waveSeq += 1;
+      const results = restored.map((child) => ({
+        resultId: `${child.childInvocationId}:${child.generation}:restored`,
+        parentKey: parent.parentKey,
+        parentSessionId: parent.parentSessionId,
+        childInvocationId: child.childInvocationId,
+        childSessionId: child.childSessionId,
+        generation: child.generation,
+        model: child.model,
+        task: boundedText(child.task, 4_000),
+        status: child.status,
+        output: child.output,
+        metadata: child.metadata,
+        queuedAt: child.updatedAt,
+      }));
+      parent.wave = {
+        waveId: snapshot.wave?.waveId || `wave_${parent.waveSeq}`,
+        childIds: restored.map((child) => child.childInvocationId),
+        pendingIds: new Set(),
+        results,
+        sealed: true,
+      };
+      const batch = {
+        kind: "batch",
+        resultId: `batch:${parent.wave.waveId}:${parent.sequence += 1}`,
+        waveId: parent.wave.waveId,
+        parentKey: parent.parentKey,
+        parentSessionId: parent.parentSessionId,
+        status: "ready",
+        children: results,
+        queuedAt: new Date(now()).toISOString(),
+      };
+      parent.resultQueue.push(batch);
+      notifyResult(parent);
+    }
+    return {
+      ok: true,
+      hold: hasActiveChildren(parent.parentKey) || hasUnconsumedResults(parent.parentKey),
+      pendingBatch: parent.resultQueue[0] || null,
+    };
+  }
+
   function registerParent(parentKey, options = {}) {
     if (parentKey && typeof parentKey === "object") {
       const descriptor = parentKey;
@@ -691,6 +909,10 @@ function createSubagentCoordinator({
     validateSpawnAdmission,
     batchStillRunning,
     openChildCount,
+    pendingQuestionCount,
+    exportWave,
+    restoreWave,
+    pumpResults,
     MAX_SPAWN_BATCH,
     cancelPendingQuestionsForParent,
     parents,

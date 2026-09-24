@@ -5,7 +5,7 @@ const nodePath = require("node:path");
 const nodeCrypto = require("node:crypto");
 const { assertMemoryId, canonicalJson, isMemoryId } = require("../../../contracts/memory/index.js");
 const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/schema-registry.js");
-const { assertNoSecretValues, atomicWriteText, clone, hashText, operationFailure, timestamp } = require("./memory-storage-utils.js");
+const { assertNoSecretKeys, atomicWriteText, clone, hashText, operationFailure, timestamp } = require("./memory-storage-utils.js");
 
 /*
  * Exact Tier 1 data is intentionally kept out of readable workspace memory.
@@ -137,7 +137,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     }
     const validation = schemas.validate("ConversationCheckpointV3", value);
     if (!validation.ok) return operationFailure("MEMORY_CHECKPOINT_INVALID", "The encrypted Tier 1 checkpoint is invalid.", { details: validation.error.details }, true);
-    try { assertNoSecretValues(value); } catch (error) {
+    try { assertNoSecretKeys(value); } catch (error) {
       return operationFailure(error.code || "MEMORY_CHECKPOINT_SECRET", "The encrypted Tier 1 checkpoint contains an invalid protected field.", {}, true);
     }
     return { ok: true, value };

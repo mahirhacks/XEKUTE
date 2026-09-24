@@ -29,6 +29,32 @@ export function sortHistorySessions(sessions = [], query = "") {
     });
 }
 
+function historyDayStart(time) {
+  const day = new Date(time);
+  day.setHours(0, 0, 0, 0);
+  return day.getTime();
+}
+
+// Today is the local calendar day. Previous 7 days is the seven days before
+// that, not including today. Anything older stays in its own group so it is
+// not hidden.
+export function groupHistoryByAge(sessions = [], now = new Date()) {
+  const startToday = historyDayStart(now);
+  const startPrevious = startToday - 7 * 24 * 60 * 60 * 1000;
+  const groups = { today: [], previous: [], older: [] };
+  for (const session of Array.isArray(sessions) ? sessions : []) {
+    const time = Date.parse(session?.updatedAt || session?.createdAt || "") || 0;
+    if (time >= startToday) groups.today.push(session);
+    else if (time >= startPrevious) groups.previous.push(session);
+    else groups.older.push(session);
+  }
+  return [
+    { id: "today", label: "Today", sessions: groups.today },
+    { id: "previous", label: "Previous 7 days", sessions: groups.previous },
+    { id: "older", label: "Older", sessions: groups.older },
+  ].filter((group) => group.sessions.length);
+}
+
 export function paginateRecentHistory(sessions = [], { showAll = false, limit = RECENT_HISTORY_LIMIT } = {}) {
   const recent = Array.isArray(sessions) ? sessions : [];
   const safeLimit = Math.max(1, Number(limit) || RECENT_HISTORY_LIMIT);

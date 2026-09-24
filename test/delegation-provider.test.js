@@ -99,7 +99,7 @@ test("child tools exclude delegate_agent and include the rest", async () => {
   const result = await runProvider(provider, input, execContext("G:/ws"));
 
   const toolNames = received.tools.map((tool) => tool.function.name);
-  assert.ok(toolNames.includes("apply_patch"));
+  assert.ok(!toolNames.includes("apply_patch"), "child must not edit files");
   assert.ok(toolNames.includes("read_file"));
   assert.ok(!toolNames.includes("delegate_agent"), "child must not get delegate_agent");
   assert.equal(received.userMessage, input.task);
@@ -285,9 +285,10 @@ test("tool-less child cannot report a requested file mutation as completed", asy
     expectedOutput: { description: "created file", format: "text" },
   }, execContext("G:/ws"), {});
 
-  assert.equal(outcome.status, "failed");
-  assert.match(outcome.metadata.error, /without a successful apply_patch call/);
-  assert.ok(events.some((event) => event.type === "subagent_failed"));
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.output.finding.status, "blocked");
+  assert.match(outcome.output.finding.unverified.join("\n"), /parent must edit/i);
+  assert.ok(events.some((event) => event.type === "subagent_completed"));
 });
 
 test("unavailable dedicated model falls back once to the working parent model before tools run", async () => {
@@ -556,10 +557,11 @@ test("child runs apply_patch through the provided executeToolCall and the file l
     expectedOutput: { description: "created file", format: "text" },
   }, execContext(root));
 
-  assert.equal(result.ok === undefined ? true : true, true);
-  assert.ok(seenToolCalls.length === 1 && seenToolCalls[0].ok, "child apply_patch must succeed");
-  assert.equal(fs.existsSync(target), true, "test3.txt must exist on disk");
-  assert.equal(fs.readFileSync(target, "utf8"), "test");
+  assert.equal(seenToolCalls.length, 1);
+  assert.equal(seenToolCalls[0].ok, false);
+  assert.equal(seenToolCalls[0].error.code, "CHILD_TOOL_DENIED");
+  assert.equal(fs.existsSync(target), false, "a child must not create files");
+  assert.equal(result.output.finding.status, "blocked");
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -633,6 +635,9 @@ test("follow_up resumes the same coordinated child session with its prior histor
     expectedOutput: { description: "report", format: "text" },
   }, execContext("G:/ws"), {});
   await new Promise((resolve) => setImmediate(resolve));
+  const pending = coordinator.pendingResultsForSender("")[0];
+  assert.equal(coordinator.claimResult("sender::parent", pending.resultId).ok, true);
+  coordinator.finishParentTurn("sender::parent", { resultId: pending.resultId });
   const follow = await provider({
     operation: "follow_up",
     childInvocationId: first.childInvocationId,
@@ -644,4 +649,32 @@ test("follow_up resumes the same coordinated child session with its prior histor
   assert.equal(follow.metadata.sessionId, first.metadata.sessionId);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(histories[1], [{ role: "assistant", content: "report 1" }]);
+});
+
+test("a model timeout retries the child once and a second failure stays terminal", async () => {
+  let attempts = 0;
+  const provider = createRuntimeDelegationProvider({
+    senderId: "s",
+    runKey: "s::parent",
+    parentModel: "m",
+    workspace: "G:/ws",
+    sessionId: "parent-session-1",
+    tools: PARENT_TOOLS,
+    runAgentTurn: async () => {
+      attempts += 1;
+      return { ok: false, error: "request timeout", runState: { status: "failed", stopReason: "timeout" } };
+    },
+    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
+    executeToolCall: async () => ({ ok: true }),
+    beginChildSession: async () => ({ ok: true, sessionId: "child-retry" }),
+    sendToRenderer: () => {},
+  });
+  const outcome = await provider({
+    task: "Inspect the login response",
+    contextPackage: { role: "agent", authority: "approve_for_me", scope: {}, identity: {}, resources: {} },
+    expectedOutput: { description: "report", format: "json" },
+  }, execContext("G:/ws"), {});
+  assert.equal(attempts, 2);
+  assert.equal(outcome.metadata.retried, true);
+  assert.equal(outcome.status, "failed");
 });

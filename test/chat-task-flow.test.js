@@ -117,7 +117,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /source === "parent_continuation"/);
   assert.match(renderer, /function renderParentContinuationEvent\(/);
   assert.match(main, /function scheduleParentContinuation\(/);
-  assert.match(main, /onResultReady: \(readyResult\) => scheduleParentContinuation\(coordinationKey, readyResult\)/);
+  assert.match(main, /onResultReady: \(readyResult\) => \{[\s\S]*?scheduleParentContinuation\(coordinationKey, readyResult\)/);
   assert.match(main, /agent:pendingParentContinuations/);
   assert.match(renderer, /pendingParentContinuations/);
   assert.match(renderer, /getBoundingClientRect\(\)/);
@@ -189,6 +189,10 @@ test("chat history is compact, searchable, and keeps archive/delete actions hove
   assert.match(renderer, /\[\.\.\.chatSessions, \.\.\.closedChatSessions\]/);
   assert.match(renderer, /sortHistorySessions\(archivedChatSessions, query\)/);
   assert.match(renderer, /paginateRecentHistory\(recent/);
+  assert.match(renderer, /groupHistoryByAge\(visibleRecent\)/);
+  assert.match(history, /label: "Today"/);
+  assert.match(history, /label: "Previous 7 days"/);
+  assert.match(chatStyles, /\.chat-history-group-label/);
   assert.match(renderer, /function scrollChatSessionIntoView\(sessionId = activeChatSessionId\)/);
   assert.match(renderer, /renderChatSessionSelect\(\);\s*scrollChatSessionIntoView\(session\.id\);/);
   assert.match(chatStyles, /\.chat-history-session-actions\s*\{[\s\S]*?opacity:\s*0[\s\S]*?pointer-events:\s*none/);
@@ -347,7 +351,7 @@ test("hidden background runtime remains isolated from the visible chat surface",
   assert.match(renderer, /function sendHiddenAgentRuntime\([\s\S]*?hiddenAgentRuntimeQueues\.set\(key, task\)/);
   assert.doesNotMatch(renderer, /schedulePentestContinuation|pentestLoop|internalSkillId:\s*"pentest"/);
   assert.match(renderer, /payload\?\.source === "background_runtime"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
-  assert.match(renderer, /payload\?\.source === "parent_continuation"[\s\S]*?handleHiddenBackgroundRuntimeEvent\(payload\)/);
+  assert.match(renderer, /payload\?\.source === "parent_continuation"[\s\S]*?queueParentContinuationEvent\(payload\)/);
   assert.match(renderer, /handleHiddenBackgroundRuntimeEvent[\s\S]*?ackParentContinuation/);
   assert.doesNotMatch(main, /pentestLoopController|createPentestLoopController|pentest_checkpoint/);
   assert.match(main, /source: "background_runtime"/);
@@ -394,8 +398,11 @@ test("long user prompts clamp to two lines and expand only on demand", () => {
   assert.match(renderer, /function createUserPromptBox\(text\)[\s\S]*?user-prompt-preview/);
   assert.match(renderer, /function renderCanonicalChatHistory[\s\S]*?createUserPromptBox\(content\)/);
   assert.match(renderer, /function addUserMessage\(text\)[\s\S]*?createUserPromptBox\(value\)/);
-  assert.match(renderer, /chatPane\?\.addEventListener\("click"[\s\S]*?collapseExpandedUserPrompts\(\)/);
-  assert.match(renderer, /chatPane\?\.addEventListener\("keydown"[\s\S]*?\["Enter", " "\]/);
+  assert.match(renderer, /messages\?\.addEventListener\("mousedown"[\s\S]*?activateUserPromptSelection\(promptBox, e\.clientX, e\.clientY\)/);
+  assert.match(renderer, /messages\?\.addEventListener\("dblclick"[\s\S]*?selectWholeUserPrompt\(content\)/);
+  assert.match(renderer, /function selectWholeUserPrompt\(content\)[\s\S]*?range\.selectNodeContents\(content\)/);
+  assert.match(renderer, /dismissUserPromptSelectionIfOutside/);
+  assert.match(renderer, /messages\?\.addEventListener\("keydown"[\s\S]*?\["Enter", " "\]/);
   assert.match(chatStyles, /user-prompt-preview[\s\S]*?-webkit-line-clamp: 2[\s\S]*?line-clamp: 2/);
   assert.match(chatStyles, /user-prompt-expandable\.is-expanded[\s\S]*?-webkit-line-clamp: unset/);
 });
