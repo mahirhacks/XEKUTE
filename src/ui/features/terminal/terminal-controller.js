@@ -222,6 +222,7 @@ const TerminalManager = (() => {
   }
 
   function sessionIconClass(session) {
+    if (session?.queued) return "codicon-clock";
     if (session?.agent) return "codicon-copilot";
     return shellIconClass(session?.profileId, session?.name);
   }
@@ -598,7 +599,9 @@ const TerminalManager = (() => {
     const session = sessions.get(id);
     if (!session || session.exited || session.interrupting) return;
     session.interrupting = true;
-    term.writeln("\r\n\x1b[33m^C  Stopping command…\x1b[0m");
+    term.writeln(session.queued
+      ? "\r\n\x1b[33m^C  Cancelling queued command…\x1b[0m"
+      : "\r\n\x1b[33m^C  Stopping command…\x1b[0m");
     try {
       const result = await window.api.terminalKill(id);
       if (result?.alreadyStopped) {
@@ -618,9 +621,32 @@ const TerminalManager = (() => {
     }
   }
 
-  async function attachAgentSession({ id, command = "", toolName = "run_command" } = {}) {
+  function terminalText(value) {
+    return String(value || "")
+      .replace(/\u001b/g, "␛")
+      .replace(/\r/g, "")
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, " ");
+  }
+
+  function agentPrompt(session) {
+    const path = terminalText(session?.cwd);
+    const shell = String(session?.shell || "auto").toLowerCase();
+    if (/^(?:auto|powershell|pwsh)$/i.test(shell)) return `PS ${path}> `;
+    return shell === "cmd" ? `${path}> ` : `${path}$ `;
+  }
+
+  function setAgentSessionQueued(id, queued) {
+    const session = sessions.get(String(id || ""));
+    if (!session?.agent) return false;
+    session.queued = Boolean(queued);
+    renderTabsList();
+    return true;
+  }
+
+  async function attachAgentSession({ id, command = "", toolName = "run_command", cwd = "", shell = "auto", queued = false } = {}) {
     if (!id) return null;
     if (sessions.has(id)) {
+      setAgentSessionQueued(id, queued);
       switchTerminal(id);
       globalThis.expandTerminalPanel?.({ createIfMissing: false });
       return id;
@@ -632,7 +658,7 @@ const TerminalManager = (() => {
     globalThis.expandTerminalPanel?.({ createIfMissing: false });
 
     const container = document.createElement("div");
-    container.className = "terminal-instance agent-terminal";
+    container.className = "terminal-instance";
     container.dataset.terminalId = id;
     container.hidden = true;
     viewport.appendChild(container);
@@ -679,12 +705,15 @@ const TerminalManager = (() => {
       lastCols: 0,
       lastRows: 0,
       agent: true,
+      queued: Boolean(queued),
       command,
       toolName,
+      cwd,
+      shell,
     };
     sessions.set(id, session);
 
-    term.writeln("\x1b[90mread-only output\x1b[0m");
+    term.write(`${agentPrompt(session)}${terminalText(command).replace(/\n/g, "\r\n")}\r\n`);
 
     clearTerminalError();
     updateEmptyState();
@@ -766,11 +795,17 @@ const TerminalManager = (() => {
     const session = sessions.get(id);
     if (!session) return;
     session.exited = true;
+    session.queued = false;
     session.interrupting = false;
-    session.term.writeln("");
-    session.term.writeln(session.agent
-      ? "\x1b[33mCommand exited. Press the trash icon to close this session.\x1b[0m"
-      : "\x1b[33mTerminal process exited. Press the trash icon to close this session.\x1b[0m");
+    if (session.agent) {
+      session.term.write("", () => {
+        const needsLineBreak = Number(session.term.buffer?.active?.cursorX) > 0;
+        session.term.write(`${needsLineBreak ? "\r\n" : ""}${agentPrompt(session)}\r\n\x1b[90mAgent terminal is observe only\x1b[0m`);
+      });
+    } else {
+      session.term.writeln("");
+      session.term.writeln("\x1b[33mTerminal process exited. Press the trash icon to close this session.\x1b[0m");
+    }
     renderTabsList();
     updateEmptyState();
   }

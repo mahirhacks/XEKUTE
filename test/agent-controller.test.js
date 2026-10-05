@@ -1420,7 +1420,7 @@ test("mixed run and non-run tools seal in call order", async () => {
   assert.deepEqual(toolMessages.map((message) => message.tool_name), ["exec_command", "read_file", "exec_command", "end_turn"]);
 });
 
-test("a request for more commands than free slots starts none of them", async () => {
+test("a request for more commands than free slots reaches the process manager", async () => {
   const log = [];
   let rounds = 0;
   const result = await runAgentTurn({
@@ -1445,16 +1445,15 @@ test("a request for more commands than free slots starts none of them", async ()
     },
   });
   assert.equal(result.ok, true, result.error || "");
-  assert.deepEqual(log, []);
+  assert.deepEqual(log, ["exec", "exec", "exec", "exec"]);
   const toolMessages = result.appendedMessages.filter((message) => message.role === "tool" && message.tool_name === "exec_command");
   assert.equal(toolMessages.length, 4);
   for (const message of toolMessages) {
-    assert.match(message.content, /No more than 3 commands at a time/);
-    assert.match(message.content, /none were started/);
+    assert.doesNotMatch(message.content, /COMMAND_QUEUE_REJECTED|none were started/);
   }
 });
 
-test("a request that exceeds the remaining slots names the running commands and starts none", async () => {
+test("commands beyond the remaining slots reach the process manager", async () => {
   const log = [];
   let rounds = 0;
   const result = await runAgentTurn({
@@ -1478,13 +1477,11 @@ test("a request that exceeds the remaining slots names the running commands and 
     },
   });
   assert.equal(result.ok, true, result.error || "");
-  assert.deepEqual(log, []);
+  assert.deepEqual(log, ["exec", "exec"]);
   const toolMessages = result.appendedMessages.filter((message) => message.role === "tool" && message.tool_name === "exec_command");
   assert.equal(toolMessages.length, 2);
   for (const message of toolMessages) {
-    assert.match(message.content, /cmd 1 \(process-a\) and cmd 2 \(process-b\) are still running/);
-    assert.match(message.content, /only 1 slot is available/);
-    assert.match(message.content, /none were started/);
+    assert.doesNotMatch(message.content, /COMMAND_QUEUE_REJECTED|none were started/);
   }
 });
 

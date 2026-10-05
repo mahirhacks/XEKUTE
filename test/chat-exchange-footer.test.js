@@ -85,14 +85,15 @@ test("assistant footer keeps copy visible and always shows time on the latest ex
   assert.match(bootstrapSource, /fork\.forkedFromSessionId = forkRootSessionId\(source\)/);
   assert.match(
     source,
-    /\.chat-exchange:hover \.assistant-reply-time,[\s\S]*?opacity: 0\.72;[\s\S]*?visibility: visible/,
+    /\.chat-exchange:hover \.assistant-reply-time,[\s\S]*?opacity: 0\.9;[\s\S]*?visibility: visible/,
   );
   assert.match(
     source,
     /#messages > \.chat-exchange:last-child \.assistant-reply-time/,
   );
-  assert.doesNotMatch(source, /\.assistant-reply-time:hover/);
-  assert.match(source, /\.assistant-reply-copy \{[^]*?opacity: 0\.72;/);
+  assert.match(source, /\.assistant-reply-time:hover\s*\{[^}]*background: #2d2d2d/);
+  assert.match(source, /\.assistant-reply-copy \{[^]*?opacity: 0\.92;/);
+  assert.match(source, /\.assistant-reply-copy:hover,[\s\S]*?background: #303030/);
   assert.match(chatStyles, /#messages \.agent-response-host > \.assistant-reply-footer/);
   assert.match(chatStyles, /#messages \.chat-exchange-body > \.assistant-reply-footer/);
   assert.doesNotMatch(chatStyles, /#messages \.chat-exchange > \.assistant-reply-footer/);

@@ -49,7 +49,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /chatSessionSelect\.scrollLeft \+ delta/);
   assert.match(renderer, /editorTabBar\?\.addEventListener\("wheel"/);
   assert.match(renderer, /editorTabBar\.scrollLeft \+ delta/);
-  assert.match(renderer, /behavior: force \? "smooth" : "auto"/);
+  assert.match(renderer, /chatScroller.follow\(\{ force \}\)/);
   assert.match(styles, /\.agent-task-brief/);
   assert.match(styles, /\.notification-count\[hidden\] \{ display:none; \}/);
   assert.match(styles, /\.notification-panel \{[\s\S]*?position:fixed;[\s\S]*?border:1px solid #303030;[\s\S]*?border-radius:10px;[\s\S]*?background:#181818;/);
@@ -108,9 +108,9 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(chatStyles, /#messages \.tool-card/);
   assert.doesNotMatch(styles, /\.tool-card \{ min-height:66px/);
   assert.match(chatStyles, /#messages \.tool-card,[\s\S]*?display: block !important[\s\S]*?min-height: 0 !important/);
-  assert.match(chatStyles, /#messages \.tool-card-file \{[\s\S]*?max-width: none !important[\s\S]*?text-overflow: clip !important/);
+  assert.match(chatStyles, /#messages \.tool-card-file \{[\s\S]*?max-width: 100% !important[\s\S]*?text-overflow: ellipsis !important/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \.chat-box[\s\S]*?width: 100%/);
-  assert.match(chatStyles, /\.composer:focus-within[\s\S]*?border-color: #3b3b3b[\s\S]*?box-shadow: none/);
+  assert.match(chatStyles, /\.composer:focus-within[\s\S]*?border-color: #5a5a5a[\s\S]*?box-shadow: none/);
   assert.match(activeIpc, /path: resolved\.target/);
   assert.doesNotMatch(renderer, /Show run details/);
   assert.match(renderer, /function syncChatStickyMask\(/);
@@ -146,14 +146,14 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.doesNotMatch(chatMarkup, /12\s*Files|paperclip|microphone|attachment/i);
   assert.doesNotMatch(chatMarkup, /chat-sticky-user/);
   assert.match(read("src/ui/react/main.jsx"), /import "\.\.\/styles\/chat\.css"/);
-  assert.doesNotMatch(renderer, /chatStickyUser|syncStickyUserTurn|cloneNode\(true\)/);
+  assert.doesNotMatch(renderer, /chatStickyUser|syncStickyUserTurn/);
   assert.match(renderer, /function normalizeChatExchanges\(/);
   assert.match(renderer, /appendChatTurn\(turn, \{ startsExchange: true \}\)/);
   assert.match(chatStyles, /#messages \.chat-exchange-body \{[\s\S]*?gap: 0/);
   assert.match(chatStyles, /#messages \.chat-turn\.user \{[\s\S]*position: sticky[\s\S]*top: 8px/);
   assert.match(chatStyles, /#messages \.agent-response-host > \.assistant-reply-footer/);
   assert.match(chatStyles, /#messages \.chat-exchange-body > \.assistant-reply-footer/);
-  assert.match(chatStyles, /#messages \.chat-turn\.user \.chat-box[\s\S]*background: #252526 !important/);
+  assert.match(chatStyles, /#messages \.chat-turn\.user \.chat-box[\s\S]*background: #1f1f1f !important/);
   assert.match(chatStyles, /#chat-pane::before[\s\S]*height: var\(--chat-sticky-mask-solid-height\)[\s\S]*background: #171717/);
   assert.match(chatStyles, /#chat-pane::after[\s\S]*top: calc\(35px \+ var\(--chat-sticky-mask-solid-height\)\)[\s\S]*height: 12px[\s\S]*linear-gradient/);
   assert.match(chatStyles, /#chat-pane::before[\s\S]*right: 10px/);
@@ -249,7 +249,7 @@ test("running chats stay navigable and signal background completion per tab", ()
   assert.match(renderer, /if \(isChatSessionRunning\(id\)\) return/);
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /eventSessionId !== runEventSessionId/);
-  assert.match(renderer, /sendBtn\.disabled = !activeRunning && \(\s*delegatedLocked/);
+  assert.match(renderer, /sendBtn\.disabled = editingQueue[\s\S]*?: !activeRunning && \(\s*delegatedLocked/);
   assert.doesNotMatch(renderer, /Another agent is running/);
   assert.match(main, /sender\.send\("agent:event", \{ \.\.\.data, sessionId \}\)/);
   assert.match(styles, /\.chat-tab-running-icon\s*\{/);
@@ -299,7 +299,7 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   assert.match(renderer, /function chooseSlashSuggestion\(index = slashSuggestionIndex, \{ clicked = false \} = \{\}\)/);
   assert.match(renderer, /function effectiveChatInputValue\(\)/);
   assert.match(renderer, /const SYSTEM_SKILL_SLASH_COMMANDS = Object\.freeze\(\[/);
-  assert.match(renderer, /"system-skill": "System Skills"/);
+  assert.match(renderer, /"system-command": "System Commands"/);
   assert.match(renderer, /\.\.\.SYSTEM_SKILL_SLASH_COMMANDS/);
   assert.match(renderer, /SYSTEM_SKILL_COMMANDS\.has\(command\.toLowerCase\(\)\)/);
   assert.match(renderer, /let text = hasExplicitText[\s\S]*?: effectiveChatInputValue\(\)\.trim\(\)/);
@@ -607,6 +607,9 @@ test("command completion settles timers immediately across call, process, and te
   assert.match(renderer, /function bindCommandTimelineIdentity/);
   assert.match(renderer, /completedCommandLifecycles/);
   assert.match(renderer, /if \(type === "terminal_complete"\) \{\s*finalizeCommandTimeline\(payload/);
+  assert.match(renderer, /type === "agent_command_output"/);
+  assert.match(renderer, /function deliverAgentCommandOutput/);
+  assert.match(renderer, /phase === "command_output"/);
   assert.match(renderer, /only the transcript continuation waits for the active turn to finish/);
   assert.match(renderer, /const completion = commandCompletionForRow\(row\)/);
   assert.match(renderer, /updateCommandTimelineRow\(row, completion\.state\)/);

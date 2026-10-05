@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { resolveShellInvocation } = require("../../../agent/tools/process/exec-command.js");
-const { MAX_COMMAND_SLOTS, queueRejectionResult } = require("../../../agent/tools/process/command-queue.js");
+const { MAX_COMMAND_SLOTS } = require("../../../agent/tools/process/command-queue.js");
 const { redactSecrets } = require("../../../shared/secret-redaction.js");
 const { sampleProcessTree } = require("./process-tree-sampler.js");
 
@@ -31,7 +31,9 @@ function createDurableProcessManager({
 } = {}) {
   const live = new Map();
   const records = new Map();
-  const pendingSlots = new Map();
+  const commandQueues = new Map();
+  const queuedTasks = new Map();
+  const launchingSlots = new Map();
 
   function rootFor(workspace) {
     const digest = crypto.createHash("sha256").update(pathImpl.resolve(workspace)).digest("hex").slice(0, 16);
@@ -349,6 +351,7 @@ function createDurableProcessManager({
       persist(entry);
     }
     live.delete(entry.record.id);
+    pumpQueue(sessionKey(entry.workspace, entry.record.sessionId));
     try { entry.runtime?.onComplete?.(value); } catch { /* renderer may have closed */ }
     emit(entry.runtime, { type: "terminal_complete", processId: entry.record.id, terminalId: entry.record.terminalId || "", command: entry.record.command, ...value });
     entry.doneResolve?.(value);
@@ -466,47 +469,253 @@ function createDurableProcessManager({
     }));
   }
   function runningCommands(workspace, sessionId = "") {
-    return describeRunning(runningEntries(workspace, sessionId));
-  }
-  function reserveCommandSlot(workspace, sessionId = "") {
-    const key = sessionKey(workspace, sessionId);
-    const running = runningEntries(workspace, sessionId);
-    const pending = pendingSlots.get(key) || 0;
-    const occupied = running.length + pending;
-    if (occupied >= MAX_COMMAND_SLOTS) {
-      return {
-        ok: false,
-        result: queueRejectionResult({
-          running: describeRunning(running),
-          freeSlots: Math.max(0, MAX_COMMAND_SLOTS - running.length),
-          requested: 1,
-        }, "manager"),
-      };
+    const root = pathImpl.resolve(String(workspace || ""));
+    const wantSession = String(sessionId || "");
+    const commands = describeRunning(runningEntries(workspace, sessionId));
+    for (const task of queuedTasks.values()) {
+      if (pathImpl.resolve(String(task.workspace || "")) !== root) continue;
+      if (String(task.runtime?.sessionId || "") !== wantSession) continue;
+      commands.push({ processId: task.processId, command: task.record.command, status: "queued" });
     }
-    pendingSlots.set(key, pending + 1);
-    return { ok: true, key };
+    return commands;
   }
-  function releaseCommandSlot(key) {
-    if (!key) return;
-    const next = (pendingSlots.get(key) || 1) - 1;
-    if (next <= 0) pendingSlots.delete(key);
-    else pendingSlots.set(key, next);
+  function occupiedSlots(task) {
+    return runningEntries(task.workspace, task.runtime?.sessionId).length
+      + (launchingSlots.get(task.key) || 0);
   }
-  async function start(workspace, input = {}, runtime = {}) {
-    const reservation = reserveCommandSlot(workspace, runtime?.sessionId);
-    if (!reservation.ok) return reservation.result;
+  function settleQueuedStart(task, result) {
+    if (task.startSettled) return;
+    task.startSettled = true;
+    task.resolveStarted(result);
+  }
+  function removeQueuedTask(task) {
+    const queue = commandQueues.get(task.key);
+    if (queue) {
+      const index = queue.indexOf(task);
+      if (index >= 0) queue.splice(index, 1);
+      if (!queue.length) commandQueues.delete(task.key);
+    }
+    queuedTasks.delete(task.processId);
+  }
+  function detachQueuedAbort(task) {
+    if (!task.abortHandler) return;
+    task.runtime?.signal?.removeEventListener?.("abort", task.abortHandler);
+    task.abortHandler = null;
+  }
+  function queuedValue(task) {
+    return {
+      ...task.record,
+      id: task.processId,
+      processId: task.processId,
+      mode: "process_queued",
+      status: "queued",
+      alive: false,
+      stdout: "",
+      stderr: "",
+      terminalId: task.record.terminalId,
+      outputCompleteness: "none",
+      observation: { changed: false, timedOut: false, waitedMs: 0, state: "queued", quietForMs: 0, note: "Waiting for an available command slot." },
+    };
+  }
+  function waitForQueueResult(task) {
+    const value = queuedValue(task);
+    value.mode = "terminal_wait";
+    value.waiting = true;
+    value.outputCompleteness = "partial";
+    value.elapsedMs = Math.max(0, Date.now() - new Date(task.record.queuedAt).getTime());
+    return { ok: true, value };
+  }
+  function cancelQueuedTask(task, reason = "user_requested") {
+    if (!task || task.state !== "queued") return null;
+    removeQueuedTask(task);
+    detachQueuedAbort(task);
+    task.state = "stopped";
+    const completedAt = now().toISOString();
+    task.record.status = "stopped";
+    task.record.completedAt = completedAt;
+    task.record.updatedAt = completedAt;
+    task.record.terminationReason = reason;
+    writeRecord(task.workspace, task.record);
+    const value = {
+      ...task.record,
+      id: task.processId,
+      processId: task.processId,
+      terminalId: task.record.terminalId,
+      status: "stopped",
+      mode: "command",
+      alive: false,
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      outputCompleteness: "complete",
+      finishedAt: completedAt,
+      elapsedMs: 0,
+    };
+    try { task.runtime?.onComplete?.(value); } catch { /* observer is best effort */ }
+    settleQueuedStart(task, {
+      ok: false,
+      error: { code: "PROCESS_STOPPED", message: "The queued command was cancelled before it started.", retryable: false },
+      value,
+    });
+    pumpQueue(task.key);
+    return projectAgentFacing(value);
+  }
+  function processFailure(error, task) {
+    return {
+      ok: false,
+      error: { code: error?.code || "PROCESS_START_FAILED", message: error?.message || "The command could not be started.", retryable: false },
+      value: { processId: task.processId, status: "failed", command: task.record.command, cwd: task.record.cwd },
+    };
+  }
+  function launchTask(task) {
+    if (task.state === "queued") removeQueuedTask(task);
+    detachQueuedAbort(task);
+    task.state = "starting";
+    task.record.status = "starting";
+    task.record.updatedAt = now().toISOString();
+    writeRecord(task.workspace, task.record);
+    launchingSlots.set(task.key, (launchingSlots.get(task.key) || 0) + 1);
+    Promise.resolve()
+      .then(() => launchProcess(task.workspace, task.input, task.runtime, task))
+      .then((result) => {
+        if (result?.ok) {
+          task.state = "running";
+          settleQueuedStart(task, result);
+          return;
+        }
+        task.state = "failed";
+        task.record.status = "failed";
+        task.record.completedAt = now().toISOString();
+        task.record.updatedAt = task.record.completedAt;
+        writeRecord(task.workspace, task.record);
+        const failed = { ...task.record, processId: task.processId, terminalId: task.record.terminalId, status: "failed", exitCode: null, signal: result?.error?.code || null, stdout: "", stderr: "", outputCompleteness: "complete", finishedAt: task.record.completedAt };
+        try { task.runtime?.onComplete?.(failed); } catch { /* observer is best effort */ }
+        settleQueuedStart(task, result || processFailure(null, task));
+      })
+      .catch((error) => {
+        task.state = "failed";
+        task.record.status = "failed";
+        task.record.completedAt = now().toISOString();
+        task.record.updatedAt = task.record.completedAt;
+        writeRecord(task.workspace, task.record);
+        const failed = { ...task.record, processId: task.processId, terminalId: task.record.terminalId, status: "failed", exitCode: null, signal: error?.code || null, stdout: "", stderr: "", outputCompleteness: "complete", finishedAt: task.record.completedAt };
+        try { task.runtime?.onComplete?.(failed); } catch { /* observer is best effort */ }
+        settleQueuedStart(task, processFailure(error, task));
+      })
+      .finally(() => {
+        const pending = Math.max(0, (launchingSlots.get(task.key) || 1) - 1);
+        if (pending) launchingSlots.set(task.key, pending);
+        else launchingSlots.delete(task.key);
+        pumpQueue(task.key);
+      });
+  }
+  function pumpQueue(key) {
+    const queue = commandQueues.get(key);
+    if (!queue?.length) return;
+    while (queue.length) {
+      const task = queue[0];
+      if (task.state !== "queued") {
+        queue.shift();
+        continue;
+      }
+      if (occupiedSlots(task) >= MAX_COMMAND_SLOTS) break;
+      launchTask(task);
+    }
+    if (!queue.length) commandQueues.delete(key);
+  }
+  function createTask(workspace, input, runtime, resolved, selected) {
+    const processId = `process-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+    const command = redactSecrets(input.command || [input.executable, ...(input.args || [])].join(" "));
+    const cwd = resolved.target || resolved.root;
+    const stamp = now().toISOString();
+    const record = {
+      schemaVersion: 2,
+      id: processId,
+      pid: null,
+      status: "queued",
+      executable: pathImpl.basename(String(selected.executable)),
+      shell: selected.shell || "direct",
+      command,
+      cwd,
+      stdoutFile: "",
+      stderrFile: "",
+      startedAt: stamp,
+      queuedAt: stamp,
+      updatedAt: stamp,
+      lastOutputAt: stamp,
+      exitCode: null,
+      signal: null,
+      detached: false,
+      resumable: false,
+      terminalId: runtime.terminalId || "",
+      sessionId: runtime.sessionId || "",
+    };
+    let resolveStarted;
+    const started = new Promise((resolve) => { resolveStarted = resolve; });
+    return {
+      processId,
+      workspace,
+      input,
+      runtime,
+      resolved,
+      selected,
+      key: sessionKey(workspace, runtime?.sessionId),
+      record,
+      state: "new",
+      started,
+      resolveStarted,
+      startSettled: false,
+      abortHandler: null,
+    };
+  }
+  function queueTask(task) {
+    task.state = "queued";
+    writeRecord(task.workspace, task.record);
+    queuedTasks.set(task.processId, task);
+    const queue = commandQueues.get(task.key) || [];
+    queue.push(task);
+    commandQueues.set(task.key, queue);
+    task.abortHandler = () => cancelQueuedTask(task, "turn_cancelled");
+    if (task.runtime?.signal?.aborted) task.abortHandler();
+    else task.runtime?.signal?.addEventListener?.("abort", task.abortHandler, { once: true });
+    if (task.state !== "queued") return;
     try {
-      return await launchProcess(workspace, input, runtime);
-    } finally {
-      releaseCommandSlot(reservation.key);
-    }
+      task.runtime?.onQueued?.({ processId: task.processId, command: task.record.command, cwd: task.record.cwd, terminalId: task.record.terminalId, queuedAt: task.record.queuedAt });
+    } catch { /* observer is best effort */ }
+    emit(task.runtime, { type: "terminal_queued", processId: task.processId, terminalId: task.record.terminalId, command: task.record.command, cwd: task.record.cwd });
   }
-  async function launchProcess(workspace, input = {}, runtime = {}) {
+  async function submitProcess(workspace, input = {}, runtime = {}, { waitForStart = false, maxWaitMs = null } = {}) {
     const resolved = resolveWorkspaceTarget(workspace, input.cwd || "");
     if (resolved.error) return { ok: false, error: { code: "WORKSPACE_OUT_OF_SCOPE", message: resolved.error, retryable: false } };
     const selected = invocation(input);
     if (!selected?.executable) return { ok: false, error: { code: "PROCESS_ARGUMENT_INVALID", message: "No executable could be resolved.", retryable: false } };
-    const id = `process-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+    const task = createTask(workspace, input, runtime, resolved, selected);
+    if (occupiedSlots(task) < MAX_COMMAND_SLOTS && !commandQueues.get(task.key)?.length) {
+      launchTask(task);
+      return task.started;
+    }
+    queueTask(task);
+    pumpQueue(task.key);
+    if (task.state !== "queued") return task.started;
+    if (!waitForStart) return projectResult({ ok: true, value: queuedValue(task) });
+    if (maxWaitMs == null) return task.started;
+    let timer;
+    const outcome = await Promise.race([
+      task.started.then((value) => ({ kind: "started", value })),
+      new Promise((resolve) => { timer = setTimeout(() => resolve({ kind: "waited" }), Math.max(0, Number(maxWaitMs) || 0)); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (outcome.kind === "started") return outcome.value;
+    if (task.state === "queued") return projectResult(waitForQueueResult(task));
+    return task.started;
+  }
+  async function start(workspace, input = {}, runtime = {}) {
+    return submitProcess(workspace, input, runtime);
+  }
+  async function launchProcess(workspace, input = {}, runtime = {}, task) {
+    const { resolved, selected } = task;
+    const id = task.processId;
     const processRoot = rootFor(workspace);
     fsImpl.mkdirSync(processRoot, { recursive: true, mode: 0o700 });
     const stdoutFile = pathImpl.join(processRoot, `${id}.stdout.log`);
@@ -528,7 +737,7 @@ function createDurableProcessManager({
     }
     try { fsImpl.closeSync(stdoutFd); fsImpl.closeSync(stderrFd); } catch {}
     const stamp = now().toISOString();
-    const record = { schemaVersion: 2, id, pid: child.pid, status: "running", executable: pathImpl.basename(String(selected.executable)), shell: selected.shell || "direct", command: redactSecrets(input.command || [input.executable, ...(input.args || [])].join(" ")), cwd: resolved.target || resolved.root, stdoutFile: stdoutFile.replace(/\\/g, "/"), stderrFile: stderrFile.replace(/\\/g, "/"), startedAt: stamp, updatedAt: stamp, lastOutputAt: stamp, exitCode: null, signal: null, detached: launchDetached, resumable: launchDetached, terminalId: runtime.terminalId || "", sessionId: runtime.sessionId || "" };
+    const record = { ...task.record, pid: child.pid, status: "running", stdoutFile: stdoutFile.replace(/\\/g, "/"), stderrFile: stderrFile.replace(/\\/g, "/"), startedAt: stamp, updatedAt: stamp, lastOutputAt: stamp, exitCode: null, signal: null, detached: launchDetached, resumable: launchDetached };
     writeRecord(workspace, record);
     const entry = makeEntry(workspace, record, child, runtime);
     live.set(id, entry);
@@ -550,6 +759,7 @@ function createDurableProcessManager({
   async function run(workspace, input = {}, runtime = {}) {
     const waitSpecified = Object.prototype.hasOwnProperty.call(input, "wait_ms");
     const waitMs = waitSpecified ? Math.max(0, Number(input.wait_ms) || 0) : null;
+    const waitStartedAt = Date.now();
     let reviewResolve = null;
     const reviewPromise = new Promise((resolve) => { reviewResolve = resolve; });
     const startRuntime = waitMs == null
@@ -560,8 +770,14 @@ function createDurableProcessManager({
         },
       }
       : runtime;
-    const started = await start(workspace, input, startRuntime);
+    const started = await submitProcess(workspace, input, startRuntime, { waitForStart: true, maxWaitMs: waitMs });
     if (!started.ok) return started;
+    if (started.value?.status === "queued") {
+      const value = { ...started.value, mode: "terminal_wait", waiting: true, outputCompleteness: "partial" };
+      runtime.onDetached?.(value);
+      emit(runtime, { type: "terminal_wait", processId: value.processId, terminalId: value.terminalId, command: value.command, ...value });
+      return projectResult({ ok: true, value });
+    }
     const processId = started.value.processId;
     const entry = live.get(processId);
     if (!entry) return { ok: false, error: { code: "PROCESS_START_FAILED", message: "The process started but could not be supervised.", retryable: true } };
@@ -605,13 +821,14 @@ function createDurableProcessManager({
       emit(runtime, { type: "terminal_wait", processId, terminalId: value.terminalId, command: record.command, ...value });
       return projectResult({ ok: true, value });
     };
-    if (waitMs === 0) return detachWithPartial();
+    const remainingWaitMs = waitMs == null ? null : Math.max(0, waitMs - (Date.now() - waitStartedAt));
+    if (remainingWaitMs === 0) return detachWithPartial();
     const abortPromise = new Promise((resolve) => { abortWait = () => resolve("aborted"); });
     if (runtime.signal?.aborted) onAbort();
     else runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
     const done = entry.donePromise.then((value) => (value ? { kind: "done", value } : { kind: "detach" }));
     const aborted = abortPromise.then(() => ({ kind: "abort" }));
-    if (waitMs == null) {
+    if (remainingWaitMs == null) {
       const completed = await Promise.race([done, aborted, reviewPromise]);
       entry.foregroundReview = null;
       if (completed.kind === "done") return finishWith(completed.value);
@@ -619,7 +836,7 @@ function createDurableProcessManager({
       return detachWithPartial();
     }
     let timer;
-    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ kind: "timeout" }), waitMs); });
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ kind: "timeout" }), remainingWaitMs); });
     const completed = await Promise.race([done, aborted, timeout]);
     if (timer) clearTimeout(timer);
     if (completed.kind === "done") return finishWith(completed.value);
@@ -628,6 +845,10 @@ function createDurableProcessManager({
   async function status(workspace, input = {}, runtime = {}) {
     let record = readRecord(workspace, input.process_id);
     if (!record) return { ok: false, error: { code: "PROCESS_NOT_FOUND", message: `Unknown durable process: ${input.process_id}`, retryable: false } };
+    const queuedTask = queuedTasks.get(record.id);
+    if (queuedTask?.state === "queued") {
+      return projectResult({ ok: true, value: queuedValue(queuedTask) });
+    }
     const observation = await waitForObservation(workspace, record, input, runtime);
     record = readRecord(workspace, input.process_id) || record;
     let observedTree = live.get(record.id)?.tree || null;
@@ -667,6 +888,11 @@ function createDurableProcessManager({
   async function stop(workspace, input = {}) {
     const record = readRecord(workspace, input.process_id);
     if (!record) return { ok: false, error: { code: "PROCESS_NOT_FOUND", message: `Unknown durable process: ${input.process_id}`, retryable: false } };
+    const queuedTask = queuedTasks.get(record.id);
+    if (queuedTask?.state === "queued") {
+      const value = cancelQueuedTask(queuedTask, input.reason || "user_requested");
+      return projectResult({ ok: true, value });
+    }
     const entry = live.get(record.id);
     if (entry?.finished) return projectResult({ ok: true, value: { processId: record.id, pid: record.pid, status: record.status, completedAt: record.completedAt } });
     if (entry) {

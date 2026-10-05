@@ -225,9 +225,14 @@ function createSkillKnowledgeGraph({ fs = fsDefault, path = pathDefault, library
     const query = clean(input.query || "", 4_000).toLowerCase();
     const terms = query.split(/\s+/).filter(Boolean).slice(0, 24);
     const searchable = phase === "recon" ? [...all, ...LEGACY_COMPAT_ENTRIES] : all;
-    return searchable.map((entry) => {
-      const haystack = `${entry.id} ${entry.title} ${entry.summary} ${entry.category} ${entry.level} ${entry.signals.join(" ")} ${entry.technologies.join(" ")} ${entry.phase} ${entry.aliases.join(" ")} ${entry.body}`.toLowerCase();
-      const score = (phase && entry.phase === phase ? 10 : 0) + terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0);
+    const documents = searchable.map((entry) => `${entry.id} ${entry.title} ${entry.summary} ${entry.category} ${entry.level} ${entry.signals.join(" ")} ${entry.technologies.join(" ")} ${entry.phase} ${entry.aliases.join(" ")} ${entry.body}`.toLowerCase());
+    const documentFrequency = new Map(terms.map((term) => [term, documents.filter((document) => document.includes(term)).length]));
+    return searchable.map((entry, index) => {
+      const haystack = documents[index];
+      const score = (phase && entry.phase === phase ? 10 : 0) + terms.reduce((total, term) => {
+        if (!haystack.includes(term)) return total;
+        return total + Math.log1p(documents.length / Math.max(1, documentFrequency.get(term) || 0));
+      }, 0);
       return { entry, score };
     }).filter((item) => (!phase || item.entry.phase === phase) && (!terms.length || item.score > 0)).sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id)).map((item) => item.entry);
   }

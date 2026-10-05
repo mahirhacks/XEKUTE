@@ -408,8 +408,9 @@ const skillGraph = createSkillKnowledgeGraph({ libraryRoot: path.join(sourceRoot
 const skillValidation = skillGraph.validation();
 assert.equal(skillValidation.ok, true, `skill knowledge graph must validate: ${skillValidation.error || "unknown error"}`);
 const requiredKnowledgeSkills = [
-  "idor", "bola", "xss", "csrf", "ssrf", "sqli", "auth_logic", "business_logic", "payment_logic", "user_account_logic",
-  "graphql", "file_upload", "path_traversal", "sensitive_data_exposure",
+  "bug-bounty", "bb-methodology", "triage-validation", "web2-recon", "web2-vuln-classes",
+  "security-arsenal", "graphql-audit", "client-reverse", "report-writing", "cicd-security",
+  "mobile-pentest", "credential-attack", "web3-audit", "meme-coin-audit", "argus",
 ];
 for (const requiredSkill of requiredKnowledgeSkills) assert.ok(skillGraph.list().some((skill) => skill.id === requiredSkill), `knowledge skill ${requiredSkill} must be discoverable`);
 assert.ok(!exists("src/prompts/skills/cyber-library.js"), "the JavaScript cyber-library mirror must remain removed");

@@ -9,6 +9,7 @@ import {
   sortHistorySessions,
 } from "./features/history/history-model.js";
 import { ensureChatMemorySessionId } from "./features/history/chat-memory-session.js";
+import { createChatScroller } from "./features/chat/chat-scroll.js";
 import {
   captureChatTranscript,
   hasStructuredTranscript,
@@ -30,6 +31,14 @@ import {
   workFoldBody,
   workFoldHeader,
 } from "./features/chat/chat-work-fold.js";
+import {
+  enqueuePrompt,
+  movePrompt,
+  promptQueueEntries,
+  removePromptAt,
+  shiftPromptQueue,
+  updatePromptAt,
+} from "./features/chat/prompt-queue.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
 const SetiIconTheme = globalThis.XekuteSetiIconTheme;
@@ -666,6 +675,8 @@ let contextFilesCache = [];
 let chatSessionCounter = 0;
 let activeChatSessionId = "";
 const chatSessions = [];
+let promptQueueExpanded = false;
+let promptQueueEdit = null;
 const closedChatSessions = [];
 const archivedChatSessions = [];
 let chatHistoryShowAllRecent = false;
@@ -1186,13 +1197,14 @@ function sanitizePersistedChatHtml(html) {
   const clean = globalThis.DOMPurify
     ? globalThis.DOMPurify.sanitize(raw, {
       ADD_TAGS: ["button", "img"],
-       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "data-expanded", "data-file", "data-file-action-kind", "data-file-verb", "data-tool-action", "data-tool-key", "data-call-id", "data-running-label", "data-completed-label", "data-work-verdict", "data-sealed", "data-started-at", "data-ended-at", "data-duration-ms", "data-worked-for-ms", "data-command-text", "data-cwd", "data-exit-code", "data-stdout", "data-lane", "data-path", "data-verb", "data-foldable", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
+       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "data-expanded", "data-file", "data-file-action-kind", "data-file-verb", "data-tool-action", "data-tool-key", "data-call-id", "data-running-label", "data-completed-label", "data-work-verdict", "data-sealed", "data-started-at", "data-ended-at", "data-duration-ms", "data-worked-for-ms", "data-command-text", "data-command-context", "data-cwd", "data-exit-code", "data-stdout", "data-lane", "data-path", "data-verb", "data-foldable", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
     })
     : "";
   const template = document.createElement("template");
   template.innerHTML = clean;
   template.content.querySelectorAll(".stream-cursor").forEach((node) => node.remove());
   template.content.querySelectorAll(".streaming").forEach((node) => node.classList.remove("streaming"));
+  template.content.querySelectorAll("[data-live-reply]").forEach((node) => node.removeAttribute("data-live-reply"));
   // Old chat snapshots may contain XEKUTE's former hypothesis/working line.
   template.content.querySelectorAll(".assistant-status").forEach((node) => node.remove());
   // Progress checklists were redundant with the durable tool and command rows.
@@ -1827,6 +1839,7 @@ function normalizeAssistantTurns(root) {
     : [...root.querySelectorAll(".chat-turn.assistant")];
   for (const turn of turns) {
     if (turn.getAttribute("aria-busy") === "true") continue;
+    if (turn.querySelector('.assistant-reply[data-live-reply="true"].streaming')) continue;
     if (turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) {
       coalesceAdjacentReplyRuns(turn);
       continue;
@@ -1841,7 +1854,7 @@ function normalizeAssistantTurns(root) {
     coalesceAdjacentReplyRuns(workFoldBody(fold));
     const answer = promoteFinalAnswer(turn);
     if (answer) answer.dataset.workVerdict = "true";
-    if (isFinishedWorkFold(fold)) setWorkFoldExpanded(fold, false);
+    if (isFinishedWorkFold(fold) && fold.dataset.userToggled !== "true") setWorkFoldExpanded(fold, false);
   }
 }
 
@@ -1854,8 +1867,10 @@ function createFoldCaret() {
   return caret;
 }
 
-function setCollapsibleFoldExpanded(fold, expanded) {
+function setCollapsibleFoldExpanded(fold, expanded, { user = false } = {}) {
   if (!fold) return;
+  if (!user && fold.dataset.userToggled === "true") return;
+  if (user) fold.dataset.userToggled = "true";
   const next = Boolean(expanded);
   fold.dataset.expanded = String(next);
   fold.querySelector(":scope > .agent-status-line, :scope > .agent-explored-toggle, :scope > .agent-thinking-toggle, :scope > .agent-file-stack-toggle")?.setAttribute("aria-expanded", String(next));
@@ -1863,7 +1878,7 @@ function setCollapsibleFoldExpanded(fold, expanded) {
 
 function toggleCollapsibleFold(fold) {
   if (!fold) return;
-  setCollapsibleFoldExpanded(fold, fold.dataset.expanded === "false");
+  setCollapsibleFoldExpanded(fold, fold.dataset.expanded === "false", { user: true });
 }
 
 function isEmptyAssistantReply(node) {
@@ -2179,10 +2194,39 @@ function wrapAssistantInRunChunk(turn) {
 
 function promoteCheckpointNotices(root) {
   if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".agent-response-host").forEach((host) => {
+    const firstChunk = host.querySelector(":scope > .agent-run-chunk");
+    const primaryTurn = firstChunk?.querySelector(":scope > .chat-turn.assistant");
+    const primaryBody = workFoldBody(turnWorkFold(primaryTurn));
+    if (!primaryTurn || !primaryBody) return;
+    let node = firstChunk.nextSibling;
+    while (node && node.parentElement === host) {
+      const next = node.nextSibling;
+      if (node.classList.contains("context-checkpoint-notice")) {
+        primaryBody.appendChild(node);
+      } else if (node.classList.contains("agent-run-chunk")) {
+        const turn = node.querySelector(":scope > .chat-turn.assistant");
+        const fold = turnWorkFold(turn);
+        const body = workFoldBody(fold);
+        if (body) {
+          while (body.firstChild) primaryBody.appendChild(body.firstChild);
+        }
+        if (turn) {
+          [...turn.children].forEach((child) => {
+            if (child === fold) return;
+            if (child.classList.contains("assistant-reply")) primaryTurn.appendChild(child);
+            else if (!fold) primaryBody.appendChild(child);
+          });
+        }
+        node.remove();
+      }
+      node = next;
+    }
+  });
   root.querySelectorAll(".chat-turn.assistant .context-checkpoint-notice").forEach((notice) => {
     const turn = notice.closest(".chat-turn.assistant");
-    if (!turn) return;
-    const chunk = wrapAssistantInRunChunk(turn);
+    const body = workFoldBody(turnWorkFold(turn));
+    if (!turn || !body || body.contains(notice)) return;
     const trailing = [];
     let node = notice.nextSibling;
     while (node) {
@@ -2190,17 +2234,8 @@ function promoteCheckpointNotices(root) {
       trailing.push(node);
       node = next;
     }
-    notice.remove();
-    (chunk || turn).after(notice);
-    if (!trailing.length) return;
-    const nextTurn = document.createElement("div");
-    nextTurn.className = "chat-turn assistant";
-    nextTurn.dataset.createdAt = turn.dataset.createdAt || "";
-    trailing.forEach((item) => nextTurn.appendChild(item));
-    const nextChunk = document.createElement("div");
-    nextChunk.className = "agent-run-chunk agent-run-working";
-    nextChunk.appendChild(nextTurn);
-    notice.after(nextChunk);
+    body.appendChild(notice);
+    trailing.forEach((item) => turn.appendChild(item));
   });
   root.querySelectorAll(".chat-turn.assistant").forEach((turn) => wrapAssistantInRunChunk(turn));
 }
@@ -2458,7 +2493,7 @@ function createCommandFromRecord(item = {}) {
     name: "exec_command",
     command: item.command,
     cwd: item.cwd,
-    args: { command: item.command, cwd: item.cwd || "." },
+    args: { command: item.command, context: item.context, cwd: item.cwd || "." },
   }), { state: item.status === "error" ? "error" : "success" });
   markActivityNode(row);
   if (item.exit_code != null) row.dataset.exitCode = String(item.exit_code);
@@ -2470,6 +2505,34 @@ function createCommandFromRecord(item = {}) {
   if (Number.isFinite(endedAt)) row.dataset.endedAt = String(endedAt);
   if (item.duration_ms != null) row.dataset.durationMs = String(item.duration_ms);
   return row;
+}
+
+function restoreHistoryCommandContexts(root, history = []) {
+  const contextsByCall = new Map();
+  const contextsByCommand = new Map();
+  for (const message of history) {
+    if (message?.role !== "assistant") continue;
+    for (const call of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
+      const tool = commandToolFromHistoryCall(call);
+      if (tool.toolName !== "exec_command") continue;
+      const context = agentCommandContextForTool(tool);
+      const command = agentTerminalCommandForTool(tool);
+      if (!command) continue;
+      if (tool.callId && context) contextsByCall.set(tool.callId, context);
+      const contexts = contextsByCommand.get(command) || new Set();
+      contexts.add(context);
+      contextsByCommand.set(command, contexts);
+    }
+  }
+  for (const row of root.querySelectorAll(".agent-command-event")) {
+    if (!row.dataset.commandContext) {
+      const contexts = contextsByCommand.get(row.dataset.commandText);
+      const context = contextsByCall.get(row.dataset.callId)
+        || (contexts?.size === 1 ? [...contexts][0] : "");
+      if (context) row.dataset.commandContext = context;
+    }
+    if (row.dataset.commandContext) renderCommandTimelineLabel(row, row.dataset.state);
+  }
 }
 
 function createFileStackFromRecord(event = {}) {
@@ -2666,7 +2729,7 @@ function syncChatEmptyState() {
 function isChatSessionRunning(sessionId) {
   const run = activeChatRuns.get(String(sessionId || ""));
   if (!run || run.stopRequested) return false;
-  if (run.orchestrationHold) return true;
+  if (run.orchestrationHold || run.commandWait) return true;
   if (run.awaitingParentContinuation || run.pendingEndTurn) return true;
   if (rootHasLiveProcesses(runWorkRoot(run))) return true;
   return run.state === "running";
@@ -2691,7 +2754,7 @@ function rootHasLiveProcesses(root) {
 
 function parentRunStillWorking(run) {
   if (!run || run.stopRequested) return false;
-  if (run.modelTurnOpen || run.orchestrationHold || run.pendingEndTurn || run.awaitingParentContinuation) return true;
+  if (run.modelTurnOpen || run.orchestrationHold || run.commandWait || run.pendingEndTurn || run.awaitingParentContinuation) return true;
   return rootHasLiveProcesses(runWorkRoot(run));
 }
 
@@ -2922,6 +2985,10 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
 function prepareActiveChatSessionForSwitch(nextSessionId = "") {
   const current = activeChatSession();
   if (!current || current.id === nextSessionId) return;
+  if (promptQueueEdit?.sessionId === current.id && chatInput) {
+    chatInput.value = promptQueueEdit.priorDraft || "";
+    promptQueueEdit = null;
+  }
   current.draftText = chatInput?.value || "";
   current.draftSlashCommand = selectedSlashCommand;
   syncActiveChatSession();
@@ -2981,6 +3048,7 @@ function applyActiveChatSession(session) {
     renderCanonicalChatHistory(session.history);
     restoreHistorySubagentCards(session.history);
   }
+  restoreHistoryCommandContexts(messages, session.history);
   normalizeChatExchanges();
   ensureVisibleDelegatedPrompt(session);
   syncChatStickyMask();
@@ -3000,6 +3068,8 @@ function applyActiveChatSession(session) {
   resizeChatInput();
   syncChatModeUi();
   updateSendBtn();
+  renderPromptQueue();
+  queueMicrotask(() => drainPromptQueue(session.id));
   requestAnimationFrame(() => {
     messages.querySelectorAll(".assistant-reply[data-raw-md]").forEach((element) => {
       globalThis.MarkdownRenderer?.renderToElement(element, element.dataset.rawMd || "");
@@ -9270,8 +9340,8 @@ function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SU
       assistant.splitAtContextCheckpoint(notice);
     } else {
       const turn = assistant?.turn || null;
-      const chunk = wrapAssistantInRunChunk(turn) || checkpointNoticeHost(host);
-      if (chunk?.after) chunk.after(notice);
+      const foldBody = workFoldBody(turnWorkFold(turn));
+      if (foldBody) appendChatStreamNode(foldBody, notice);
       else host.appendChild(notice);
     }
   }
@@ -9691,8 +9761,8 @@ fileTree?.addEventListener("click", (event) => {
   selectItem(null);
 });
 
-const EXPLORER_TREE_BASE_PADDING = 8;
-const EXPLORER_TREE_LEVEL_INDENT = 14;
+const EXPLORER_TREE_BASE_PADDING = 4;
+const EXPLORER_TREE_LEVEL_INDENT = 8;
 
 function explorerTreeDepth(item) {
   const explicit = Number(item?.dataset?.treeDepth);
@@ -15125,7 +15195,7 @@ function exploredToolParts(tool = {}, result = {}, phase = "success") {
   if (isAgentTerminalTool(tool) || /^(exec_command)$/.test(action) || /command|terminal|process|shell|script|exec/.test(action)) {
     return {
       verb: running ? "Running Command" : "Ran Command",
-      detail: agentTerminalCommandForTool(tool),
+      detail: agentCommandContextForTool(tool),
     };
   }
   if (action === "web_research") return webResearchParts(tool, result, running);
@@ -15515,6 +15585,10 @@ function commandToolFromHistoryCall(call = {}) {
   return { callId: String(call.id || call.callId || ""), toolName, action: toolName, args };
 }
 
+function agentCommandContextForTool(tool) {
+  return String(tool?.args?.context || tool?.context || "").trim();
+}
+
 function agentTerminalCommandForTool(tool) {
   if (!tool) return "";
   if (tool.command) return String(tool.command);
@@ -15579,6 +15653,8 @@ function bindCommandTimelineIdentity(row, ...sources) {
   for (const [key, value] of Object.entries(identities)) {
     if (value) row.dataset[key] = value;
   }
+  const context = values.map(agentCommandContextForTool).find(Boolean);
+  if (context) row.dataset.commandContext = context;
   return row;
 }
 
@@ -15642,7 +15718,7 @@ function renderCommandTimelineLabel(row, state = "running", extraDetail = "") {
   if (!row) return;
   const label = row.querySelector(".agent-command-label");
   if (!label) return;
-  const detail = String(extraDetail || row.dataset.commandText || "").trim();
+  const detail = String(extraDetail || row.dataset.commandContext || "").trim();
   renderToolStatusLabel(label, commandTimelineStateLabel(state), detail);
 }
 
@@ -15656,6 +15732,8 @@ function createCommandTimelineRow(tool, { state = "running" } = {}) {
   row.open = false;
   const command = agentTerminalCommandForTool(tool) || "";
   if (command) row.dataset.commandText = command;
+  const commandContext = agentCommandContextForTool(tool);
+  if (commandContext) row.dataset.commandContext = commandContext;
   const cwd = tool.args?.cwd || tool.cwd;
   if (cwd) row.dataset.cwd = String(cwd);
   row.dataset.startedAt = String(Date.now());
@@ -15727,7 +15805,7 @@ function stopCommandTimelineTicker(row) {
   commandTimelineTickers.delete(row);
 }
 
-function updateCommandTimelineLabel(identity, label) {
+function updateCommandTimelineLabel(identity) {
   const ids = identity && typeof identity === "object"
     ? commandLifecycleIds(identity)
     : new Set([String(identity || "").trim()].filter(Boolean));
@@ -15735,8 +15813,7 @@ function updateCommandTimelineLabel(identity, label) {
   for (const row of commandTimelineRows()) {
     if (!commandTimelineIdentityMatches(row, ids)) continue;
     if (row.dataset.waiting !== "true") continue;
-    const labelEl = row.querySelector(".agent-command-label");
-    if (labelEl) renderToolStatusLabelFromText(labelEl, label);
+    renderCommandTimelineLabel(row, "running");
     row.dataset.state = "running";
     persistCommandTimelineRowState(row);
   }
@@ -15838,14 +15915,9 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
   scrollMessages();
 }
 
-const CHAT_BOTTOM_THRESHOLD = 8;
-let chatAutoFollow = true;
 let chatStickyMaskFrame = 0;
-
-function messagesAreNearBottom() {
-  if (!messages) return true;
-  return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= CHAT_BOTTOM_THRESHOLD;
-}
+const chatScroller = createChatScroller(messages, { onScroll: syncChatStickyMask });
+appLifecycle.add(() => chatScroller.destroy());
 
 function syncChatStickyMask() {
   if (!chatPane || !messages || chatStickyMaskFrame) return;
@@ -15874,25 +15946,8 @@ function syncChatStickyMask() {
 }
 
 function scrollMessages({ force = false } = {}) {
-  if (!messages) return;
-  if (force) chatAutoFollow = true;
-  if (!chatAutoFollow) return;
-  messages.scrollTo({
-    top: messages.scrollHeight,
-    behavior: force ? "smooth" : "auto",
-  });
+  chatScroller.follow({ force });
 }
-
-messages.addEventListener("wheel", (event) => {
-  // Disable follow immediately, including for a small upward wheel movement
-  // that has not yet crossed the bottom-distance threshold.
-  if (event.deltaY < 0) chatAutoFollow = false;
-}, { passive: true });
-
-messages.addEventListener("scroll", () => {
-  chatAutoFollow = messagesAreNearBottom();
-  syncChatStickyMask();
-}, { passive: true });
 
 function syncScrollerScrollbarHover(scroller, event) {
   if (!scroller || !event) return;
@@ -15917,34 +15972,6 @@ function bindScrollbarHoverLane(scroller) {
 
 bindScrollbarHoverLane(messages);
 bindScrollbarHoverLane(chatHistoryBody);
-
-function animateStreamDelta(container, delta) {
-  if (!container || !String(delta || "").trim()) return;
-  if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-  const now = Date.now();
-  if (now - Number(container.dataset.streamRevealAt || 0) < 80) return;
-  if (String(container.textContent || "").length > 12000) return;
-  container.dataset.streamRevealAt = String(now);
-
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-  let candidate = null;
-  while (walker.nextNode()) {
-    const node = walker.currentNode;
-    if (!node.data?.trim()) continue;
-    const parent = node.parentElement;
-    if (!parent || parent.closest("button, .md-code-copy, [aria-hidden='true']")) continue;
-    candidate = node;
-  }
-  if (!candidate?.parentNode) return;
-
-  const visibleDelta = String(delta).trimEnd();
-  const revealLength = Math.min(candidate.data.length, Math.max(1, visibleDelta.length));
-  const suffix = candidate.splitText(Math.max(0, candidate.data.length - revealLength));
-  const reveal = document.createElement("span");
-  reveal.className = "stream-text-reveal";
-  suffix.parentNode.insertBefore(reveal, suffix);
-  reveal.appendChild(suffix);
-}
 
 function formatAgentWorkDuration(startedAt, endedAt = Date.now()) {
   const totalSeconds = Math.max(0, Math.round((endedAt - startedAt) / 1000));
@@ -16975,6 +17002,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
   const contentEl = document.createElement("div");
   contentEl.className = "assistant-reply";
   contentEl.dataset.lane = "prose";
+  contentEl.dataset.liveReply = "true";
   contentEl.hidden = true;
   turn.appendChild(contentEl);
   appendChatTurn(turn, { container });
@@ -17029,6 +17057,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const next = document.createElement("div");
       next.className = "assistant-reply";
       next.dataset.lane = "prose";
+      next.dataset.liveReply = "true";
       if (this.verdictOpen) next.dataset.workVerdict = "true";
       if (this.turn.getAttribute("aria-busy") === "true") next.classList.add("streaming");
       next.hidden = true;
@@ -17068,15 +17097,10 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       }
       return this.workHostTurn() || this.turn;
     },
-    // Interim narration is part of the work, so it streams into the body while
-    // the fold is open. A run with no work at all has no fold to stream into.
+    // The current reply keeps its position through completion. A later tool
+    // start moves that reply into the work history before adding its activity.
     conversationMount() {
-      if (this.turn?.classList.contains("agent-run-stop") || this.turn?.closest(".agent-run-stop")) {
-        return this.turn;
-      }
-      if (this.verdictOpen) return this.replyMount();
-      const host = this.workHostTurn() || this.turn;
-      return workFoldBody(turnWorkFold(host)) || host;
+      return this.replyMount();
     },
     workingMount() {
       return this.replyMount();
@@ -17133,7 +17157,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       });
       for (const fold of folds) {
         const content = thinkingContentOf(fold);
-        const raw = String(content?.dataset?.rawMd || (fold === this.thinkingFoldEl ? this.thinkingRaw : "") || "");
+        const raw = String((fold === this.thinkingFoldEl ? this.thinkingRaw : "") || content?.dataset?.rawMd || "");
         finishThinkingFold(fold, { collapse });
         if (content && raw.trim()) renderMarkdown(content, raw, { streaming: false });
       }
@@ -17147,8 +17171,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       if (streamingNodeLive(current) && !current.closest(".agent-explored-fold") && !current.closest(".agent-thinking-fold")) {
         // Streamed text keeps flowing into the current block. The only things
         // that may break it are tool work landing after it, or the block being
-        // mounted in the wrong place (inside the fold once the verdict opened,
-        // or outside the fold while work is still running).
+        // mounted inside a fold left over from a previous tool cycle.
         const inWorkFold = Boolean(current.closest(".agent-work-fold, .agent-thinking-fold, .agent-file-stack"));
         const misplaced = this.verdictOpen ? inWorkFold : current.parentElement !== host;
         if (!misplaced) {
@@ -17162,6 +17185,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
           const anchor = this.contentSegmentAnchor(host);
           if (anchor) anchor.after(current);
           else host.appendChild(current);
+          current.dataset.liveReply = "true";
           if (this.verdictOpen) current.dataset.workVerdict = "true";
           return current;
         }
@@ -17278,49 +17302,10 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     splitAtContextCheckpoint(notice) {
       if (!notice || !this.turn) return null;
-      this.sealCurrentContentSegment();
-      this.turn.querySelectorAll(".tool-card").forEach((card) => {
-        if (isKeepableToolCard(card)) return;
-        if (card.hidden || isPlaceholderToolCardLabel(toolCardLabelText(card))) card.remove();
-      });
-      const chunk = wrapAssistantInRunChunk(this.turn);
-      if (chunk) chunk.after(notice);
-      else this.turn.after(notice);
-
-      const nextTurn = document.createElement("div");
-      nextTurn.className = "chat-turn assistant";
-      nextTurn.setAttribute("aria-busy", this.turn.getAttribute("aria-busy") || "true");
-      nextTurn.dataset.createdAt = this.turn.dataset.createdAt || new Date().toISOString();
-      if (this.sessionId) nextTurn.dataset.sessionId = this.sessionId;
-      const nextContent = document.createElement("div");
-      nextContent.className = "assistant-reply";
-      if (nextTurn.getAttribute("aria-busy") === "true") nextContent.classList.add("streaming");
-      nextContent.hidden = true;
-      nextTurn.appendChild(nextContent);
-      const nextChunk = document.createElement("div");
-      nextChunk.className = "agent-run-chunk agent-run-working";
-      nextChunk.appendChild(nextTurn);
-      notice.after(nextChunk);
-
-      this.turn.setAttribute("aria-busy", "false");
-      this.finishThinking({ collapse: true });
-      this.stopWorkTimer();
-      this.workFoldEl = null;
-      this.workFoldBodyEl = null;
-      this.liveStateEl = null;
-      this.statusEl = null;
-      this.exploredFoldEl = null;
-      this.exploredBodyEl = null;
-      this.thinkingFoldEl = null;
-      this.thinkingContentEl = null;
-      this.thinkingRaw = "";
-      this.verdictOpen = false;
-      this.turn = nextTurn;
-      this.contentEl = nextContent;
-      this.contentSegments.push({ el: nextContent, raw: "" });
-      const host = notice.closest(".agent-response-host") || notice.parentElement;
-      const footer = host?.querySelector?.(":scope > .assistant-reply-footer");
-      if (footer) host.appendChild(footer);
+      const host = this.toolWorkMount();
+      markActivityNode(notice);
+      if (host) appendChatStreamNode(host, notice);
+      else this.turn.appendChild(notice);
       return notice;
     },
     renderContentSegment(segment, { streaming = false } = {}) {
@@ -17357,6 +17342,12 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       (this.rootTurn || this.turn).dataset.rawAssistant = next;
     },
     markToolUse() {
+      const current = this.currentContentSegment()?.el;
+      if (current) {
+        delete current.dataset.liveReply;
+        delete current.dataset.workVerdict;
+      }
+      this.sealCurrentContentSegment();
       this.noteModelOutput();
       this.pendingVerdictBreak = false;
       if (this.verdictOpen) {
@@ -17438,7 +17429,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         this.coalesceLiveVerdict();
       }
       this.pendingVerdictBreak = Boolean(String(this.currentContentSegment()?.raw || "").trim());
-      if (collapse && fold) setWorkFoldExpanded(fold, false);
+      if (collapse && fold && fold.dataset.userToggled !== "true") setWorkFoldExpanded(fold, false);
     },
     ensureCommandEvent(tool) {
       this.markToolUse();
@@ -17669,7 +17660,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         restackFileRows(turn);
         const answer = promoteFinalAnswer(turn);
         if (answer) answer.dataset.workVerdict = "true";
-        if (isFinishedWorkFold(fold)) setWorkFoldExpanded(fold, false);
+        if (isFinishedWorkFold(fold) && fold.dataset.userToggled !== "true") setWorkFoldExpanded(fold, false);
       }
       if (stopped) appendStoppedPlainText(this.workHostTurn() || this.turn, this.contentSegments);
     },
@@ -17743,7 +17734,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const streaming = this.contentEl.classList.contains("streaming");
       return ToolParser.cleanReplyForDisplay(this.rawContent, { streaming });
     },
-    syncDisplay({ animateToken = "" } = {}) {
+    syncDisplay() {
       const segment = this.currentContentSegment();
       if (!segment) return;
       const raw = String(segment.raw || "");
@@ -17755,7 +17746,6 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
           text,
           { streaming: segment.el.classList.contains("streaming") },
         );
-        if (animateToken) animateStreamDelta(segment.el, animateToken);
       }
       scrollMessages();
     },
@@ -17764,6 +17754,10 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       this.noteModelOutput();
       this.ensureConversationSegment();
       const segment = this.currentContentSegment();
+      if (segment) {
+        segment.el.classList.add("streaming");
+        segment.el.dataset.liveReply = "true";
+      }
       if (this.pendingVerdictBreak) {
         // A new model round is extending an already-finished verdict: keep it
         // in the same block, but as its own paragraph.
@@ -17773,7 +17767,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       this.rawContent += value;
       if (segment) segment.raw += value;
       (this.rootTurn || this.turn).dataset.rawAssistant = this.rawContent;
-      this.syncDisplay({ animateToken: token });
+      this.syncDisplay();
     },
     finalizeContent() {
       this.finalizeThinking();
@@ -17797,6 +17791,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         }
       }
       this.finishLiveState(this.finalOutcome || "complete");
+      for (const segment of this.contentSegments) delete segment.el.dataset.liveReply;
       const copyAnchor = this.contentSegments.findLast((segment) => !segment.el.hidden)?.el || this.contentEl;
       attachAssistantCopyButton(copyAnchor);
       this.pruneIfEmpty();
@@ -18342,6 +18337,7 @@ function sendHiddenAgentRuntime(payload = {}) {
 
 async function sendMessageWithAgentRuntime(options = {}) {
   const internal = Boolean(options?.internal);
+  let drainQueuedPrompt = false;
   const targetSessionId = String(options?.sessionId || activeChatSessionId || "");
   const hasExplicitText = Object.prototype.hasOwnProperty.call(options || {}, "text");
   let text = hasExplicitText
@@ -18402,11 +18398,13 @@ async function sendMessageWithAgentRuntime(options = {}) {
     : (providedContextFiles[0] || getActiveFileContext());
 
   if (!internal) {
-    chatInput.value = "";
-    runSession.draftText = "";
-    runSession.draftSlashCommand = "";
-    resetChatInput();
-    addUserMessage(text);
+    if (!options?.fromQueue) {
+      chatInput.value = "";
+      runSession.draftText = "";
+      runSession.draftSlashCommand = "";
+      resetChatInput();
+    }
+    if (activeChatSessionId === runSession.id) addUserMessage(text);
   }
   const userMessage = {
     role: "user",
@@ -18497,6 +18495,11 @@ async function sendMessageWithAgentRuntime(options = {}) {
     // the main process starts the continuation, so do not render those events
     // into the old assistant turn as well.
     if (payload.source === "parent_continuation") return;
+
+    if (payload.type === "model_run_command_wait") {
+      beginModelRunCommandWait(run, assistant, payload);
+      return;
+    }
 
     if (payload.type === "context_checkpoint") {
       // Checkpointing is automatic and main-process owned. The in-chat
@@ -18649,11 +18652,14 @@ async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "agent_terminal") {
-      if (payload.phase === "start" || payload.phase === "started") {
+      if (payload.phase === "start" || payload.phase === "queued" || payload.phase === "started") {
         TerminalManager.attachAgentSession({
           id: payload.id || payload.terminalId,
           command: payload.command || "command",
           toolName: payload.toolName || "exec_command",
+          cwd: payload.cwd || "",
+          shell: payload.shell || "auto",
+          queued: payload.phase === "queued",
         });
         globalThis.expandTerminalPanel?.({ createIfMissing: false });
       }
@@ -18762,6 +18768,11 @@ async function sendMessageWithAgentRuntime(options = {}) {
     } else if (agentRunResult && typeof agentRunResult === "object") {
       run.orchestrationHold = Boolean(agentRunResult.orchestrationHold);
       run.pendingEndTurn = Boolean(agentRunResult.pendingEndTurn);
+      run.commandWait = Boolean(agentRunResult.commandWait);
+      if (run.commandWait && Array.isArray(agentRunResult.waitingProcessIds)) {
+        run.commandWaitIds = new Set(agentRunResult.waitingProcessIds.map((id) => String(id)));
+        run.commandWaitResults = run.commandWaitResults || new Map();
+      }
     }
     const result = agentRunResult;
     // Drain serialized UI events so the last tokens/tool cards land before
@@ -18824,7 +18835,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       assistant.setRawContent(lastAgentText);
     }
 
-    if ((run.orchestrationHold || run.pendingEndTurn) && !run.stopRequested) {
+    if ((run.orchestrationHold || run.pendingEndTurn || run.commandWait) && !run.stopRequested) {
       for (const turn of assistant.assistantTurns?.() || [assistant.turn]) {
         turn?.setAttribute("aria-busy", "true");
       }
@@ -18894,6 +18905,10 @@ async function sendMessageWithAgentRuntime(options = {}) {
       updateContextUsage();
       refreshStoredContextCapacity();
     }
+    if (!stillWorking && !run.stopRequested) {
+      runSession.promptQueueArmed = true;
+      drainQueuedPrompt = true;
+    }
     if (activeChatSessionId === runSession.id) syncActiveChatSession();
     if (activeChatSessionId === runSession.id && !contextCheckpointing && !stillWorking) {
       chatInput.disabled = false;
@@ -18907,6 +18922,10 @@ async function sendMessageWithAgentRuntime(options = {}) {
   return agentRunResult;
   } finally {
     if (!internal) chatSendInFlight.delete(targetSessionId);
+    if (drainQueuedPrompt) {
+      const sessionId = targetSessionId;
+      queueMicrotask(() => drainPromptQueue(sessionId));
+    }
   }
 }
 
@@ -19045,9 +19064,9 @@ function dropAutoContinuationsForSession(sessionId = "") {
 }
 
 sendBtn.addEventListener("click", () => {
-  if (isRunningChatActive()) stopGeneration();
-  else sendMessageWithAgentRuntime();
+  submitChatComposer();
 });
+bindPromptQueue();
 
 btnTopTerminal?.addEventListener("click", () => {
   setTerminalCollapsed(!terminalCollapsed);
@@ -19225,27 +19244,25 @@ function childAssistant(run) {
           const content = thinkingContentOf(fold) || this.thinkingContentEl;
           if (content) {
             content.hidden = false;
-            scheduleDelegatedMarkdownRender(`${run.sessionId}:thinking`, content, this.thinkingRaw, { streaming: true });
+            renderMarkdown(content, this.thinkingRaw, { streaming: true });
           }
         }
         run.thinkingFoldEl = this.thinkingFoldEl;
         run.thinkingRaw = this.thinkingRaw;
         if (runIsChildVisible(run.sessionId)) scrollMessages();
       };
-      run.assistant.syncDisplay = function delegatedSyncDisplay(options = {}) {
+      run.assistant.syncDisplay = function delegatedSyncDisplay() {
         const segment = this.currentContentSegment();
         if (!segment) return;
         const raw = String(segment.raw || "");
         const text = ToolParser.cleanReplyForDisplay(raw, { streaming: true }) || raw.trim();
         if (text) {
           segment.el.hidden = false;
-          scheduleDelegatedMarkdownRender(
-            `${run.sessionId}:content`,
+          renderMarkdown(
             segment.el,
             text,
             { streaming: segment.el.classList.contains("streaming") },
           );
-          if (options.animateToken) animateStreamDelta(segment.el, options.animateToken);
         }
         if (runIsChildVisible(run.sessionId)) scrollMessages();
       };
@@ -19498,8 +19515,10 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
       assistant.finalizeThinking();
     } else {
       assistant.markToolUse();
-      if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
-      else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
+      if (isAgentTerminalTool(payload.tool)) {
+        const operation = String(payload.tool.args?.operation || "run");
+        if (operation === "run" || operation === "start") assistant.ensureCommandEvent(payload.tool);
+      } else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
     }
   } else if (type === "tool_result" && payload.tool && payload.result) {
     if (isEndTurnTool(payload.tool)) {
@@ -19595,7 +19614,6 @@ function drainPendingSubagentResults() {
 
 const parentContinuationEventQueues = new Map();
 const childEventLanes = new Map();
-const delegatedMarkdownFrames = new Map();
 const delegatedSnapshotTimers = new Map();
 
 function enqueueDelegatedChildEvent(childSessionId, handler) {
@@ -19606,16 +19624,6 @@ function enqueueDelegatedChildEvent(childSessionId, handler) {
   next.finally(() => {
     if (childEventLanes.get(key) === next) childEventLanes.delete(key);
   });
-}
-
-function scheduleDelegatedMarkdownRender(childSessionId, contentEl, raw, options = {}) {
-  const key = String(childSessionId || "");
-  if (delegatedMarkdownFrames.has(key)) cancelAnimationFrame(delegatedMarkdownFrames.get(key));
-  const frame = requestAnimationFrame(() => {
-    delegatedMarkdownFrames.delete(key);
-    renderMarkdown(contentEl, raw, options);
-  });
-  delegatedMarkdownFrames.set(key, frame);
 }
 
 function scheduleDelegatedLiveSnapshot(run) {
@@ -19753,8 +19761,10 @@ async function renderParentContinuationEvent(payload = {}) {
     } else {
       assistant.markToolUse();
       assistant.finalizeThinking();
-      if (isAgentTerminalTool(payload.tool)) assistant.ensureCommandEvent(payload.tool);
-      else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
+      if (isAgentTerminalTool(payload.tool)) {
+        const operation = String(payload.tool.args?.operation || "run");
+        if (operation === "run" || operation === "start") assistant.ensureCommandEvent(payload.tool);
+      } else ensureToolCard(assistant.turn, assistant.contentEl, payload.tool, { pending: true });
     }
   } else if (type === "tool_result" && payload.tool && payload.result) {
     if (isEndTurnTool(payload.tool)) {
@@ -19874,7 +19884,7 @@ window.api?.onAgentEvent?.((payload) => {
       const elapsedMs = Number(payload.elapsedMs) || 0;
       const state = String(payload.health?.state || payload.metrics?.state || "running");
       updateWaitCardLabel(waitId, `Running command · ${formatWaitClock(elapsedMs)} · ${state}`);
-      updateCommandTimelineLabel(waitId, `Running command · ${formatWaitClock(elapsedMs)} · ${state}`);
+      updateCommandTimelineLabel(waitId);
     }
     return;
   }
@@ -19914,7 +19924,7 @@ window.api?.onAgentEvent?.((payload) => {
 // Queue events while any chat is already running so nothing is dropped.
 window.api?.onAgentEvent?.((payload) => {
   const type = String(payload?.type || "");
-  if (!["subagent_complete", "terminal_complete", "subagent_checkpoint", "terminal_checkpoint"].includes(type)) {
+  if (!["subagent_complete", "terminal_complete", "subagent_checkpoint", "terminal_checkpoint", "agent_command_output"].includes(type)) {
     return;
   }
   // UI settlement is independent from the follow-up agent turn. A command
@@ -19922,11 +19932,20 @@ window.api?.onAgentEvent?.((payload) => {
   // only the transcript continuation waits for the active turn to finish.
   if (type === "terminal_complete") {
     finalizeCommandTimeline(payload, payload?.status, payload?.exitCode);
+    if (absorbModelRunCommandResult(payload)) return;
+    return;
   }
-  // Foreground commands can emit a terminal_complete lifecycle event before
-  // their normal tool result arrives. They never entered a background wait,
-  // so do not start a duplicate continuation turn for them.
-  if (type === "terminal_complete" && payload?.waiting === false) return;
+  if (type === "agent_command_output") {
+    if (!payload.deliverToSession) return;
+    if (absorbModelRunCommandResult(payload)) return;
+    const sessionId = chatSessionIdForRuntimeId(payload.sessionId || "") || String(payload.sessionId || "");
+    if (isChatSessionRunning(sessionId) || subagentCompletionPending) {
+      pendingBackgroundWaitEvents.push({ payload, kind: "terminal", phase: "command_output" });
+      return;
+    }
+    deliverAgentCommandOutput(payload);
+    return;
+  }
   const phase = type.endsWith("_checkpoint") ? "checkpoint" : "complete";
   const kind = type.startsWith("subagent_") ? "subagent" : "terminal";
   if (!anyChatSessionRunning() && !subagentCompletionPending) {
@@ -19954,7 +19973,129 @@ function drainPendingBackgroundWaitEvents() {
   if (anyChatSessionRunning() || subagentCompletionPending) return;
   const next = pendingBackgroundWaitEvents.shift();
   if (!next) return;
+  if (next.phase === "command_output") {
+    deliverAgentCommandOutput(next.payload);
+    return;
+  }
   handleBackgroundWaitEvent(next.payload, next.kind, next.phase);
+}
+
+function formatCommandWaitClock(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours}h ${minutes}m ${seconds}s`;
+}
+
+function takePendingCommandOutputs(processIds) {
+  const ids = processIds instanceof Set ? processIds : new Set(processIds);
+  const kept = [];
+  const matched = [];
+  for (const item of pendingBackgroundWaitEvents) {
+    const id = String(item?.payload?.processId || "");
+    if (item?.phase === "command_output" && ids.has(id)) matched.push(item.payload);
+    else kept.push(item);
+  }
+  pendingBackgroundWaitEvents = kept;
+  return matched;
+}
+
+function beginModelRunCommandWait(run, assistant, payload = {}) {
+  if (!run) return;
+  const commands = Array.isArray(payload.commands) ? payload.commands : [];
+  run.commandWait = true;
+  run.commandWaitIds = new Set(commands.map((item) => String(item.processId || "")).filter(Boolean));
+  run.commandWaitResults = run.commandWaitResults || new Map();
+  run.commandWaitStartedAt = Number(payload.startedAt) || Date.now();
+  for (const queued of takePendingCommandOutputs(run.commandWaitIds)) {
+    absorbModelRunCommandResult(queued);
+  }
+  if (!run.commandWait) return;
+  const host = assistant?.toolWorkMount?.();
+  if (!host) return;
+  let line = host.querySelector(":scope > .command-run-wait");
+  if (!line) {
+    line = document.createElement("div");
+    line.className = "command-run-wait";
+    line.innerHTML = `<div class="command-run-wait-title">Running command</div><div class="command-run-wait-clock"></div>`;
+    host.appendChild(line);
+  }
+  const tick = () => {
+    const clock = line.querySelector(".command-run-wait-clock");
+    if (!clock) return;
+    clock.textContent = `Waiting for command ${formatCommandWaitClock(Date.now() - run.commandWaitStartedAt)}`;
+  };
+  tick();
+  if (line._timer) clearInterval(line._timer);
+  line._timer = setInterval(tick, 1000);
+}
+
+function commandWaitRunForProcess(processId) {
+  const id = String(processId || "");
+  if (!id) return null;
+  for (const run of activeChatRuns.values()) {
+    if (run?.commandWaitIds?.has(id)) return run;
+  }
+  return null;
+}
+
+function absorbModelRunCommandResult(payload = {}) {
+  const processId = String(payload.processId || "");
+  const run = commandWaitRunForProcess(processId);
+  if (!run) return false;
+  run.commandWaitResults.set(processId, payload);
+  if (run.commandWaitResults.size < run.commandWaitIds.size) return true;
+  const commands = [...run.commandWaitIds].map((id) => {
+    const item = run.commandWaitResults.get(id) || {};
+    return {
+      command: String(item.command || ""),
+      context: String(item.context || ""),
+      processId: id,
+      status: String(item.status || "complete"),
+      exitCode: item.exitCode ?? null,
+      stdout: String(item.stdout || ""),
+      stderr: String(item.stderr || ""),
+    };
+  });
+  run.commandWait = false;
+  run.commandWaitIds = null;
+  const host = run.assistant?.toolWorkMount?.();
+  const line = host?.querySelector?.(":scope > .command-run-wait");
+  if (line?._timer) clearInterval(line._timer);
+  line?.remove();
+  const sessionId = run.sessionId;
+  void sendMessageWithAgentRuntime({
+    internal: true,
+    sessionId,
+    text: JSON.stringify({ commands }, null, 2),
+    skipContextFiles: true,
+    continuation: { kind: "command_wait" },
+  });
+  return true;
+}
+
+function deliverAgentCommandOutput(payload = {}) {
+  const sessionId = chatSessionIdForRuntimeId(payload.sessionId || "") || String(payload.sessionId || activeChatSessionId || "");
+  if (!sessionId || isChatSessionStoppedByOperator(sessionId)) return;
+  const body = {
+    commands: [{
+      command: String(payload.command || ""),
+      context: String(payload.context || ""),
+      processId: String(payload.processId || ""),
+      status: String(payload.status || "complete"),
+      exitCode: payload.exitCode ?? null,
+      stdout: String(payload.stdout || ""),
+      stderr: String(payload.stderr || ""),
+    }],
+  };
+  void sendMessageWithAgentRuntime({
+    internal: true,
+    sessionId,
+    text: JSON.stringify(body, null, 2),
+    skipContextFiles: true,
+    continuation: { kind: "command_output" },
+  });
 }
 
 async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "complete") {
@@ -19974,7 +20115,7 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
     if (phase === "checkpoint") {
       const waitLabel = kind === "terminal" ? `Running command · ${elapsedLabel}` : `waiting ${elapsedLabel}`;
       updateWaitCardLabel(waitId, waitLabel);
-      if (kind === "terminal") updateCommandTimelineLabel(payload, waitLabel);
+      if (kind === "terminal") updateCommandTimelineLabel(payload);
     } else {
       finalizeSubagentWaitingCard(waitId, status, elapsedLabel);
       if (kind === "terminal") finalizeCommandTimeline(payload, status, payload.exitCode);
@@ -20207,11 +20348,16 @@ chatInput.addEventListener("keydown", (e) => {
   if (!slashCommandSuggestions?.hidden && e.key === "Escape") {
     e.preventDefault(); closeSlashSuggestions(); return;
   }
+  if (e.key === "Escape" && isEditingPromptQueue()) {
+    e.preventDefault();
+    cancelPromptQueueEdit();
+    return;
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     if (e.repeat || e.isComposing) return;
     e.preventDefault();
     e.stopPropagation();
-    sendMessageWithAgentRuntime();
+    submitChatComposerFromInput();
   }
 });
 chatInput.addEventListener("beforeinput", (e) => {
@@ -20336,18 +20482,288 @@ function isDelegatedChildRunLocked(sessionId = activeChatSessionId) {
   return Boolean(run && run.state === "running" && run.delegated === true);
 }
 
+function isEditingPromptQueue() {
+  return Boolean(promptQueueEdit && promptQueueEdit.sessionId === activeChatSessionId);
+}
+
+function promptQueueMoreLabel(count) {
+  if (count >= 9) return "9+ more queue";
+  return `${count} more queue`;
+}
+
+function remapPromptQueueEdit(from, to) {
+  if (!promptQueueEdit) return;
+  const index = promptQueueEdit.index;
+  if (index === from) promptQueueEdit.index = to;
+  else if (from < to && index > from && index <= to) promptQueueEdit.index -= 1;
+  else if (from > to && index >= to && index < from) promptQueueEdit.index += 1;
+}
+
+function renderPromptQueue() {
+  const host = $("prompt-queue");
+  if (!host) return;
+  const session = activeChatSession();
+  const entries = promptQueueEntries(session?.promptQueue);
+  if (!session || !entries.length) {
+    host.hidden = true;
+    host.replaceChildren();
+    promptQueueExpanded = false;
+    return;
+  }
+  host.hidden = false;
+  if (entries.length <= 1) promptQueueExpanded = false;
+  const expanded = promptQueueExpanded && entries.length > 1;
+  const visible = entries.length === 1 || expanded ? (expanded ? entries : entries.slice(0, 1)) : [];
+  const list = document.createElement("div");
+  list.className = "prompt-queue-list";
+  if (entries.length > 1) {
+    const more = document.createElement("div");
+    more.className = "prompt-queue-more";
+    more.dataset.promptQueueMore = expanded ? "collapse" : "expand";
+    const caret = expanded ? "codicon-chevron-down" : "codicon-chevron-up";
+    more.innerHTML = `<span class="codicon ${caret} prompt-queue-more-caret" aria-hidden="true"></span><span>${promptQueueMoreLabel(entries.length)}</span>`;
+    list.appendChild(more);
+  }
+  const rows = document.createElement("div");
+  rows.className = "prompt-queue-rows";
+  rows.classList.toggle("is-scroll", expanded && entries.length > 5);
+  visible.forEach((entry) => {
+    const editing = promptQueueEdit?.sessionId === session.id && promptQueueEdit.index === entry.index;
+    const row = document.createElement("div");
+    row.className = `prompt-queue-row${entry.index === 1 ? " is-next" : ""}${editing ? " is-editing" : ""}`;
+    row.dataset.queueIndex = String(entry.index);
+    row.draggable = true;
+    const text = document.createElement("p");
+    text.className = "prompt-queue-text";
+    text.textContent = entry.user_prompt;
+    text.title = entry.user_prompt;
+    const actions = document.createElement("div");
+    actions.className = "prompt-queue-actions";
+    actions.innerHTML = `<button type="button" class="prompt-queue-edit" title="Edit" aria-label="Edit queued prompt"><span class="codicon codicon-edit" aria-hidden="true"></span></button><button type="button" class="prompt-queue-delete" title="Delete" aria-label="Delete queued prompt"><span class="codicon codicon-trash" aria-hidden="true"></span></button>`;
+    row.append(text, actions);
+    rows.appendChild(row);
+  });
+  if (visible.length) list.appendChild(rows);
+  host.replaceChildren(list);
+  placePromptQueue();
+}
+
+function placePromptQueue() {
+  const host = $("prompt-queue");
+  const row = composerEl?.querySelector(".composer-input-row");
+  if (!host || !row) return;
+  if (host.hidden) {
+    host.style.top = "";
+    return;
+  }
+  const height = row.getBoundingClientRect().height;
+  const lowered = height / 4;
+  host.style.setProperty("--queue-line", "28px");
+  host.style.top = `${row.offsetTop - host.offsetHeight + lowered}px`;
+}
+
+function beginPromptQueueEdit(index) {
+  const session = activeChatSession();
+  const entry = promptQueueEntries(session?.promptQueue).find((item) => item.index === Number(index));
+  if (!session || !entry || !chatInput) return;
+  const priorDraft = promptQueueEdit?.sessionId === session.id
+    ? promptQueueEdit.priorDraft
+    : String(session.draftText || effectiveChatInputValue() || "");
+  promptQueueEdit = { sessionId: session.id, index: entry.index, priorDraft };
+  chatInput.value = entry.user_prompt;
+  onChatInputChange();
+  chatInput.focus();
+  renderPromptQueue();
+}
+
+function cancelPromptQueueEdit() {
+  const edit = promptQueueEdit;
+  promptQueueEdit = null;
+  const session = activeChatSession();
+  if (edit && session && chatInput && edit.sessionId === session.id) {
+    chatInput.value = edit.priorDraft || "";
+    session.draftText = edit.priorDraft || "";
+    onChatInputChange();
+  }
+  renderPromptQueue();
+  if (session && !isChatSessionRunning(session.id)) queueMicrotask(() => drainPromptQueue(session.id));
+}
+
+function commitPromptQueueEdit() {
+  const edit = promptQueueEdit;
+  const session = activeChatSession();
+  if (!edit || !session || edit.sessionId !== session.id) return;
+  const text = effectiveChatInputValue().trim();
+  if (text) session.promptQueue = updatePromptAt(session.promptQueue, edit.index, text);
+  promptQueueEdit = null;
+  const restored = edit.priorDraft || "";
+  if (chatInput) chatInput.value = restored;
+  session.draftText = restored;
+  onChatInputChange();
+  renderPromptQueue();
+  if (!isChatSessionRunning(session.id) && !chatSendInFlight.has(session.id)) {
+    queueMicrotask(() => drainPromptQueue(session.id));
+  }
+}
+
+function deletePromptQueueItem(index) {
+  const session = activeChatSession();
+  if (!session) return;
+  const numeric = Number(index);
+  session.promptQueue = removePromptAt(session.promptQueue, numeric);
+  if (promptQueueEdit?.sessionId === session.id) {
+    if (promptQueueEdit.index === numeric) {
+      const prior = promptQueueEdit.priorDraft || "";
+      promptQueueEdit = null;
+      if (chatInput) chatInput.value = prior;
+      session.draftText = prior;
+      onChatInputChange();
+    } else if (promptQueueEdit.index > numeric) promptQueueEdit.index -= 1;
+  }
+  if (promptQueueEntries(session.promptQueue).length <= 1) promptQueueExpanded = false;
+  renderPromptQueue();
+}
+
+function queueComposerPrompt() {
+  const text = effectiveChatInputValue().trim();
+  const session = activeChatSession();
+  if (!text || !session) return;
+  session.promptQueue = enqueuePrompt(session.promptQueue, text);
+  if (chatInput) chatInput.value = "";
+  session.draftText = "";
+  session.draftSlashCommand = "";
+  resetChatInput();
+  closeSlashSuggestions();
+  renderPromptQueue();
+  updateSendBtn();
+}
+
+function drainPromptQueue(sessionId) {
+  const id = String(sessionId || "");
+  if (!id || id !== String(activeChatSessionId || "")) return;
+  if (promptQueueEdit?.sessionId === id) return;
+  if (isChatSessionRunning(id) || chatSendInFlight.has(id)) return;
+  const session = chatSessions.find((item) => item.id === id);
+  if (!session?.promptQueueArmed) return;
+  session.promptQueueArmed = false;
+  const shifted = shiftPromptQueue(session.promptQueue);
+  session.promptQueue = shifted.queue;
+  if (promptQueueEntries(session.promptQueue).length <= 1) promptQueueExpanded = false;
+  renderPromptQueue();
+  if (!String(shifted.prompt || "").trim()) return;
+  void sendMessageWithAgentRuntime({ text: shifted.prompt, sessionId: id, fromQueue: true });
+}
+
+function submitChatComposer() {
+  if (isEditingPromptQueue()) {
+    commitPromptQueueEdit();
+    return;
+  }
+  if (isRunningChatActive()) {
+    stopGeneration();
+    return;
+  }
+  sendMessageWithAgentRuntime();
+}
+
+function submitChatComposerFromInput() {
+  if (isEditingPromptQueue()) {
+    commitPromptQueueEdit();
+    return;
+  }
+  const sessionId = activeChatSessionId;
+  if (isChatSessionRunning(sessionId) || chatSendInFlight.has(sessionId)) {
+    queueComposerPrompt();
+    return;
+  }
+  sendMessageWithAgentRuntime();
+}
+
+function bindPromptQueue() {
+  const host = $("prompt-queue");
+  if (!host || host.dataset.bound === "true") return;
+  host.dataset.bound = "true";
+  document.addEventListener("click", (event) => {
+    if (!promptQueueExpanded) return;
+    if (host.contains(event.target)) return;
+    if (event.target.closest?.("[data-prompt-queue-more], .prompt-queue-list")) return;
+    promptQueueExpanded = false;
+    renderPromptQueue();
+  });
+  host.addEventListener("wheel", (event) => {
+    const list = event.target.closest?.(".prompt-queue-rows");
+    if (!list || list.scrollHeight <= list.clientHeight) return;
+    event.stopPropagation();
+  });
+  host.addEventListener("click", (event) => {
+    const more = event.target.closest("[data-prompt-queue-more]");
+    if (more) {
+      promptQueueExpanded = more.dataset.promptQueueMore === "expand";
+      renderPromptQueue();
+      return;
+    }
+    const row = event.target.closest(".prompt-queue-row");
+    if (!row) return;
+    const index = Number(row.dataset.queueIndex);
+    if (event.target.closest(".prompt-queue-edit")) beginPromptQueueEdit(index);
+    else if (event.target.closest(".prompt-queue-delete")) deletePromptQueueItem(index);
+  });
+  host.addEventListener("dragstart", (event) => {
+    const row = event.target.closest?.(".prompt-queue-row");
+    if (!row || event.target.closest?.(".prompt-queue-actions")) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.setData("text/plain", row.dataset.queueIndex || "");
+    event.dataTransfer.effectAllowed = "move";
+    row.classList.add("is-dragging");
+    const ghost = row.cloneNode(true);
+    ghost.classList.add("is-drag-ghost");
+    ghost.style.width = `${row.offsetWidth}px`;
+    document.body.appendChild(ghost);
+    const rect = row.getBoundingClientRect();
+    event.dataTransfer.setDragImage(ghost, event.clientX - rect.left, event.clientY - rect.top);
+    requestAnimationFrame(() => ghost.remove());
+  });
+  host.addEventListener("dragend", () => {
+    host.querySelectorAll(".prompt-queue-row.is-dragging").forEach((row) => row.classList.remove("is-dragging"));
+  });
+  host.addEventListener("dragover", (event) => {
+    if (!event.target.closest(".prompt-queue-row")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  });
+  host.addEventListener("drop", (event) => {
+    const row = event.target.closest(".prompt-queue-row");
+    if (!row) return;
+    event.preventDefault();
+    const from = Number(event.dataTransfer.getData("text/plain"));
+    const to = Number(row.dataset.queueIndex);
+    const session = activeChatSession();
+    if (!session || !from || !to || from === to) return;
+    session.promptQueue = movePrompt(session.promptQueue, from, to);
+    if (promptQueueEdit?.sessionId === session.id) remapPromptQueueEdit(from, to);
+    renderPromptQueue();
+  });
+}
+
 function updateSendBtn() {
-  const activeRunning = isRunningChatActive();
+  const editingQueue = isEditingPromptQueue();
+  const activeRunning = isRunningChatActive() && !editingQueue;
   const delegatedLocked = isDelegatedChildRunLocked();
   sendBtn.classList.toggle("stop", activeRunning);
-  sendBtn.title = activeRunning
-    ? "Stop generation"
-    : "Send message";
-  sendBtn.disabled = !activeRunning && (
-    delegatedLocked
-    || !effectiveChatInputValue().trim()
-    || (contextCheckpointing && contextCheckpointingSessionId === activeChatSessionId)
-  );
+  sendBtn.title = editingQueue
+    ? "Save queued prompt"
+    : activeRunning
+      ? "Stop generation"
+      : "Send message";
+  sendBtn.disabled = editingQueue
+    ? !effectiveChatInputValue().trim()
+    : !activeRunning && (
+      delegatedLocked
+      || !effectiveChatInputValue().trim()
+      || (contextCheckpointing && contextCheckpointingSessionId === activeChatSessionId)
+    );
 }
 
 function onChatInputChange() {
@@ -20376,6 +20792,7 @@ if (chatPane && typeof ResizeObserver !== "undefined") {
     resizeChatInput();
     refreshUserPromptDisclosures();
     syncChatStickyMask();
+    placePromptQueue();
   }).observe(chatPane);
 }
 

@@ -744,16 +744,29 @@
 .chat-session-action:focus-visible { background: #313131; color: #fff; }
 
 #messages {
-  --chat-row-gap: 4px;
-  --chat-work-group-gap: 12px;
-  --chat-work-gap: 24px;
+  --chat-row-gap: 6px;
+  --chat-work-group-gap: 10px;
+  --chat-work-gap: 16px;
   --chat-run-gap: 24px;
-  --chat-stream-inset: 6px;
-  padding: 12px 16px 24px;
+  --chat-stream-inset: 0px;
+  --chat-icon-size: 14px;
+  padding: 16px 20px 28px;
   gap: 0;
-  background: #171717;
+  background: var(--revamp-panel, #171717);
   scrollbar-gutter: stable;
+  overflow-anchor: none;
+  scroll-behavior: auto;
 }
+
+.chat-transcript-viewport {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+#messages:focus-visible { outline: 1px solid #555; outline-offset: -1px; }
 
 /* Keep only the thumb visible. The mask stops before this lane so the thumb
    remains in front and usable while the conversation fades underneath. */
@@ -806,6 +819,10 @@
   max-width: 100%;
 }
 
+#messages .chat-exchange:not(:last-child) {
+  margin-bottom: var(--chat-run-gap);
+}
+
 #messages .chat-exchange-body {
   padding: 0;
   margin: 0;
@@ -817,7 +834,7 @@
   padding: 0;
   padding-left: var(--chat-stream-inset);
   padding-right: var(--chat-stream-inset);
-  margin: 0 0 var(--chat-run-gap);
+  margin: 0;
 }
 
 #messages .agent-run-chunk {
@@ -855,7 +872,8 @@
   padding-top: 0;
   color: #d4d4d4;
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 
 .agent-command-event {
@@ -881,7 +899,7 @@
 
 .agent-command-summary::-webkit-details-marker { display: none; }
 .agent-command-shell { flex: 0 0 auto; color: #8f8f8f; font-size: 13px; }
-.agent-command-label { min-width: 0; white-space: nowrap; color: #d4d4d4; font: 400 12px/1.35 var(--font-ui); font-weight: 400; }
+.agent-command-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #d4d4d4; font: 400 13px/1.5 var(--font-ui); }
 .agent-command-chevron { color: #777; font-size: 12px; transition: transform 120ms ease; }
 .agent-command-event[open] .agent-command-chevron { transform: rotate(90deg); }
 .agent-command-event[data-state="running"] .agent-command-shell { animation: agent-tool-pulse 1.3s ease-in-out infinite; }
@@ -1021,35 +1039,49 @@
 }
 
 .composer {
-  border: 1px solid #3b3b3b;
-  border-radius: 12px;
+  border: 1px solid #353535;
+  border-radius: 10px;
   background: #1e1e1e;
-  box-shadow: none;
+  box-shadow: 0 2px 8px #0002;
+  transition: border-color 140ms ease;
 }
 
 .composer:focus-within {
-  border-color: #3b3b3b;
+  border-color: #5a5a5a;
   box-shadow: none;
 }
 
 #chat-input {
-  padding: 9px 9px 4px;
+  min-height: 42px;
+  padding: 12px 12px 6px;
   color: #dcdcdc;
   font-size: 13px;
+  line-height: 1.5;
 }
+
+#chat-input-measure { font-size: 13px; line-height: 1.5; }
+.composer-input-row { min-height: 42px; border: 0; background: transparent; }
 
 #chat-input::placeholder { color: #707070; }
 
 .composer-toolbar {
-  min-height: 33px;
-  padding: 4px 6px 6px;
+  min-height: 36px;
+  padding: 4px 8px 8px;
+  gap: 8px;
 }
 
+.composer-meta { gap: 6px; min-width: 0; overflow: hidden; }
+.composer-meta > * { flex-shrink: 0; }
+.composer-meta #model-picker { flex-shrink: 1; }
+
 .chat-mode-button,
-.model-pill {
-  height: 23px;
+.model-pill,
+.authority-pill {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
   border-color: #454545;
-  border-radius: 8px;
+  border-radius: 6px;
   background: #252526;
   color: #bcbcbc;
 }
@@ -1061,19 +1093,17 @@
   background: #2a2d2e;
 }
 
-/* Keep the mode selector pill-shaped even when the compact composer overrides
- * the shared control radius above. */
-.chat-mode-button { border-radius: 999px; }
+.chat-mode-button { border-radius: 6px; min-width: 0; width: fit-content; }
 
 .model-pill,
 .authority-pill {
-  border-radius: 999px;
+  border-radius: 6px;
   background: transparent;
   border-color: transparent;
 }
 .model-pill:hover,
 .model-pill.open {
-  background: rgba(230, 230, 230, .24);
+  background: rgba(230, 230, 230, .08);
   border-color: transparent;
 }
 
@@ -1496,6 +1526,7 @@
   flex-direction: column;
   gap: 0;
   min-width: 0;
+  padding: 4px 0 0;
 }
 
 #messages .agent-work-fold-body > .assistant-reply {
@@ -1545,7 +1576,7 @@
   -webkit-appearance: none;
   color: #d4d4d4;
   font: 400 14px/1.45 var(--font-ui);
-  opacity: 0.6;
+  opacity: 1;
 }
 
 #messages .agent-explored-fold,
@@ -1567,7 +1598,7 @@
   width: max-content;
   max-width: 100%;
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
   border: 0;
   background: transparent;
   color: #8a8a8a;
@@ -1592,7 +1623,9 @@
 
 #messages .agent-command-body {
   display: block;
+  box-sizing: border-box;
   max-width: 100%;
+  padding: 4px 0 4px 16px;
   overflow-x: auto;
   border: 0;
   color: #c3c3c3;
@@ -1609,7 +1642,7 @@
 
 #messages .agent-thinking-content {
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
   color: #9a9a9a;
   font: 400 13px/1.5 var(--font-ui);
   white-space: pre-wrap;
@@ -1647,6 +1680,7 @@
   opacity: .85;
   transform: none;
   transform-origin: 50% 50%;
+  transition: transform 140ms ease;
 }
 
 #messages .agent-work-fold[data-expanded="false"] > .agent-work-header .agent-work-caret,
@@ -1658,10 +1692,18 @@
 }
 
 #messages .tool-card-icon,
-#messages .tool-card-file-icon,
-#messages .agent-command-shell,
 #messages .agent-command-chevron {
   display: none !important;
+}
+
+#messages .tool-card-file-icon,
+#messages .agent-command-shell {
+  display: block;
+  width: var(--chat-icon-size);
+  height: var(--chat-icon-size);
+  flex: 0 0 var(--chat-icon-size);
+  object-fit: contain;
+  margin: 0;
 }
 
 #messages .agent-status-icon {
@@ -1673,6 +1715,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 #messages .agent-status-line[data-final="true"] {
@@ -1685,7 +1728,7 @@
 #messages .agent-work-fold > .agent-status-line[data-final="true"] {
   color: #d4d4d4;
   font-weight: 400;
-  opacity: 0.6;
+  opacity: 0.7;
 }
 
 #messages .agent-work-header {
@@ -1695,13 +1738,13 @@
   gap: 6px;
   width: max-content;
   max-width: 100%;
-  min-height: 22px;
+  min-height: 26px;
   margin: 0;
-  padding: 0;
+  padding: 3px 0;
   border: 0;
   background: transparent;
   color: #d4d4d4;
-  opacity: 0.6;
+  opacity: 1;
   font: 400 14px/1.45 var(--font-ui);
   text-align: left;
   cursor: pointer;
@@ -1712,8 +1755,19 @@
 #messages .agent-work-header[data-final="true"] {
   color: #d4d4d4;
   font-weight: 400;
-  opacity: 0.6;
+  opacity: 0.7;
 }
+
+#messages .agent-work-header:not([data-final="true"]) .agent-status-text {
+  color: #c8c8c8;
+}
+
+#messages .agent-work-header:hover,
+#messages .agent-thinking-toggle:hover,
+#messages .agent-file-stack-toggle:hover { color: #e5e5e5; }
+#messages .agent-work-header:focus-visible,
+#messages .agent-thinking-toggle:focus-visible,
+#messages .agent-file-stack-toggle:focus-visible { outline: 1px solid #666; outline-offset: 3px; border-radius: 3px; }
 
 #messages .chat-turn.assistant > .assistant-reply,
 #messages .agent-work-fold-body > * {
@@ -1901,6 +1955,25 @@
 #messages .agent-status-line[data-state="error"] { color: #b7a09c; }
 #messages .agent-status-line.status-updated .agent-status-text { animation: agent-status-update 150ms ease-out both; }
 
+@supports ((background-clip: text) or (-webkit-background-clip: text)) {
+  #messages .agent-work-header:not([data-final="true"]):not([data-state="error"]) > .agent-status-text,
+  #messages .agent-thinking-fold[data-final="false"] > .agent-thinking-toggle > .agent-thinking-text {
+    background-image: linear-gradient(100deg, #909090 40%, #ededed 50%, #909090 60%);
+    background-size: 250% 100%;
+    background-position: 100% 0;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: agent-text-shimmer 2.4s linear infinite;
+  }
+}
+
+@keyframes agent-text-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+
 #messages .context-checkpoint-notice {
   display: flex;
   flex: 0 0 auto;
@@ -1986,6 +2059,10 @@
 
 #messages .agent-file-row .tool-card-file {
   font: 400 13px/1.45 var(--font-ui) !important;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #messages .tool-card.pending::after { display: none !important; }
@@ -2010,12 +2087,12 @@
   flex: 0 1 auto !important;
   width: auto !important;
   min-width: 0 !important;
-  max-width: none !important;
-  overflow: visible !important;
-  text-overflow: clip !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
   white-space: nowrap !important;
   color: #d4d4d4 !important;
-  font: 400 12px/1.35 var(--font-ui) !important;
+  font: 400 13px/1.5 var(--font-ui) !important;
   font-weight: 400 !important;
 }
 #messages .agent-tool-verb,
@@ -2101,9 +2178,22 @@
 .chat-error-toast-close .codicon { font-size: 14px; line-height: 1; }
 
 @media (prefers-reduced-motion: reduce) {
+  #messages .agent-work-header:not([data-final="true"]):not([data-state="error"]) > .agent-status-text,
+  #messages .agent-thinking-fold[data-final="false"] > .agent-thinking-toggle > .agent-thinking-text {
+    animation: none;
+    background: none;
+    color: inherit;
+    -webkit-text-fill-color: currentColor;
+  }
+  #messages .subagent-run-card,
+  #messages .tool-card.subagent-wait::after,
   #messages .agent-status-line.status-updated .agent-status-text,
   #messages .tool-card.status-updated .tool-card-file,
   #messages .tool-card.pending .tool-card-icon { animation: none !important; }
+  #messages .agent-work-caret,
+  #messages .agent-command-chevron,
+  #messages .tool-card,
+  .composer { transition: none; }
 }
 
 /* Composer actions use the same quiet neutral controls in idle, send, and stop states. */
@@ -2149,7 +2239,7 @@
   z-index: 1;
   padding: 8px 12px !important;
   border-radius: 10px !important;
-  background: #252526 !important;
+  background: #1f1f1f !important;
 }
 
 /* Copy/time are the last row inside the agent response host, after replies

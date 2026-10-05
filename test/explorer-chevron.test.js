@@ -28,11 +28,11 @@ test("root project label stays compact and bold at every window width", () => {
 test("Explorer tree uses Cursor-like compact rows with centered chevrons", () => {
   assert.match(layoutCss, /\.tree-item\s*\{[^}]*height:\s*22px;[^}]*font-size:\s*13px;/);
   assert.match(layoutCss, /\.tree-name\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*22px;/);
-  assert.match(css, /\.tree-file-icon\.seti-icon\s*\{[^}]*font-size:\s*18px\s*!important;/);
+  assert.match(css, /\.tree-file-icon\.seti-icon\s*\{[^}]*font-size:\s*15px\s*!important;/);
 });
 
 test("Explorer rows use one stable leading slot and a consistent depth indent", () => {
-  assert.match(renderer, /const EXPLORER_TREE_LEVEL_INDENT = 14;/);
+  assert.match(renderer, /const EXPLORER_TREE_LEVEL_INDENT = 8;/);
   assert.match(renderer, /function setExplorerTreeDepth\(item, depth = 0\)/);
   assert.match(renderer, /item\.dataset\.treeDepth = String\(normalized\)/);
   assert.match(renderer, /normalized \* EXPLORER_TREE_LEVEL_INDENT/);

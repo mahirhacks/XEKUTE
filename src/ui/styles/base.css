@@ -1419,10 +1419,11 @@ html, body {
 
 .tree-file-icon.seti-icon {
   font-family: "Xekute Seti";
-  font-size: 18px !important;
+  font-size: 15px !important;
   font-style: normal;
   font-weight: normal;
   line-height: 1;
+  opacity: 0.92;
 }
 
 .tab-icon.seti-icon {
@@ -3289,10 +3290,6 @@ html.panel-resizing iframe {
   color: var(--fg);
 }
 
-.terminal-instance.agent-terminal {
-  border-top: none;
-}
-
 .terminal-tab-item.exited {
   color: var(--fg-dim);
 }
@@ -3678,27 +3675,6 @@ html.panel-resizing iframe {
 
 .assistant-reply[hidden] {
   display: none !important;
-}
-
-@keyframes stream-text-reveal {
-  from {
-    opacity: 0;
-    filter: blur(2px);
-  }
-  to {
-    opacity: 1;
-    filter: blur(0);
-  }
-}
-
-.stream-text-reveal {
-  animation: stream-text-reveal 180ms ease-out both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .stream-text-reveal {
-    animation: none;
-  }
 }
 
 .assistant-reply > *:first-child,
@@ -4634,18 +4610,25 @@ html.panel-resizing iframe {
 
 .assistant-reply-time {
   font-size: 11px;
-  color: var(--fg-dim);
+  color: #b0b0b0;
   white-space: nowrap;
+  padding: 2px 5px;
+  border-radius: 4px;
   opacity: 0;
   visibility: hidden;
-  transition: opacity .15s ease, visibility .15s ease;
+  pointer-events: auto;
+  transition: color .15s ease, background-color .15s ease, opacity .15s ease, visibility .15s ease;
 }
 
 .chat-exchange:hover .assistant-reply-time,
 .chat-exchange:focus-within .assistant-reply-time,
 #messages > .chat-exchange:last-child .assistant-reply-time {
-  opacity: 0.72;
+  opacity: 0.9;
   visibility: visible;
+}
+.assistant-reply-time:hover {
+  color: #ededed;
+  background: #2d2d2d;
 }
 
 .assistant-reply-copy {
@@ -4658,20 +4641,25 @@ html.panel-resizing iframe {
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--fg-muted);
+  border-radius: 4px;
+  color: #c0c0c0;
   font-size: 11px;
   font-family: var(--font-ui);
   cursor: pointer;
   user-select: none;
-  opacity: 0.72;
+  opacity: 0.92;
   pointer-events: auto;
-  transition: color .15s ease, opacity .15s ease;
+  transition: color .15s ease, background-color .15s ease, opacity .15s ease;
 }
-.assistant-reply-copy:hover {
-  color: var(--fg);
-  background: transparent;
+.assistant-reply-copy:hover,
+.assistant-reply-copy:focus-visible {
+  color: #f5f5f5;
+  background: #303030;
   opacity: 1;
 }
+.assistant-reply-copy:active { background: #3b3b3b; }
+.assistant-reply-copy:hover .chat-action-icon,
+.assistant-reply-copy:focus-visible .chat-action-icon { filter: brightness(1.15); }
 .assistant-reply-copy .codicon {
   font-size: 12px;
 }

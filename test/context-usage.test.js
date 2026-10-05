@@ -96,7 +96,8 @@ test("context checkpointing is automatic and renderer-owned compaction is absent
   assert.match(renderer, /openStopSection\(/);
   assert.match(renderer, /agent-run-stop/);
   assert.match(renderer, /payload\.type === "model_round"/);
-  assert.match(renderer, /notice\.after\(nextChunk\)/);
+  assert.match(renderer, /appendChatStreamNode\(host, notice\)/);
+  assert.doesNotMatch(renderer, /notice\.after\(nextChunk\)/);
   assert.match(renderer, /ensureContextCheckpointNotice\(container, \{ assistant: run\?\.assistant \}\)/);
   assert.match(renderer, /lastAgentRunChunk\(body\) \|\| body \|\| root/);
   assert.match(css, /#messages \.agent-run-chunk \{/);

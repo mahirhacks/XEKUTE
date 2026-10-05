@@ -233,7 +233,7 @@ test("tool activity sits in a two-lane stream under a Worked for header", () => 
   assert.match(renderer, /function isSearchWorkspaceTool/);
   assert.match(renderer, /workspace\/search_workspace/);
   assert.match(renderer, /action === "search_workspace" \|\| action\.endsWith\("\.search_workspace"\)/);
-  assert.match(chatStyles, /#messages \.agent-work-header \{[\s\S]{0,280}opacity: 0\.6/);
+  assert.match(chatStyles, /#messages \.agent-work-header \{[\s\S]{0,280}opacity: 1/);
   assert.doesNotMatch(renderer, /openStopSection\(\{ collapse: true, allowEmpty: true \}\)/);
   assert.match(renderer, /function workFollowingReply/);
   assert.match(renderer, /const followingWork = workFollowingReply\(current\);\s*if \(!followingWork\) return current;/);
@@ -248,8 +248,8 @@ test("tool activity sits in a two-lane stream under a Worked for header", () => 
   assert.match(renderer, /this\.ensureConversationSegment\(\)/);
   assert.match(chatStyles, /#messages \.agent-work-fold-body > \.assistant-reply \{[\s\S]{0,80}padding: 0/);
   assert.match(chatStyles, /#messages \.agent-work-fold \+ \.assistant-reply \{[\s\S]{0,80}padding: 0/);
-  assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line\[data-final="true"\] \{[\s\S]{0,80}font-weight: 400[\s\S]{0,40}opacity: 0\.6/);
-  assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line \{[\s\S]{0,280}font: 400 14px[\s\S]{0,80}opacity: 0\.6/);
+  assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line\[data-final="true"\] \{[\s\S]{0,80}font-weight: 400[\s\S]{0,40}opacity: 0\.7/);
+  assert.match(chatStyles, /#messages \.agent-work-fold > \.agent-status-line \{[\s\S]{0,280}font: 400 14px[\s\S]{0,80}opacity: 1/);
   assert.match(renderer, /assistant\?\.sealCurrentContentSegment\?\.\(\)/);
   assert.doesNotMatch(renderer, /exploredMount\(\) \{[\s\S]{0,180}?agent-run-stop[\s\S]{0,80}?return this\.turn/);
   assert.match(chatStyles, /#messages \.agent-explored-fold \.tool-card\.tool-card-fade \{/);
@@ -280,13 +280,13 @@ test("tool activity sits in a two-lane stream under a Worked for header", () => 
   assert.match(chatStyles, /#messages \.agent-thinking-fold\[data-expanded="false"\] > \.agent-thinking-body/);
   assert.match(chatStyles, /#messages \.agent-tool-verb \{ opacity: \.8; \}/);
   assert.match(chatStyles, /#messages \.agent-tool-detail \{ opacity: \.5; \}/);
-  assert.match(chatStyles, /--chat-row-gap: 4px/);
-  assert.match(chatStyles, /--chat-work-gap: 24px/);
+  assert.match(chatStyles, /--chat-row-gap: 6px/);
+  assert.match(chatStyles, /--chat-work-gap: 16px/);
   assert.match(chatStyles, /--chat-run-gap: 24px/);
   assert.match(chatStyles, /#messages \.chat-turn\.assistant > :not\(\.assistant-reply-footer\),[\s\S]*?margin: var\(--chat-row-gap\) 0 0/);
   assert.match(chatStyles, /#messages \.chat-turn\.assistant > \.agent-work-fold \{[\s\S]*?margin: var\(--chat-work-gap\) 0 0/);
   assert.match(chatStyles, /#messages \.agent-response-host,[\s\S]*?padding: 0;/);
-  assert.match(chatStyles, /padding: 12px 16px 24px/);
+  assert.match(chatStyles, /padding: 16px 20px 28px/);
 });
 
 test("the Worked for section is one container, not a lane of stamped siblings", () => {
@@ -300,17 +300,17 @@ test("the Worked for section is one container, not a lane of stamped siblings", 
   // The flattener used to tear the container back into siblings on every pass.
   assert.doesNotMatch(renderer, /flattenNestedChatLayout/);
 
-  // Interim work streams into the body; the answer written before stop sits beside it.
-  assert.match(renderer, /return workFoldBody\(turnWorkFold\(host\)\) \|\| host;/);
+  // Live prose stays beside the fold; narration enters history when a tool starts.
+  assert.match(renderer, /conversationMount\(\) \{\s*return this.replyMount\(\);/);
   assert.match(renderer, /const fold = this\.ensureWorkFold\(\);\s*return workFoldBody\(fold\) \|\| this\.workHostTurn\(\);/);
   assert.match(workFold, /!replyHasFollowingWork\(child\)/);
   assert.match(workFold, /!isStopRoundReply\(child\)/);
   assert.match(workFold, /fold\.after\(answer\);/);
-  assert.match(workFold, /child\.dataset\.workVerdict === "true"\) continue;/);
+  assert.match(workFold, /child\.dataset\.workVerdict === "true" \|\| child\.dataset\.liveReply === "true"/);
   assert.match(chatStyles, /#messages \.agent-work-fold-body > \.assistant-reply \{[\s\S]{0,60}color: #9a9a9a/);
 
   // Live completion and restore both settle through the same promotion.
-  assert.match(renderer, /const answer = promoteFinalAnswer\(turn\);\s*if \(answer\) answer\.dataset\.workVerdict = "true";\s*if \(isFinishedWorkFold\(fold\)\) setWorkFoldExpanded\(fold, false\);/);
+  assert.match(renderer, /const answer = promoteFinalAnswer\(turn\);\s*if \(answer\) answer\.dataset\.workVerdict = "true";\s*if \(isFinishedWorkFold\(fold\) && fold.dataset.userToggled !== "true"\) setWorkFoldExpanded\(fold, false\);/);
   assert.match(renderer, /restackFileRows\(turn\);\s*const answer = promoteFinalAnswer\(turn\);/);
 
   // Copy sits on the answer, not on the first folded fragment.
@@ -330,21 +330,11 @@ test("raw reasoning streams on thinking events and settles into a fold", () => {
   assert.match(renderer, /sealExploredFolds\(this\.workHostTurn\(\)\)/);
 });
 
-test("streaming text fades in by delta without restoring the old activity line", () => {
-  assert.match(renderer, /function animateStreamDelta\(container, delta\)/);
-  assert.match(renderer, /reveal\.className = "stream-text-reveal"/);
-  assert.match(renderer, /this\.syncDisplay\(\{ animateToken: token \}\)/);
-  assert.match(styles, /@keyframes stream-text-reveal[\s\S]*?opacity: 0[\s\S]*?opacity: 1/);
+test("chat does not restore the old activity line or blur streamed text", () => {
+  assert.doesNotMatch(renderer, /animateStreamDelta/);
+  assert.doesNotMatch(styles, /@keyframes stream-text-reveal/);
   assert.doesNotMatch(renderer, /statusEl\.className = "assistant-status is-active"/);
   assert.doesNotMatch(styles, /\.assistant-status\.is-active/);
-});
-
-test("chat auto-follow pauses when the operator scrolls up", () => {
-  assert.match(renderer, /let chatAutoFollow = true/);
-  assert.match(renderer, /if \(event\.deltaY < 0\) chatAutoFollow = false/);
-  assert.match(renderer, /chatAutoFollow = messagesAreNearBottom\(\)/);
-  assert.match(renderer, /if \(!chatAutoFollow\) return/);
-  assert.match(renderer, /scrollMessages\(\{ force: true \}\)/);
 });
 
 test("every agent failure path restores the composer", () => {
@@ -353,8 +343,8 @@ test("every agent failure path restores the composer", () => {
   assert.match(renderer, /finally \{[\s\S]*?(holdActive|orchestrationHold)[\s\S]*?chatInput\.focus\(\)/);
 });
 
-test("send button stays disabled while orchestration hold keeps parent running", () => {
-  assert.match(renderer, /if \(run\.orchestrationHold\) return true/);
+test("send button stays disabled while orchestration or command hold keeps parent running", () => {
+  assert.match(renderer, /if \(run\.orchestrationHold \|\| run\.commandWait\) return true/);
   assert.match(renderer, /const holdActive = Boolean\(run\?\.orchestrationHold\) && !run\.stopRequested/);
   assert.match(renderer, /parentRunStillWorking\(run\)/);
   assert.match(renderer, /rootHasLiveProcesses/);
@@ -363,7 +353,7 @@ test("send button stays disabled while orchestration hold keeps parent running",
   assert.match(renderer, /run\.orchestrationHold = Boolean\(agentRunResult\.orchestrationHold\)/);
   assert.match(renderer, /delegatedEnsureThinkingFold/);
   assert.match(renderer, /childEventLanes/);
-  assert.match(renderer, /scheduleDelegatedMarkdownRender/);
+  assert.match(renderer, /delegatedSyncDisplay[\s\S]*?renderMarkdown\([\s\S]*?streaming: segment\.el\.classList\.contains\("streaming"\)/);
 });
 
 test("stopping the orchestrator clears the hold so the send button returns", () => {
@@ -389,12 +379,12 @@ test("detached delegated streams reuse the same reply block via streamingNodeLiv
   assert.match(thinkingBlock[0], /word-break: normal/);
 });
 
-test("delegated child thinking and content batch markdown through scheduleDelegatedMarkdownRender", () => {
+test("delegated child thinking and content share the main markdown scheduler", () => {
   const childAssistantStart = renderer.indexOf("function childAssistant(run)");
   const childAssistantEnd = renderer.indexOf("function handleDelegatedChildEvent", childAssistantStart);
   const childAssistantBody = renderer.slice(childAssistantStart, childAssistantEnd);
-  assert.match(childAssistantBody, /function delegatedAppendThinking\(token\)[\s\S]*?scheduleDelegatedMarkdownRender\(\`\$\{run\.sessionId\}:thinking\`/);
-  assert.match(childAssistantBody, /function delegatedSyncDisplay[\s\S]*?scheduleDelegatedMarkdownRender[\s\S]*?:content/);
+  assert.match(childAssistantBody, /function delegatedAppendThinking\(token\)[\s\S]*?renderMarkdown\(content, this.thinkingRaw, \{ streaming: true \}\)/);
+  assert.match(childAssistantBody, /function delegatedSyncDisplay[\s\S]*?renderMarkdown\(/);
   assert.doesNotMatch(childAssistantBody, /baseAppendThinking\(token\)/);
 });
 

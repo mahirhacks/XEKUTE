@@ -151,7 +151,7 @@ test("replay_request redacts identity material from response headers and body", 
       headerBindings: [{ origin: "https://fixture.test/", headers: { Authorization: "Bearer secret-token" } }],
     }) },
   });
-  const result = await tool.execute({ request: { url: "https://fixture.test/" }, identityId: "u1" }, execContext());
+  const result = await tool.execute({ request: { url: "https://fixture.test/" }, identityId: "u1" }, execContext({ resourceLimits: { redactSecrets: true } }));
   assert.equal(result.ok, true);
   const serialized = JSON.stringify(result.value);
   assert.doesNotMatch(serialized, /secret-cookie/);

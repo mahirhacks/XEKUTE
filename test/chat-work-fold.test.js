@@ -26,6 +26,23 @@ function assistantTurn(...nodes) {
   return turn;
 }
 
+test("the live reply stays beside the work fold until another tool starts", async () => {
+  const { ensureTurnWorkFold, workFoldBody } = await load();
+  const answer = node("assistant-reply", { text: "The answer is still streaming." });
+  answer.dataset.liveReply = "true";
+  const command = node("agent-command-event", { text: "Read file" });
+  const turn = assistantTurn(command, answer);
+  const fold = ensureTurnWorkFold(turn);
+  assert.equal(answer.parentElement, turn);
+  assert.equal(command.parentElement, workFoldBody(fold));
+  ensureTurnWorkFold(turn);
+  assert.equal(answer.parentElement, turn);
+
+  delete answer.dataset.liveReply;
+  ensureTurnWorkFold(turn);
+  assert.equal(answer.parentElement, workFoldBody(fold));
+});
+
 test("the work fold is a container with a single collapse point", async () => {
   const { createWorkFold, workFoldHeader, workFoldBody, setWorkFoldExpanded, toggleWorkFold } = await load();
   const fold = createWorkFold({ label: "Worked for 5s", final: true });

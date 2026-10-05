@@ -186,7 +186,7 @@ test("terminal stays collapsed without a session and creates one when expanded",
 test("agent-owned terminals stay after exit so the operator can review output", () => {
   const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
   const onExit = terminal.slice(terminal.indexOf("function onExit"), terminal.indexOf("function onExit") + 700);
-  assert.match(onExit, /Command exited\. Press the trash icon to close this session/);
+  assert.match(onExit, /Agent terminal is observe only/);
   assert.match(onExit, /Terminal process exited\. Press the trash icon to close this session/);
   assert.doesNotMatch(onExit, /if \(session\.agent\) \{\s*removeSession\(id\)/);
   assert.doesNotMatch(terminal, /AI command finished\. You can review output here or close this session\./);
