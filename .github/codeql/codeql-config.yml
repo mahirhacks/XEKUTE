@@ -4,6 +4,10 @@ queries:
   - uses: security-extended
 
 paths-ignore:
+  # Vendored upstream dependency: the local RSA backport is separately
+  # regression-tested; scanning the entire upstream package reports unrelated
+  # legacy findings outside the change.
+  - vendor/node-forge/**
   - out
   - graphify-out
   - temp_test

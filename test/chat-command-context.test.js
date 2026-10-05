@@ -70,6 +70,15 @@ test("waiting updates retain command context until completion", () => {
   assert.equal(row.dataset.waiting, undefined);
 });
 
+test("direct executable labels escape Windows quotes without corrupting paths", () => {
+  const { context } = setup();
+  const label = context.agentTerminalCommandForTool({ args: {
+    executable: "C:\\Program Files\\tool.exe",
+    args: ['say "hi"', "C:\\Folder with spaces\\", ""],
+  } });
+  assert.equal(label, '"C:\\Program Files\\tool.exe" "say \\"hi\\"" "C:\\Folder with spaces\\\\" ""');
+});
+
 test("old saved command rows recover available context from canonical tool calls", () => {
   const { context, document, turn } = setup();
   const row = context.createCommandFromRecord({ command: "node --test", status: "error" });

@@ -5149,8 +5149,9 @@ async function toggleWebClonePreview(show = true) {
     return;
   }
   if (show && webcloneFileContent && webcloneSelectedFile.endsWith("index.html")) {
-    // Run the cloned application in an opaque sandbox. A strict document CSP
-    // prevents it from making network calls or reaching the XEKUTE parent.
+    // Parse the untrusted clone only to rewrite local assets. Its serialized
+    // HTML runs in a separate sandboxed WebContentsView with no Node/preload;
+    // the preview server applies a restrictive CSP and blocks network egress.
     const html = String(webcloneFileContent.textContent || "").replace(/^\uFEFF/, "");
     const previewDocument = new DOMParser().parseFromString(html, "text/html");
     const csp = previewDocument.createElement("meta");
@@ -15598,7 +15599,20 @@ function agentTerminalCommandForTool(tool) {
   if (tool.args?.executable) {
     const quote = (value) => {
       const text = String(value ?? "");
-      return /[\s"']/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
+      if (!text) return '""';
+      if (!/[\s"]/.test(text)) return text;
+      let quoted = '"';
+      let backslashes = 0;
+      for (const character of text) {
+        if (character === "\\") {
+          backslashes += 1;
+          continue;
+        }
+        if (character === '"') quoted += "\\".repeat(backslashes * 2 + 1) + '"';
+        else quoted += "\\".repeat(backslashes) + character;
+        backslashes = 0;
+      }
+      return quoted + "\\".repeat(backslashes * 2) + '"';
     };
     return [quote(tool.args.executable), ...(Array.isArray(tool.args.args) ? tool.args.args.map(quote) : [])].join(" ");
   }
