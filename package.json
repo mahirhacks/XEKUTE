@@ -59,7 +59,7 @@
     "highlight.js": "^11.12.0",
     "http-mitm-proxy": "^1.1.0",
     "marked": "^18.0.9",
-    "mermaid": "^11.16.1",
+    "mermaid": "^12.1.0",
     "monaco-editor": "0.56.0",
     "node-forge": "file:vendor/node-forge",
     "node-pty": "^1.1.0",
