@@ -32,6 +32,9 @@ stopwords = [
 ]
 paths = [
   '''(^|/)node_modules/''',
+  # Third-party node-forge 1.4.1 backport. Its upstream examples contain
+  # fixture passwords and crypto identifiers that match generic secret rules.
+  '''(^|/)vendor/node-forge/''',
   '''(^|/)graphify-out/''',
   '''(^|/)out/''',
   '''(^|/)temp_test/''',
