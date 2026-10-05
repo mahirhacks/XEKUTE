@@ -24,7 +24,7 @@ test("agent exec_command streams into Xekute's in-app terminal by default", () =
 });
 
 test("AI command terminals stay after exit and user runCommand never targets them", () => {
-  assert.match(terminalUiSource, /Command exited\. Press the trash icon to close this session/);
+  assert.match(terminalUiSource, /Agent terminal is observe only/);
   assert.doesNotMatch(
     terminalUiSource.slice(terminalUiSource.indexOf("function onExit"), terminalUiSource.indexOf("function onExit") + 500),
     /if \(session\.agent\) \{\s*removeSession\(id\)/,
@@ -93,7 +93,9 @@ test("terminal session icons distinguish powershell, command prompt, and git bas
   assert.doesNotMatch(terminalUiSource, /AI · \$\{label\}/);
   assert.doesNotMatch(terminalUiSource, /session\.agent \? "AI"/);
   assert.doesNotMatch(terminalUiSource, /XEKUTE AI Agent/);
-  assert.match(terminalUiSource, /read-only output/);
+  assert.match(terminalUiSource, /if \(session\?\.queued\) return "codicon-clock"/);
+  assert.match(terminalUiSource, /return \`PS \$\{path\}> \`/);
+  assert.doesNotMatch(terminalUiSource, /read-only output/);
   assert.match(terminalUiSource, /terminal-shell-icon \$\{sessionIconClass/);
   const chatCss = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
   assert.match(chatCss, /\.codicon-terminal-powershell[\s\S]{0,80}#5391fe/);

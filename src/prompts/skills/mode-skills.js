@@ -1,7 +1,7 @@
 /* Profile-specific mode skills — skill-file depth appended at compile time. */
 
-const AgentSkill = require("./modes/agent-skill");
-const AskSkill = require("./modes/ask-skill");
+const AgentSkill = require("../../agent/modes/agent/agent-skill");
+const AskSkill = require("../../agent/modes/ask/ask-skill");
 const { MODE_KEY_ALIASES } = require("../../agent/modes/mode-registry");
 
 const SKILLS = Object.freeze({

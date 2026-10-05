@@ -304,7 +304,7 @@ const RAW_SECRET_KEY = /^(?:raw[_-]?cookie|cookie(?:[_-]?value)?|authorization(?
 const RAW_SECRET_VALUE = [
   /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----/i,
   /\b(?:Bearer|Basic)\s+[A-Za-z0-9+\/=._-]{8,}/i,
-  /\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*[^\s]{8,}/i,
+  /\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*(?!\[REDACTED\])[^\s]{8,}/i,
   /\b(?:access[_-]?token|refresh[_-]?token|csrf[_-]?token|api[_-]?key|api[_-]?token|password|passphrase|secret)\s*[:=]\s*["']?[^\s,;"']{8,}/i,
 ];
 

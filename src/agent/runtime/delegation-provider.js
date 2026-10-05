@@ -45,6 +45,29 @@ function appendSteeringUpdate(contextText, steeringSections = []) {
   return `${contextText}\n\n## Steering update\n${blocks.join("\n\n")}`;
 }
 
+function scopeHosts(scope = {}) {
+  const hosts = [];
+  for (const key of ["hosts", "targets", "inScope", "allowedHosts"]) {
+    const value = scope?.[key];
+    if (Array.isArray(value)) hosts.push(...value.map((item) => String(item || "").trim()).filter(Boolean));
+    else if (typeof value === "string" && value.trim()) hosts.push(value.trim());
+  }
+  return [...new Set(hosts)].slice(0, 40);
+}
+
+function pointerLines(resources = {}) {
+  const lines = ["Read project artifacts under .xekute/ with read_file or search_workspace."];
+  const projectId = String(resources.projectId || resources.project_id || "").trim();
+  if (projectId) lines.push(`Project id: ${projectId.slice(0, 120)}`);
+  const paths = [];
+  for (const key of ["artifactPaths", "paths", "files"]) {
+    const value = resources?.[key];
+    if (Array.isArray(value)) paths.push(...value.map((item) => String(item || "").trim()).filter(Boolean));
+  }
+  for (const file of paths.slice(0, 20)) lines.push(`Path: ${file.slice(0, 300)}`);
+  return lines.join("\n");
+}
+
 function buildChildContextText(input, executionContext, steeringSections = []) {
   const contextPackage = input?.contextPackage && typeof input.contextPackage === "object"
     ? { ...input.contextPackage }
@@ -53,49 +76,75 @@ function buildChildContextText(input, executionContext, steeringSections = []) {
   const expectedOutput = input?.expectedOutput && typeof input.expectedOutput === "object"
     ? input.expectedOutput
     : {};
-  const safeContext = redactStructuredValue({
-    scope: contextPackage.scope || {},
-    identity: contextPackage.identity || {},
-    resources: contextPackage.resources || {},
-    inheritedRuntime: {
-      mode: executionContext?.mode || executionContext?.role || "agent",
-      workspace: executionContext?.workspace?.root || "",
-      parentInvocationId: executionContext?.invocationId || "",
-    },
-  });
+  const scope = contextPackage.scope && typeof contextPackage.scope === "object" ? contextPackage.scope : {};
+  const resources = contextPackage.resources && typeof contextPackage.resources === "object" ? contextPackage.resources : {};
+  const hosts = scopeHosts(scope);
+  const workspaceRoot = String(executionContext?.workspace?.root || "").slice(0, 500);
   const sections = [
     "## Objective",
     task,
     "",
-    "## Role",
-    String(contextPackage.role || "").slice(0, MAX_TASK_CHARS),
-    "",
     "## Authority",
-    String(contextPackage.authority || "").slice(0, MAX_TASK_CHARS),
+    String(contextPackage.authority || executionContext?.authority || "").slice(0, 500),
     "",
-    "## Scope",
-    jsonSection(safeContext.scope || {}),
+    "## Workspace",
+    workspaceRoot || "(workspace root is available to read_file and search_workspace)",
     "",
-    "## Identity",
-    jsonSection(safeContext.identity || {}),
+    "## In-scope hosts",
+    hosts.length ? hosts.join("\n") : "(use the workspace scope; do not assume hosts that are not in project scope)",
     "",
-    "## Resources",
-    jsonSection(safeContext.resources || {}),
+    "## Pointers",
+    pointerLines(resources),
     "",
     "## Inherited runtime",
-    jsonSection(safeContext.inheritedRuntime || {}),
+    `parentInvocationId: ${String(executionContext?.invocationId || "").slice(0, 200)}`,
     "",
     "## Expected output",
-    String(expectedOutput.description || "").slice(0, MAX_TASK_CHARS),
+    String(expectedOutput.description || "").slice(0, 1_000),
     "",
     "## Return format (required)",
-    String(expectedOutput.format || "").slice(0, MAX_TASK_CHARS),
-    "",
-    "You must return output that matches the return format above.",
+    "Return one JSON object only, at most 2000 characters in summary:",
+    '{"status":"done|blocked|needs_operator","summary":"...","evidenceRefs":["workspace-relative path or evidence id"],"unverified":["claim you could not check"]}',
+    "status done means you checked the claim. status blocked means you could not finish. status needs_operator means the parent must ask the user.",
+    "Do not edit files. Do not call apply_patch or delegate_agent. Investigate, then return the JSON object.",
+    String(expectedOutput.format || "").slice(0, 500),
   ];
   let contextText = sections.join("\n");
   if (contextText.length > MAX_CONTEXT_CHARS) contextText = `${contextText.slice(0, MAX_CONTEXT_CHARS)}\n[bounded by XEKUTE]`;
   return appendSteeringUpdate(contextText, steeringSections);
+}
+
+function parseChildFinding(text = "") {
+  const raw = String(text || "").trim();
+  const match = raw.match(/\{[\s\S]*\}/);
+  let parsed = null;
+  if (match) {
+    try { parsed = JSON.parse(match[0]); } catch { parsed = null; }
+  }
+  const status = String(parsed?.status || "").toLowerCase();
+  if (!parsed || !["done", "blocked", "needs_operator"].includes(status)) {
+    return {
+      status: "blocked",
+      summary: raw.slice(0, MAX_SUMMARY_CHARS),
+      evidenceRefs: [],
+      unverified: raw ? [raw.slice(0, MAX_SUMMARY_CHARS)] : ["The child did not return the required JSON object."],
+    };
+  }
+  const refs = Array.isArray(parsed.evidenceRefs) ? parsed.evidenceRefs.map((item) => String(item || "").slice(0, 300)).filter(Boolean).slice(0, 40) : [];
+  const unverified = Array.isArray(parsed.unverified) ? parsed.unverified.map((item) => String(item || "").slice(0, 500)).filter(Boolean).slice(0, 40) : [];
+  return {
+    status,
+    summary: String(parsed.summary || raw).slice(0, MAX_SUMMARY_CHARS),
+    evidenceRefs: refs,
+    unverified,
+  };
+}
+
+function isRetryableChildFailure(result = {}) {
+  if (result?.aborted) return false;
+  const detail = `${result?.code || ""} ${result?.error || ""} ${result?.runState?.stopReason || ""}`;
+  if (/policy|scope|denied|workspace_out_of_scope/i.test(detail)) return false;
+  return /timeout|timed out|econnreset|econnrefused|rate limit|too many requests|\b429\b|\b502\b|\b503\b|unavailable|network/i.test(detail);
 }
 
 function requestedWorkspaceMutation(input = {}) {
@@ -120,7 +169,6 @@ function childResultStatus(result = {}, mutation = {}, actions = []) {
   // an inconclusive child can never be treated as a successful completion.
   if (runtimeStatus === "stopped") return "stopped";
   if (["failed", "inconclusive", "waiting"].includes(runtimeStatus)) return "failed";
-  if (mutation.required && !actions.some((action) => action.ok && WORKSPACE_MUTATION_TOOLS.has(action.toolName))) return "failed";
   return "completed";
 }
 
@@ -276,7 +324,10 @@ function createRuntimeDelegationProvider({
   function currentTools() {
     const source = typeof getTools === "function" ? getTools() : tools;
     return (Array.isArray(source) ? source : [])
-      .filter((tool) => String(tool?.function?.name || tool?.name || "") !== "delegate_agent");
+      .filter((tool) => {
+        const name = String(tool?.function?.name || tool?.name || "");
+        return name !== "delegate_agent" && name !== "apply_patch";
+      });
   }
 
   coordinator?.registerParent?.(runKey, {
@@ -416,6 +467,11 @@ function createRuntimeDelegationProvider({
       : null;
     const executeChildToolCall = async (request) => {
       const toolName = String(request?.toolCall?.function?.name || request?.toolCall?.toolName || "");
+      if (toolName === "apply_patch" || toolName === "delegate_agent") {
+        const denied = { ok: false, error: { code: "CHILD_TOOL_DENIED", message: "Delegated children cannot edit files or spawn agents." } };
+        childActions.push({ toolName, target: targetFromToolCall(request), ok: false, code: "CHILD_TOOL_DENIED" });
+        return denied;
+      }
       let toolResult;
       try {
         toolResult = await executeToolCall({
@@ -526,6 +582,13 @@ function createRuntimeDelegationProvider({
     });
     try {
       let result = await runSpec.run();
+      let retried = false;
+      if (isRetryableChildFailure(result) && !childController.signal.aborted && childResultStatus(result, runSpec.mutation, runSpec.childActions) === "failed") {
+        retried = true;
+        sendChildEvent(childSessionId, childInvocationId, { type: "subagent_activity", model: effectiveModel, summary: "Retrying the child once after a model or timeout failure." });
+        runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel });
+        result = await runSpec.run();
+      }
       const fallbackModel = String(parentModel || "").trim();
       if (fallbackModel && effectiveModel !== fallbackModel && runSpec.childActions.length === 0 && isModelAvailabilityFailure(result) && !childController.signal.aborted) {
         sendChildEvent(childSessionId, childInvocationId, { type: "subagent_activity", model: fallbackModel, summary: `Selected sub-agent model was unavailable; retrying with ${fallbackModel}.` });
@@ -535,13 +598,20 @@ function createRuntimeDelegationProvider({
         result = await runSpec.run();
       }
       const runtimeStatus = String(result?.runState?.status || "").toLowerCase();
-      const status = childResultStatus(result, runSpec.mutation, runSpec.childActions);
-      const childSummary = String(result?.finalText || "").trim().slice(0, MAX_SUMMARY_CHARS);
-      const mutationFailure = status === "failed" && runSpec.mutation.required
-        && !runSpec.childActions.some((action) => action.ok && WORKSPACE_MUTATION_TOOLS.has(action.toolName))
-        ? `The delegated task required a real write to ${runSpec.mutation.target || "the workspace"}, but the child completed without a successful apply_patch call.`
-        : "";
-      const error = String(mutationFailure || result?.error || result?.runState?.stopReason || "").slice(0, MAX_SUMMARY_CHARS);
+      const status = childController.signal.aborted
+        ? "stopped"
+        : childResultStatus(result, runSpec.mutation, runSpec.childActions);
+      let finding = parseChildFinding(result?.finalText || "");
+      if (runSpec.mutation.required) {
+        finding = {
+          status: "blocked",
+          summary: finding.summary,
+          evidenceRefs: finding.evidenceRefs,
+          unverified: [...finding.unverified, `The parent must edit ${runSpec.mutation.target || "the workspace"}. Delegated children cannot apply patches.`],
+        };
+      }
+      const childSummary = finding.summary.slice(0, MAX_SUMMARY_CHARS);
+      const error = String(result?.error || result?.runState?.stopReason || "").slice(0, MAX_SUMMARY_CHARS);
       const terminalType = status === "completed" ? "subagent_completed" : status === "stopped" ? "subagent_stopped" : "subagent_failed";
       let specialistReturn = null;
       const returnedPayload = result?.specialistReturn || result?.specialist_return || result?.memorySpecialistReturn || result?.structuredReturn || null;
@@ -569,11 +639,17 @@ function createRuntimeDelegationProvider({
       }
       const outcome = {
         status,
-        output: { text: childSummary, format: String(input?.expectedOutput?.format || "text"), summary: String(input?.expectedOutput?.description || input?.task || "").slice(0, MAX_SUMMARY_CHARS) },
+        output: {
+          text: childSummary,
+          format: "json",
+          summary: childSummary,
+          finding,
+        },
         metadata: {
           model: effectiveModel,
           requestedModel,
           fallbackUsed,
+          retried,
           provider: getActiveProvider(),
           sessionId: childSessionId,
           runtimeStatus,
@@ -1012,5 +1088,7 @@ module.exports = {
   requestedWorkspaceMutation,
   isModelAvailabilityFailure,
   childResultStatus,
+  parseChildFinding,
+  isRetryableChildFailure,
   createRuntimeDelegationProvider,
 };

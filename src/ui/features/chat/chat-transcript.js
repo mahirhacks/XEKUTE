@@ -117,6 +117,7 @@ function normalizeCommand(item = {}) {
     lane: eventLane("command", item),
     name: clip(item.name || "exec_command", MAX_NAME) || "exec_command",
     command: clip(item.command, MAX_COMMAND),
+    context: clip(item.context || item.args?.context || "", MAX_NAME),
     cwd: clip(item.cwd || ".", MAX_PATH) || ".",
     exit_code: Number.isFinite(Number(exit)) ? Number(exit) : undefined,
     status: String(item.status || "ok").toLowerCase() === "error" ? "error" : "ok",
@@ -182,7 +183,25 @@ function normalizeEvent(event) {
   if (type === "tool") return normalizeTool(event);
   if (type === "command") return normalizeCommand(event);
   if (type === "tool_group") return normalizeToolGroup(event);
+  if (type === "subagent") return normalizeSubagent(event);
   return null;
+}
+
+function normalizeSubagent(item = {}) {
+  const childInvocationId = clip(item.child_invocation_id || item.childInvocationId || "", 160);
+  const childSessionId = clip(item.child_session_id || item.childSessionId || "", 160);
+  if (!childInvocationId && !childSessionId) return null;
+  const status = String(item.status || "completed").toLowerCase();
+  return compact({
+    type: "subagent",
+    lane: "activity",
+    child_invocation_id: childInvocationId,
+    child_session_id: childSessionId,
+    parent_session_id: clip(item.parent_session_id || item.parentSessionId || "", 160),
+    model: clip(item.model || "", 160),
+    status: ["queued", "working", "running", "completed", "stopped", "failed"].includes(status) ? status : "completed",
+    summary: clip(item.summary || "", 240),
+  });
 }
 
 function normalizeRun(run = {}, index = 0) {
@@ -294,6 +313,23 @@ function captureThinkingEvent(fold) {
   });
 }
 
+function captureSubagentItem(card) {
+  const childInvocationId = clip(dataset(card).childInvocationId || "", 160);
+  const childSessionId = clip(dataset(card).childSessionId || "", 160);
+  if (!childInvocationId && !childSessionId) return null;
+  const detail = String(card.querySelector?.(".subagent-run-detail")?.textContent || "").trim();
+  return compact({
+    type: "subagent",
+    lane: "activity",
+    child_invocation_id: childInvocationId,
+    child_session_id: childSessionId,
+    parent_session_id: clip(dataset(card).parentSessionId || "", 160),
+    model: clip(dataset(card).model || "", 160),
+    status: clip(dataset(card).state || "completed", 40) || "completed",
+    summary: clip(detail, 240),
+  });
+}
+
 function captureToolItem(card) {
   if (!card || card.hidden) return null;
   const name = clip(dataset(card).toolAction || "", MAX_NAME);
@@ -370,6 +406,7 @@ function captureCommandItem(row) {
     lane: "activity",
     name: "exec_command",
     command,
+    context: clip(dataset(row).commandContext || "", MAX_NAME),
     cwd: clip(dataset(row).cwd || ".", MAX_PATH) || ".",
     exit_code: exit === "" || exit == null ? undefined : Number(exit),
     status: dataset(row).state === "error" ? "error" : "ok",
@@ -383,9 +420,8 @@ function captureCommandItem(row) {
 function captureWorkItem(node) {
   if (classListContains(node, "agent-thinking-fold")) return captureThinkingEvent(node);
   if (classListContains(node, "agent-command-event")) return captureCommandItem(node);
-  if (classListContains(node, "agent-file-row")
-    || classListContains(node, "tool-card")
-    || classListContains(node, "subagent-run-card")) {
+  if (classListContains(node, "subagent-run-card")) return captureSubagentItem(node);
+  if (classListContains(node, "agent-file-row") || classListContains(node, "tool-card")) {
     return captureToolItem(node);
   }
   return null;
@@ -427,9 +463,13 @@ function captureNode(node, events, { verdict = false } = {}) {
     if (command) events.push(command);
     return;
   }
+  if (classListContains(node, "subagent-run-card")) {
+    const subagent = captureSubagentItem(node);
+    if (subagent) events.push(subagent);
+    return;
+  }
   if (classListContains(node, "agent-file-row")
-    || classListContains(node, "tool-card")
-    || classListContains(node, "subagent-run-card")) {
+    || classListContains(node, "tool-card")) {
     const tool = captureWorkItem(node);
     if (tool) events.push(tool);
   }

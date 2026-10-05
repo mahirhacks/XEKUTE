@@ -1,0 +1,17 @@
+---
+id: create-skill
+title: Create user guidance skill
+description: Internal guidance for conversationally creating a validated project or global user-authored guidance skill.
+version: 1.1.0
+entrypoint: SKILL.md
+visibility: internal
+instruction_role: skill-context
+modes: ["agent", "ask"]
+required_tools: ["ask_questions", "create_guidance"]
+parameter_policy: context-only
+menu: system-command
+---
+
+## Workflow
+
+Ask for the skill name, goal, scope, prerequisites, and instructions when needed. Use `create_guidance` with kind `skill`; store it in `.xekute/skills/` or the existing global guidance root. This creates user guidance, not a shipped package under `src/prompts/skills/libraries/`. Preserve all existing validation and safety limits.

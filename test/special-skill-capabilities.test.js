@@ -9,7 +9,7 @@ const {
   CREATE_GUIDANCE_TOOL,
   createSpecialSkillToolDefinitions,
   executeCreateGuidance,
-} = require("../src/agent/special-skills/capabilities.js");
+} = require("../src/prompts/skills/internal/capabilities.js");
 const { writeGuidanceFile } = require("../src/app/services/guidance/custom-guidance.js");
 
 function manifest(id = "create-rule") {

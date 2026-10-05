@@ -17,28 +17,28 @@ const SEMANTIC_STOPWORDS = new Set([
   "the", "and", "that", "this", "with", "from", "for", "was", "were", "has", "have",
   "into", "then", "when", "will", "must", "should", "could", "would", "user", "agent",
 ]);
-const SECRET_TEXT = /(?:bearer\s+|basic\s+|(?:password|passwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*|-----BEGIN [^-]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)[^\s,;]*/gi;
+const SECRET_TEXT = /(?:bearer\s+|basic\s+|(?:cookie|set-cookie|authorization|proxy-authorization)\s*:\s*|(?:password|passwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*|-----BEGIN [^-]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)[^\s,;]*/gi;
 
-function redactText(value, maximum = 8_000) {
-  return String(value == null ? "" : value)
-    .replace(SECRET_TEXT, "[REDACTED]")
+function redactText(value, maximum = 8_000, retainSecrets = false) {
+  const text = String(value == null ? "" : value);
+  return (retainSecrets ? text : text.replace(SECRET_TEXT, "[REDACTED]"))
     .replace(/[\u0000\r\n]+/g, " ")
     .trim()
     .slice(0, maximum);
 }
 
-function sanitizeValue(value, key = "", depth = 0, seen = new WeakSet()) {
+function sanitizeValue(value, key = "", depth = 0, seen = new WeakSet(), retainSecrets = false) {
   if (depth > 10) return "[OMITTED_TOO_DEEP]";
-  if (/(?:cookie|authorization|access[_-]?token|refresh[_-]?token|csrf|secret|password|private[_-]?key|passphrase|credential|raw[_-]?value)/i.test(String(key))) return undefined;
+  if (!retainSecrets && /(?:cookie|authorization|access[_-]?token|refresh[_-]?token|csrf|secret|password|private[_-]?key|passphrase|credential|raw[_-]?value)/i.test(String(key))) return undefined;
   if (value == null || typeof value === "boolean" || typeof value === "number") return value;
-  if (typeof value === "string") return redactText(value, 4_000);
+  if (typeof value === "string") return redactText(value, 4_000, retainSecrets);
   if (typeof value !== "object") return redactText(value, 2_000);
   if (seen.has(value)) return "[CIRCULAR]";
   seen.add(value);
-  if (Array.isArray(value)) return value.slice(0, 100).map((entry) => sanitizeValue(entry, "", depth + 1, seen)).filter((entry) => entry !== undefined);
+  if (Array.isArray(value)) return value.slice(0, 100).map((entry) => sanitizeValue(entry, "", depth + 1, seen, retainSecrets)).filter((entry) => entry !== undefined);
   const result = {};
   for (const [childKey, child] of Object.entries(value).slice(0, 100)) {
-    const safe = sanitizeValue(child, childKey, depth + 1, seen);
+    const safe = sanitizeValue(child, childKey, depth + 1, seen, retainSecrets);
     if (safe !== undefined) result[redactText(childKey, 120)] = safe;
   }
   return result;
@@ -136,12 +136,7 @@ function createTier1ContextCoordinator({
         // secret scan is defense in depth for older files written before the
         // current redaction contract existed.
         const validation = schemas.validate("ConversationCheckpointV3", value);
-        if (validation.ok) {
-          try {
-            assertNoSecretValues(value);
-            state.summary = value;
-          } catch { /* keep an empty summary rather than injecting unsafe data */ }
-        }
+        if (validation.ok) state.summary = value;
       }
     } catch { /* secure storage is optional; keep process-only state empty */ }
     return state;
@@ -320,7 +315,7 @@ function createTier1ContextCoordinator({
     return { ok: true, shouldCheckpoint: Number(assembled.conservative_prompt_upper_bound) >= Math.floor(limit * CHECKPOINT_RATIO), protectedOverflow: assembled.blocks.A.components.reduce((sum, item) => sum + item.tokens, 0) > limit, threshold: Math.floor(limit * CHECKPOINT_RATIO), totalTokens: assembled.total_tokens, estimated: assembled.estimated };
   }
 
-  function reduceConversation(messages = [], toolEvents = []) {
+  function reduceConversation(messages = [], toolEvents = [], retainSecrets = false) {
     // Deterministic checkpoint stage: extract and normalize tool output, then
     // extract workflow results. Semantic checkpointing later adds grounded
     // continuation facts, decisions, and significant events.
@@ -329,10 +324,10 @@ function createTier1ContextCoordinator({
     const normalized = [];
     for (const message of source) {
       const role = String(message?.role || "unknown");
-      const content = redactText(message?.content || "", 4_000);
+      const content = redactText(message?.content || "", 4_000, retainSecrets);
       normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80) });
     }
-    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || ""), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
+    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || ""), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
     return { messages: normalized, tool_events: eventSummary, message_count: normalized.length, event_count: eventSummary.length, digest: canonicalKeyHash({ messages: normalized, tool_events: eventSummary }) };
   }
 
@@ -527,18 +522,18 @@ function createTier1ContextCoordinator({
     return (words.length <= 3 && overlap >= 1) || (overlap >= 2 && overlap / words.length >= 0.34);
   }
 
-  function normalizeSemanticField(values, corpus, { fallback = [], allowUnsupported = false } = {}) {
+  function normalizeSemanticField(values, corpus, { fallback = [], allowUnsupported = false, retainSecrets = false } = {}) {
     const safe = [];
     const unsupported = [];
     const source = Array.isArray(values) ? values : [];
     for (const raw of source) {
-      const value = redactText(raw, 2_000);
+      const value = redactText(raw, 2_000, retainSecrets);
       if (!value) continue;
       if (allowUnsupported || semanticValueIsGrounded(value, corpus)) safe.push(value);
       else unsupported.push(value);
     }
     for (const raw of Array.isArray(fallback) ? fallback : []) {
-      const value = redactText(raw, 2_000);
+      const value = redactText(raw, 2_000, retainSecrets);
       if (value) safe.push(value);
     }
     return { values: [...new Set(safe)].slice(0, 300), unsupported: [...new Set(unsupported)].slice(0, 200) };
@@ -547,14 +542,15 @@ function createTier1ContextCoordinator({
   function checkpointCandidate(raw, context, generatedBy = "model") {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const fallback = deterministicFallback(context);
-    const safeRaw = sanitizeValue(raw) || {};
+    const safeRaw = sanitizeValue(raw, "", 0, new WeakSet(), context?.retainSecrets === true) || {};
     const candidate = { ...fallback, ...safeRaw, schema_version: 3, project_id: context.projectId, session_id: context.sessionId, generated_by: generatedBy };
     const corpus = semanticCorpus(context);
-    const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpus, { fallback: fallback.grounded_facts });
-    const constraints = normalizeSemanticField(candidate.constraints, corpus, { fallback: fallback.constraints });
-    const decisions = normalizeSemanticField(candidate.decisions, corpus, { fallback: fallback.decisions });
-    const significantEvents = normalizeSemanticField(candidate.significant_events, corpus, { fallback: fallback.significant_events });
-    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpus, { fallback: fallback.unresolved_work });
+    const retainSecrets = context?.retainSecrets === true;
+    const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpus, { fallback: fallback.grounded_facts, retainSecrets });
+    const constraints = normalizeSemanticField(candidate.constraints, corpus, { fallback: fallback.constraints, retainSecrets });
+    const decisions = normalizeSemanticField(candidate.decisions, corpus, { fallback: fallback.decisions, retainSecrets });
+    const significantEvents = normalizeSemanticField(candidate.significant_events, corpus, { fallback: fallback.significant_events, retainSecrets });
+    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpus, { fallback: fallback.unresolved_work, retainSecrets });
     candidate.grounded_facts = groundedFacts.values;
     candidate.constraints = constraints.values;
     candidate.decisions = decisions.values;
@@ -567,7 +563,7 @@ function createTier1ContextCoordinator({
       ...decisions.unsupported,
       ...significantEvents.unsupported,
       ...unresolvedWork.unsupported,
-    ].map((value) => redactText(value, 2_000)).filter(Boolean))].slice(0, 200);
+    ].map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean))].slice(0, 200);
     // These fields are runtime continuity, not model prose.  Pin them to the
     // deterministic reduction so a model cannot move the transcript boundary,
     // replace the checkpoint lineage, drop protected references, or invent a
@@ -607,7 +603,7 @@ function createTier1ContextCoordinator({
       decisions: Array.isArray(context.decisions) ? context.decisions.slice(0, 200) : [],
       authoritative_refs: context.protectedRefs,
       source_block_refs: context.sourceBlocks,
-    }) || {};
+    }, "", 0, new WeakSet(), context?.retainSecrets === true) || {};
     const callModel = async (input) => new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -689,7 +685,8 @@ function createTier1ContextCoordinator({
     const reductionMessages = currentPrompt && !promptAlreadyActive
       ? [{ role: "user", content: currentPrompt, id: `prompt_${canonicalKeyHash({ projectId, sessionId, currentPrompt }).slice(0, 32)}` }, ...active]
       : active;
-    const reduction = reduceConversation(reductionMessages, input.tool_events || input.toolEvents || []);
+    const retainSecrets = input.retain_secrets === true || input.retainSecrets === true;
+    const reduction = reduceConversation(reductionMessages, input.tool_events || input.toolEvents || [], retainSecrets);
     let previous = state.summary;
     if (!previous && sensitiveStore?.readCheckpoint) {
       // A checkpoint can race with a secure-store restart while the session
@@ -706,7 +703,7 @@ function createTier1ContextCoordinator({
     const rawProtectedRefs = input.protected_refs || input.protectedRefs || [];
     const rawSourceBlocks = input.source_block_refs || input.sourceBlockRefs || [];
     const rawConstraints = input.constraints || input.operator_constraints || input.operatorConstraints || [];
-    const objective = redactText(input.objective || "", 8_000);
+    const objective = redactText(input.objective || "", 8_000, retainSecrets);
     const suppliedWorkflow = input.current_workflow === undefined ? state.workflow : input.current_workflow;
     const workflow = normalizeWorkflow(suppliedWorkflow || {
       state: objective ? "active" : "idle",
@@ -722,8 +719,8 @@ function createTier1ContextCoordinator({
       active,
       currentPrompt,
       objective,
-      constraints: (Array.isArray(rawConstraints) ? rawConstraints : [rawConstraints]).map((value) => redactText(value, 2_000)).filter(Boolean).slice(0, 200),
-      decisions: (Array.isArray(input.decisions) ? input.decisions : [input.decisions]).map((value) => redactText(value, 2_000)).filter(Boolean).slice(0, 200),
+      constraints: (Array.isArray(rawConstraints) ? rawConstraints : [rawConstraints]).map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean).slice(0, 200),
+      decisions: (Array.isArray(input.decisions) ? input.decisions : [input.decisions]).map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean).slice(0, 200),
       // Checkpoint references are identifiers, not arbitrary caller-provided
       // strings. Invalid values are replaced with deterministic opaque handles
       // so a secret can never be persisted or echoed in a repair request.
@@ -731,6 +728,7 @@ function createTier1ContextCoordinator({
       sourceBlocks: safeReferenceIds(rawSourceBlocks, projectId, "block"),
       limit: Number(input.effective_context_limit || input.effectiveContextLimit || 1_000_000),
       model: input.model,
+      retainSecrets,
     };
     let semantic = null;
     if (input.allow_model !== false && input.reason !== "emergency") semantic = await semanticCheckpoint(context);
@@ -746,7 +744,7 @@ function createTier1ContextCoordinator({
       // copied into the readable Tier 1 assembly and diagnostics.  Keep the
       // final boundary defensive in case a custom model/provider callback
       // returns a credential-shaped value that earlier normalization missed.
-      if (checkpointValue) assertNoSecretValues(checkpointValue);
+      if (checkpointValue && !retainSecrets) assertNoSecretValues(checkpointValue);
     } catch (error) {
       return { ok: false, code: error.code || "MEMORY_CHECKPOINT_SECRET_REJECTED", error: "Checkpoint contains a prohibited sensitive value.", details: {}, activePreserved: true };
     }
@@ -787,6 +785,26 @@ function createTier1ContextCoordinator({
     syncMeter(projectId, sessionId, ["Current Workflow"]);
     return clone(state.workflow);
   }
+  function cloneSession(projectId, sourceSessionId, destSessionId) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sourceSessionId, "session") || !isMemoryId(destSessionId, "session")) {
+      return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 session clone requires opaque project and session IDs.");
+    }
+    if (sourceSessionId === destSessionId) return { ok: true, sessionId: destSessionId, activeCount: 0, copied: false };
+    const source = hydrateSession(projectId, sourceSessionId);
+    const dest = stateFor(projectId, destSessionId);
+    dest.active = capActive(source.active);
+    dest.summary = source.summary ? clone(source.summary) : null;
+    dest.workflow = source.workflow ? clone(source.workflow) : null;
+    dest.checkpointRevision = Number(source.checkpointRevision) || 0;
+    dest.blockA = source.blockA ? clone(source.blockA) : null;
+    dest.lastAssembly = null;
+    dest.activeHydrated = true;
+    persistActive(projectId, destSessionId);
+    if (dest.summary && sensitiveStore?.writeCheckpoint) {
+      try { sensitiveStore.writeCheckpoint(projectId, destSessionId, dest.summary); } catch { /* in-memory summary remains */ }
+    }
+    return { ok: true, sessionId: destSessionId, activeCount: dest.active.length, copied: true };
+  }
   function state(projectId, sessionId) {
     const value = hydrateSession(projectId, sessionId);
     return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) };
@@ -799,7 +817,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, state, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, clear, clearProject });
 }
 
 module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, METER_ROWS });

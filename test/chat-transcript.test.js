@@ -7,6 +7,27 @@ async function load() {
   return import("../src/ui/features/chat/chat-transcript.js");
 }
 
+test("finished sub-agent rows survive transcript normalization", async () => {
+  const { normalizeUiTranscript } = await load();
+  const transcript = normalizeUiTranscript({
+    version: 2,
+    runs: [{
+      user: { message: "spin up two sub-agents" },
+      events: [{
+        type: "subagent",
+        child_invocation_id: "child-1",
+        child_session_id: "session-1",
+        model: "deepseek/deepseek-v4-flash",
+        status: "completed",
+        summary: "Finished working.",
+      }],
+    }],
+  });
+  assert.equal(transcript.runs[0].events[0].type, "subagent");
+  assert.equal(transcript.runs[0].events[0].status, "completed");
+  assert.equal(transcript.runs[0].events[0].model, "deepseek/deepseek-v4-flash");
+});
+
 test("thinking duration uses stored elapsed time instead of wall-clock age", async () => {
   const { thinkingElapsedMs, parseWorkedForMs } = await load();
   const startedAt = Date.parse("2026-09-12T08:00:04.200Z");

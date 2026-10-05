@@ -1,0 +1,63 @@
+# Selection catalog for the skill library. Read this file to choose one skill.
+# Load only the matching SKILL.md. Do not load the whole library for one task.
+skills:
+  - id: bug-bounty
+    path: bug-bounty/SKILL.md
+    description: End-to-end engagement model from scope through recon, learning, hunting, validation, and reporting, with impact-first stop rules.
+    use_when: Any bug bounty task that needs one frame for the whole program.
+  - id: bb-methodology
+    path: bb-methodology/SKILL.md
+    description: Session orchestration with daily goals, a non-linear five-phase workflow, and wide versus deep routing.
+    use_when: Session start, a target switch, or when the next phase is unclear.
+  - id: triage-validation
+    path: triage-validation/SKILL.md
+    description: Pre-report gates with seven questions, identity checks, four submission gates, and chain-before-submit rules.
+    use_when: Immediately before writing or filing a report, or when deciding whether a signal is worth keeping.
+  - id: web2-recon
+    path: web2-recon/SKILL.md
+    description: Turns in-scope assets into scored live hosts, URL buckets, and hunt leads, with time-box and dead-surface rules.
+    use_when: Starting or refreshing web attack-surface mapping before a deep hunt.
+  - id: web2-vuln-classes
+    path: web2-vuln-classes/SKILL.md
+    description: Routes recon signals to vulnerability families by auth needs, impact ceiling, and early drop conditions.
+    use_when: After recon buckets exist and you are choosing or switching hunt focus.
+  - id: security-arsenal
+    path: security-arsenal/SKILL.md
+    description: Reportability gates, block and rate-limit routing, pattern vocabulary, and where external references fit.
+    use_when: Deciding whether a signal is reportable, or how to treat a blocked or marginal result.
+  - id: graphql-audit
+    path: graphql-audit/SKILL.md
+    description: Ordered GraphQL review from schema visibility through resolver authorization, argument trust, subscriptions, and depth or batch limits.
+    use_when: A target exposes GraphQL and you need an audit map rather than ad hoc queries.
+  - id: client-reverse
+    path: client-reverse/SKILL.md
+    description: Packet-first workflow for protected APIs when the client computes signs or anti-bot tokens that break raw replay.
+    use_when: Proxy or script replay fails with signature or bot errors while the real client still works.
+  - id: report-writing
+    path: report-writing/SKILL.md
+    description: Impact-first report drafting with persistence, title and severity discipline, platform shape, and a pre-submit checklist.
+    use_when: After a finding is validated and in scope, before submission.
+  - id: cicd-security
+    path: cicd-security/SKILL.md
+    description: Reviews pipelines as privileged trust boundaries, covering untrusted inputs, triggers, tokens, OIDC, and supply-chain pinning.
+    use_when: In-scope repos and pipelines such as GitHub Actions, GitLab CI, Jenkins, or CircleCI.
+  - id: mobile-pentest
+    path: mobile-pentest/SKILL.md
+    description: Runtime-first mobile assessment of APIs, environments, and client trust, with a remote-impact bar.
+    use_when: An in-scope Android or iOS app, or a mobile-only backend.
+  - id: credential-attack
+    path: credential-attack/SKILL.md
+    description: Triage of exposed secrets and auth policy, including scope, what the secret can reach, and whether impact is real.
+    use_when: A leaked key or token in a repo, app, or pipeline, when you must decide if it is a valid finding.
+  - id: web3-audit
+    path: web3-audit/SKILL.md
+    description: DeFi contract review with economic triage, sibling-function invariants, and a fixed deep-review order.
+    use_when: Auditing protocol source, or deciding whether a bounty target deserves deep effort.
+  - id: meme-coin-audit
+    path: meme-coin-audit/SKILL.md
+    description: Token due diligence with fast kills, privilege inventory, rug-pattern categories, and authority checks.
+    use_when: Assessing a token launch, LP or authority risk, or a pre-trade decision.
+  - id: argus
+    path: argus/SKILL.md
+    description: Class-specific scanning for CORS, header injection, NoSQL, JWT, out-of-band behavior, and LLM or chatbot surfaces.
+    use_when: Recon points at those surfaces and you need a fast, class-scoped signal.

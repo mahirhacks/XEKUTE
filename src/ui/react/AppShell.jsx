@@ -1031,7 +1031,9 @@ export default memo(function AppShell() {
             </div>
           </div>
     
-          <div id="messages"></div>
+          <div className="chat-transcript-viewport">
+            <div id="messages" tabIndex="0" aria-label="Conversation"></div>
+          </div>
     
           <div id="input-bar">
             <div id="chat-history-security-warning" className="chat-history-security-warning" role="status" aria-live="polite" hidden></div>
@@ -1045,6 +1047,7 @@ export default memo(function AppShell() {
             </div>
             <div className="composer">
               <div id="slash-command-suggestions" className="slash-command-suggestions" role="listbox" aria-label="Available slash commands" hidden></div>
+              <div id="prompt-queue" className="prompt-queue" hidden></div>
               <div className="composer-input-row">
                 <div id="chat-input" contentEditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Chat message" data-placeholder="Ask, investigate, run, or search" className="chat-input-empty"><span id="selected-slash-command" className="selected-slash-command" hidden></span></div>
               </div>

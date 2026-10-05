@@ -194,12 +194,12 @@ test("exec_command raw adapter contains no authority decision result", async () 
   assert.equal("approval" in result.value, false);
 });
 
-test("exec_command context is at most 5 words and is required for run and start", () => {
+test("exec_command context is fewer than 4 words and is required for run and start", () => {
   assert.equal(validateExecCommandContext("amass subdomain enum").ok, true);
-  assert.equal(validateExecCommandContext("one two three four five six").ok, false);
-  assert.match(validateExecCommandContext("one two three four five six").message, /at most 5 words/);
+  assert.equal(validateExecCommandContext("one two three four").ok, false);
+  assert.match(validateExecCommandContext("one two three four").message, /fewer than 4 words/);
   assert.equal(validateInput({ command: "echo ok", context: "echo check" }).ok, true);
-  assert.equal(validateInput({ command: "echo ok", context: "one two three four five six" }).ok, false);
+  assert.equal(validateInput({ command: "echo ok", context: "one two three four" }).ok, false);
   assert.equal(validateInput({ command: "echo ok" }).ok, false);
   assert.equal(validateInput({ operation: "status", process_id: "process-abc", context: "status peek" }).ok, false);
   assert.equal((validateInput({ command: "echo ok", context: "one two three four five six" })).error.code, "INVALID_EXEC_COMMAND_INPUT");

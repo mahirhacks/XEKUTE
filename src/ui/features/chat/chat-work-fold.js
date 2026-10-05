@@ -179,7 +179,7 @@ function adoptIntoWorkFold(turn, fold) {
     }
     // The closing answer already sits beside the fold. Pulling it back in would
     // hide it the next time a tool call recreates the section.
-    if (isReplyNode(child) && child.dataset.workVerdict === "true") continue;
+    if (isReplyNode(child) && (child.dataset.workVerdict === "true" || child.dataset.liveReply === "true")) continue;
     if (isWorkNode(child) || isReplyNode(child)) body.appendChild(child);
   }
   return fold;

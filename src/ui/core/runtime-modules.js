@@ -11,6 +11,7 @@ import "../../agent/modes/mode-registry.js";
 import "../../prompts/instructions/system-prompt.js";
 import "../../prompts/instructions/initial-context.js";
 import "../../agent/runtime/prompt-compiler.js";
+import "../../agent/runtime/operator-surface.js";
 import "../features/toolbox/toolbox-controller.js";
 import "../../agent/runtime/context-budget.js";
 import "../features/editor/editor-controller.js";

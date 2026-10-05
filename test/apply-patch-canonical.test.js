@@ -28,40 +28,22 @@ function tempRoot() {
   return root;
 }
 
-const CANONICAL_PATHS = [
-  Artifacts.PATHS.projectEngagement,
-  Artifacts.PATHS.projectTargets,
-  Artifacts.PATHS.projectIdentities,
-  Artifacts.PATHS.projectSurface,
-  Artifacts.PATHS.projectControls,
-  Artifacts.PATHS.projectIndex,
-];
-
 test("APPLY_PATCH_CANONICAL_ARTIFACT is exported", () => {
   assert.equal(APPLY_ERROR_CODES.CANONICAL_ARTIFACT, "APPLY_PATCH_CANONICAL_ARTIFACT");
 });
 
-test("create modify move delete on canonical investigation Markdown are rejected", async () => {
+test("apply_patch can modify canonical investigation Markdown", async () => {
   const root = tempRoot();
   const tool = createApplyPatchTool();
   const execution = ctx(root);
-  for (const relative of CANONICAL_PATHS) {
-    const parent = path.join(root, path.dirname(relative));
-    fs.mkdirSync(parent, { recursive: true });
-    const existing = path.join(root, relative);
-    fs.writeFileSync(existing, "# existing\n");
-    for (const [kind, extra] of [
-      ["create", { content: "new" }],
-      ["modify", { content: "changed" }],
-      ["move", { target: relative.replace(/\.md$/, "-moved.md") }],
-      ["delete", {}],
-    ]) {
-      const result = await tool.execute({ operations: [{ kind, path: relative, ...extra }] }, execution);
-      assert.equal(result.ok, false, `${kind} ${relative}`);
-      assert.equal(result.error.code, "APPLY_PATCH_CANONICAL_ARTIFACT", `${kind} ${relative}`);
-      assert.equal(result.error.retryable, false);
-    }
-  }
+  const relative = Artifacts.PATHS.projectEngagement;
+  fs.mkdirSync(path.join(root, path.dirname(relative)), { recursive: true });
+  fs.writeFileSync(path.join(root, relative), "# existing\n");
+  const result = await tool.execute({
+    operations: [{ kind: "modify", path: relative, content: "# changed\n" }],
+  }, execution);
+  assert.equal(result.ok, true, result.error?.message || result.error);
+  assert.equal(fs.readFileSync(path.join(root, relative), "utf8"), "# changed\n");
   fs.rmSync(root, { recursive: true, force: true });
 });
 

@@ -8,9 +8,9 @@ const { denyUserTerminalControl } = require("../../../app/services/terminal/acti
 
 const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
   type: "object",
-  description: "Run an arbitrary shell command or launch an executable in the active workspace. On Windows, command mode defaults to PowerShell and supports pipelines, redirects, variables, quoting, and multiline scripts. A chat can have at most 3 run or start commands active. If one response asks for more run or start commands than there are free slots, none of those commands start.",
+  description: "Run an arbitrary shell command or launch an executable in the active workspace. On Windows, command mode defaults to PowerShell and supports pipelines, redirects, variables, quoting, and multiline scripts. A chat runs at most 3 commands at once. Additional run or start commands wait in FIFO order until a slot opens.",
   properties: {
-    operation: { type: "string", enum: ["run", "start", "status", "stop", "list"], description: "run waits until the command exits, then returns stdout/stderr/exit to the agent. start creates a durable background job immediately; status, stop, and list are secondary inspect, cancel, and list operations." },
+    operation: { type: "string", enum: ["run", "start", "status", "stop", "list"], description: "run waits until the command exits, then returns stdout/stderr/exit to the agent. start creates a durable background job immediately or returns its queued process handle. status, stop, and list inspect, cancel, and list jobs." },
     command: { type: "string", description: "Complete shell command or multiline script. Prefer this for PowerShell/cmd syntax, pipelines, redirection, and compound commands." },
     shell: { type: "string", enum: ["auto", "powershell", "pwsh", "cmd", "bash", "sh"], description: "Shell used for command mode. auto selects PowerShell on Windows and bash elsewhere." },
     executable: { type: "string", description: "Executable name or path for direct process mode. Use with args instead of command." },
@@ -18,11 +18,11 @@ const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
     cwd: { type: "string", description: "Working directory inside the active workspace. Defaults to the workspace root." },
     env: { type: "object", additionalProperties: { type: "string" }, description: "Environment variables merged over the application environment for this process." },
     timeout_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "Optional hard kill in milliseconds. Zero or omission means no kill timer. Distinct from wait_ms." },
-    show_in_terminal: { type: "boolean", default: true, description: "For run/start only. When true or omitted, the command streams into Xekute's in-app Terminal panel immediately. Set false to hide short commands; the host still opens a terminal tab if the command runs longer than 1.5 seconds. Commands never open an external OS console." },
-    context: { type: "string", description: "For run/start only. Required operator label: at most 5 whitespace-separated words. Extra words are rejected before the command starts." },
+    show_in_terminal: { type: "boolean", default: true, description: "For run/start only. When true or omitted, the command streams into Xekute's in-app Terminal panel immediately. Set false to hide short commands; the host still opens a terminal tab if the command runs longer than 1.5 seconds or waits in the queue. Commands never open an external OS console." },
+    context: { type: "string", description: "For run/start only. Required operator label: strictly fewer than 4 whitespace-separated words (1 to 3). Extra words are rejected before the command starts." },
     process_id: { type: "string", description: "Durable process-… handle used by status or stop. Not an OS PID." },
     tail_chars: { type: "integer", minimum: 0, maximum: 200000, description: "Maximum recent stdout/stderr characters returned by status." },
-    wait_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "For run, optional cap on how long this call blocks for exit before backgrounding (omit → wait until the command exits; 0 → immediate background). Never kills. For status, an observation window for state or output change. Never kills." },
+    wait_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "For run, optional cap on how long this call waits for a slot and for exit before backgrounding (omit → wait until the command exits; 0 → immediate background). Never kills. For status, an observation window for state or output change. Never kills." },
     stdout_offset: { type: "integer", minimum: 0, description: "Optional byte cursor returned by a previous status call. When supplied, stdout contains only newer output." },
     stderr_offset: { type: "integer", minimum: 0, description: "Optional byte cursor returned by a previous status call. When supplied, stderr contains only newer output." },
   },
@@ -104,7 +104,7 @@ function validateInput(input) {
   if (input.show_in_terminal !== undefined && typeof input.show_in_terminal !== "boolean") return invalidInput("show_in_terminal must be true or false");
   if (!needsCommand && input.show_in_terminal !== undefined) return invalidInput("show_in_terminal is only valid for run or start");
   if (needsCommand) {
-    if (input.context === undefined) return invalidInput("run and start require context (at most 5 words)");
+    if (input.context === undefined) return invalidInput("run and start require context (fewer than 4 words)");
     const contextCheck = validateExecCommandContext(input.context);
     if (!contextCheck.ok) return invalidInput(contextCheck.message);
   } else if (input.context !== undefined) {

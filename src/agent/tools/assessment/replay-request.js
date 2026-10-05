@@ -187,7 +187,7 @@ function createReplayRequestTool({ fetchImpl = globalThis.fetch, identityProvide
       const baseHeaders = safeRequestHeaders(mergeHeaders(input.request.headers, input.config?.headers));
       // Identity material is read from the dedicated identity vault and is
       // redacted from replay output before it leaves the main process.
-      const sensitiveEnabled = Boolean(identity);
+      const sensitiveEnabled = executionContext?.resourceLimits?.redactSecrets === true && Boolean(identity);
 
       const startedAt = Date.now();
       let response;

@@ -5,17 +5,21 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createSpecialSkillRegistry, internalSkillIdForIntent } = require("../src/agent/special-skills/registry.js");
-const { loadPackage } = require("../src/agent/special-skills/loader.js");
-const { selectInternalSkill } = require("../src/agent/special-skills/runner.js");
+const { createSpecialSkillRegistry, internalSkillIdForIntent } = require("../src/prompts/skills/internal/registry.js");
+const { loadPackage } = require("../src/prompts/skills/internal/loader.js");
+const { selectInternalSkill } = require("../src/prompts/skills/internal/runner.js");
 const { buildSkillContext, buildSystemContext } = require("../src/agent/runtime/prompt-context.js");
-const { createSpecialSkillToolDefinitions } = require("../src/agent/special-skills/capabilities.js");
+const { createSpecialSkillToolDefinitions } = require("../src/prompts/skills/internal/capabilities.js");
 const { createWebArtifactStore } = require("../src/domain/assessment/web-artifact-store.js");
 
 test("internal Markdown skills support safe explicit invocation and remain subordinate to the canonical system prompt", () => {
-  const registry = createSpecialSkillRegistry({ root: path.resolve(__dirname, "../src/agent/special-skills") });
+  const registry = createSpecialSkillRegistry({ root: path.resolve(__dirname, "../src/prompts/skills/libraries") });
   assert.deepEqual(registry.list(), []);
-  assert.deepEqual(registry.listInternal().map((entry) => entry.id), ["create-rule", "create-skill", "create-subagent", "report"]);
+  const ids = registry.listInternal().map((entry) => entry.id);
+  for (const id of ["create-rule", "create-skill", "create-subagent", "report", "bug-bounty"]) {
+    assert.equal(ids.includes(id), true, id);
+  }
+  assert.equal(registry.diagnostics().length, 0);
   assert.equal(internalSkillIdForIntent("Please run a penetration test against the configured target"), "");
   assert.equal(internalSkillIdForIntent("Explain what penetration testing means"), "");
   assert.equal(internalSkillIdForIntent("/pentest example.com"), "");
@@ -57,9 +61,9 @@ test("internal skill packages reject their own system prompt declarations", () =
 });
 
 test("the pentest skill and loop coordinator are removed", () => {
-  const skillRoot = path.resolve(__dirname, "../src/agent/special-skills/pentest");
+  const skillRoot = path.resolve(__dirname, "../src/prompts/skills/libraries/bug-bounty-skills/pentest");
   assert.equal(fs.existsSync(skillRoot), false);
-  const registry = createSpecialSkillRegistry({ root: path.resolve(__dirname, "../src/agent/special-skills") });
+  const registry = createSpecialSkillRegistry({ root: path.resolve(__dirname, "../src/prompts/skills/libraries") });
   assert.equal(registry.resolve("pentest").ok, false);
   assert.equal(internalSkillIdForIntent("run a pentest against the target"), "");
 });

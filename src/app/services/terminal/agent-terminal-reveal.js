@@ -12,18 +12,26 @@ function createHiddenCommandReveal({
   let timer = null;
   const pendingOutput = [];
 
+  function revealNow(onReveal) {
+    if (finished || revealed) return false;
+    revealed = true;
+    if (timer) {
+      unschedule(timer);
+      timer = null;
+    }
+    const replay = pendingOutput.splice(0, pendingOutput.length);
+    onReveal?.({ replay });
+    return true;
+  }
+
   function start({ wantVisible = true, onReveal } = {}) {
     if (wantVisible) {
-      revealed = true;
-      onReveal?.({ replay: [] });
+      revealNow(onReveal);
       return;
     }
     timer = schedule(() => {
       timer = null;
-      if (finished || revealed) return;
-      revealed = true;
-      const replay = pendingOutput.splice(0, pendingOutput.length);
-      onReveal?.({ replay });
+      revealNow(onReveal);
     }, Math.max(0, Number(delayMs) || 0));
   }
 
@@ -46,6 +54,7 @@ function createHiddenCommandReveal({
 
   return {
     start,
+    revealNow,
     pushOutput,
     complete,
     isRevealed: () => revealed,

@@ -12,6 +12,7 @@ const editor = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features
 const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
 const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
 const layoutStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
+const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
 const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
 
 test("workspace files open in the Monaco-powered center editor", () => {
@@ -53,7 +54,7 @@ test("workspace files open in the Monaco-powered center editor", () => {
   assert.doesNotMatch(styles, /\.editor-tab\.preview/);
   assert.match(layoutStyles, /\.editor-tab \.tab-icon \{[\s\S]*?display: inline-flex !important;/);
   assert.match(layoutStyles, /\.editor-tab\.special-workspace-tab \.tab-icon \{[\s\S]*?color: currentColor;/);
-  assert.match(layoutStyles, /\.chat-mode-button \{[\s\S]*?min-width: 0;[\s\S]*?width: fit-content;/);
+  assert.match(chatStyles, /\.chat-mode-button \{[\s\S]*?min-width: 0;[\s\S]*?width: fit-content;/);
   assert.match(layoutStyles, /#terminal-pane,[\s\S]*?#terminal-tabs-list,[\s\S]*?background: var\(--revamp-surface\) !important;/);
   assert.match(styles, /\.app-dialog \{[\s\S]*?background: var\(--revamp-surface, var\(--bg-0\)\)/);
   assert.match(styles, /\.app-dialog > header,[\s\S]*?\.app-dialog > footer \{[\s\S]*?border: 0;[\s\S]*?background: var\(--revamp-surface, var\(--bg-0\)\)/);

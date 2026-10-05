@@ -17,8 +17,10 @@ test("labeled child context includes required sections", () => {
     { invocationId: "parent-1", workspace: { root: "G:/ws" } },
   );
   assert.match(text, /## Objective/);
+  assert.match(text, /## Workspace/);
   assert.match(text, /## Return format \(required\)/);
-  assert.match(text, /You must return output that matches the return format above/);
+  assert.match(text, /"status":"done\|blocked\|needs_operator"/);
+  assert.doesNotMatch(text, /## Identity/);
 });
 
 test("steering sections append in FIFO order", () => {
@@ -77,8 +79,10 @@ test("agent controller pauses for orchestration hold after tool rounds", () => {
   assert.match(controller, /orchestrationControlOnly/);
 });
 
-test("main schedules control-only parent continuations while siblings remain active", () => {
+test("main schedules a full synthesis turn for a finished wave and control-only continuations for questions", () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
-  assert.match(main, /controlOnly: subagentCoordinator\.hasActiveChildren\(key\)/);
-  assert.match(main, /orchestrationControlOnly/);
+  assert.match(main, /controlOnly: false/);
+  assert.match(main, /questionRequestId: targetId, controlOnly: true/);
+  assert.match(main, /orchestrationControlOnly = Boolean\(payload\.continuation\?\.controlOnly\)/);
+  assert.match(main, /The delegated wave has finished/);
 });

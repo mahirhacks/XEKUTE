@@ -271,3 +271,49 @@ test("checkpoint pressure flips at 90% of the effective context limit", () => {
   assert.equal(atPressure.threshold, threshold);
   assert.equal(atPressure.shouldCheckpoint, true);
 });
+
+test("cloning a Tier 1 session copies the active ledger without changing the source", () => {
+  const coordinator = createTier1ContextCoordinator({ now: () => new Date("2026-08-29T00:00:00.000Z") });
+  const destSessionId = "session_00000000-0000-4000-8000-000000004099";
+  const messages = [
+    { role: "user", content: "Inspect the captured traffic." },
+    { role: "assistant", content: "Reading the raw exchanges." },
+  ];
+  assert.equal(coordinator.setActiveConversation(projectId, sessionId, messages).ok, true);
+  const cloned = coordinator.cloneSession(projectId, sessionId, destSessionId);
+  assert.equal(cloned.ok, true);
+  assert.equal(cloned.activeCount, 2);
+  assert.equal(coordinator.state(projectId, destSessionId).active.length, 2);
+  assert.equal(coordinator.state(projectId, destSessionId).active[0].content, messages[0].content);
+  coordinator.setActiveConversation(projectId, destSessionId, [{ role: "user", content: "fork only" }]);
+  assert.equal(coordinator.state(projectId, sessionId).active.length, 2);
+  assert.equal(coordinator.state(projectId, destSessionId).active.length, 1);
+});
+
+test("checkpoint keeps captured cookies when secrets are retained and redacts them otherwise", async () => {
+  const cookie = "Cookie: traefik-session=3d2d022e-081d-40b1-b3a6-66384b890109";
+  const retained = createTier1ContextCoordinator({ now: () => new Date("2026-08-29T00:00:00.000Z") });
+  const kept = await retained.checkpoint({
+    project_id: projectId,
+    session_id: sessionId,
+    active_conversation: [{ role: "user", content: `Replay this capture. ${cookie}` }],
+    objective: "Replay the authenticated session.",
+    allow_model: false,
+    retain_secrets: true,
+    effective_context_limit: 100_000,
+  });
+  assert.equal(kept.ok, true);
+  assert.equal(JSON.stringify(kept.checkpoint).includes("traefik-session=3d2d022e-081d-40b1-b3a6-66384b890109"), true);
+
+  const redacted = createTier1ContextCoordinator({ now: () => new Date("2026-08-29T00:00:00.000Z") });
+  const hidden = await redacted.checkpoint({
+    project_id: projectId,
+    session_id: sessionId,
+    active_conversation: [{ role: "user", content: `Replay this capture. ${cookie}` }],
+    objective: "Replay the authenticated session.",
+    allow_model: false,
+    effective_context_limit: 100_000,
+  });
+  assert.equal(hidden.ok, true);
+  assert.equal(JSON.stringify(hidden.checkpoint).includes("traefik-session=3d2d022e-081d-40b1-b3a6-66384b890109"), false);
+});

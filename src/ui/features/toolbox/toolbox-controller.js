@@ -434,11 +434,12 @@ const TOOL_NAME_PATTERN = "ask_questions|exec_command|view_active_terminal|read_
       stripBoilerplateText: !streaming,
     });
     const raw = String(withoutIntent || "").trim();
-    if (!cleaned && raw && !isOnlyToolSyntax(raw)) return raw;
-    if (streaming && cleaned && raw && cleaned.length < Math.min(24, Math.floor(raw.length * 0.35))) {
-      return raw;
-    }
-    return cleaned;
+    const visible = (!cleaned && raw && !isOnlyToolSyntax(raw))
+      ? raw
+      : (streaming && cleaned && raw && cleaned.length < Math.min(24, Math.floor(raw.length * 0.35)))
+        ? raw
+        : cleaned;
+    return globalThis.XekuteOperatorSurface?.redactOperatorText(visible) ?? visible;
   }
 
   function isRepetitiveLoop(text) {

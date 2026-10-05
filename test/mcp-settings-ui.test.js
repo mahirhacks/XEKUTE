@@ -33,19 +33,19 @@ test("Tools and MCP settings keep generic MCP configuration separate from option
 });
 
 test("vulnerability knowledge files remain separate from the MCP settings model", () => {
-  const skill = read("src/prompts/skills/libraries/ssrf.md");
+  const skill = read("src/prompts/skills/libraries/bug-bounty-skills/web2-vuln-classes/SKILL.md");
   const registry = read("src/agent/tools/config/tool-registry.js");
-  assert.match(skill, /^id: ssrf/m);
-  assert.match(skill, /summary:/);
-  assert.match(skill, /## Prerequisites|## Workflow/);
-  assert.match(skill, /server-side fetch|collaborator|redirect/i);
+  assert.match(skill, /^id: web2-vuln-classes/m);
+  assert.match(skill, /description:/);
+  assert.match(skill, /## Class routing reference/);
+  assert.match(skill, /server-side fetch|internal service/i);
   assert.doesNotMatch(registry, /run_exploit|send_session_command|msf_module_execute/);
 });
 
-test("SQL injection knowledge is indexed as a bounded assessment skill", () => {
-  const skill = read("src/prompts/skills/libraries/sqli.md");
-  assert.match(skill, /^id: sqli/m);
-  assert.match(skill, /category: injection/);
-  assert.match(skill, /non-destructive|negative control|verification/i);
+test("SQL injection guidance is indexed in the bounded vulnerability-class skill", () => {
+  const skill = read("src/prompts/skills/libraries/bug-bounty-skills/web2-vuln-classes/SKILL.md");
+  assert.match(skill, /^id: web2-vuln-classes/m);
+  assert.match(skill, /SQLi/);
+  assert.match(skill, /verification|evidence/i);
   assert.doesNotMatch(skill, /dump table|read file|execute command/i);
 });

@@ -144,7 +144,7 @@ function createActiveTerminalCatalog({
       can_read: true,
       can_control: agent,
       process_id: String(record?.processId || ""),
-      status: exited ? "exited" : "running",
+      status: record?.queued ? "queued" : exited ? "exited" : "running",
       command: String(record?.command || ""),
       cwd: String(record?.cwd || ""),
       session_id: String(record?.sessionId || ""),

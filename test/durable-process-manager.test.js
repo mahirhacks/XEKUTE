@@ -447,7 +447,7 @@ test("run abort does not call manager.stop for agent_cancelled", () => {
   assert.match(runSlice, /Promise\.race\(\[done, aborted, reviewPromise\]\)/);
 });
 
-test("a session cannot start a fourth command and a free slot opens when one stops", async (t) => {
+test("a session queues a fourth command and starts it when a slot opens", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-command-slots-"));
   const children = [];
   const manager = makeManager({
@@ -474,15 +474,16 @@ test("a session cannot start a fourth command and a free slot opens when one sto
     ids.push(started.value.processId);
   }
   assert.equal(manager.runningCommands(workspace, "chat-a").length, 3);
-  const rejected = await manager.start(workspace, {
+  const queued = await manager.start(workspace, {
     executable: process.execPath,
     args: ["-e", ""],
     command: "cmd 4",
   }, runtime);
-  assert.equal(rejected.ok, false);
-  assert.equal(rejected.error.code, "COMMAND_QUEUE_REJECTED");
-  assert.match(rejected.error.message, /still running/);
-  assert.match(rejected.error.message, /queue is full/);
+  assert.equal(queued.ok, true);
+  assert.equal(queued.value.mode, "process_queued");
+  assert.equal(queued.value.status, "queued");
+  ids.push(queued.value.processId);
+  assert.equal(manager.runningCommands(workspace, "chat-a").length, 4);
   assert.equal(children.length, 3);
 
   const other = await manager.start(workspace, {
@@ -495,13 +496,20 @@ test("a session cannot start a fourth command and a free slot opens when one sto
   assert.equal(children.length, 4);
 
   await manager.stop(workspace, { process_id: ids[0] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(children.length, 5);
   const reopened = await manager.start(workspace, {
     executable: process.execPath,
     args: ["-e", ""],
     command: "cmd after stop",
   }, runtime);
   assert.equal(reopened.ok, true, reopened.error?.message || "");
+  assert.equal(reopened.value.mode, "process_queued");
+  assert.equal(reopened.value.status, "queued");
   ids.push(reopened.value.processId);
+  await manager.stop(workspace, { process_id: ids[1] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(children.length, 6);
   assert.equal(manager.runningCommands(workspace, "chat-a").length, 3);
 });
 

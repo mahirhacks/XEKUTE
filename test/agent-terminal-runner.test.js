@@ -231,6 +231,8 @@ test("canonical agent exec projects terminal output only when explicitly request
   assert.match(runner, /if \(exposeTerminal\) \{[\s\S]*?announceAgentTerminal/);
   assert.doesNotMatch(hostSource, /artifactProvenance/, "terminal supervision must not reference tool-only provenance outside its scope");
   assert.match(hostSource, /type: "terminal_complete"[\s\S]{0,300}commandCallId[\s\S]{0,100}commandInvocationId/);
+  assert.match(hostSource, /type: "agent_command_output"/);
+  assert.match(hostSource, /deliverOnExit/);
   assert.match(hostSource, /HIDDEN_COMMAND_REVEAL_MS/);
   assert.match(main, /processManager: agentTerminalHost/);
 });

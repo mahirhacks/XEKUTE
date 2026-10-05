@@ -25,7 +25,44 @@ const RequestIntentRules = require("../../prompts/rules/request-intent-rules");
 const Tier1TokenAccounting = require("../runtime/tier1-token-accounting.js");
 const { createExecutionBudget } = require("../runtime/execution-budget.js");
 const { END_TURN_TOOL_NAME, isEndTurnStop, executeEndTurn } = require("../tools/process/end-turn.js");
-const { MAX_COMMAND_SLOTS, consumesCommandSlot, queueRejectionResult } = require("../tools/process/command-queue.js");
+const { consumesCommandSlot } = require("../tools/process/command-queue.js");
+const { shouldReadLiveCommandState } = require("../runtime/operator-surface.js");
+
+function rememberModelRunCommand(commands, tool, toolResult) {
+  const value = toolResult?.value && typeof toolResult.value === "object" ? toolResult.value : {};
+  const processId = String(value.processId || "").trim();
+  if (!processId) return;
+  const status = String(value.status || "").toLowerCase();
+  const mode = String(value.mode || "");
+  const running = mode === "terminal_wait" || mode === "process_start" || mode === "process_queued" || status === "running" || status === "queued" || value.waiting === true;
+  commands.set(processId, {
+    processId,
+    command: String(value.command || tool?.args?.command || tool?.args?.executable || ""),
+    context: String(tool?.args?.context || ""),
+    startedAt: Number(value.startedAt) || Date.now(),
+    running,
+    stdout: String(value.stdout || ""),
+    stderr: String(value.stderr || ""),
+    exitCode: value.exitCode ?? null,
+    status: status || (running ? "running" : "complete"),
+  });
+}
+
+async function modelRunCommandsStillRunning(commands, listRunningCommands, { workspace, sessionId } = {}) {
+  const tracked = [...commands.values()].filter((item) => item.running);
+  if (!tracked.length) return [];
+  let liveIds = null;
+  try {
+    const listed = await listRunningCommands({ workspace, sessionId });
+    if (Array.isArray(listed)) {
+      liveIds = new Set(listed.map((item) => String(item?.processId || item?.id || "")).filter(Boolean));
+    }
+  } catch {
+    liveIds = null;
+  }
+  if (!liveIds) return tracked;
+  return tracked.filter((item) => liveIds.has(item.processId));
+}
 
 const MAX_AGENT_ROUNDS = Tunables.MAX_AGENT_ROUNDS;
 const READ_ONLY_TOOL_NAMES = new Set(ToolMap.READ_ONLY_TOOL_NAMES);
@@ -877,6 +914,7 @@ async function runAgentTurn({
         protected_refs: Array.isArray(workingReferences) ? workingReferences.map((entry) => entry?.record_id || entry?.recordId || entry?.id || entry).filter(Boolean) : [],
         source_block_refs: precedingBlockId ? [precedingBlockId] : [],
         effective_context_limit: effectiveContextLimit,
+        retain_secrets: projectProfile?.dataHandling?.redactSecrets === false,
         // The active block model is the only semantic checkpoint author.  A
         // missing provider callback safely falls back to the deterministic
         // reducer inside the coordinator.
@@ -1054,6 +1092,7 @@ async function runAgentTurn({
     maxRounds: maxAgentRounds,
     wallClockMs: Tunables.TURN_WALL_CLOCK_MS,
   });
+  const modelRunCommands = new Map();
   for (let round = 0; executionBudget.canContinue(round); round += 1) {
     await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, toolCount: runState.toolCount, failedToolCount: runState.failedToolCount, ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
     if (signal?.aborted) {
@@ -1448,7 +1487,9 @@ async function runAgentTurn({
           call_id: String(tool.callId || ""),
           executed: toolWasExecuted,
           outcome,
-          safe_excerpt: redactSecrets(String(toolResult?.error || toolResult?.value?.summary || toolResult?.value?.stdout || "")).slice(0, 1_000),
+          safe_excerpt: (projectProfile?.dataHandling?.redactSecrets === false
+            ? String(toolResult?.error || toolResult?.value?.summary || toolResult?.value?.stdout || "")
+            : redactSecrets(String(toolResult?.error || toolResult?.value?.summary || toolResult?.value?.stdout || ""))).slice(0, 1_000),
           artifact_refs: Array.isArray(toolResult?.artifactRefs || toolResult?.artifact_refs) ? (toolResult.artifactRefs || toolResult.artifact_refs) : [],
         });
         // Measure after every sealed result, not merely at the next model
@@ -1470,9 +1511,8 @@ async function runAgentTurn({
     };
 
     const slotCalls = normalizedCalls.filter((tool) => consumesCommandSlot(tool));
-    let slotRejection = null;
+    let running = [];
     if (slotCalls.length) {
-      let running = null;
       try {
         const listed = await listRunningCommands({ workspace, sessionId });
         if (Array.isArray(listed)) {
@@ -1480,27 +1520,9 @@ async function runAgentTurn({
             processId: String(item.processId || item.id || ""),
             command: String(item.command || ""),
           }));
-        }
+        } else running = null;
       } catch {
         running = null;
-      }
-      if (!running) {
-        slotRejection = {
-          ok: false,
-          error: "The command queue could not be read, so no command was started.",
-          errorCode: "COMMAND_QUEUE_UNAVAILABLE",
-          retryable: true,
-          value: { limit: MAX_COMMAND_SLOTS, requested: slotCalls.length },
-        };
-      } else {
-        const freeSlots = Math.max(0, MAX_COMMAND_SLOTS - running.length);
-        if (slotCalls.length > freeSlots) {
-          slotRejection = queueRejectionResult({
-            running,
-            freeSlots,
-            requested: slotCalls.length,
-          });
-        }
       }
     }
 
@@ -1519,14 +1541,80 @@ async function runAgentTurn({
         toolResult,
         toolWasExecuted,
       });
-      emitToolActivity(sendEvent, "tool_start", { tool: toolForEvent });
+      const liveRead = shouldReadLiveCommandState({ userMessage, tool, running });
+      const surfacedTool = liveRead
+        ? { ...toolForEvent, args: { operation: "status" } }
+        : toolForEvent;
+      emitToolActivity(sendEvent, "tool_start", { tool: surfacedTool });
       if (toolName !== END_TURN_TOOL_NAME) {
-        const preview = tool.args?.path || tool.args?.url || tool.args?.target || tool.args?.command || "";
+        const operation = String(surfacedTool.args?.operation || "");
+        const text = toolName === "exec_command"
+          ? (operation === "status" || operation === "list" ? "Checking the process" : "Running command")
+          : "Working";
         sendEvent({
           type: "activity",
-          text: "Running " + toolName + (preview ? ": " + String(preview).slice(0, 240) : ""),
+          text,
           kind: "tool",
         });
+      }
+      if (liveRead) {
+        seenThisRound.add(signature);
+        executedTools = true;
+        const promise = (async () => {
+          const processes = [];
+          for (const item of running) {
+            const processId = String(item?.processId || item?.id || "").trim();
+            if (!processId) continue;
+            let result;
+            try {
+              result = normalizeFailure(await executeToolCall({
+                workspace,
+                toolCall: {
+                  id: tool.callId,
+                  type: "function",
+                  function: {
+                    name: "exec_command",
+                    arguments: { operation: "status", process_id: processId, tail_chars: 50000 },
+                  },
+                },
+                signal,
+                sessionId,
+                mode: profile.key,
+                durableRunId: runId,
+              }));
+            } catch (error) {
+              result = { ok: false, error: error.message, errorCode: "TOOL_EXECUTION_FAILED", retryable: false };
+            }
+            const value = result?.value && typeof result.value === "object" ? result.value : {};
+            processes.push({
+              processId,
+              command: String(value.command || item.command || ""),
+              alive: Boolean(value.alive),
+              status: String(value.status || ""),
+              exitCode: value.exitCode ?? null,
+              stdout: String(value.stdout || ""),
+              stderr: String(value.stderr || ""),
+              error: result?.ok ? "" : String(result?.error?.message || result?.error || ""),
+            });
+          }
+          return {
+            tool,
+            toolForEvent: surfacedTool,
+            toolName,
+            signature,
+            actionId,
+            toolWasExecuted: true,
+            toolResult: {
+              ok: true,
+              value: {
+                mode: "live_command_state",
+                instruction: "This is the live state of the command already running. Report it in plain language. Do not name tools, parameters, schemas, or process ids to the operator.",
+                processes,
+              },
+            },
+          };
+        })();
+        return { immediate: false, promise };
       }
       if (forcedResult) return immediate(forcedResult, false);
       if (toolName === END_TURN_TOOL_NAME) {
@@ -1597,10 +1685,6 @@ async function runAgentTurn({
     const prepared = new Map();
     for (const tool of normalizedCalls) {
       if (!consumesCommandSlot(tool)) continue;
-      if (slotRejection) {
-        prepared.set(tool, beginTool(tool, { ...slotRejection, value: slotRejection.value ? { ...slotRejection.value } : undefined }));
-        continue;
-      }
       if (signal?.aborted) break;
       prepared.set(tool, beginTool(tool));
     }
@@ -1613,6 +1697,7 @@ async function runAgentTurn({
       const workflowUpdate = toolResult?.current_workflow || toolResult?.currentWorkflow || toolResult?.value?.current_workflow || toolResult?.value?.currentWorkflow || toolResult?.workflow;
       if (workflowUpdate && typeof workflowUpdate === "object" && !Array.isArray(workflowUpdate)) currentWorkflow = { ...workflowUpdate };
       actionResults.push(toolResult);
+      if (toolName === "exec_command") rememberModelRunCommand(modelRunCommands, tool, toolResult);
       noteLongHorizonAction(longHorizonLedger, tool, toolResult);
       const actionEvidenceIds = AgentRuntime.evidenceIdsFromResults([toolResult]);
       if (toolResult?.ok && !toolResult?.error) {
@@ -1690,6 +1775,33 @@ async function runAgentTurn({
     if (requestedEndTurn) {
       const combined = cleanAssistantText(`${outputSegments.join("")}${rawText}`);
       if (combined) finalText = combined;
+      const waitingCommands = await modelRunCommandsStillRunning(modelRunCommands, listRunningCommands, { workspace, sessionId });
+      if (waitingCommands.length) {
+        sendEvent({
+          type: "model_run_command_wait",
+          commands: waitingCommands,
+          startedAt: Math.min(...waitingCommands.map((item) => item.startedAt)),
+        });
+        if (typeof setPendingEndTurn === "function") {
+          try { setPendingEndTurn(true); } catch { /* best effort */ }
+        }
+        return {
+          ok: true,
+          finalText,
+          appendedMessages: appendedMessages(),
+          executedTools,
+          runState,
+          contextRoute,
+          commandWait: true,
+          deferredEndTurn: true,
+          endTurn: true,
+          waitingProcessIds: waitingCommands.map((item) => item.processId),
+          reason: "COMMAND_WAIT",
+          evidenceIds: AgentRuntime.evidenceIdsFromResults(actionResults),
+          failureRecords,
+          lastUsage,
+        };
+      }
       const holdActive = typeof orchestrationHold === "function" ? Boolean(orchestrationHold()) : false;
       if (holdActive) {
         if (typeof setPendingEndTurn === "function") {

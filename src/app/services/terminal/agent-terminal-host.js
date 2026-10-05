@@ -1,5 +1,6 @@
 "use strict";
 
+const path = require("node:path");
 const revealDefaults = require("./agent-terminal-reveal.js");
 const { appendTerminalOutput } = require("./active-terminal-catalog.js");
 const { createTerminalOutputBatcher } = require("./terminal-output-batcher.js");
@@ -39,6 +40,11 @@ function createAgentTerminalHost({
     const command = typeof input.command === "string"
       ? input.command
       : displayExecCommand(input.executable, Array.isArray(input.args) ? input.args : []);
+    const cwd = path.resolve(String(workspace || ""), String(input.cwd || ""));
+    const requestedShell = String(input.shell || "auto").toLowerCase();
+    const shell = requestedShell === "auto"
+      ? (process.platform === "win32" ? "powershell" : "bash")
+      : requestedShell;
     const commandCallId = String(runtime.commandCallId || "");
     const commandInvocationId = String(runtime.commandInvocationId || "");
     let processId = "";
@@ -52,11 +58,12 @@ function createAgentTerminalHost({
       hidden: !wantVisible,
       processId: "",
       waiting: false,
+      queued: false,
       command,
       commandCallId,
       commandInvocationId,
       toolName: "exec_command",
-      cwd: input.cwd || workspace,
+      cwd,
       sessionId,
       outputTail: "",
       exited: false,
@@ -87,14 +94,15 @@ function createAgentTerminalHost({
         command,
         toolName: "exec_command",
         cwd: record.cwd,
+        shell,
         sessionId,
         ...extra,
       });
     };
     const revealToUi = ({ replay = [] } = {}) => {
       record.hidden = false;
-      announce("start");
-      if (processId) announce("started", { pid: record.pid });
+      announce(record.queued ? "queued" : "start", record.queued ? { queuedAt: record.queuedAt } : {});
+      if (processId && !record.queued) announce("started", { pid: record.pid });
       for (const chunk of replay) outputBatch.push(chunk);
       outputBatch.flush();
     };
@@ -103,10 +111,24 @@ function createAgentTerminalHost({
       ...runtime,
       terminalId,
       sessionId,
+      onQueued: (queued) => {
+        processId = String(queued?.processId || "");
+        record.processId = processId;
+        record.queued = true;
+        record.queuedAt = queued?.queuedAt || null;
+        record.cwd = queued?.cwd || record.cwd;
+        if (!reveal.revealNow(revealToUi)) {
+          record.hidden = false;
+          announce("queued", { queuedAt: record.queuedAt });
+        }
+        runtime.onQueued?.(queued);
+        if (record.stopRequested && processId) manager.stop(workspace, { process_id: processId, reason: "user_requested" }).catch(() => {});
+      },
       onStarted: (started) => {
         processId = String(started?.processId || "");
         record.processId = processId;
         record.pid = started?.pid;
+        record.queued = false;
         if (reveal.isRevealed()) announce("started", { pid: started?.pid });
         runtime.onStarted?.(started);
         if (record.stopRequested && processId) manager.stop(workspace, { process_id: processId, reason: "user_requested" }).catch(() => {});
@@ -135,11 +157,26 @@ function createAgentTerminalHost({
         const waiting = Boolean(record.waiting);
         const { revealed } = reveal.complete();
         record.exited = true;
+        record.queued = false;
         record.exitCode = payload?.exitCode ?? null;
         record.signal = payload?.signal || null;
         if (revealed && !webContents.isDestroyed()) webContents.send("terminal:exit", { id: terminalId, exitCode: payload?.exitCode ?? null, signal: payload?.signal || null, agent: true, processId: payload?.processId || processId, waiting });
         if (revealed) announce("end", { exitCode: payload?.exitCode ?? null, signal: payload?.signal || null, status: payload?.status, terminationReason: payload?.terminationReason, waiting });
+        const deliverToSession = Boolean(waiting || record.deliverOnExit);
         sendAgentEvent?.({ type: "terminal_complete", ...payload, terminalId, processId: payload?.processId || processId, commandCallId, commandInvocationId, command, waiting, sessionId });
+        sendAgentEvent?.({
+          type: "agent_command_output",
+          ...payload,
+          terminalId,
+          processId: payload?.processId || processId,
+          commandCallId,
+          commandInvocationId,
+          command,
+          context: String(input.context || ""),
+          waiting,
+          deliverToSession,
+          sessionId,
+        });
         if (!revealed) terminals.delete(terminalId);
         runtime.onComplete?.(payload);
       },
@@ -155,6 +192,7 @@ function createAgentTerminalHost({
     const result = operation === "run"
       ? await manager.run(workspace, input, terminal.runtime)
       : await manager.start(workspace, input, terminal.runtime);
+    if (!terminal.record.exited) terminal.record.deliverOnExit = true;
     const revealed = terminal.reveal.isRevealed();
     if (result?.ok === false && !terminal.getProcessId()) terminals.delete(terminal.terminalId);
     if (result?.value && revealed && !result.value.terminalId) result.value.terminalId = terminal.terminalId;
