@@ -31,7 +31,6 @@ jobs:
       - run: mkdir temp_test
       - run: npm run verify:production
       - run: npm test
-      - run: npm run package
       - name: Build signed installer when signing credentials are configured
         if: env.HAS_SIGNING_CERT == 'true'
         shell: pwsh

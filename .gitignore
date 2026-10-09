@@ -44,6 +44,7 @@ PointerSetup*.exe
 !.env.example
 !.env.*.example
 .npmrc
+!/.npmrc
 
 # Runtime data and logs
 *.log
