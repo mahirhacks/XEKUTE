@@ -1,3 +1,5 @@
+import { initializeAppTooltips } from "../features/tooltip/app-tooltip.js";
+
 let started = false;
 
 /**
@@ -8,6 +10,7 @@ export function startRenderer() {
   if (started) return;
   if (!document.getElementById("app-shell")) return;
   started = true;
+  initializeAppTooltips();
   void (async () => {
     try {
       await import("../core/runtime-modules.js");

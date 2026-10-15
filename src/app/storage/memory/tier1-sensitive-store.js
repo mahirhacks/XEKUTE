@@ -6,6 +6,7 @@ const nodeCrypto = require("node:crypto");
 const { assertMemoryId, canonicalJson, isMemoryId } = require("../../../contracts/memory/index.js");
 const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/schema-registry.js");
 const { assertNoSecretKeys, atomicWriteText, clone, hashText, operationFailure, timestamp } = require("./memory-storage-utils.js");
+const { normalizeRunControl } = require("../../../agent/runtime/session-input.js");
 
 /*
  * Exact Tier 1 data is intentionally kept out of readable workspace memory.
@@ -33,6 +34,10 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   function transcriptFile(projectId, sessionId) { return path.join(sessionDir(projectId, sessionId), "transcript.enc.json"); }
   function checkpointFile(projectId, sessionId, which = "current") { return path.join(sessionDir(projectId, sessionId), which === "previous" ? "checkpoint-previous.enc.json" : "checkpoint-current.enc.json"); }
   function activeFile(projectId, sessionId) { return path.join(sessionDir(projectId, sessionId), "active.enc.json"); }
+  function referenceFile(projectId, snapshotId) {
+    if (!/^[a-f0-9]{64}$/.test(String(snapshotId))) throw new TypeError("Invalid chat snapshot identity.");
+    return path.join(projectDir(projectId), "chat-references", `${snapshotId}.enc.json`);
+  }
   function key(file) { return path.resolve(file); }
 
   function encryptEnvelope(value) {
@@ -58,9 +63,10 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
       return { ok: true, value };
     } catch (error) { return operationFailure("MEMORY_SENSITIVE_DECRYPT_FAILED", `The encrypted Tier 1 state could not be decrypted: ${error.message}.`, {}, true); }
   }
-  function writeFile(file, value) {
+  function writeFile(file, value, { requireDurable = false } = {}) {
     const encrypted = encryptEnvelope(value);
     if (!encrypted.ok) {
+      if (requireDurable) return encrypted;
       // Never shadow an existing durable encrypted value with a process-only
       // replacement.  When safeStorage is temporarily unavailable the old
       // envelope is deliberately unreadable, but it is still the last known
@@ -82,35 +88,29 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     }
     try {
       const raw = JSON.stringify(encrypted.envelope, null, 2) + "\n";
-      // Use the shared atomic writer instead of a bare rename.  Windows does
-      // not reliably replace an existing file with renameSync, so the helper
-      // includes the copy/replace fallback while still fsyncing the complete
-      // encrypted envelope before publication.  Sensitive files deliberately
-      // do not retain an additional plaintext or encrypted .bak copy here;
-      // checkpoint rollback is represented by the separate previous file.
-      atomicWriteText({ fs, path, crypto }, file, raw, { mode: 0o600, backup: false });
+      atomicWriteText({ fs, path, crypto }, file, raw, { mode: 0o600, backup: false, strictAtomic: true });
       // A process may begin in the supported ephemeral mode and later regain
       // access to Electron safeStorage (for example after the app keyring is
       // unlocked).  Remove the stale in-memory shadow once a durable write
       // succeeds; otherwise readFile() would keep returning the old
       // plaintext-in-memory value ahead of the newly committed envelope.
       ephemeral.delete(key(file));
-      return { ok: true, changed: true, encrypted: true, ephemeral: false, path: file, sha256: encrypted.envelope.sha256 };
+      return { ok: true, changed: true, encrypted: true, durable: true, ephemeral: false, path: file, sha256: encrypted.envelope.sha256 };
     } catch (error) { return operationFailure("MEMORY_SENSITIVE_WRITE_FAILED", `The encrypted Tier 1 state could not be written: ${error.message}.`, { path: file }, true); }
   }
   function readFile(file) {
-    if (ephemeral.has(key(file))) return { ok: true, exists: true, encrypted: false, ephemeral: true, value: clone(ephemeral.get(key(file))), path: file };
+    if (ephemeral.has(key(file))) return { ok: true, exists: true, encrypted: false, durable: false, ephemeral: true, value: clone(ephemeral.get(key(file))), path: file };
     try {
       // Keep the existence probe inside the guarded read path.  A locked
       // profile, ACL failure, or test double can throw from existsSync itself;
       // that must become the stable sensitive-read error rather than escaping
       // into checkpoint/retry orchestration.
-      if (!fs.existsSync(file)) return { ok: true, exists: false, encrypted: false, ephemeral: false, value: null, path: file };
+      if (!fs.existsSync(file)) return { ok: true, exists: false, encrypted: false, durable: false, ephemeral: false, value: null, path: file };
       const envelope = JSON.parse(fs.readFileSync(file, "utf8"));
       const decoded = decryptEnvelope(envelope);
       if (!decoded.ok) return decoded;
       if (envelope.sha256 && envelope.sha256 !== hashText(crypto, JSON.stringify(decoded.value))) return operationFailure("MEMORY_SENSITIVE_HASH_MISMATCH", "The encrypted Tier 1 state hash does not match.", { path: file }, true);
-      return { ok: true, exists: true, encrypted: true, ephemeral: false, value: decoded.value, path: file };
+      return { ok: true, exists: true, encrypted: true, durable: true, ephemeral: false, value: decoded.value, path: file };
     } catch (error) { return operationFailure("MEMORY_SENSITIVE_READ_FAILED", `The encrypted Tier 1 state could not be read: ${error.message}.`, { path: file }, true); }
   }
 
@@ -121,6 +121,10 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
       || value.session_id !== sessionId
       || !Array.isArray(value.blocks)) {
       return operationFailure("MEMORY_TRANSCRIPT_INVALID", "The encrypted Tier 1 transcript is invalid or belongs to another project/session.", { project_id: projectId, session_id: sessionId }, true);
+    }
+    if (value.run_control !== undefined) {
+      try { normalizeRunControl(value.run_control); }
+      catch (error) { return operationFailure(error.code || "SESSION_CONTROL_INVALID", "The encrypted session control state is invalid.", {}, true); }
     }
     // The transcript is an approved encrypted/raw store.  Unlike readable
     // semantic state, it may contain the exact user/tool exchange, including
@@ -157,7 +161,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     const checked = validateTranscriptValue(loaded.value, project, session);
     return checked.ok ? { ...loaded, value: checked.value } : checked;
   }
-  function writeTranscript(projectId, sessionId, transcript) {
+  function writeTranscript(projectId, sessionId, transcript, options = {}) {
     let project;
     let session;
     try {
@@ -180,7 +184,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
         return operationFailure("MEMORY_TRANSCRIPT_BLOCK_INVALID", "The encrypted Tier 1 transcript contains an invalid block ID.", { project_id: project, session_id: session }, false);
       }
     }
-    return writeFile(transcriptFile(project, session), candidate);
+    return writeFile(transcriptFile(project, session), candidate, options);
   }
   function listSessionIds(projectId) {
     let directory;
@@ -331,6 +335,23 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
       return operationFailure("MEMORY_SESSION_DELETE_FAILED", `The encrypted V3 session state could not be removed: ${error.message}.`, { project_id: projectId, session_id: sessionId, path: directory }, true);
     }
   }
+  function readChatReferenceSnapshot(projectId, snapshotId) {
+    try {
+      const loaded = readFile(referenceFile(projectId, snapshotId));
+      if (!loaded.ok || !loaded.exists) return loaded;
+      if (loaded.value?.projectId !== projectId || loaded.value?.snapshot?.id !== snapshotId) return operationFailure("CHAT_REFERENCE_INVALID", "The saved chat snapshot belongs to another project or identity.");
+      return { ...loaded, value: loaded.value.snapshot };
+    } catch (error) { return operationFailure("CHAT_REFERENCE_INVALID", error.message); }
+  }
+  function writeChatReferenceSnapshot(projectId, snapshot) {
+    try {
+      const file = referenceFile(projectId, snapshot.id);
+      const previous = readChatReferenceSnapshot(projectId, snapshot.id);
+      if (!previous.ok) return previous;
+      if (previous.exists) return { ok: true, encrypted: previous.encrypted, durable: previous.durable };
+      return writeFile(file, { projectId, snapshot }, { requireDurable: true });
+    } catch (error) { return operationFailure("CHAT_REFERENCE_WRITE_FAILED", error.message); }
+  }
   function status(projectId) {
     let directory;
     try { directory = projectDir(projectId); } catch (error) { return operationFailure(error.code || "MEMORY_PROJECT_ID_INVALID", error.message, {}, false); }
@@ -359,7 +380,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   }
   function clearEphemeral() { ephemeral.clear(); }
 
-  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, readActive, writeActive, deleteSession, status, flush, resetProject, clearEphemeral });
+  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, readActive, writeActive, writeChatReferenceSnapshot, readChatReferenceSnapshot, deleteSession, status, flush, resetProject, clearEphemeral });
 }
 
 module.exports = Object.freeze({ createTier1SensitiveStore });

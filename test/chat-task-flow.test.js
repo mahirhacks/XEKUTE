@@ -117,7 +117,6 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /source === "parent_continuation"/);
   assert.match(renderer, /function renderParentContinuationEvent\(/);
   assert.match(main, /function scheduleParentContinuation\(/);
-  assert.match(main, /onResultReady: \(readyResult\) => \{[\s\S]*?scheduleParentContinuation\(coordinationKey, readyResult\)/);
   assert.match(main, /agent:pendingParentContinuations/);
   assert.match(renderer, /pendingParentContinuations/);
   assert.match(renderer, /getBoundingClientRect\(\)/);
@@ -249,7 +248,7 @@ test("running chats stay navigable and signal background completion per tab", ()
   assert.match(renderer, /if \(isChatSessionRunning\(id\)\) return/);
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /eventSessionId !== runEventSessionId/);
-  assert.match(renderer, /sendBtn\.disabled = editingQueue[\s\S]*?: !activeRunning && \(\s*delegatedLocked/);
+  assert.match(renderer, /sendBtn\.disabled = !effectiveChatInputValue\(\)\.trim\(\)/);
   assert.doesNotMatch(renderer, /Another agent is running/);
   assert.match(main, /sender\.send\("agent:event", \{ \.\.\.data, sessionId \}\)/);
   assert.match(styles, /\.chat-tab-running-icon\s*\{/);
@@ -302,7 +301,7 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   assert.match(renderer, /"system-command": "System Commands"/);
   assert.match(renderer, /\.\.\.SYSTEM_SKILL_SLASH_COMMANDS/);
   assert.match(renderer, /SYSTEM_SKILL_COMMANDS\.has\(command\.toLowerCase\(\)\)/);
-  assert.match(renderer, /let text = hasExplicitText[\s\S]*?: effectiveChatInputValue\(\)\.trim\(\)/);
+  assert.match(renderer, /let text = hasExplicitText[\s\S]*?: effectiveChatInputValue\(\)/);
   assert.match(html, /class="composer-input-row">[\s\S]*?id="chat-input"[\s\S]*?id="selected-slash-command"/);
   assert.doesNotMatch(html, /selected-slash-command-clear/);
   assert.match(renderer, /\["Tab", "Shift"\]\.includes\(e\.key\)[\s\S]*?chooseSlashSuggestion\(slashSuggestionIndex, \{ clicked: true \}\)/);
@@ -397,7 +396,7 @@ test("long user prompts clamp to two lines and expand only on demand", () => {
   assert.match(renderer, /function syncUserPromptDisclosure\(box\)[\s\S]*?content\.scrollHeight > content\.clientHeight \+ 1/);
   assert.match(renderer, /function createUserPromptBox\(text\)[\s\S]*?user-prompt-preview/);
   assert.match(renderer, /function renderCanonicalChatHistory[\s\S]*?createUserPromptBox\(content\)/);
-  assert.match(renderer, /function addUserMessage\(text\)[\s\S]*?createUserPromptBox\(value\)/);
+  assert.match(renderer, /function addUserMessage\(text, sourceMessageId = ""\)[\s\S]*?createUserPromptBox\(value\)/);
   assert.match(renderer, /messages\?\.addEventListener\("mousedown"[\s\S]*?activateUserPromptSelection\(promptBox, e\.clientX, e\.clientY\)/);
   assert.match(renderer, /messages\?\.addEventListener\("dblclick"[\s\S]*?selectWholeUserPrompt\(content\)/);
   assert.match(renderer, /function selectWholeUserPrompt\(content\)[\s\S]*?range\.selectNodeContents\(content\)/);
@@ -413,7 +412,8 @@ test("V3 checkpointing never hides or removes visible chat history", () => {
   const renderEnd = renderer.indexOf("function ensureChatEmptyState", renderStart);
   const renderBody = renderer.slice(renderStart, renderEnd);
 
-  assert.match(renderBody, /for \(const message of sourceHistory\) \{[\s\S]*?renderMessage\(message, fragment\);[\s\S]*?\}/);
+  assert.match(renderBody, /for \(const message of sourceHistory\) renderMessage\(message, fragment\);/);
+  assert.doesNotMatch(renderBody, /previousUserContent/);
   assert.match(renderBody, /messages\.replaceChildren\(fragment\)/);
   assert.doesNotMatch(renderBody, /archivedThroughMessageId|chat-archive-marker/);
   assert.doesNotMatch(renderer, /maybeCompactContext|v3_checkpoint_owned|renderCanonicalChatHistory\(chatHistory\)/);
@@ -426,7 +426,7 @@ test("stopped streamed responses enter history before the durable outcome is wri
   const finalizeEnd = renderer.indexOf("const runIsVisible", finalizeStart);
   const finalizeBody = renderer.slice(finalizeStart, finalizeEnd);
   const stopStart = renderer.indexOf("function stopGeneration()");
-  const stopEnd = renderer.indexOf("sendBtn.addEventListener", stopStart);
+  const stopEnd = renderer.indexOf("bindLiveInputComposer({", stopStart);
   const stopBody = renderer.slice(stopStart, stopEnd);
 
   assert.match(renderer, /function syncAssistantDraftToHistory\([\s\S]*?history\.push\(message\)[\s\S]*?schedulePersistChatSessions\(session\)/);
@@ -607,10 +607,9 @@ test("command completion settles timers immediately across call, process, and te
   assert.match(renderer, /function bindCommandTimelineIdentity/);
   assert.match(renderer, /completedCommandLifecycles/);
   assert.match(renderer, /if \(type === "terminal_complete"\) \{\s*finalizeCommandTimeline\(payload/);
-  assert.match(renderer, /type === "agent_command_output"/);
-  assert.match(renderer, /function deliverAgentCommandOutput/);
-  assert.match(renderer, /phase === "command_output"/);
-  assert.match(renderer, /only the transcript continuation waits for the active turn to finish/);
+  assert.doesNotMatch(renderer, /type === "agent_command_output"/);
+  assert.doesNotMatch(renderer, /function deliverAgentCommandOutput/);
+  assert.doesNotMatch(renderer, /phase === "command_output"/);
   assert.match(renderer, /const completion = commandCompletionForRow\(row\)/);
   assert.match(renderer, /updateCommandTimelineRow\(row, completion\.state\)/);
   assert.doesNotMatch(renderer, /querySelectorAll\("\.agent-command-event\[data-process-id\]"\)/);

@@ -60,6 +60,10 @@ function createAgentTerminalHost({
       waiting: false,
       queued: false,
       command,
+      context: String(input.context || ""),
+      workspace,
+      shell,
+      createdAt: new Date().toISOString(),
       commandCallId,
       commandInvocationId,
       toolName: "exec_command",
@@ -194,7 +198,11 @@ function createAgentTerminalHost({
       : await manager.start(workspace, input, terminal.runtime);
     if (!terminal.record.exited) terminal.record.deliverOnExit = true;
     const revealed = terminal.reveal.isRevealed();
-    if (result?.ok === false && !terminal.getProcessId()) terminals.delete(terminal.terminalId);
+    if (result?.ok === false && !terminal.getProcessId()) {
+      terminal.record.exited = true;
+      terminal.reveal.complete();
+      terminals.delete(terminal.terminalId);
+    }
     if (result?.value && revealed && !result.value.terminalId) result.value.terminalId = terminal.terminalId;
     if (result?.value && !revealed) delete result.value.terminalId;
     if (result?.value) result.value.showInTerminal = revealed;

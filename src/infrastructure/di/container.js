@@ -29,7 +29,7 @@ const { createAuthorityComposition } = require("../../agent/authority/compositio
 const { createInvocationPipeline } = require("../../agent/authority/invocation-pipeline.js");
 const { createToolAuditStore } = require("../../app/storage/tool-audit-store.js");
 const { createLongHorizonRunStore } = require("../../app/storage/long-horizon-run-store.js");
-const { createDurableProcessManager } = require("../../app/services/terminal/durable-process-manager.js");
+const { createDurableProcessManager, createEncryptedProcessHandleStore } = require("../../app/services/terminal/durable-process-manager.js");
 const { terminateProcessTree } = require("../../app/services/terminal/terminate-process-tree.js");
 const { createActiveTerminalCatalog } = require("../../app/services/terminal/active-terminal-catalog.js");
 const ContextBudget = require("../../agent/runtime/context-budget.js");
@@ -152,6 +152,7 @@ function createContainer({
   } = createWorkspaceFiles({ fs, path, workspaceSearch });
   const { listProjectFiles } = workspaceSearch;
   const durableProcessManager = createDurableProcessManager({
+    handleStore: createEncryptedProcessHandleStore({ baseDir: path.join(config.memoryV3SensitiveDirectory(), "process-handles"), protector: memoryProtector }),
     fsImpl: fs,
     pathImpl: path,
     resolveWorkspaceTarget,

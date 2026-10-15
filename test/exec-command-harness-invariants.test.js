@@ -12,6 +12,7 @@ test("exec_command harness invariants keep review timer, PTY channels, and check
   const durableSource = read("src/app/services/terminal/durable-process-manager.js");
   const terminalIpc = read("src/app/ipc/terminal.js");
   const bootstrap = read("src/ui/bootstrap.js");
+  const main = read("src/app/electron/main.js");
 
   assert.match(durableSource, /DEFAULT_REVIEW_INTERVAL_MS = 15 \* 60 \* 1000/);
   assert.match(durableSource, /reviewTimer/);
@@ -28,5 +29,6 @@ test("exec_command harness invariants keep review timer, PTY channels, and check
     bootstrap.indexOf("async function handleBackgroundWaitEvent") + 4_000,
   );
   assert.match(handleBackground, /stop_process/);
-  assert.match(handleBackground, /exec_command operation=stop/);
+  const commandReport = main.slice(main.indexOf("async function deliverCommandReport"), main.indexOf("async function deliverCommandReport") + 2_000);
+  assert.match(commandReport, /exec_command operation=stop/);
 });

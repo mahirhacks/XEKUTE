@@ -302,7 +302,7 @@ test("the Worked for section is one container, not a lane of stamped siblings", 
 
   // Live prose stays beside the fold; narration enters history when a tool starts.
   assert.match(renderer, /conversationMount\(\) \{\s*return this.replyMount\(\);/);
-  assert.match(renderer, /const fold = this\.ensureWorkFold\(\);\s*return workFoldBody\(fold\) \|\| this\.workHostTurn\(\);/);
+  assert.match(renderer, /toolWorkMount\(\) \{\s*return this\.activityBody\(\) \|\| this\.workHostTurn\(\);/);
   assert.match(workFold, /!replyHasFollowingWork\(child\)/);
   assert.match(workFold, /!isStopRoundReply\(child\)/);
   assert.match(workFold, /fold\.after\(answer\);/);

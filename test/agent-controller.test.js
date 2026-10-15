@@ -1299,8 +1299,37 @@ function execToolCall(id, args = {}) {
   };
 }
 
+test("an outstanding command parks the model turn without marking it pending end-turn", async () => {
+  const pendingEndTurnWrites = [];
+  const events = [];
+  const result = await runAgentTurn({
+    workspace: "",
+    mode: "agent",
+    userMessage: "Run the command and continue when I steer.",
+    tools: [{ type: "function", function: { name: "exec_command", description: "run", parameters: {} } }],
+    async runModelRound() {
+      return { fullText: "The command is still running.", toolCalls: [execToolCall("call-sleep"), endTurnCall()] };
+    },
+    async executeToolCall({ toolCall }) {
+      if (toolCall.function.name === "end_turn") return { ok: true, endTurn: true, value: { status: "stop" } };
+      return { ok: true, value: { processId: "process-sleep", mode: "process_start", status: "running", startedAt: Date.now() } };
+    },
+    async listRunningCommands() { return [{ processId: "process-sleep" }]; },
+    setPendingEndTurn(value) { pendingEndTurnWrites.push(value); },
+    sendEvent(event) { events.push(event); },
+  });
+
+  assert.equal(result.ok, true, result.error || "");
+  assert.equal(result.commandWait, true);
+  assert.equal(result.deferredEndTurn, true);
+  assert.equal(result.runState.status, "running");
+  assert.deepEqual(pendingEndTurnWrites, [], "command lifetime must not own the model's pending-end-turn flag");
+  assert.equal(events.some((event) => event.type === "model_run_command_wait"), true);
+});
+
 test("a single exec_command run seals its result as soon as it finishes", async () => {
   const log = [];
+  const waits = [];
   let rounds = 0;
   const result = await runAgentTurn({
     workspace: "",
@@ -1316,12 +1345,14 @@ test("a single exec_command run seals its result as soon as it finishes", async 
       return { fullText: "done", toolCalls: [endTurnCall()] };
     },
     async executeToolCall({ toolCall }) {
+      waits.push(toolCall.function.arguments.wait_ms);
       log.push(`start:${toolCall.id}`);
       log.push(`end:${toolCall.id}`);
       return { ok: true, value: { stdout: toolCall.id, exitCode: 0 } };
     },
   });
   assert.equal(result.ok, true, result.error || "");
+  assert.deepEqual(waits, [1_000], "an omitted command wait should yield quickly to the next agent checkpoint");
   assert.deepEqual(log, ["start:call-one", "end:call-one", "result:call-one", "result:end-turn-1"]);
 });
 
@@ -1549,8 +1580,9 @@ test("aborting an agent run does not execute remaining queued commands", async (
     },
   });
   assert.equal(result.aborted, true);
-  assert.deepEqual(log, ["exec:call-a", "result:call-a"]);
+  assert.deepEqual(log, ["exec:call-a", "result:call-a", "result:call-b"]);
   assert.equal(log.includes("exec:call-b"), false);
+  assert.match(result.appendedMessages.find((message) => message.tool_call_id === "call-b").content, /TOOL_CALL_CANCELLED/);
 });
 
 test("a silent model round continues until end_turn status stop", async () => {
@@ -1624,8 +1656,9 @@ test("identical failed tool calls honor REPEAT_CLASS_LIMIT before suppression", 
   assert.equal(results.includes("REPEATED_FAILED_CALL"), true);
 });
 
-test("context overflow checkpoints and continues instead of failing the turn", async () => {
+test("mandatory context overflow returns an explicit limit without sending a truncated prompt", async () => {
   const events = [];
+  let providerCalls = 0;
   const result = await runAgentTurn({
     workspace: "",
     mode: "ask",
@@ -1638,13 +1671,15 @@ test("context overflow checkpoints and continues instead of failing the turn", a
     })),
     sendEvent(event) { events.push(event); },
     async runModelRound() {
+      providerCalls += 1;
       return { ok: true, fullText: "Summary ready.", toolCalls: [endTurnCall()], finishReason: "stop" };
     },
   });
-  assert.notEqual(result.code, "MEMORY_PROTECTED_CONTEXT_OVERFLOW");
-  assert.notEqual(result.runState.status, "inconclusive");
+  assert.equal(providerCalls, 0);
+  assert.equal(result.code, "MANDATORY_CONTEXT_LIMIT");
+  assert.equal(result.runState.status, "inconclusive");
   assert.equal(result.ok, true, result.error || "");
-  assert.equal(result.runState.status, "completed");
+  assert.match(result.runState.stopReason, /MANDATORY_CONTEXT_LIMIT/);
 });
 
 test("deferred end_turn while orchestration hold avoids finalize", async () => {

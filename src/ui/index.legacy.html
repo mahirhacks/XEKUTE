@@ -843,9 +843,6 @@
                 <span class="codicon codicon-symbol-event"></span><span><strong>Intruder</strong><small>Payload-position testing</small></span><span class="codicon codicon-check"></span>
               </button>
             </div>
-            <button type="button" id="security-analyze-button" class="security-analyze-button" title="Analyze request and response with AI" aria-label="Analyze exchange with AI" hidden>
-              <span class="codicon codicon-copilot security-analyze-icon" aria-hidden="true"></span>
-            </button>
           </div>
           <div class="terminal-actions">
             <button type="button" id="terminal-active-session" class="terminal-session-button terminal-shell-action" title="Select terminal or shell" aria-haspopup="menu" aria-expanded="false" disabled>
@@ -1065,7 +1062,7 @@
                   <span class="codicon codicon-chevron-down chat-mode-chevron"></span>
                 </button>
               </div>
-              <button type="button" id="model-picker" class="model-pill composer-pill" title="Select model">
+              <button type="button" id="model-picker" class="model-pill composer-pill" title="Select model" aria-haspopup="menu" aria-controls="model-controls-menu" aria-expanded="false">
                 <span id="model-label">Select model</span>
                 <span class="codicon codicon-chevron-down model-chevron"></span>
               </button>
@@ -1242,6 +1239,10 @@
   </div>
 
   <div id="security-history-menu" class="security-history-menu" role="menu" hidden>
+    <button type="button" id="security-history-analyze" class="security-history-menu-item" data-action="analyze-agent" role="menuitem">
+      <span class="codicon codicon-copilot" aria-hidden="true"></span>
+      <span>Analyze with agent</span>
+    </button>
     <button type="button" class="security-history-menu-item" data-action="send-repeater" role="menuitem">
       <span class="codicon codicon-sync"></span>
       <span id="security-history-repeater-label">Send to Repeater</span>
@@ -1288,7 +1289,19 @@
     </div>
   </div>
 
-  <div id="model-menu" class="model-menu" hidden>
+  <div id="model-controls-menu" class="model-controls-menu" role="menu" aria-label="Model settings" hidden>
+    <button type="button" id="model-context-trigger" class="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-edit-menu">
+      <span>Context</span><span id="model-context-value" class="model-control-value">Auto</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span>
+    </button>
+    <button type="button" id="model-effort-trigger" class="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-edit-menu">
+      <span>Effort</span><span id="model-effort-value" class="model-control-value">Auto</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span>
+    </button>
+    <div class="model-menu-divider" role="separator"></div>
+    <button type="button" id="model-browse-trigger" class="model-control-option model-browse-trigger" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-menu">
+      <span id="model-current-name">Select model</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span>
+    </button>
+  </div>
+  <div id="model-menu" class="model-menu" aria-label="Models" hidden>
     <input id="model-search" type="text" placeholder="Search models" spellcheck="false" />
     <div id="model-list" class="model-list"></div>
     <div class="model-menu-divider"></div>
@@ -1316,7 +1329,6 @@
         </button>
       </div>
     </div>
-    <div class="model-edit-divider"></div>
     <div id="model-context-section" class="model-edit-section">
       <div class="model-edit-label">Context</div>
       <div id="context-options" class="context-options"></div>

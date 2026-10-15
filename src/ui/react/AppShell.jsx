@@ -582,7 +582,7 @@ export default memo(function AppShell() {
                       <div className="models-api-row">
                         <div>
                           <strong>Active provider</strong>
-                          <p>Only one provider is used for chat, agents, model listing, and verification.</p>
+                          <p>Select the provider for the main agent and chat.</p>
                         </div>
                         <select id="llm-provider" className="models-select" aria-label="Active LLM provider">
                           <option value="ollama">Ollama</option>
@@ -836,9 +836,6 @@ export default memo(function AppShell() {
                     <span className="codicon codicon-symbol-event"></span><span><strong>Intruder</strong><small>Payload-position testing</small></span><span className="codicon codicon-check"></span>
                   </button>
                 </div>
-                <button type="button" id="security-analyze-button" className="security-analyze-button" title="Analyze request and response with AI" aria-label="Analyze exchange with AI" hidden>
-                  <span className="codicon codicon-copilot security-analyze-icon" aria-hidden="true"></span>
-                </button>
               </div>
               <div className="terminal-actions">
                 <button type="button" id="terminal-active-session" className="terminal-session-button terminal-shell-action" title="Select terminal or shell" aria-haspopup="menu" aria-expanded="false" disabled={true}>
@@ -1047,7 +1044,6 @@ export default memo(function AppShell() {
             </div>
             <div className="composer">
               <div id="slash-command-suggestions" className="slash-command-suggestions" role="listbox" aria-label="Available slash commands" hidden></div>
-              <div id="prompt-queue" className="prompt-queue" hidden></div>
               <div className="composer-input-row">
                 <div id="chat-input" contentEditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Chat message" data-placeholder="Ask, investigate, run, or search" className="chat-input-empty"><span id="selected-slash-command" className="selected-slash-command" hidden></span></div>
               </div>
@@ -1061,7 +1057,7 @@ export default memo(function AppShell() {
                       <span className="codicon codicon-chevron-down chat-mode-chevron"></span>
                     </button>
                   </div>
-                  <button type="button" id="model-picker" className="model-pill composer-pill" title="Select model">
+                  <button type="button" id="model-picker" className="model-pill composer-pill" title="Select model" aria-haspopup="menu" aria-controls="model-controls-menu" aria-expanded="false">
                     <span id="model-label">Select model</span>
                     <span className="codicon codicon-chevron-down model-chevron"></span>
                   </button>
@@ -1237,6 +1233,10 @@ export default memo(function AppShell() {
       </div>
     
       <div id="security-history-menu" className="security-history-menu" role="menu" hidden>
+        <button type="button" id="security-history-analyze" className="security-history-menu-item" data-action="analyze-agent" role="menuitem">
+          <span className="codicon codicon-copilot" aria-hidden="true"></span>
+          <span>Analyze with agent</span>
+        </button>
         <button type="button" className="security-history-menu-item" data-action="send-repeater" role="menuitem">
           <span className="codicon codicon-sync"></span>
           <span id="security-history-repeater-label">Send to Repeater</span>
@@ -1283,7 +1283,19 @@ export default memo(function AppShell() {
         </div>
       </div>
     
-      <div id="model-menu" className="model-menu" hidden>
+      <div id="model-controls-menu" className="model-controls-menu" role="menu" aria-label="Model settings" hidden>
+        <button type="button" id="model-context-trigger" className="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-edit-menu">
+          <span>Context</span><span id="model-context-value" className="model-control-value">Auto</span><span className="codicon codicon-chevron-right" aria-hidden="true"></span>
+        </button>
+        <button type="button" id="model-effort-trigger" className="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-edit-menu">
+          <span>Effort</span><span id="model-effort-value" className="model-control-value">Auto</span><span className="codicon codicon-chevron-right" aria-hidden="true"></span>
+        </button>
+        <div className="model-menu-divider" role="separator"></div>
+        <button type="button" id="model-browse-trigger" className="model-control-option model-browse-trigger" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-menu">
+          <span id="model-current-name">Select model</span><span className="codicon codicon-chevron-right" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div id="model-menu" className="model-menu" aria-label="Models" hidden>
         <input id="model-search" type="text" placeholder="Search models" spellCheck="false" />
         <div id="model-list" className="model-list"></div>
         <div className="model-menu-divider"></div>
@@ -1311,7 +1323,6 @@ export default memo(function AppShell() {
             </button>
           </div>
         </div>
-        <div className="model-edit-divider"></div>
         <div id="model-context-section" className="model-edit-section">
           <div className="model-edit-label">Context</div>
           <div id="context-options" className="context-options"></div>

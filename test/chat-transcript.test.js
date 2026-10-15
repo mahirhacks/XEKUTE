@@ -2,10 +2,19 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { JSDOM } = require("jsdom");
 
 async function load() {
   return import("../src/ui/features/chat/chat-transcript.js");
 }
+
+test("independent waiting cards preserve their task ownership after reload", async () => {
+  const { normalizeUiTranscript } = await load();
+  const restored = normalizeUiTranscript({ version: 2, runs: [{ user: { message: "Build a page" }, events: [{ type: "subagent", child_session_id: "child", independent: true, task_id: "task:page", status: "waiting" }] }] });
+  assert.equal(restored.runs[0].events[0].independent, true);
+  assert.equal(restored.runs[0].events[0].task_id, "task:page");
+  assert.equal(restored.runs[0].events[0].status, "waiting");
+});
 
 test("finished sub-agent rows survive transcript normalization", async () => {
   const { normalizeUiTranscript } = await load();
@@ -130,4 +139,20 @@ test("consecutive same-verb file tools collapse to a file_stack", async () => {
   assert.equal(events[1].files.length, 3);
   assert.equal(events[2].verb, "Edited");
   assert.equal(events.at(-1).verdict, true);
+});
+
+test("steering prompts and assistant output keep their chronological order in saved transcripts", async () => {
+  const { captureChatTranscript, normalizeUiTranscript } = await load();
+  const dom = new JSDOM(`
+    <div id="messages"><div class="chat-exchange"><div class="chat-exchange-body">
+      <div class="chat-turn user" data-source-message-id="input:main" data-task-id="task:main"><div class="chat-box-content">run three sleeps</div></div>
+      <div class="agent-response-host"><div class="agent-run-chunk"><div class="chat-turn assistant"><div class="assistant-reply" data-raw-md="Started the sleep commands">Started the sleep commands</div></div></div></div>
+      <div class="chat-turn user" data-source-message-id="input:steer" data-task-id="task:main"><div class="chat-box-content">also run echo</div></div>
+      <div class="agent-response-host"><div class="agent-run-chunk"><div class="chat-turn assistant"><div class="assistant-reply" data-raw-md="Running echo now">Running echo now</div></div></div></div>
+    </div></div></div>`);
+  const captured = captureChatTranscript(dom.window.document.querySelector("#messages"));
+  const restored = normalizeUiTranscript(captured).runs[0].timeline;
+  assert.deepEqual(restored.map((item) => item.type), ["user", "assistant", "user", "assistant"]);
+  assert.deepEqual(restored.filter((item) => item.type === "user").map((item) => item.message), ["run three sleeps", "also run echo"]);
+  assert.deepEqual(restored.filter((item) => item.type === "assistant").map((item) => item.events[0].text), ["Started the sleep commands", "Running echo now"]);
 });

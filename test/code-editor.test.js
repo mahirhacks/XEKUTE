@@ -169,7 +169,7 @@ test("workspace context menu analyzes every single file in a visible Agent sessi
   assert.doesNotMatch(renderer.match(/async function startWorkspaceFileAnalysis[\s\S]*?async function runWorkspaceContextAction/)?.[0] || "", /window\.api\.readFile/);
   assert.match(renderer, /const runMode = options\?\.modeOverride[\s\S]*?canonicalChatMode\(options\.modeOverride\)/);
   assert.match(renderer, /const hasExplicitText = Object\.prototype\.hasOwnProperty\.call\(options \|\| \{\}, "text"\)/);
-  assert.match(renderer, /let text = hasExplicitText[\s\S]*?String\(options\.text \|\| ""\)\.trim\(\)[\s\S]*?effectiveChatInputValue\(\)\.trim\(\)/);
+  assert.match(renderer, /let text = hasExplicitText[\s\S]*?String\(options\.text \|\| ""\)[\s\S]*?effectiveChatInputValue\(\)/);
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /const providedContextFiles = Array\.isArray\(options\?\.contextFiles\)/);
   assert.match(renderer, /const hasActiveFileOverride = Object\.prototype\.hasOwnProperty\.call\(options \|\| \{\}, "activeFile"\)/);

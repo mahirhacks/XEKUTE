@@ -356,7 +356,7 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(settingsStyles, /\.project-toggle-grid > label:has\(input:checked\)::after[\s\S]*transform:translateX\(12px\)/);
   assert.match(settingsStyles, /\.agent-subagent-settings \{[\s\S]*background:var\(--settings-panel\)/);
   assert.match(settingsStyles, /#app-settings-prompts-panel[\s\S]*grid-template-columns:240px/);
-  assert.match(settingsStyles, /@container app-settings \(max-width: 780px\)[\s\S]*\.app-settings-sidebar \{[\s\S]*width:64px/);
+  assert.match(settingsStyles, /@container app-settings \(max-width: 700px\)[\s\S]*\.app-settings-sidebar \{[\s\S]*width:64px/);
   assert.match(settingsStyles, /grid-template-columns:auto minmax\(0,1fr\)/);
   assert.match(settingsStyles, /\.llm-provider-actions button[\s\S]*border:0[\s\S]*border-radius:999px/);
   assert.match(settingsStyles, /#llm-settings-test \{[\s\S]*background:#6a541d/);

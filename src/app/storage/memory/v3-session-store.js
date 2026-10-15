@@ -2,14 +2,17 @@
 
 const nodeCrypto = require("node:crypto");
 const { assertMemoryId, createOpaqueId, isMemoryId } = require("../../../contracts/memory/memory-identity.js");
+const { emptyRunControl, normalizeRunControl } = require("../../../agent/runtime/session-input.js");
 
 const DEFAULT_TITLE = "New Agent";
+const DEFAULT_APP_PROJECT_ID = "proj_app_conversations";
 const MAX_TEXT = 16 * 1024 * 1024;
-const MESSAGE_FIELDS = Object.freeze(["tool_calls", "tool_call_id", "tool_name", "name", "subagents"]);
+const MESSAGE_FIELDS = Object.freeze(["tool_calls", "tool_call_id", "tool_name", "name", "subagents", "source_message_id", "source_text", "reference_prepared", "reference_context", "reference_snapshots", "task_id", "task_revision", "intent_scope"]);
 const META_KEYS = Object.freeze([
   "title", "model", "mode", "family", "kind", "parentSessionId", "parent_session_id",
   "childInvocationId", "child_invocation_id", "lastContextUsage", "last_context_usage",
   "status", "checkpointId", "checkpoint_id", "checkpointRevision", "checkpoint_revision",
+  "liveInputs", "draftText", "taskId", "parentMemorySessionId", "sourceMessageIds", "promptQueue",
 ]);
 
 /*
@@ -17,8 +20,9 @@ const META_KEYS = Object.freeze([
  * authority.  Exact blocks live only in the encrypted V3 Tier 1 store; the
  * renderer receives a bounded projection needed to display chat history.
  */
-function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = nodeCrypto, now = () => new Date() } = {}) {
+function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = nodeCrypto, now = () => new Date(), appProjectId = DEFAULT_APP_PROJECT_ID } = {}) {
   if (!sensitiveStore || !projectIdentityStore) throw new TypeError("V3 session store dependencies are required.");
+  assertMemoryId(appProjectId, "proj");
   const queues = new Map();
 
   function stamp() { return now().toISOString(); }
@@ -37,6 +41,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
     return `${prefix}_${digest}`;
   }
   function workspaceResult(rawWorkspace, persist = false) {
+    if (!String(rawWorkspace || "").trim()) return { ok: true, projectId: appProjectId, canonical: appProjectId, workspace: "", appOwned: true };
     const resolved = projectIdentityStore.resolveV3Project(rawWorkspace, { persist });
     if (!resolved?.ok || !isMemoryId(resolved.projectId, "proj")) return resolved;
     return resolved;
@@ -63,6 +68,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       },
       display_html: "",
       ui_transcript: { version: 1, runs: [] },
+      run_control: emptyRunControl(),
       blocks: [],
     };
   }
@@ -143,14 +149,70 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       metadata: normalizeMetadata(source.metadata, sessionId, fallback),
       display_html: messageContent(source.display_html || source.displayHtml || ""),
       ui_transcript: normalizeUiTranscript(source.ui_transcript || source.uiTranscript || source.transcript_ui),
+      run_control: normalizeRunControl(source.run_control),
       blocks,
     };
   }
   function loadDocument(projectId, sessionId) {
-    const loaded = sensitiveStore.readTranscript(projectId, sessionId);
-    if (!loaded?.ok) return loaded;
-    if (!loaded.exists) return { ok: true, exists: false, value: emptyDocument(projectId, sessionId) };
-    return { ok: true, exists: true, encrypted: loaded.encrypted, durable: loaded.durable !== false, value: normalizeDocument(loaded.value, projectId, sessionId) };
+    try {
+      const loaded = sensitiveStore.readTranscript(projectId, sessionId);
+      if (loaded?.ok !== true) return loaded || { ok: false, code: "MEMORY_TRANSCRIPT_READ_FAILED", error: "The session transcript could not be read." };
+      if (!loaded.exists) return { ok: true, exists: false, encrypted: false, durable: false, value: emptyDocument(projectId, sessionId) };
+      return { ok: true, exists: true, encrypted: loaded.encrypted === true, durable: loaded.durable === true, value: normalizeDocument(loaded.value, projectId, sessionId) };
+    } catch (error) {
+      return { ok: false, code: error.code || "MEMORY_TRANSCRIPT_READ_FAILED", error: error.message };
+    }
+  }
+  function readControl(rawWorkspace, rawSessionId) {
+    try {
+      if (!String(rawSessionId || "").trim()) return { ok: false, code: "SESSION_ID_REQUIRED", error: "A stable session ID is required." };
+      const resolved = workspaceResult(rawWorkspace, false);
+      if (!resolved?.ok || !resolved.projectId) return resolved;
+      const sessionId = opaqueId(rawSessionId, "session", `${resolved.projectId}|${resolved.canonical}`);
+      const loaded = loadDocument(resolved.projectId, sessionId);
+      if (!loaded?.ok) return loaded;
+      return { ok: true, exists: loaded.exists, projectId: resolved.projectId, sessionId, encrypted: loaded.encrypted, durable: loaded.durable, control: clone(loaded.value.run_control) };
+    } catch (error) {
+      return { ok: false, code: error.code || "SESSION_CONTROL_READ_FAILED", error: error.message };
+    }
+  }
+  function transactSession(rawWorkspace, rawSessionId, mutation, { create = false, requireDurable = true } = {}) {
+    const failed = (code, error) => ({ ok: false, code, error });
+    if (typeof mutation !== "function") return Promise.resolve(failed("SESSION_MUTATION_REQUIRED", "A synchronous session mutation is required."));
+    if (!String(rawSessionId || "").trim()) return Promise.resolve(failed("SESSION_ID_REQUIRED", "A stable session ID is required."));
+    let resolved;
+    let sessionId;
+    try {
+      resolved = workspaceResult(rawWorkspace, create);
+      if (!resolved?.ok || !resolved.projectId) return Promise.resolve(resolved);
+      sessionId = opaqueId(rawSessionId, "session", `${resolved.projectId}|${resolved.canonical}`);
+    } catch (error) { return Promise.resolve(failed(error.code || "SESSION_IDENTITY_INVALID", error.message)); }
+    return enqueue(queueKey(resolved), () => {
+      try {
+        if (requireDurable && !(typeof sensitiveStore.available === "function" && sensitiveStore.available())) return failed("MEMORY_SECURE_STORAGE_UNAVAILABLE", "Encrypted durable session storage is unavailable.");
+        const loaded = loadDocument(resolved.projectId, sessionId);
+        if (!loaded?.ok) return loaded;
+        if (!loaded.exists && !create) return failed("MEMORY_SESSION_NOT_FOUND", "The V3 chat session was not found.");
+        const document = clone(loaded.value);
+        const result = mutation(document);
+        if (result && typeof result.then === "function") {
+          Promise.resolve(result).catch(() => {});
+          return failed("SESSION_MUTATION_ASYNC", "Session mutations must finish synchronously.");
+        }
+        if (result?.ok === false) return result;
+        if (result?.ok !== true) return failed("SESSION_MUTATION_RESULT_INVALID", "A session mutation must return a structured outcome.");
+        if (result.write === false) {
+          if (requireDurable && !(loaded.exists && loaded.encrypted && loaded.durable)) return failed("SESSION_DURABILITY_REQUIRED", "The unchanged session has no encrypted durable receipt.");
+          return { ...result, ok: true, encrypted: loaded.encrypted, durable: loaded.durable, projectId: resolved.projectId, sessionId };
+        }
+        if (document.schema_version !== 3 || document.project_id !== resolved.projectId || document.session_id !== sessionId || !Array.isArray(document.blocks)) return failed("MEMORY_TRANSCRIPT_INVALID", "The mutation changed the session's identity or transcript structure.");
+        const candidate = normalizeDocument(document, resolved.projectId, sessionId);
+        const saved = sensitiveStore.writeTranscript(resolved.projectId, sessionId, candidate, { requireDurable });
+        if (saved?.ok !== true) return saved || failed("MEMORY_TRANSCRIPT_WRITE_FAILED", "The session write returned no receipt.");
+        if (requireDurable && !(saved.encrypted === true && saved.durable === true)) return failed("SESSION_DURABILITY_REQUIRED", "The session write did not return an encrypted durable receipt.");
+        return { ...result, ok: true, encrypted: saved.encrypted === true, durable: saved.durable === true, projectId: resolved.projectId, sessionId };
+      } catch (error) { return failed(error.code || "SESSION_MUTATION_FAILED", error.message); }
+    });
   }
   function sessionHistory(document) {
     const result = [];
@@ -187,6 +249,12 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       kind: text(metadata.kind || "chat", "chat", 40),
       parentSessionId: text(metadata.parent_session_id || "", "", 240),
       childInvocationId: text(metadata.child_invocation_id || "", "", 240),
+      liveInputs: clone(metadata.liveInputs) || [],
+      draftText: text(metadata.draftText || "", "", 100000),
+      taskId: text(metadata.taskId || "", "", 240),
+      parentMemorySessionId: text(metadata.parentMemorySessionId || "", "", 240),
+      sourceMessageIds: clone(metadata.sourceMessageIds) || [],
+      promptQueue: clone(metadata.promptQueue) || [],
       createdAt: text(metadata.created_at || "", "", 80) || null,
       updatedAt: text(metadata.updated_at || "", "", 80) || null,
       status,
@@ -247,38 +315,39 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       document.metadata = normalizeMetadata({ ...document.metadata, ...session, title, status: "active" }, actualSessionId, session);
       document.blocks.push(normalizeBlock({ block_id: blockId, user_prompt_id: messageId, user_prompt: userPrompt, messages: [{ id: messageId, role: "user", content: userPrompt, createdAt: stamp() }], outcome: "pending" }, resolved.projectId, actualSessionId, blockId));
       const saved = sensitiveStore.writeTranscript(resolved.projectId, actualSessionId, document);
-      return saved?.ok === false ? saved : { ok: true, persisted: true, durable: saved?.durable !== false, encrypted: Boolean(saved?.encrypted), projectId: resolved.projectId, sessionId: actualSessionId, blockId, userPromptId: messageId, projectPath: resolved.workspace };
+      return saved?.ok !== true ? saved || { ok: false, code: "MEMORY_TRANSCRIPT_WRITE_FAILED", error: "The session write returned no receipt." } : { ok: true, persisted: true, durable: saved.durable === true, encrypted: saved.encrypted === true, projectId: resolved.projectId, sessionId: actualSessionId, blockId, userPromptId: messageId, projectPath: resolved.workspace };
     });
   }
   function applyEvent(document, event = {}) {
     const sessionId = assertMemoryId(opaqueId(event.sessionId, "session"), "session");
     const blockId = event.blockId ? opaqueId(event.blockId, "block", `${document.project_id}|${sessionId}`) : document.blocks.at(-1)?.block_id || "";
     const block = document.blocks.find((entry) => entry.block_id === blockId);
+    const taskOwnsBlock = Boolean(block && document.run_control.tasks.some((task) => task.blockId === block.block_id));
     const type = String(event.type || event.event || "").toLowerCase();
     if (type === "session_meta") document.metadata = normalizeMetadata({ ...document.metadata, ...(event.sessionMeta || event.session || {}) }, sessionId);
     if (type === "snapshot" || type === "transcript") {
       if (!block) throw Object.assign(new Error("The V3 chat block was not found."), { code: "MEMORY_BLOCK_NOT_FOUND" });
-      if (Array.isArray(event.transcript)) block.messages = normalizeMessages(event.transcript, `${document.project_id}|${sessionId}|${blockId}`);
-      if (Array.isArray(event.messages)) block.messages = normalizeMessages(event.messages, `${document.project_id}|${sessionId}|${blockId}`);
-      if (Array.isArray(event.toolEvents)) block.tool_events = clone(event.toolEvents).slice(-500);
-      if (Array.isArray(event.tool_events)) block.tool_events = clone(event.tool_events).slice(-500);
+      if (!taskOwnsBlock && Array.isArray(event.transcript)) block.messages = normalizeMessages(event.transcript, `${document.project_id}|${sessionId}|${blockId}`);
+      if (!taskOwnsBlock && Array.isArray(event.messages)) block.messages = normalizeMessages(event.messages, `${document.project_id}|${sessionId}|${blockId}`);
+      if (!taskOwnsBlock && Array.isArray(event.toolEvents)) block.tool_events = clone(event.toolEvents).slice(-500);
+      if (!taskOwnsBlock && Array.isArray(event.tool_events)) block.tool_events = clone(event.tool_events).slice(-500);
       if (event.displayHtml !== undefined || event.display_html !== undefined) {
         document.display_html = messageContent(event.displayHtml ?? event.display_html ?? "");
       }
       if (event.uiTranscript !== undefined || event.ui_transcript !== undefined) {
         document.ui_transcript = normalizeUiTranscript(event.uiTranscript ?? event.ui_transcript);
       }
-      if (event.outcome) block.outcome = text(event.outcome, "pending", 40);
-      if (["completed", "failed", "stopped", "incomplete"].includes(block.outcome)) block.completed_at = stamp();
+      if (!taskOwnsBlock && event.outcome) block.outcome = text(event.outcome, "pending", 40);
+      if (!taskOwnsBlock && ["completed", "failed", "stopped", "incomplete"].includes(block.outcome)) block.completed_at = stamp();
     } else if (type === "tool_usage") {
       if (!block) throw Object.assign(new Error("The V3 chat block was not found."), { code: "MEMORY_BLOCK_NOT_FOUND" });
       const names = Array.isArray(event.toolNames) ? event.toolNames : [event.toolName || event.tool_name].filter(Boolean);
-      block.tool_events = [...(Array.isArray(block.tool_events) ? block.tool_events : []), ...names.map((name) => ({ tool_name: text(name, "unknown", 200), captured_at: stamp() }))].slice(-500);
+      if (!taskOwnsBlock) block.tool_events = [...(Array.isArray(block.tool_events) ? block.tool_events : []), ...names.map((name) => ({ tool_name: text(name, "unknown", 200), captured_at: stamp() }))].slice(-500);
     } else if (type === "outcome" || type === "assistant" || type === "ai_output") {
       if (!block) throw Object.assign(new Error("The V3 chat block was not found."), { code: "MEMORY_BLOCK_NOT_FOUND" });
       const content = messageContent(event.text || event.content || event.ai_prompt || "");
-      if (Array.isArray(event.transcript)) block.messages = normalizeMessages(event.transcript, `${document.project_id}|${sessionId}|${blockId}`);
-      else if (content.trim()) {
+      if (!taskOwnsBlock && Array.isArray(event.transcript)) block.messages = normalizeMessages(event.transcript, `${document.project_id}|${sessionId}|${blockId}`);
+      else if (!taskOwnsBlock && content.trim()) {
         const messageId = opaqueId(event.messageId || event.id || `${blockId}:assistant`, "event", `${document.project_id}|${sessionId}|assistant`);
         const current = Array.isArray(block.messages) ? block.messages : [];
         const index = current.findIndex((message) => message.id === messageId);
@@ -293,8 +362,8 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       if (event.uiTranscript !== undefined || event.ui_transcript !== undefined) {
         document.ui_transcript = normalizeUiTranscript(event.uiTranscript ?? event.ui_transcript);
       }
-      if (event.outcome) block.outcome = text(event.outcome, "pending", 40);
-      if (["completed", "failed", "stopped", "incomplete"].includes(block.outcome)) block.completed_at = stamp();
+      if (!taskOwnsBlock && event.outcome) block.outcome = text(event.outcome, "pending", 40);
+      if (!taskOwnsBlock && ["completed", "failed", "stopped", "incomplete"].includes(block.outcome)) block.completed_at = stamp();
     } else if (["close", "reopen", "archive", "unarchive"].includes(type)) {
       document.metadata.status = type === "close" ? "closed" : type === "archive" ? "archived" : "active";
     }
@@ -312,7 +381,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
     const document = normalizeDocument(loaded.value, resolved.projectId, sessionId);
     try { applyEvent(document, { ...event, sessionId }); } catch (error) { return { ok: false, code: error.code || "MEMORY_SESSION_EVENT_INVALID", error: error.message }; }
     const saved = sensitiveStore.writeTranscript(resolved.projectId, sessionId, document);
-    return saved?.ok === false ? saved : { ok: true, projectId: resolved.projectId, sessionId, blockId: event.blockId || document.blocks.at(-1)?.block_id || "", durable: saved?.durable !== false, encrypted: Boolean(saved?.encrypted), savedAt: stamp() };
+    return saved?.ok !== true ? saved || { ok: false, code: "MEMORY_TRANSCRIPT_WRITE_FAILED", error: "The session write returned no receipt." } : { ok: true, projectId: resolved.projectId, sessionId, blockId: event.blockId || document.blocks.at(-1)?.block_id || "", durable: saved.durable === true, encrypted: saved.encrypted === true, savedAt: stamp() };
   }
   function record(rawWorkspace, event = {}) {
     const resolved = workspaceResult(rawWorkspace, false);
@@ -334,7 +403,15 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
   }
   function flush() { return Promise.all([...queues.values()].map((pending) => pending.catch(() => null))).then(() => sensitiveStore.flush?.() || { ok: true }); }
 
-  return Object.freeze({ load, begin, record, recordSync, close, reopen, remove, deleteSession: remove, sessionFile, flush, resolveProject: (workspace, options) => workspaceResult(workspace, options?.persist === true), resolveProjectId: (workspace) => workspaceResult(workspace, false)?.projectId || "" });
+  function writeChatReferenceSnapshot(workspace, snapshot) {
+    const resolved = workspaceResult(workspace, false);
+    return resolved?.ok ? sensitiveStore.writeChatReferenceSnapshot(resolved.projectId, snapshot) : resolved;
+  }
+  function readChatReferenceSnapshot(workspace, snapshotId) {
+    const resolved = workspaceResult(workspace, false);
+    return resolved?.ok ? sensitiveStore.readChatReferenceSnapshot(resolved.projectId, snapshotId) : resolved;
+  }
+  return Object.freeze({ load, begin, record, recordSync, readControl, transactSession, close, reopen, remove, deleteSession: remove, sessionFile, flush, writeChatReferenceSnapshot, readChatReferenceSnapshot, resolveProject: (workspace, options) => workspaceResult(workspace, options?.persist === true), resolveProjectId: (workspace) => workspaceResult(workspace, false)?.projectId || "" });
 }
 
-module.exports = Object.freeze({ createV3SessionStore });
+module.exports = Object.freeze({ createV3SessionStore, DEFAULT_APP_PROJECT_ID });

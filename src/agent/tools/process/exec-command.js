@@ -10,7 +10,7 @@ const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
   type: "object",
   description: "Run an arbitrary shell command or launch an executable in the active workspace. On Windows, command mode defaults to PowerShell and supports pipelines, redirects, variables, quoting, and multiline scripts. A chat runs at most 3 commands at once. Additional run or start commands wait in FIFO order until a slot opens.",
   properties: {
-    operation: { type: "string", enum: ["run", "start", "status", "stop", "list"], description: "run waits until the command exits, then returns stdout/stderr/exit to the agent. start creates a durable background job immediately or returns its queued process handle. status, stop, and list inspect, cancel, and list jobs." },
+    operation: { type: "string", enum: ["run", "start", "status", "stop", "list"], description: "run returns stdout/stderr/exit when the command exits. In Agent mode, an omitted wait_ms yields after 1 second while the durable process continues. start creates a durable background job immediately or returns its queued process handle. status, stop, and list inspect, cancel, and list jobs." },
     command: { type: "string", description: "Complete shell command or multiline script. Prefer this for PowerShell/cmd syntax, pipelines, redirection, and compound commands." },
     shell: { type: "string", enum: ["auto", "powershell", "pwsh", "cmd", "bash", "sh"], description: "Shell used for command mode. auto selects PowerShell on Windows and bash elsewhere." },
     executable: { type: "string", description: "Executable name or path for direct process mode. Use with args instead of command." },
@@ -22,7 +22,7 @@ const EXEC_COMMAND_INPUT_SCHEMA = Object.freeze({
     context: { type: "string", description: "For run/start only. Required operator label: strictly fewer than 4 whitespace-separated words (1 to 3). Extra words are rejected before the command starts." },
     process_id: { type: "string", description: "Durable process-… handle used by status or stop. Not an OS PID." },
     tail_chars: { type: "integer", minimum: 0, maximum: 200000, description: "Maximum recent stdout/stderr characters returned by status." },
-    wait_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "For run, optional cap on how long this call waits for a slot and for exit before backgrounding (omit → wait until the command exits; 0 → immediate background). Never kills. For status, an observation window for state or output change. Never kills." },
+    wait_ms: { type: "integer", minimum: 0, maximum: 86400000, description: "For run, cap how long this call waits for a slot and for exit before returning a live process handle. Agent mode defaults to 1000 ms when omitted; 0 returns immediately. Never kills. For status, an observation window for state or output change. Never kills." },
     stdout_offset: { type: "integer", minimum: 0, description: "Optional byte cursor returned by a previous status call. When supplied, stdout contains only newer output." },
     stderr_offset: { type: "integer", minimum: 0, description: "Optional byte cursor returned by a previous status call. When supplied, stderr contains only newer output." },
   },

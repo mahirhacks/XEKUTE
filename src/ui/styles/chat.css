@@ -819,8 +819,17 @@
   max-width: 100%;
 }
 
+/* A sticky prompt is pushed once its exchange body ends, so part of the run
+   gap lives inside the body as a spacer. The layout keeps the same spacing,
+   but the previous prompt stays pinned until the next one is this close. */
 #messages .chat-exchange:not(:last-child) {
-  margin-bottom: var(--chat-run-gap);
+  --chat-prompt-handoff-gap: 6px;
+  margin-bottom: var(--chat-prompt-handoff-gap);
+}
+
+#messages .chat-exchange:not(:last-child) > .chat-exchange-body::after {
+  content: "";
+  flex: 0 0 calc(var(--chat-run-gap) - var(--chat-prompt-handoff-gap));
 }
 
 #messages .chat-exchange-body {
@@ -1180,8 +1189,6 @@
 
 .send-btn:not(:disabled) { background: #0e639c; color: #fff; }
 .send-btn:not(:disabled):hover { background: #1177bb; }
-.send-btn.stop { background: #5a1d1d; color: #f48771; }
-
 @media (max-width: 1180px) {
   .chat-session-tab { min-width: 80px; }
 }
@@ -1542,6 +1549,12 @@
 
 #messages .agent-work-fold[data-expanded="false"] > .agent-work-fold-body {
   display: none;
+}
+
+/* Work under steering prompts folds with the run's Worked for header and keeps
+   its place. Only the run's answer stays visible. */
+#messages .chat-exchange:has(.chat-turn.assistant:not([data-steering-segment="true"]) > .agent-work-fold[data-expanded="false"]) .chat-turn.assistant[data-steering-segment="true"]:not([aria-busy="true"]) > :not(.assistant-reply[data-work-verdict="true"]) {
+  display: none !important;
 }
 
 #messages .agent-work-fold + .assistant-reply {
@@ -1939,6 +1952,145 @@
 
 .selected-slash-command[hidden] { display:none; }
 
+/* The visible name is generated content and the marker text has no size, so
+   the prompt text read from the editor keeps the full marker. The chip stays
+   inline-block: a flex or block box would add line breaks to innerText. */
+.file-tag-chip {
+  display:inline-block;
+  margin:0 1px;
+  padding:0 6px;
+  border-radius:6px;
+  background:rgba(56,139,253,.16);
+  color:#6cb6ff;
+  font:600 13px/20px var(--font-mono);
+  vertical-align:baseline;
+  white-space:nowrap;
+  cursor:default;
+}
+
+.file-tag-chip::before { content:attr(data-label); }
+
+.file-tag-marker {
+  font-size:0;
+  line-height:0;
+  color:transparent;
+}
+
+.file-tag-suggestions {
+  position:absolute;
+  left:0;
+  bottom:calc(100% + 7px);
+  z-index:80;
+  width:min(380px,calc(100% - 8px));
+  max-height:min(290px,calc(100vh - 16px));
+  padding:0;
+  border:1px solid var(--revamp-divider,var(--border));
+  border-radius:8px;
+  background:var(--revamp-surface,var(--bg-0));
+  box-shadow:0 12px 32px rgba(0,0,0,.52);
+  overflow-x:hidden;
+  overflow-y:auto;
+}
+
+.file-tag-suggestions[hidden] { display:none; }
+
+.file-tag-option {
+  width:100%;
+  min-width:0;
+  min-height:29px;
+  padding:4px 10px;
+  display:flex;
+  align-items:center;
+  gap:9px;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  color:#bcbcbc;
+  font:12px/20px var(--font-ui);
+  text-align:left;
+  cursor:pointer;
+}
+
+.file-tag-option:hover { background:#1c1c1c; color:#e8e8e8; }
+.file-tag-option.selected { background:#1a1a1a; color:#e8e8e8; }
+
+.chat-tag-icon,
+.chat-tag-chip::before {
+  width:14px;
+  height:14px;
+  flex:0 0 14px;
+  background:currentColor;
+  mask:url("../assets/icons/chat_icon.svg") center/contain no-repeat;
+  -webkit-mask:url("../assets/icons/chat_icon.svg") center/contain no-repeat;
+}
+
+.chat-tag-chip::before { content:""; display:inline-block; margin-right:5px; vertical-align:-2px; }
+.chat-tag-chip::after { content:attr(data-label); }
+
+.terminal-tag-icon,
+.terminal-tag-chip::before {
+  width:14px;
+  height:14px;
+  flex:0 0 14px;
+  background:currentColor;
+  mask:var(--terminal-origin-icon) center/contain no-repeat;
+  -webkit-mask:var(--terminal-origin-icon) center/contain no-repeat;
+}
+.terminal-tag-user,
+.terminal-tag-chip[data-origin="user"] { --terminal-origin-icon:url("../assets/icons/user_icon.svg"); }
+.terminal-tag-agent,
+.terminal-tag-chip[data-origin="agent"] { --terminal-origin-icon:url("../assets/icons/agents_icon.svg"); }
+.terminal-tag-chip::before { content:""; display:inline-block; margin-right:5px; vertical-align:-2px; }
+.terminal-tag-chip::after { content:attr(data-label); }
+.terminal-tag-running {
+  width:10px;
+  height:10px;
+  flex:0 0 10px;
+  box-sizing:border-box;
+  border:1.5px solid currentColor;
+  border-right-color:transparent;
+  border-radius:50%;
+  opacity:.7;
+  animation:terminal-tag-spin .8s linear infinite;
+}
+@keyframes terminal-tag-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .terminal-tag-running { animation:none; } }
+
+.file-tag-icon.seti-icon {
+  flex:0 0 14px;
+  width:14px;
+  font-family:"Xekute Seti";
+  font-size:14px;
+  font-style:normal;
+  font-weight:normal;
+  line-height:1;
+  text-align:center;
+}
+
+.file-tag-name {
+  flex:0 1 auto;
+  min-width:0;
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+}
+
+.file-tag-folder {
+  flex:1 1 0;
+  min-width:0;
+  overflow:hidden;
+  color:#8a8a8a;
+  font-size:12px;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+}
+
+.file-tag-empty {
+  padding:7px 8px;
+  color:#8a8a8a;
+  font:12px/16px var(--font-ui);
+}
+
 #chat-input.chat-input-empty::before {
   content:attr(data-placeholder);
   color:#646464;
@@ -1957,6 +2109,7 @@
 
 @supports ((background-clip: text) or (-webkit-background-clip: text)) {
   #messages .agent-work-header:not([data-final="true"]):not([data-state="error"]) > .agent-status-text,
+  #messages .context-checkpoint-notice[data-state="pending"] .context-checkpoint-text,
   #messages .agent-thinking-fold[data-final="false"] > .agent-thinking-toggle > .agent-thinking-text {
     background-image: linear-gradient(100deg, #909090 40%, #ededed 50%, #909090 60%);
     background-size: 250% 100%;
@@ -1991,6 +2144,31 @@
 #messages .context-checkpoint-icon {
   display: none !important;
 }
+
+#messages .chat-reference-fold { width: 100%; min-width: 0; }
+#messages .chat-reference-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  font: inherit;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+#messages .chat-reference-summary::-webkit-details-marker { display: none; }
+#messages .chat-reference-summary .context-checkpoint-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#messages .chat-reference-summary:focus-visible { outline: 1px solid #888; outline-offset: 3px; }
+#messages .chat-reference-caret { flex: 0 0 auto; color: #777; transition: transform 120ms ease; }
+#messages .chat-reference-fold[open] .chat-reference-caret { transform: rotate(90deg); }
+#messages .chat-reference-names { margin: 4px 0 0 12px; color: #aaa; }
+#messages .chat-reference-name { padding: 2px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 
 #messages .context-checkpoint-notice[data-state="complete"] {
   color: #d4d4d4;
@@ -2179,6 +2357,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   #messages .agent-work-header:not([data-final="true"]):not([data-state="error"]) > .agent-status-text,
+  #messages .context-checkpoint-notice[data-state="pending"] .context-checkpoint-text,
   #messages .agent-thinking-fold[data-final="false"] > .agent-thinking-toggle > .agent-thinking-text {
     animation: none;
     background: none;
@@ -2191,24 +2370,22 @@
   #messages .tool-card.status-updated .tool-card-file,
   #messages .tool-card.pending .tool-card-icon { animation: none !important; }
   #messages .agent-work-caret,
+  #messages .chat-reference-caret,
   #messages .agent-command-chevron,
   #messages .tool-card,
   .composer { transition: none; }
 }
 
-/* Composer actions use the same quiet neutral controls in idle, send, and stop states. */
+/* Composer actions use the same quiet neutral controls in idle and send states. */
 .send-btn,
-.send-btn:not(:disabled),
-.send-btn.stop,
-.send-btn.stop:not(:disabled) {
+.send-btn:not(:disabled) {
   background: #d6d6d6 !important;
   border: 0 !important;
   border-radius: 999px !important;
   color: #1b1b1b !important;
   box-shadow: none !important;
 }
-.send-btn:hover:not(:disabled),
-.send-btn.stop:hover:not(:disabled) {
+.send-btn:hover:not(:disabled) {
   background: #f1f1f1 !important;
   color: #111 !important;
 }
@@ -2228,6 +2405,14 @@
   align-self: stretch;
   margin: var(--chat-row-gap) 0 0;
   padding: 0;
+}
+
+/* Only the exchange's main prompt pins. Sub-prompts scroll with the response
+   and pass under the pinned main prompt. */
+#messages .chat-turn.user ~ .chat-turn.user {
+  position: relative;
+  top: auto;
+  z-index: auto;
 }
 
 #messages .chat-turn.user .chat-box {

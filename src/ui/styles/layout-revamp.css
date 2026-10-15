@@ -633,46 +633,6 @@ body,
   background: linear-gradient(180deg, rgba(18, 18, 18, 0) 0%, rgba(18, 18, 18, 1) 100%);
 }
 
-.composer:has(#prompt-queue:not([hidden])) .composer-input-row {
-  position: relative;
-  z-index: 2;
-}
-
-#input-bar:has(#prompt-queue:not([hidden])) {
-  position: relative;
-  z-index: 13;
-}
-
-.prompt-queue {
-  position: absolute;
-  z-index: 1;
-  left: 2.5%;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 95%;
-  margin: 0;
-  pointer-events: none;
-}
-
-.prompt-queue[hidden] { display: none !important; }
-
-.prompt-queue-list {
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow: hidden;
-  padding: 8px 8px 12px 13px;
-  border: 1px solid var(--revamp-control);
-  border-radius: 8px;
-  background: #1a1a1a;
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 10px;
-  line-height: 14px;
-  pointer-events: auto;
-}
-
 .command-run-wait {
   margin-top: 8px;
   color: rgba(255, 255, 255, 0.72);
@@ -682,122 +642,6 @@ body,
 
 .command-run-wait-title {
   color: #fff;
-}
-
-.prompt-queue-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.prompt-queue-rows.is-scroll {
-  max-height: calc(var(--queue-line, 28px) * 5 + 8px);
-  overflow-y: scroll;
-  overscroll-behavior: contain;
-}
-
-.prompt-queue-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  min-height: var(--queue-line, 28px);
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font-size: 10px;
-  line-height: 14px;
-  pointer-events: auto;
-  cursor: grab;
-  transition: transform 0.12s ease, opacity 0.12s ease;
-}
-
-.prompt-queue-row:active,
-.prompt-queue-row.is-dragging {
-  cursor: grabbing;
-}
-
-.prompt-queue-row.is-dragging {
-  opacity: 0.35;
-  transform: scale(0.98);
-}
-
-.prompt-queue-row.is-drag-ghost {
-  position: fixed;
-  top: -1000px;
-  left: 0;
-  z-index: 10000;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: #1a1a1a;
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.45);
-  transform: rotate(1.5deg) scale(1.03);
-  cursor: grabbing;
-}
-
-.prompt-queue-text {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.prompt-queue-actions {
-  display: none;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 2px;
-}
-
-.prompt-queue-row:hover .prompt-queue-actions,
-.prompt-queue-row.is-editing .prompt-queue-actions,
-.prompt-queue-row:focus-within .prompt-queue-actions {
-  display: flex;
-}
-
-.prompt-queue-actions button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: #bdbdbd;
-  cursor: pointer;
-}
-
-.prompt-queue-actions button:hover { background: rgba(255, 255, 255, 0.06); }
-
-.prompt-queue-more {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  min-height: var(--queue-line, 28px);
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 10px;
-  line-height: 14px;
-  cursor: pointer;
-}
-
-.prompt-queue-more-caret {
-  flex: 0 0 auto;
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 10px;
 }
 
 #chat-mode-toggle { order: 1; }
@@ -881,7 +725,7 @@ body,
 }
 
 .app-settings-sidebar {
-  width: 290px;
+  width: 244px;
   padding-top: 38px;
   border-right: 0;
   background: var(--revamp-surface);
@@ -895,7 +739,7 @@ body,
   box-sizing: border-box;
   width: 216px;
   height: 39px;
-  margin: 0 0 26px 62px;
+  margin: 0 0 26px 16px;
   border: 1px solid #373737;
   border-radius: 8px;
   background: transparent;
@@ -921,7 +765,7 @@ body,
 
 .app-settings-tabs {
   width: 211px;
-  margin: 0 0 0 67px;
+  margin: 0 0 0 21px;
   padding: 0;
   overflow-y: auto;
 }
@@ -939,7 +783,8 @@ body,
 #messages::-webkit-scrollbar,
 .app-settings-content::-webkit-scrollbar,
 .app-settings-tabs::-webkit-scrollbar,
-.chat-history-body::-webkit-scrollbar {
+.chat-history-body::-webkit-scrollbar,
+.file-tag-suggestions::-webkit-scrollbar {
   width: 10px;
   height: 10px;
   display: block !important;
@@ -953,14 +798,17 @@ body,
 .app-settings-tabs::-webkit-scrollbar-track,
 .app-settings-tabs::-webkit-scrollbar-corner,
 .chat-history-body::-webkit-scrollbar-track,
-.chat-history-body::-webkit-scrollbar-corner {
+.chat-history-body::-webkit-scrollbar-corner,
+.file-tag-suggestions::-webkit-scrollbar-track,
+.file-tag-suggestions::-webkit-scrollbar-corner {
   background: transparent !important;
 }
 
 #messages::-webkit-scrollbar-thumb,
 .app-settings-content::-webkit-scrollbar-thumb,
 .app-settings-tabs::-webkit-scrollbar-thumb,
-.chat-history-body::-webkit-scrollbar-thumb {
+.chat-history-body::-webkit-scrollbar-thumb,
+.file-tag-suggestions::-webkit-scrollbar-thumb {
   min-width: 0;
   min-height: 24px;
   background: rgba(56, 56, 56, .55) !important;
@@ -973,7 +821,8 @@ body,
 #messages::-webkit-scrollbar-thumb:hover,
 .app-settings-content::-webkit-scrollbar-thumb:hover,
 .app-settings-tabs::-webkit-scrollbar-thumb:hover,
-.chat-history-body::-webkit-scrollbar-thumb:hover {
+.chat-history-body::-webkit-scrollbar-thumb:hover,
+.file-tag-suggestions::-webkit-scrollbar-thumb:hover {
   background: rgba(66, 66, 66, .7) !important;
 }
 
@@ -1043,7 +892,7 @@ body,
 
 /* Icon-only rail when the settings pane is narrow. Must live here because
    layout-revamp overrides sidebar width after settings.css. */
-@container app-settings (max-width: 900px) {
+@container app-settings (max-width: 700px) {
   .app-settings-sidebar {
     width: 72px;
     max-width: 72px;
@@ -1097,7 +946,7 @@ body,
 
 .app-settings-workspace-header {
   min-height: 112px;
-  padding: 38px 63px 14px 48px;
+  padding: 38px 20px 14px 20px;
   align-items: flex-start;
 }
 
@@ -1149,7 +998,7 @@ body,
 }
 
 .app-settings-content {
-  padding: 0 63px 52px 48px;
+  padding: 0 20px 52px 20px;
   overflow-x: hidden;
   overflow-y: scroll;
   background: var(--revamp-surface);
@@ -2394,16 +2243,14 @@ body,
   font-size: 11px;
 }
 
-.security-workbench-icon,
-.security-analyze-button {
+.security-workbench-icon {
   width: 24px;
   height: 24px;
   border-radius: 4px;
   color: var(--revamp-text);
 }
 
-.security-workbench-icon:hover,
-.security-analyze-button:hover {
+.security-workbench-icon:hover {
   background: rgba(255, 255, 255, .06);
   color: #fff;
 }

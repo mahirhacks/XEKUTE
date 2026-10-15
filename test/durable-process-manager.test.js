@@ -269,7 +269,7 @@ test("timeout_ms uses the shared terminator and keeps command mode", async (t) =
   assert.equal(result.error, undefined);
 });
 
-test("killAndComplete still records the intent when the terminator throws", async (t) => {
+test("failed termination retains the live process and its queue slot", async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-kill-finally-"));
   const child = createFakeChild();
   const manager = makeManager({
@@ -279,6 +279,8 @@ test("killAndComplete still records the intent when the terminator throws", asyn
     },
   });
   t.after(async () => {
+    child.exitCode = 0;
+    child.emit("exit", 0, null);
     await new Promise((resolve) => setTimeout(resolve, 50));
     try { fs.rmSync(workspace, { recursive: true, force: true }); } catch { /* temp workspace */ }
   });
@@ -291,8 +293,8 @@ test("killAndComplete still records the intent when the terminator throws", asyn
   const listed = await manager.list(workspace);
   const item = listed.value.processes.find((record) => record.id === processId);
   assert.ok(item);
-  assert.equal(item.status, "stopped");
-  assert.notEqual(item.status, "running");
+  assert.equal(item.status, "running");
+  assert.equal(item.terminationReason, "stop_unconfirmed");
 });
 
 test("completeEntry copies tails then unlinks logs; status and list keep stdout/stderr", async (t) => {
@@ -323,6 +325,10 @@ test("completeEntry copies tails then unlinks logs; status and list keep stdout/
   assert.equal("logsUnlinked" in item, false);
   assert.equal("retainedStdout" in item, false);
   assertProjected(item, "list after unlink");
+  const reference = manager.readReferenceCommand(workspace, processId);
+  assert.match(reference.stdout, /hello-out/);
+  assert.match(reference.stderr, /hello-err/);
+  assert.equal(manager.referenceCommands(workspace).find(record => record.id === processId).running, false);
   const byteLength = Buffer.byteLength(String(status.value.stdout || ""), "utf8");
   const offsetStatus = await manager.status(workspace, { process_id: processId, stdout_offset: byteLength });
   assert.equal(offsetStatus.ok, true);

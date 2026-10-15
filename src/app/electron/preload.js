@@ -167,6 +167,7 @@ const api = {
 
   // Terminal
   terminalShells: () => ipcRenderer.invoke("terminal:shells"),
+  terminalReferences: (payload) => ipcRenderer.invoke("terminal:references", payload),
   terminalCreate: (opts) => ipcRenderer.invoke("terminal:create", opts),
   terminalWrite: (id, data) => ipcRenderer.invoke("terminal:write", { id, data }),
   terminalResize: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", { id, cols, rows }),
@@ -185,6 +186,8 @@ const api = {
   countTokens: (payload) => ipcRenderer.invoke("ollama:countTokens", payload),
   chat: (payload) => ipcRenderer.invoke("ollama:chat", payload),
   agentRun: (payload) => ipcRenderer.invoke("agent:run", payload),
+  agentSubmitInput: (payload) => ipcRenderer.invoke("agent:submitInput", payload),
+  agentCancelTask: (payload) => ipcRenderer.invoke("agent:cancelTask", payload),
   contextTier1Usage: (payload = {}) => ipcRenderer.invoke("context:tier1Usage", payload),
   forkTier1Session: (payload = {}) => ipcRenderer.invoke("context:forkTier1Session", payload),
   pendingSubagentResults: (payload = {}) => ipcRenderer.invoke("agent:pendingSubagentResults", payload),

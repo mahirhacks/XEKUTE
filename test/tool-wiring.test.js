@@ -9,6 +9,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const { createExecutionContext, projectExecutionContext, isRestrictedToolContext } = require("../src/contracts/tool/execution-context");
 const { toOpenAITool } = require("../src/agent/tools/config/tool-registry.js");
@@ -102,18 +103,22 @@ test("wiring: adapters reject unrestricted contexts (safety preserved)", async (
   assert.equal(result.error.code, "INVALID_EXECUTION_CONTEXT");
 });
 
-test("wiring: exec_command adapter is executable under a restricted projection", async () => {
+test("wiring: exec_command adapter is executable under a restricted projection", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wire-tool-"));
   const { createContainer } = require("../src/infrastructure/di/container");
-  const app = { getPath: (name) => path.join(os.tmpdir(), "xekute-wire-exec", String(name)) };
-  const container = createContainer({ app, safeStorage: { isEncryptionAvailable: () => false } });
+  const app = { getPath: (name) => path.join(root, "app", String(name)) };
+  const key = crypto.randomBytes(32);
+  const safeStorage = { isEncryptionAvailable: () => true,
+    encryptString(value) { const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv("aes-256-gcm", key, iv); const body = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]); return Buffer.concat([iv, cipher.getAuthTag(), body]); },
+    decryptString(value) { const decipher = crypto.createDecipheriv("aes-256-gcm", key, value.subarray(0, 12)); decipher.setAuthTag(value.subarray(12, 28)); return Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString("utf8"); },
+  };
+  const container = createContainer({ app, safeStorage });
+  t.after(() => { container.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
   const tool = container.toolRegistry.get("exec_command").adapter;
   const result = await tool.execute({ executable: process.execPath, args: ["-e", "console.log('hi')"], wait_ms: 5_000, context: "node hello" }, restrictedContext(root, "exec_command"));
   assert.equal(result.ok, true);
   assert.match(result.value.processId, /^process-/);
   if (result.value.stdout) assert.match(result.value.stdout, /hi/);
-  container.dispose();
-  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test("wiring: unbound exec_command adapter fails closed", async () => {
