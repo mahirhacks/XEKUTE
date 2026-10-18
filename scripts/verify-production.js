@@ -124,7 +124,7 @@ assert.match(read("src/ui/bootstrap.js"), /type === "updated"/);
 assert.doesNotMatch(forgeConfig, /src\/automation/);
 
 const canonicalNames = ToolPort.REGISTRY_TOOL_NAMES;
-assert.equal(new Set(canonicalNames).size, 12, "the canonical registry must contain exactly 12 unique tools");
+assert.equal(new Set(canonicalNames).size, 14, "the canonical registry must contain exactly 14 unique tools");
 assert.deepEqual(
   canonicalNames,
   [
@@ -140,8 +140,10 @@ assert.deepEqual(
     "browser_action",
     "delegate_agent",
     "web_research",
+    "release_blocks",
+    "recall_block",
   ],
-  "the tool contract must preserve the canonical 12-tool inventory and order",
+  "the tool contract must preserve the canonical 14-tool inventory and order",
 );
 assert.deepEqual(ModeRegistry.MODE_TOOL_GROUPS, ToolPort.MODE_TOOL_GROUPS);
 assert.deepEqual(
