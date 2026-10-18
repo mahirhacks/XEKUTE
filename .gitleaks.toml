@@ -26,9 +26,17 @@ keywords = ["windows_certificate", "win_csc_link", "csc_link"]
 description = "Generated output, harness scratch space, lockfiles, and known fake fixtures"
 # Sequential-hex fake capture token from test/proxy-listener.test.js. It is
 # already in git history, so it is allowlisted by value only (nothing else is).
+# The last four are the fake credentials that test/command-redaction.test.js and
+# its sibling checkpoint tests feed to the command-line redactor to prove they
+# are removed; they appear in docs/architecture/checkpoint-summarization-plan.md
+# as the same examples.
 stopwords = [
   "abcdef0123456789abcdef0123456789",
   "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+  "hunter2",
+  "abcd1234efgh",
+  "abcdefgh12345678",
+  "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
 ]
 paths = [
   '''(^|/)node_modules/''',
