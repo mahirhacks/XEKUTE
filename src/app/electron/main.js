@@ -3368,7 +3368,9 @@ function tier1SessionIdForRun(rawSessionId, runKey = "") {
   return `session_${digest}`;
 }
 
-async function runTier1CheckpointModel({ context = {}, model = "", provider = "", reasoningEffort = null } = {}) {
+// `retainSecrets` mirrors the project setting "Redact secrets" being off. It is
+// passed in because this adapter has no project profile of its own.
+async function runTier1CheckpointModel({ context = {}, model = "", provider = "", reasoningEffort = null, retainSecrets = false } = {}) {
   // Checkpoint synthesis is a model boundary, not a trusted local call.
   // Keep Block C exact in the local coordinator while redacting credential
   // material from the provider payload (including nested tool/working-memory
@@ -3379,7 +3381,7 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
     required_contract: "ConversationCheckpointV3",
     previous_checkpoint: context.previous || null,
     deterministic_reduction: context.reduction || {},
-    active_conversation: Array.isArray(context.active) ? redactToolCallMessages(context.active.slice(0, 500)) : [],
+    active_conversation: Array.isArray(context.active) ? redactToolCallMessages(context.active.slice(0, 500), { retainSecrets }) : [],
     current_prompt_context_only: String(context.currentPrompt || "").slice(0, 2_000),
     current_workflow: context.workflow || null,
     constraints: Array.isArray(context.constraints) ? context.constraints.slice(0, 200) : [],
@@ -3703,6 +3705,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
           model: String(payload.model || ""),
           provider: String(payload.provider || getActiveProvider() || "ollama"),
           reasoningEffort: payload.reasoningEffort,
+          retainSecrets: readProjectProfile(payload.workspace)?.profile?.dataHandling?.redactSecrets === false,
         });
       }
       : null,
@@ -3919,6 +3922,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
           model: String(payload.model || ""),
           provider: String(payload.provider || getActiveProvider() || "ollama"),
           reasoningEffort: payload.reasoningEffort,
+          retainSecrets: readProjectProfile(payload.workspace)?.profile?.dataHandling?.redactSecrets === false,
         });
       }
       : null,
