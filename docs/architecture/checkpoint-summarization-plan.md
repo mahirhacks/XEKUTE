@@ -1,6 +1,6 @@
 # Checkpoint summarization upgrade: production plan
 
-Status: plan, not implemented. Baseline: `bugfix/agent-loop` at `cf0725a` (block management included). Every `file:line` below was read at that commit. "New" marks anything this plan adds. Produced by an arena of four independent plans, cross-judged, then re-verified against the code (see `checkpoint-summarization-plan.synthesis.md`).
+Status: implemented on `feature/checkpoint-summarization` as one change. Real-model behavior (Ollama truncation, delta recall, repair rate) has not been measured; the canary protocol in section (g) is still to be run before the v2 request is turned on. Baseline: `bugfix/agent-loop` at `cf0725a` (block management included). Every `file:line` below was read at that commit. "New" marks anything this plan adds. Produced by an arena of four independent plans, cross-judged, then re-verified against the code (see `checkpoint-summarization-plan.synthesis.md`).
 
 Abbreviations: `coord` = `src/app/services/memory/tier1-context-coordinator.js`, `ctrl` = `src/agent/controller/agent-controller.js`, `main` = `src/app/electron/main.js`, `redact` = `src/shared/secret-redaction.js`.
 
@@ -222,3 +222,18 @@ No schema change or migration; no `SUMMARY_RATIO` or `CHECKPOINT_RATIO` change; 
 1. **Raise `SUMMARY_RATIO` (0.05)?** The budget, not the 300 cap, decides survival (about 20 verbose facts at 128k). Default: no change now. Revisit after PRs 2 and 3, since compact attempts roughly quadruple what fits.
 2. **`unresolved_work` grounding.** Default: entity rule (keeps in-scope assistant leads, demotes any new network entity). The strict alternative sends every assistant-authored lead to `unverified_claims`, which is shed first under budget.
 3. **Timing.** Default: instrument first, build the soft ratio only on the trigger in section (e).
+
+## Implementation notes
+
+The plan was built as written, in five commits on one branch, with these differences and additions.
+
+- **`-p` handling.** `redactCommandLine` decides by the command's head, not by a single rule: `-p` is redacted for tools where it carries a password (`hydra`, `mysql`, `sshpass`, `crackmapexec` and similar), left alone for tools where it is a port, directory or parameter name (`nmap`, `ssh`, `mkdir`, `sqlmap` and similar), and redacted for unknown tools unless the value is a port spec or a path. The plan's single rule ("redact unless numeric or a scanner") would have hidden `mkdir -p` and `sqlmap -p id`.
+- **No `redactSecrets` for commands.** `redactCommandLine` is not built on `redactSecrets`, because that function's header rule runs to the end of the line and would swallow the rest of a command, including its URL.
+- **The Redact secrets project setting is honored** everywhere the new redaction runs: the coordinator payload, attempt digests, tombstones, directive text, and the main-process request. The older unconditional `redactStructuredValue` on the provider request is unchanged.
+- **Operator provenance** lives in `message-provenance.js`. A user message with no `source_message_id` is `unattributed`: not trusted, and not called hostile. Facts built from user-role messages say where they came from: `User request:`, `Late tool result:`, `Runtime note:`.
+- **CIDR containment.** A lead naming a host inside a range the operator named is allowed without a scope check.
+- **`known` in the v2 request** holds only what earlier checkpoints recorded; this window's requests and attempts are not repeated there, which keeps the ledger to one copy.
+- **Model output cap.** `sanitizeValue` also capped the model's own answer at 100 entries per array; answers now keep up to 300.
+- **Switches.** `XEKUTE_CHECKPOINT_POLICY` (JSON booleans) and `XEKUTE_CHECKPOINT_LEGACY=1` are read where the DI container builds the coordinator. `trustTiers` defaults on and `requestV2` defaults off.
+- **Event fields.** The completed `context_checkpoint` event reports `reason`, `midTask`, `pressureTokens`, `modelUsed`, `fallbackCode`, `modelStats` (input tokens, context size, Ollama's `prompt_eval_count`, truncation, timing) and `trimmed`.
+- **Not built, as planned:** rolling fragments, a soft checkpoint ratio, artifact-aware trimming, the pin-through-checkpoint fix, and a fix for the blind repair request.
