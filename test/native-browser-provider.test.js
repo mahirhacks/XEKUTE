@@ -90,7 +90,9 @@ test("workspace uploads resolve existing regular files and reject traversal", as
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "xekute-upload-")); t.after(() => fs.rm(temp, { recursive: true, force: true }));
   const root = path.join(temp, "project"); await fs.mkdir(root);
   await fs.writeFile(path.join(root, "file.txt"), "fixture"); await fs.writeFile(path.join(temp, "outside.txt"), "outside");
-  assert.deepEqual(await workspaceUploadPaths(root, ["file.txt"]), [path.join(root, "file.txt")]);
+  // Uploads resolve real paths. Compare against the real path too: a temp
+  // folder can be reported in 8.3 short form (C:\Users\RUNNER~1 on CI).
+  assert.deepEqual(await workspaceUploadPaths(root, ["file.txt"]), [await fs.realpath(path.join(root, "file.txt"))]);
   await assert.rejects(workspaceUploadPaths(root, ["../outside.txt"]), { code: "BROWSER_UPLOAD_OUTSIDE_WORKSPACE" });
   await assert.rejects(workspaceUploadPaths(root, ["."]), { code: "BROWSER_UPLOAD_OUTSIDE_WORKSPACE" });
 });
