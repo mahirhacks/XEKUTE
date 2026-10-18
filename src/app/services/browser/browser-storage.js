@@ -2,6 +2,13 @@
 
 const { randomUUID } = require("node:crypto");
 
+// Saved storage values are data. JSON.stringify alone leaves characters that
+// can end or reshape surrounding code, so escape them before embedding.
+const UNSAFE_SCRIPT_CHARS = { "<": "\\u003C", ">": "\\u003E", "/": "\\u002F", "\u2028": "\\u2028", "\u2029": "\\u2029" };
+function scriptLiteral(value) {
+  return JSON.stringify(value).replace(/[<>/\u2028\u2029]/g, (char) => UNSAFE_SCRIPT_CHARS[char]);
+}
+
 // This helper serves an empty document from CDP, so importing/exporting storage
 // never loads an identity's saved origins from the network or executes site code.
 async function withStorageDocument({ WebContentsView, session }, task) {
@@ -45,7 +52,7 @@ async function importBrowserStorage(dependencies, state) {
   if (!state.origins?.length) return;
   await withStorageDocument(dependencies, async visit => {
     for (const origin of state.origins) {
-      await visit(origin.origin, `(() => { localStorage.clear(); for (const item of ${JSON.stringify(origin.localStorage)}) localStorage.setItem(item.name, item.value); })()`);
+      await visit(origin.origin, `(() => { localStorage.clear(); for (const item of ${scriptLiteral(origin.localStorage)}) localStorage.setItem(item.name, item.value); })()`);
     }
   });
 }
@@ -64,4 +71,4 @@ async function exportBrowserStorage(dependencies, origins) {
   return { cookies, origins: output };
 }
 
-module.exports = { importBrowserStorage, exportBrowserStorage };
+module.exports = { importBrowserStorage, exportBrowserStorage, scriptLiteral };
