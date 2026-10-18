@@ -5,6 +5,9 @@ const { canonicalJson, canonicalKeyHash, isMemoryId } = require("../../../contra
 const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/schema-registry.js");
 const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = require("../../storage/memory/memory-storage-utils.js");
 const { redactToolCallMessages } = require("../../../shared/secret-redaction.js");
+const { NON_OPERATOR_ID, isOperatorInput, messageOrigin, operatorText } = require("./message-provenance.js");
+const { resolveCheckpointPolicy } = require("./checkpoint-policy.js");
+const { buildSummarizerRequest } = require("./tier1-checkpoint-request.js");
 const { attemptFact, attemptsFromLedger, mergeAttemptEvents } = require("./checkpoint-attempts.js");
 
 const SUMMARY_MAX = 32_768;
@@ -189,24 +192,6 @@ function extractBlockFindings(messages, { retainSecrets = false } = {}) {
   return sections.join("; ").slice(0, FINDINGS_MAX);
 }
 
-// Who wrote a ledger message. Operator input is a user message that carries a real
-// source id from the session supervisor. Late tool results (`result:`), tombstones,
-// internal runtime notices and unstamped user messages (a referenced terminal
-// capture is one) can all contain target-controlled text, so none of them is
-// operator input.
-const NON_OPERATOR_ID = /^(?:result|execution):/;
-function isOperatorInput(message) {
-  return Boolean(message) && message.role === "user" && message.block_tombstone !== true && message.__xekuteInternalRuntimeInput !== true
-    && typeof message.source_message_id === "string" && message.source_message_id.trim() !== "" && !NON_OPERATOR_ID.test(message.source_message_id);
-}
-// The words the operator typed, without the chat context the app appends to them.
-function operatorText(message) {
-  if (typeof message?.source_text === "string" && message.source_text) return message.source_text;
-  const content = typeof message?.content === "string" ? message.content : "";
-  const cut = content.indexOf("<referenced_chat_context>");
-  return (cut >= 0 ? content.slice(0, cut) : content).trimEnd();
-}
-
 const FILE_EXTENSIONS = new Set(["js", "mjs", "cjs", "json", "txt", "md", "py", "sh", "log", "yml", "yaml", "xml", "html", "htm", "css", "ts", "tsx", "jsx", "conf", "cfg", "ini", "env", "csv", "pdf", "png", "jpg", "jpeg", "gif", "svg", "ico", "zip", "gz", "tar", "bak", "sql", "exe", "dll", "so", "c", "h", "cpp", "java", "rb", "go", "rs", "php", "asp", "aspx", "jsp", "lock", "map", "woff", "ttf", "mp4", "mp3"]);
 const CIDR_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}\b/g;
 const HOSTNAME_PATTERN = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/gi;
@@ -314,7 +299,9 @@ function createTier1ContextCoordinator({
   now = () => new Date(),
   crypto = nodeCrypto,
   onChange = null,
+  policy = null,
 } = {}) {
+  const checkpointPolicy = resolveCheckpointPolicy({}, policy);
   const schemas = schemaRegistry || getDefaultMemorySchemaRegistry();
   const sessions = new Map();
 
@@ -591,10 +578,7 @@ function createTier1ContextCoordinator({
       const role = String(message?.role || "unknown");
       const content = redactText(message?.content || "", 4_000, retainSecrets);
       // Where a user-role message came from decides how it may be described later.
-      const origin = role !== "user" || message?.block_tombstone === true ? ""
-        : message?.__xekuteInternalRuntimeInput === true ? "runtime"
-          : NON_OPERATOR_ID.test(String(message?.source_message_id || "")) ? "tool_delivery"
-            : isOperatorInput(message) ? "operator" : "";
+      const origin = messageOrigin(message) === "unattributed" ? "" : messageOrigin(message);
       normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80), ...(message?.block_tombstone === true ? { tombstone: true } : {}), ...(origin ? { origin } : {}) });
     }
     const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || "").slice(0, 120), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [], call_id: String(event?.call_id || "").slice(0, 200) }));
@@ -799,10 +783,12 @@ function createTier1ContextCoordinator({
       context?.workflow, context?.operatorTexts,
     ];
     const assistantSources = [...trustedSources, messages.filter((message) => message.role === "assistant" && !message.tombstone).map((message) => message.content)];
+    const full = corpusFrom([...assistantSources, messages, context?.reduction?.tool_events, context?.reduction?.attempts, context?.previous?.grounded_facts, context?.previous?.significant_events]);
+    if (checkpointPolicy.trustTiers === false) return { trusted: full, assistant: full, full };
     return {
       trusted: corpusFrom(trustedSources),
       assistant: corpusFrom(assistantSources),
-      full: corpusFrom([...assistantSources, messages, context?.reduction?.tool_events, context?.reduction?.attempts, context?.previous?.grounded_facts, context?.previous?.significant_events]),
+      full,
     };
   }
 
@@ -854,6 +840,9 @@ function createTier1ContextCoordinator({
     // A model may return a full checkpoint, so its arrays get the largest cap any
     // field has instead of the default 100 that would cut the newest entries.
     const safeRaw = sanitizeValue(raw, "", 0, new WeakSet(), context?.retainSecrets === true, 300) || {};
+    // A delta answer may add facts, decisions, leads and unverified claims. The
+    // constraints, the events and the workflow are owned by code.
+    if (context?.deltaOutput === true) for (const key of ["constraints", "significant_events", "workflow_continuity"]) delete safeRaw[key];
     const candidate = { ...fallback, ...safeRaw, schema_version: 3, project_id: context.projectId, session_id: context.sessionId, generated_by: generatedBy };
     const corpora = semanticCorpora(context);
     const retainSecrets = context?.retainSecrets === true;
@@ -870,7 +859,7 @@ function createTier1ContextCoordinator({
     const constraints = normalizeSemanticField(candidate.constraints, corpora.trusted, { retainSecrets });
     const decisions = normalizeSemanticField(candidate.decisions, corpora.trusted, { retainSecrets });
     const significantEvents = normalizeSemanticField(candidate.significant_events, corpora.full, { retainSecrets });
-    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpora.assistant, { retainSecrets, entityCheck: { trusted: corpora.trusted.entities, scopeCheck: context?.scopeCheck } });
+    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpora.assistant, { retainSecrets, entityCheck: checkpointPolicy.trustTiers === false ? null : { trusted: corpora.trusted.entities, scopeCheck: context?.scopeCheck } });
     candidate.grounded_facts = merge("grounded_facts", groundedFacts.values, fresh.facts, 300);
     candidate.constraints = merge("constraints", constraints.values, fresh.constraints, 200);
     candidate.decisions = merge("decisions", decisions.values, fresh.decisions, 200);
@@ -926,7 +915,15 @@ function createTier1ContextCoordinator({
     const activeWindow = newest(context.active);
     const previousWindow = context.previous ? { ...context.previous } : null;
     if (previousWindow) for (const field of ["grounded_facts", "significant_events", "constraints", "decisions", "unresolved_work", "unverified_claims"]) previousWindow[field] = newest(previousWindow[field]).items;
-    const payload = sanitizeValue({
+    const useRequestV2 = checkpointPolicy.requestV2 === true;
+    if (useRequestV2) context = { ...context, deltaOutput: true };
+    const requestV2 = useRequestV2 ? buildSummarizerRequest({
+      context,
+      fresh: freshRecords(context),
+      redact: (text, maximum) => redactText(text, maximum, context?.retainSecrets === true),
+      budgetTokens: Math.max(2_000, Math.min(Math.floor(Number(context.limit) * 0.6) || 20_000, Number(context.summarizerInputTokens) || 20_000)),
+    }) : null;
+    const payload = requestV2 ? sanitizeValue(requestV2.request, "", 0, new WeakSet(), context?.retainSecrets === true, 400) || {} : sanitizeValue({
       previous_checkpoint: previousWindow,
       deterministic_reduction: context.reduction ? { ...context.reduction, ledger_call_ids: undefined, messages: messageWindow.items, tool_events: eventWindow.items, attempts: attemptWindow.items } : context.reduction,
       active_conversation: redactToolCallMessages(activeWindow.items, { retainSecrets: context?.retainSecrets === true }),
@@ -963,6 +960,8 @@ function createTier1ContextCoordinator({
     });
     let raw;
     try { raw = await callModel(payload); } catch (error) { return operationFailure(error.code || "MEMORY_CHECKPOINT_MODEL_FAILED", error.message, {}, true); }
+    // The adapter may attach how the call went as a non-enumerable `stats`.
+    const modelStats = raw && typeof raw === "object" && raw.stats && typeof raw.stats === "object" ? { ...raw.stats, ...(requestV2 ? { omittedBefore: requestV2.omittedBefore } : {}) } : (requestV2 ? { omittedBefore: requestV2.omittedBefore } : null);
     let candidate = checkpointCandidate(raw, context, "model");
     let grounding = candidate ? validateCheckpointGrounding(candidate, context) : { ok: false, details: [{ instancePath: "", message: "checkpoint output must be an object" }] };
     let validation = candidate ? schemas.validate("ConversationCheckpointV3", candidate) : { ok: false, error: { details: [{ instancePath: "", message: "checkpoint output must be an object" }] } };
@@ -1001,7 +1000,7 @@ function createTier1ContextCoordinator({
     grounding = validateCheckpointGrounding(candidate, context);
     if (!grounding.ok) return { ok: false, code: "MEMORY_CHECKPOINT_OUTPUT_INVALID", details: grounding.details || [] };
     if (!validation.ok) return { ok: false, code: "MEMORY_CHECKPOINT_OUTPUT_INVALID", details: validation.error.details };
-    return { ok: true, checkpoint: candidate };
+    return { ok: true, checkpoint: candidate, modelStats };
   }
 
   async function checkpoint(input = {}) {
@@ -1073,6 +1072,7 @@ function createTier1ContextCoordinator({
       model: input.model,
       retainSecrets,
       trimStats: {},
+      summarizerInputTokens: Number(input.summarizer_input_tokens ?? input.summarizerInputTokens) || 0,
     };
     let semantic = null;
     if (input.allow_model !== false && input.reason !== "emergency") semantic = await semanticCheckpoint(context);
@@ -1109,7 +1109,7 @@ function createTier1ContextCoordinator({
     // The workflow visible in Tier 1 changes only at this checkpoint boundary.
     state.workflow = checkpointValue.workflow_continuity?.state === "completed" ? null : clone(checkpointValue.workflow_continuity);
     syncMeter(projectId, sessionId, ["Summarized Conversation", "Active Conversation", "Current Workflow"]);
-    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", trimmed: context.trimStats };
+    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", modelStats: semantic?.ok === true ? semantic.modelStats || null : null, trimmed: context.trimStats };
   }
 
   // Operator steering is recorded when it arrives and folded into the

@@ -73,6 +73,7 @@ const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { isMemoryId } = require("../../contracts/memory/index.js");
 const { redactStructuredValue, redactToolCallMessages } = require("../../shared/secret-redaction.js");
+const { CHECKPOINT_REQUEST_CONTRACT, CHECKPOINT_SYSTEM_PROMPT, attachModelStats, checkpointContextSize, estimateTokens: estimateCheckpointTokens, promptWasTruncated } = require("../services/memory/tier1-checkpoint-request.js");
 
 // Build the model-facing catalog from the canonical tool registry.
 function toolCatalogFromRegistry(registry) {
@@ -3075,6 +3076,7 @@ async function runOllamaJson(payload) {
   });
   if (!response.ok) throw new Error(`Ollama error: ${response.status} ${response.statusText}`);
   const body = await response.json();
+  if (typeof payload.onStats === "function") payload.onStats({ promptEvalCount: Number(body?.prompt_eval_count) || 0, evalCount: Number(body?.eval_count) || 0 });
   return String(body?.message?.content || "");
 }
 
@@ -3403,6 +3405,63 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
   try { return JSON.parse(String(raw || "")); } catch { return null; }
 }
 
+// The Tier 1 coordinator sends a structured semantic-checkpoint request, while a few
+// injected test adapters pass the compact context shape directly. Accept both
+// without dropping the exact reduction or protected references. A request built by
+// the coordinator's v2 contract is handed to its own runner.
+function createTier1ModelCallback(payload = {}) {
+  return (input = {}) => {
+    const retainSecrets = readProjectProfile(payload.workspace)?.profile?.dataHandling?.redactSecrets === false;
+    const common = {
+      model: String(payload.model || ""),
+      provider: String(payload.provider || getActiveProvider() || "ollama"),
+      reasoningEffort: payload.reasoningEffort,
+    };
+    if (input?.contract === CHECKPOINT_REQUEST_CONTRACT) return runTier1CheckpointDelta({ request: input, ...common });
+    const context = input?.previous_checkpoint !== undefined || input?.deterministic_reduction !== undefined
+      ? {
+        previous: input.previous_checkpoint || null,
+        reduction: input.deterministic_reduction || {},
+        active: input.active_conversation || [],
+        currentPrompt: input.current_prompt_context_only || "",
+        workflow: input.current_workflow || input.workflow || null,
+        protectedRefs: input.authoritative_refs || [],
+        sourceBlocks: input.source_block_refs || input.sourceBlocks || [],
+        constraints: input.constraints || input.operator_constraints || input.operatorConstraints || [],
+        objective: input.objective || "",
+        decisions: input.decisions || [],
+      }
+      : input;
+    return runTier1CheckpointModel({ context, ...common, retainSecrets });
+  };
+}
+
+// Runs the v2 checkpoint request. The request is already projected and bounded by
+// the coordinator, so this only sizes the call, runs it, and reports how it went.
+async function runTier1CheckpointDelta({ request, model = "", provider = "", reasoningEffort = null } = {}) {
+  // Same unconditional provider boundary as the full request above.
+  const safeRequest = redactStructuredValue(request);
+  const messages = [
+    { role: "system", content: CHECKPOINT_SYSTEM_PROMPT },
+    { role: "user", content: JSON.stringify(safeRequest) },
+  ];
+  const inputTokens = estimateCheckpointTokens(messages);
+  const selectedProvider = String(provider || getActiveProvider() || "ollama").toLowerCase();
+  const selectedModel = String(model || "").trim();
+  const started = Date.now();
+  const stats = { inputTokens };
+  let raw;
+  if (selectedProvider === "openrouter") {
+    raw = await runOpenRouterJson({ model: selectedModel, messages, temperature: 0, maxCompletionTokens: 3_000, reasoningEffort, timeoutMs: 55_000, responseFormat: { type: "json_object" } });
+  } else {
+    stats.numCtx = checkpointContextSize(inputTokens);
+    raw = await runOllamaJson({ model: selectedModel, messages, numCtx: stats.numCtx, temperature: 0, onStats: (reported) => Object.assign(stats, reported) });
+    stats.truncated = promptWasTruncated(stats.promptEvalCount, stats.numCtx);
+  }
+  stats.modelMs = Date.now() - started;
+  return attachModelStats(raw, stats);
+}
+
 async function handleAgentRun(event, payload = {}, options = {}) {
   const sender = event.sender;
   const userImages = normalizeUserImages(payload.userImages);
@@ -3680,35 +3739,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     // supplied to delegated turns.
     tier1Context: tier1ProjectId ? container.memoryTier1Coordinator : null,
     loadChatReferenceSnapshot: (input) => agentSessionRuntime.loadChatReferenceSnapshot(input),
-    tier1Model: tier1ProjectId
-      ? (input = {}) => {
-        // The Tier 1 coordinator sends a structured semantic-checkpoint
-        // request, while a few injected test adapters pass the compact
-        // context shape directly. Accept both without dropping the exact
-        // reduction or protected references.
-        const context = input?.previous_checkpoint !== undefined || input?.deterministic_reduction !== undefined
-          ? {
-            previous: input.previous_checkpoint || null,
-            reduction: input.deterministic_reduction || {},
-            active: input.active_conversation || [],
-            currentPrompt: input.current_prompt_context_only || "",
-            workflow: input.current_workflow || input.workflow || null,
-            protectedRefs: input.authoritative_refs || [],
-            sourceBlocks: input.source_block_refs || input.sourceBlocks || [],
-            constraints: input.constraints || input.operator_constraints || input.operatorConstraints || [],
-            objective: input.objective || "",
-            decisions: input.decisions || [],
-          }
-          : input;
-        return runTier1CheckpointModel({
-          context,
-          model: String(payload.model || ""),
-          provider: String(payload.provider || getActiveProvider() || "ollama"),
-          reasoningEffort: payload.reasoningEffort,
-          retainSecrets: readProjectProfile(payload.workspace)?.profile?.dataHandling?.redactSecrets === false,
-        });
-      }
-      : null,
+    tier1Model: tier1ProjectId ? createTier1ModelCallback(payload) : null,
     workingReferences: [],
     toolMetadataForName: (name, childSessionId = sessionId) => container.mcpRuntime?.metadata?.(name, {
       workspace: payload.workspace,
@@ -3901,31 +3932,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     projectId: tier1ProjectId,
     precedingBlockId: payload.precedingBlockId || payload.preceding_block_id || "",
     tier1Context: tier1ProjectId ? container.memoryTier1Coordinator : null,
-    tier1Model: tier1ProjectId
-      ? (input = {}) => {
-        const context = input?.previous_checkpoint !== undefined || input?.deterministic_reduction !== undefined
-          ? {
-            previous: input.previous_checkpoint || null,
-            reduction: input.deterministic_reduction || {},
-            active: input.active_conversation || [],
-            currentPrompt: input.current_prompt_context_only || "",
-            workflow: input.current_workflow || input.workflow || null,
-            protectedRefs: input.authoritative_refs || [],
-            sourceBlocks: input.source_block_refs || input.sourceBlocks || [],
-            objective: input.objective || "",
-            constraints: input.constraints || input.operator_constraints || input.operatorConstraints || [],
-            decisions: input.decisions || [],
-          }
-          : input;
-        return runTier1CheckpointModel({
-          context,
-          model: String(payload.model || ""),
-          provider: String(payload.provider || getActiveProvider() || "ollama"),
-          reasoningEffort: payload.reasoningEffort,
-          retainSecrets: readProjectProfile(payload.workspace)?.profile?.dataHandling?.redactSecrets === false,
-        });
-      }
-      : null,
+    tier1Model: tier1ProjectId ? createTier1ModelCallback(payload) : null,
     memorySessionId: tier1ProjectId ? tier1SessionId : "",
     workingReferences,
     artifacts: container.projectArtifacts,

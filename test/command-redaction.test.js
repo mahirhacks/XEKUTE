@@ -154,6 +154,8 @@ test("the main-process summarizer request honors the project's Redact secrets se
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
   assert.match(main, /async function runTier1CheckpointModel\(\{ context = \{\}, model = "", provider = "", reasoningEffort = null, retainSecrets = false \} = \{\}\)/);
   assert.match(main, /redactToolCallMessages\(context\.active\.slice\(0, 500\), \{ retainSecrets \}\)/);
-  const passes = main.match(/retainSecrets: readProjectProfile\(payload\.workspace\)\?\.profile\?\.dataHandling\?\.redactSecrets === false,/g) || [];
-  assert.equal(passes.length, 2, "both adapter closures pass the setting");
+  assert.match(main, /const retainSecrets = readProjectProfile\(payload\.workspace\)\?\.profile\?\.dataHandling\?\.redactSecrets === false;/);
+  assert.match(main, /return runTier1CheckpointModel\(\{ context, \.\.\.common, retainSecrets \}\);/);
+  const users = main.match(/tier1Model: tier1ProjectId \? createTier1ModelCallback\(payload\) : null,/g) || [];
+  assert.equal(users.length, 2, "both agent run handlers use the one callback that reads the setting");
 });

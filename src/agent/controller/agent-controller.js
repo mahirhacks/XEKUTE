@@ -1091,6 +1091,8 @@ async function runAgentTurn({
         allow_model: typeof tier1Model === "function",
         reason,
         scope_check: tier1ScopeCheck(),
+        // How much of the summarizer's input window the request may use.
+        summarizer_input_tokens: contextPlan?.provider === "openrouter" ? 60_000 : 20_000,
       });
       if (checkpoint?.ok) {
         const screenshotExchanges = browserImageTokens(tier1Active) > 0
@@ -1112,6 +1114,7 @@ async function runAgentTurn({
           pressureTokens: pressure.totalTokens,
           modelUsed: checkpoint.modelUsed || "",
           fallbackCode: checkpoint.semanticCode || "",
+          modelStats: checkpoint.modelStats || null,
           trimmed: checkpoint.trimmed || {},
           checkpointId: checkpoint.checkpoint?.checkpoint_id || "",
           checkpointRevision: checkpoint.checkpoint?.checkpoint_id || "",
