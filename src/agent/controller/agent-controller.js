@@ -1048,7 +1048,10 @@ async function runAgentTurn({
     }
     return { ok: true, pressure };
   };
-  const checkpointTier1IfNeeded = async ({ force = false, reason = "iteration" } = {}) => {
+  // `midTask` marks a checkpoint that fires while the task is still running, as
+  // opposed to one at a real boundary (end of turn). It is reported so the timing
+  // of checkpoints can be measured before any new trigger is built.
+  const checkpointTier1IfNeeded = async ({ force = false, reason = "iteration", midTask = false } = {}) => {
     if (!useTier1 || tier1CheckpointInFlight) return tier1CheckpointInFlight || { ok: true, checkpointed: false, skipped: true };
     // Reassemble immediately before measuring pressure.  Tool results and
     // assistant messages are appended between model iterations; measuring the
@@ -1060,7 +1063,7 @@ async function runAgentTurn({
     const pressure = tier1PressureFor(refreshedBeforePressure);
     if (!force && !pressure.shouldCheckpoint) return { ok: true, checkpointed: false, pressure };
     tier1CheckpointInFlight = (async () => {
-      sendEvent({ type: "context_checkpoint", status: "started", reason, threshold: pressure.threshold, totalTokens: pressure.totalTokens });
+      sendEvent({ type: "context_checkpoint", status: "started", reason, midTask, threshold: pressure.threshold, totalTokens: pressure.totalTokens });
       const checkpoint = await tier1Context.checkpoint({
         project_id: tier1ProjectId,
         session_id: resolvedTier1SessionId,
@@ -1077,6 +1080,7 @@ async function runAgentTurn({
         // reducer inside the coordinator.
         model: typeof tier1Model === "function" ? tier1Model : null,
         allow_model: typeof tier1Model === "function",
+        reason,
       });
       if (checkpoint?.ok) {
         const screenshotExchanges = browserImageTokens(tier1Active) > 0
@@ -1094,6 +1098,11 @@ async function runAgentTurn({
           type: "context_checkpoint",
           status: "completed",
           reason,
+          midTask,
+          pressureTokens: pressure.totalTokens,
+          modelUsed: checkpoint.modelUsed || "",
+          fallbackCode: checkpoint.semanticCode || "",
+          trimmed: checkpoint.trimmed || {},
           checkpointId: checkpoint.checkpoint?.checkpoint_id || "",
           checkpointRevision: checkpoint.checkpoint?.checkpoint_id || "",
           activeConversationTokens: usageSectionTokens(usage, "active_conversation"),
@@ -1103,7 +1112,7 @@ async function runAgentTurn({
         });
         if (usage) sendEvent({ type: "context_usage", usage });
       } else {
-        sendEvent({ type: "context_checkpoint", status: "failed", reason, code: checkpoint?.code || "MEMORY_CHECKPOINT_FAILED" });
+        sendEvent({ type: "context_checkpoint", status: "failed", reason, midTask, pressureTokens: pressure.totalTokens, code: checkpoint?.code || "MEMORY_CHECKPOINT_FAILED", trimmed: checkpoint?.trimmed || {} });
       }
       return { ...checkpoint, pressure };
     })().finally(() => { tier1CheckpointInFlight = null; });
@@ -1259,7 +1268,7 @@ async function runAgentTurn({
 
   const compactForNextRound = async ({ reason = "context_overflow" } = {}) => {
     if (useTier1) {
-      const checkpoint = await checkpointTier1IfNeeded({ force: true, reason });
+      const checkpoint = await checkpointTier1IfNeeded({ force: true, reason, midTask: true });
       if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
     }
     const dropUnusedMcpIfProtectedOverflow = () => {
@@ -1371,7 +1380,7 @@ async function runAgentTurn({
       const pressure = tier1PressureFor(refreshed);
       if (pressure.protectedOverflow) applyToolCatalog(keepNativeAndRecentTools(availableTools, recentToolNames()));
       if (pressure.shouldCheckpoint && tier1Active.length) {
-        const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call" });
+        const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call", midTask: true });
         if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
       }
     }
@@ -1816,7 +1825,7 @@ async function runAgentTurn({
         try { tier1Context.setActiveConversation(tier1ProjectId, resolvedTier1SessionId, tier1Active); } catch { /* local ledger remains authoritative */ }
         publishTier1Meter();
       }
-      const tier1Checkpoint = useTier1 ? await checkpointTier1IfNeeded({ reason: "block_complete" }) : null;
+      const tier1Checkpoint = useTier1 ? await checkpointTier1IfNeeded({ reason: "block_complete", midTask: true }) : null;
       if (tier1Checkpoint?.ok === false) noteLimitation(tier1Checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
       if (signal?.aborted) {
         AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
@@ -2230,7 +2239,7 @@ async function runAgentTurn({
     await checkpointRun({ round, actionCount: actionResults.length, status: stoppedToolBatch ? "stopped" : "running", accounting: accounting.snapshot(), checkpoint: { phase: runState.phase, toolCount: runState.toolCount, failedToolCount: runState.failedToolCount, ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
     if (stoppedToolBatch) return abortTurnResult();
     if (useTier1 && tier1ExecutedThisRound) {
-      const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results" });
+      const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results", midTask: true });
       if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
     }
     if (signal?.aborted) return abortTurnResult();

@@ -28,7 +28,7 @@ function redactText(value, maximum = 8_000, retainSecrets = false) {
     .slice(0, maximum);
 }
 
-function sanitizeValue(value, key = "", depth = 0, seen = new WeakSet(), retainSecrets = false) {
+function sanitizeValue(value, key = "", depth = 0, seen = new WeakSet(), retainSecrets = false, maxItems = 100) {
   if (depth > 10) return "[OMITTED_TOO_DEEP]";
   if (!retainSecrets && /(?:cookie|authorization|access[_-]?token|refresh[_-]?token|csrf|secret|password|private[_-]?key|passphrase|credential|raw[_-]?value)/i.test(String(key))) return undefined;
   if (value == null || typeof value === "boolean" || typeof value === "number") return value;
@@ -36,10 +36,10 @@ function sanitizeValue(value, key = "", depth = 0, seen = new WeakSet(), retainS
   if (typeof value !== "object") return redactText(value, 2_000);
   if (seen.has(value)) return "[CIRCULAR]";
   seen.add(value);
-  if (Array.isArray(value)) return value.slice(0, 100).map((entry) => sanitizeValue(entry, "", depth + 1, seen, retainSecrets)).filter((entry) => entry !== undefined);
+  if (Array.isArray(value)) return value.slice(0, maxItems).map((entry) => sanitizeValue(entry, "", depth + 1, seen, retainSecrets, maxItems)).filter((entry) => entry !== undefined);
   const result = {};
   for (const [childKey, child] of Object.entries(value).slice(0, 100)) {
-    const safe = sanitizeValue(child, childKey, depth + 1, seen, retainSecrets);
+    const safe = sanitizeValue(child, childKey, depth + 1, seen, retainSecrets, maxItems);
     if (safe !== undefined) result[redactText(childKey, 120)] = safe;
   }
   return result;
@@ -61,6 +61,51 @@ function truncateText(value, maximum) {
   const text = String(value == null ? "" : value);
   if (text.length <= maximum) return text;
   return `${text.slice(0, Math.max(0, maximum - 40))}\n[deterministically truncated]`;
+}
+// The objective is the run's inputs joined in time order, so the newest steering
+// sits at the end. Cutting only the tail of the text would remove exactly that.
+function truncateHeadTail(value, maximum) {
+  const text = String(value == null ? "" : value);
+  if (text.length <= maximum) return text;
+  const marker = "\n[middle deterministically truncated]\n";
+  const room = Math.max(0, maximum - marker.length);
+  const head = Math.ceil(room / 2);
+  return `${text.slice(0, head)}${marker}${text.slice(text.length - (room - head))}`;
+}
+// Chronological lists keep the newest entries. A value that is repeated moves to
+// the position of its last occurrence, so re-stating a fact keeps it fresh.
+function keepNewest(values, maximum) {
+  const limit = Math.floor(Number(maximum));
+  if (!Array.isArray(values) || !(limit > 0)) return [];
+  const seen = new Set();
+  const kept = [];
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (values[index] == null) continue;
+    const value = String(values[index]);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    kept.push(value);
+    if (kept.length === limit) break;
+  }
+  return kept.reverse();
+}
+// What one reduction adds to a checkpoint, apart from what the previous
+// checkpoint already holds.
+function freshRecords({ reduction, constraints, decisions, workflow } = {}) {
+  const list = (value) => (Array.isArray(value) ? value : []);
+  const facts = [];
+  for (const message of list(reduction?.messages)) {
+    if (message.tombstone && message.content) facts.push(`Released work: ${truncateText(message.content, 1_900)}`);
+    else if (message.role === "user" && message.content) facts.push(`User request: ${truncateText(message.content, 1_900)}`);
+  }
+  for (const event of list(reduction?.tool_events)) if (event.tool_name) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.${event.safe_excerpt ? ` Result: ${truncateText(event.safe_excerpt, 1_000)}` : ""}`);
+  return {
+    facts,
+    events: list(reduction?.tool_events).filter((event) => event.tool_name).map((event) => `${event.tool_name}: ${event.outcome}`),
+    constraints: list(constraints).map(String),
+    decisions: list(decisions).map(String),
+    unresolved: workflow?.continuation_point?.next_action ? [workflow.continuation_point.next_action] : [],
+  };
 }
 
 const IPV4_PATTERN = /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g;
@@ -482,17 +527,14 @@ function createTier1ContextCoordinator({
       const content = redactText(message?.content || "", 4_000, retainSecrets);
       normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80), ...(message?.block_tombstone === true ? { tombstone: true } : {}) });
     }
-    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || ""), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
+    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || "").slice(0, 120), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
     return { messages: normalized, tool_events: eventSummary, message_count: normalized.length, event_count: eventSummary.length, digest: canonicalKeyHash({ messages: normalized, tool_events: eventSummary }) };
   }
 
   function deterministicFallback({ projectId, sessionId, previous, reduction, workflow, objective, constraints, decisions, protectedRefs, sourceBlocks, limit }) {
     const max = summaryBudget(limit);
-    const facts = [];
-    for (const message of reduction.messages) if (message.tombstone && message.content) facts.push(`Released work: ${truncateText(message.content, 1_900)}`);
-    else if (message.role === "user" && message.content) facts.push(`User request: ${truncateText(message.content, 1_900)}`);
-    for (const event of reduction.tool_events) if (event.tool_name) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.${event.safe_excerpt ? ` Result: ${truncateText(event.safe_excerpt, 1_000)}` : ""}`);
-    const previousFacts = Array.isArray(previous?.grounded_facts) ? previous.grounded_facts : [];
+    const fresh = freshRecords({ reduction, constraints, decisions, workflow });
+    const earlier = (field) => (Array.isArray(previous?.[field]) ? previous[field] : []);
     // A deterministic fallback is deliberately content addressed.  If the
     // provider is unavailable and the same ledger is retried, the checkpoint
     // identity must remain stable so a retry cannot create two semantic
@@ -519,13 +561,13 @@ function createTier1ContextCoordinator({
       session_id: sessionId,
       previous_checkpoint_id: previous?.checkpoint_id || null,
       transcript_boundary: Number(previous?.transcript_boundary || 0) + reduction.message_count,
-      objective: truncateText(objective || previous?.objective || "", 8_000),
-      constraints: [...new Set([...(Array.isArray(previous?.constraints) ? previous.constraints : []), ...(Array.isArray(constraints) ? constraints : [])].map(String))].slice(0, 200),
-      decisions: [...new Set([...(Array.isArray(previous?.decisions) ? previous.decisions : []), ...(Array.isArray(decisions) ? decisions : [])].map(String))].slice(0, 200),
-      grounded_facts: [...new Set([...previousFacts, ...facts].map(String))].slice(0, 300),
-      significant_events: reduction.tool_events.map((event) => `${event.tool_name}: ${event.outcome}`).slice(0, 300),
+      objective: truncateHeadTail(objective || previous?.objective || "", 8_000),
+      constraints: keepNewest([...earlier("constraints"), ...fresh.constraints], 200),
+      decisions: keepNewest([...earlier("decisions"), ...fresh.decisions], 200),
+      grounded_facts: keepNewest([...earlier("grounded_facts"), ...fresh.facts], 300),
+      significant_events: keepNewest([...earlier("significant_events"), ...fresh.events], 300),
       unverified_claims: [],
-      unresolved_work: workflow?.continuation_point ? [workflow.continuation_point.next_action] : [],
+      unresolved_work: keepNewest([...earlier("unresolved_work"), ...fresh.unresolved], 200),
       workflow_continuity: workflow,
       protected_refs: [...new Set((Array.isArray(protectedRefs) ? protectedRefs : []).filter(Boolean))].slice(0, 500),
       source_block_refs: [...new Set((Array.isArray(sourceBlocks) ? sourceBlocks : []).filter(Boolean))].slice(0, 500),
@@ -535,9 +577,9 @@ function createTier1ContextCoordinator({
     };
     const rendered = JSON.stringify(summary);
     if (rendered.length > max * 4) {
-      summary.grounded_facts = summary.grounded_facts.slice(0, 100);
-      summary.significant_events = summary.significant_events.slice(0, 100);
-      summary.decisions = summary.decisions.slice(0, 80);
+      summary.grounded_facts = summary.grounded_facts.slice(-100);
+      summary.significant_events = summary.significant_events.slice(-100);
+      summary.decisions = summary.decisions.slice(-80);
     }
     const hashInput = { ...summary };
     delete hashInput.content_hash;
@@ -545,21 +587,32 @@ function createTier1ContextCoordinator({
     return summary;
   }
 
-  function fitCheckpointToBudget(value, limit) {
+  // Fits a checkpoint into its token budget. Historical detail goes first and the
+  // OLDEST entries go before the newest. Constraints are operator restrictions:
+  // they are shortened as a last resort and never removed, and a checkpoint that
+  // still does not fit is refused (null) so the caller keeps the live ledger.
+  // `stats` receives how much was removed so the loss is observable.
+  function fitCheckpointToBudget(value, limit, stats = null) {
     const maximum = summaryBudget(limit);
     const candidate = clone(value);
     const measured = () => approximateTokens(candidate);
-    // Remove low-value historical detail first.  Objective, decisions,
-    // unresolved work, workflow continuity, and protected references are
-    // retained until the last possible moment because they are the fields
-    // required to continue safely after a rotation.
-    const discardable = ["significant_events", "grounded_facts", "unverified_claims"];
-    for (const field of discardable) {
-      while (measured() > maximum && Array.isArray(candidate[field]) && candidate[field].length) candidate[field].pop();
-    }
-    for (const field of ["constraints", "decisions", "unresolved_work"]) {
-      while (measured() > maximum && Array.isArray(candidate[field]) && candidate[field].length > 1) candidate[field].pop();
-    }
+    const jsonBytes = (item) => Buffer.byteLength(JSON.stringify(item), "utf8");
+    let bytes = jsonBytes(candidate);
+    const over = () => Math.ceil(bytes / 3.6) > maximum;
+    const shedOldest = (field, floor) => {
+      const values = candidate[field];
+      if (!Array.isArray(values)) return;
+      let drop = 0;
+      while (over() && values.length - drop > floor) { bytes -= jsonBytes(values[drop]) + 1; drop += 1; }
+      if (!drop) return;
+      values.splice(0, drop);
+      if (stats) stats[field] = (stats[field] || 0) + drop;
+    };
+    shedOldest("unverified_claims", 0);
+    shedOldest("grounded_facts", 0);
+    shedOldest("significant_events", 0);
+    shedOldest("decisions", 1);
+    shedOldest("unresolved_work", 1);
     if (measured() > maximum && candidate.workflow_continuity) {
       const workflowValue = candidate.workflow_continuity;
       for (const step of Array.isArray(workflowValue.steps) ? workflowValue.steps : []) {
@@ -571,9 +624,14 @@ function createTier1ContextCoordinator({
       workflowValue.blockers = (workflowValue.blockers || []).slice(0, 10).map((entry) => truncateText(entry, 240));
     }
     if (measured() > maximum) {
-      candidate.objective = truncateText(candidate.objective, 1_000);
+      candidate.objective = truncateHeadTail(candidate.objective, 1_000);
       candidate.decisions = (candidate.decisions || []).map((entry) => truncateText(entry, 320));
       candidate.unresolved_work = (candidate.unresolved_work || []).map((entry) => truncateText(entry, 320));
+    }
+    for (const width of [240, 120]) {
+      if (measured() <= maximum) break;
+      candidate.constraints = (candidate.constraints || []).map((entry) => truncateText(entry, width));
+      if (stats) stats.constraintsTruncated = width;
     }
     return measured() <= maximum ? candidate : null;
   }
@@ -678,48 +736,56 @@ function createTier1ContextCoordinator({
     return (words.length <= 3 && overlap >= 1) || (overlap >= 2 && overlap / words.length >= 0.34);
   }
 
-  function normalizeSemanticField(values, corpus, { fallback = [], allowUnsupported = false, retainSecrets = false } = {}) {
+  // Returns the model's values that have enough lexical support in the source
+  // reduction, and routes the rest to the non-authoritative unverified list.
+  function normalizeSemanticField(values, corpus, { allowUnsupported = false, retainSecrets = false } = {}) {
     const safe = [];
     const unsupported = [];
-    const source = Array.isArray(values) ? values : [];
-    for (const raw of source) {
+    for (const raw of Array.isArray(values) ? values : []) {
       const value = redactText(raw, 2_000, retainSecrets);
       if (!value) continue;
       if (allowUnsupported || semanticValueIsGrounded(value, corpus)) safe.push(value);
       else unsupported.push(value);
     }
-    for (const raw of Array.isArray(fallback) ? fallback : []) {
-      const value = redactText(raw, 2_000, retainSecrets);
-      if (value) safe.push(value);
-    }
-    return { values: [...new Set(safe)].slice(0, 300), unsupported: [...new Set(unsupported)].slice(0, 200) };
+    return { values: [...new Set(safe)], unsupported: keepNewest(unsupported, 200) };
   }
 
   function checkpointCandidate(raw, context, generatedBy = "model") {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const fallback = deterministicFallback(context);
-    const safeRaw = sanitizeValue(raw, "", 0, new WeakSet(), context?.retainSecrets === true) || {};
+    // A model may return a full checkpoint, so its arrays get the largest cap any
+    // field has instead of the default 100 that would cut the newest entries.
+    const safeRaw = sanitizeValue(raw, "", 0, new WeakSet(), context?.retainSecrets === true, 300) || {};
     const candidate = { ...fallback, ...safeRaw, schema_version: 3, project_id: context.projectId, session_id: context.sessionId, generated_by: generatedBy };
     const corpus = semanticCorpus(context);
     const retainSecrets = context?.retainSecrets === true;
-    const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpus, { fallback: fallback.grounded_facts, retainSecrets });
-    const constraints = normalizeSemanticField(candidate.constraints, corpus, { fallback: fallback.constraints, retainSecrets });
-    const decisions = normalizeSemanticField(candidate.decisions, corpus, { fallback: fallback.decisions, retainSecrets });
-    const significantEvents = normalizeSemanticField(candidate.significant_events, corpus, { fallback: fallback.significant_events, retainSecrets });
-    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpus, { fallback: fallback.unresolved_work, retainSecrets });
-    candidate.grounded_facts = groundedFacts.values;
-    candidate.constraints = constraints.values;
-    candidate.decisions = decisions.values;
-    candidate.significant_events = significantEvents.values;
-    candidate.unresolved_work = unresolvedWork.values;
-    candidate.unverified_claims = [...new Set([
+    const fresh = freshRecords(context);
+    const earlier = (field) => (Array.isArray(context.previous?.[field]) ? context.previous[field] : []);
+    const clean = (list) => list.map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean);
+    // Order is previous, then what only the model added, then this reduction's own
+    // records, so a trim by cap or budget always removes the oldest first.
+    const merge = (field, modelValues, freshValues, maximum) => {
+      const known = new Set([...clean(earlier(field)), ...clean(freshValues)]);
+      return keepNewest([...clean(earlier(field)), ...modelValues.filter((value) => !known.has(value)), ...clean(freshValues)], maximum);
+    };
+    const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpus, { retainSecrets });
+    const constraints = normalizeSemanticField(candidate.constraints, corpus, { retainSecrets });
+    const decisions = normalizeSemanticField(candidate.decisions, corpus, { retainSecrets });
+    const significantEvents = normalizeSemanticField(candidate.significant_events, corpus, { retainSecrets });
+    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpus, { retainSecrets });
+    candidate.grounded_facts = merge("grounded_facts", groundedFacts.values, fresh.facts, 300);
+    candidate.constraints = merge("constraints", constraints.values, fresh.constraints, 200);
+    candidate.decisions = merge("decisions", decisions.values, fresh.decisions, 200);
+    candidate.significant_events = merge("significant_events", significantEvents.values, fresh.events, 300);
+    candidate.unresolved_work = merge("unresolved_work", unresolvedWork.values, fresh.unresolved, 200);
+    candidate.unverified_claims = keepNewest([
       ...(Array.isArray(candidate.unverified_claims) ? candidate.unverified_claims : []),
       ...groundedFacts.unsupported,
       ...constraints.unsupported,
       ...decisions.unsupported,
       ...significantEvents.unsupported,
       ...unresolvedWork.unsupported,
-    ].map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean))].slice(0, 200);
+    ].map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean), 200);
     // These fields are runtime continuity, not model prose.  Pin them to the
     // deterministic reduction so a model cannot move the transcript boundary,
     // replace the checkpoint lineage, drop protected references, or invent a
@@ -730,7 +796,6 @@ function createTier1ContextCoordinator({
     candidate.objective = fallback.objective;
     candidate.protected_refs = clone(fallback.protected_refs);
     candidate.source_block_refs = clone(fallback.source_block_refs);
-    candidate.unresolved_work = [...new Set([...(fallback.unresolved_work || []), ...(Array.isArray(candidate.unresolved_work) ? candidate.unresolved_work : [])].map(String))].slice(0, 200);
     // The structured workflow record is produced by the deterministic
     // reducer.  Preserve the model's semantic fields, but never allow it to
     // author an alternate execution state or continuation point.
@@ -748,10 +813,23 @@ function createTier1ContextCoordinator({
     // redacted, bounded projection to the semantic model.  This is enforced
     // here as well as in the Electron adapter so injected/provider-specific
     // model callbacks cannot accidentally receive raw credentials.
+    // sanitizeValue caps every array, and it keeps the first entries. A long
+    // ledger would therefore reach the model as its oldest messages only, so the
+    // newest window is cut first and the omitted count is stated.
+    const newest = (list, count = 100) => {
+      const items = Array.isArray(list) ? list : [];
+      return items.length > count ? { items: items.slice(-count), omitted: items.length - count } : { items, omitted: 0 };
+    };
+    const messageWindow = newest(context.reduction?.messages);
+    const eventWindow = newest(context.reduction?.tool_events);
+    const activeWindow = newest(context.active);
+    const previousWindow = context.previous ? { ...context.previous } : null;
+    if (previousWindow) for (const field of ["grounded_facts", "significant_events", "constraints", "decisions", "unresolved_work", "unverified_claims"]) previousWindow[field] = newest(previousWindow[field]).items;
     const payload = sanitizeValue({
-      previous_checkpoint: context.previous || null,
-      deterministic_reduction: context.reduction,
-      active_conversation: redactToolCallMessages(context.active, { retainSecrets: context?.retainSecrets === true }),
+      previous_checkpoint: previousWindow,
+      deterministic_reduction: context.reduction ? { ...context.reduction, messages: messageWindow.items, tool_events: eventWindow.items } : context.reduction,
+      active_conversation: redactToolCallMessages(activeWindow.items, { retainSecrets: context?.retainSecrets === true }),
+      omitted_before: { messages: messageWindow.omitted, tool_events: eventWindow.omitted, active_conversation: activeWindow.omitted },
       current_prompt_context_only: context.currentPrompt,
       current_workflow: context.workflow || null,
       objective: context.objective || "",
@@ -810,7 +888,7 @@ function createTier1ContextCoordinator({
       if (!grounding.ok) validation = { ok: false, error: grounding };
       if (!validation.ok || !fitCheckpointToBudget(candidate, context.limit)) return { ok: false, code: "MEMORY_CHECKPOINT_OUTPUT_INVALID", details: validation.error?.details || [] };
     } else {
-      candidate = fitCheckpointToBudget(candidate, context.limit);
+      candidate = fitCheckpointToBudget(candidate, context.limit, context.trimStats);
     }
     if (!candidate) return { ok: false, code: "MEMORY_CHECKPOINT_OUTPUT_INVALID", details: [] };
     // Fitting changes the serialized content, so recalculate the content
@@ -859,7 +937,8 @@ function createTier1ContextCoordinator({
     const rawProtectedRefs = input.protected_refs || input.protectedRefs || [];
     const rawSourceBlocks = input.source_block_refs || input.sourceBlockRefs || [];
     const rawConstraints = input.constraints || input.operator_constraints || input.operatorConstraints || [];
-    const objective = redactText(input.objective || "", 8_000, retainSecrets);
+    // The objective keeps its head and its tail: its tail holds the newest steering.
+    const objective = truncateHeadTail(redactText(input.objective || "", 100_000, retainSecrets), 8_000);
     const suppliedWorkflow = input.current_workflow === undefined ? state.workflow : input.current_workflow;
     const workflow = normalizeWorkflow(suppliedWorkflow || {
       state: objective ? "active" : "idle",
@@ -885,11 +964,16 @@ function createTier1ContextCoordinator({
       limit: Number(input.effective_context_limit || input.effectiveContextLimit || 1_000_000),
       model: input.model,
       retainSecrets,
+      trimStats: {},
     };
     let semantic = null;
     if (input.allow_model !== false && input.reason !== "emergency") semantic = await semanticCheckpoint(context);
     let checkpointValue = semantic?.ok ? semantic.checkpoint : deterministicFallback(context);
-    checkpointValue = fitCheckpointToBudget(checkpointValue, context.limit);
+    checkpointValue = fitCheckpointToBudget(checkpointValue, context.limit, context.trimStats);
+    // A summary that cannot fit its budget is refused and the live ledger is
+    // kept. Silently dropping an operator restriction to make it fit would be
+    // worse than failing this checkpoint.
+    if (!checkpointValue) return { ok: false, code: "MEMORY_CHECKPOINT_BUDGET_EXCEEDED", error: "The checkpoint exceeds its adaptive budget.", details: [], activePreserved: true, trimmed: context.trimStats };
     if (checkpointValue) {
       const hashInput = { ...checkpointValue };
       delete hashInput.content_hash;
@@ -916,7 +1000,7 @@ function createTier1ContextCoordinator({
     // The workflow visible in Tier 1 changes only at this checkpoint boundary.
     state.workflow = checkpointValue.workflow_continuity?.state === "completed" ? null : clone(checkpointValue.workflow_continuity);
     syncMeter(projectId, sessionId, ["Summarized Conversation", "Active Conversation", "Current Workflow"]);
-    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic" };
+    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", trimmed: context.trimStats };
   }
 
   function appendConversation(projectId, sessionId, messages) {
@@ -1094,4 +1178,4 @@ function createTier1ContextCoordinator({
   return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, evictBlocks, recallBlock, pinBlock, clear, clearProject });
 }
 
-module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, METER_ROWS });
+module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, keepNewest, METER_ROWS });
