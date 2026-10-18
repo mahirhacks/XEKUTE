@@ -72,7 +72,7 @@ const { createMainLog } = require("./main-log.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { isMemoryId } = require("../../contracts/memory/index.js");
-const { redactStructuredValue } = require("../../shared/secret-redaction.js");
+const { redactStructuredValue, redactToolCallMessages } = require("../../shared/secret-redaction.js");
 
 // Build the model-facing catalog from the canonical tool registry.
 function toolCatalogFromRegistry(registry) {
@@ -3379,7 +3379,7 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
     required_contract: "ConversationCheckpointV3",
     previous_checkpoint: context.previous || null,
     deterministic_reduction: context.reduction || {},
-    active_conversation: Array.isArray(context.active) ? context.active.slice(0, 500) : [],
+    active_conversation: Array.isArray(context.active) ? redactToolCallMessages(context.active.slice(0, 500)) : [],
     current_prompt_context_only: String(context.currentPrompt || "").slice(0, 2_000),
     current_workflow: context.workflow || null,
     constraints: Array.isArray(context.constraints) ? context.constraints.slice(0, 200) : [],

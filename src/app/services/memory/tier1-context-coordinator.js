@@ -4,6 +4,7 @@ const nodeCrypto = require("node:crypto");
 const { canonicalJson, canonicalKeyHash, isMemoryId } = require("../../../contracts/memory/index.js");
 const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/schema-registry.js");
 const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = require("../../storage/memory/memory-storage-utils.js");
+const { redactToolCallMessages } = require("../../../shared/secret-redaction.js");
 
 const SUMMARY_MAX = 32_768;
 const SUMMARY_RATIO = 0.05;
@@ -750,7 +751,7 @@ function createTier1ContextCoordinator({
     const payload = sanitizeValue({
       previous_checkpoint: context.previous || null,
       deterministic_reduction: context.reduction,
-      active_conversation: context.active,
+      active_conversation: redactToolCallMessages(context.active, { retainSecrets: context?.retainSecrets === true }),
       current_prompt_context_only: context.currentPrompt,
       current_workflow: context.workflow || null,
       objective: context.objective || "",
