@@ -98,7 +98,7 @@ function createProxyBrowserService({
   onStatus = () => {},
 } = {}) {
   if (!profilesDirectory) throw new TypeError("Proxy browser profilesDirectory is required.");
-  const provider = chromium || require("playwright-core").chromium;
+  const provider = () => chromium || require("playwright-core").chromium;
   const contexts = new Map();
 
   function workspaceKey(workspace) {
@@ -248,10 +248,10 @@ function createProxyBrowserService({
     try {
       let context;
       try {
-        context = await provider.launchPersistentContext(userDataDir, launchOptions);
+        context = await provider().launchPersistentContext(userDataDir, launchOptions);
       } catch (firstError) {
         try {
-          context = await provider.launchPersistentContext(userDataDir, { ...launchOptions, chromiumSandbox: false });
+          context = await provider().launchPersistentContext(userDataDir, { ...launchOptions, chromiumSandbox: false });
         } catch {
           throw firstError;
         }

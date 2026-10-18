@@ -26,6 +26,7 @@ const EXACT_BOUND_FIELDS = Object.freeze([
   // may inherit it, but can never replace it with another project or block.
   "memoryContext",
   "artifactProvenance",
+  "browserSessionId",
 ]);
 
 const RAW_TOOL_CONTEXT_FIELDS = Object.freeze([
@@ -33,6 +34,7 @@ const RAW_TOOL_CONTEXT_FIELDS = Object.freeze([
   "toolName",
   "workspace",
   "sessionId",
+  "browserSessionId",
   "mode",
   "identityContext",
   "delegationContext",
@@ -82,7 +84,7 @@ function validateExecutionContext(input) {
     }
   }
 
-  for (const field of ["parentInvocationId"]) {
+  for (const field of ["parentInvocationId", "browserSessionId"]) {
     if (input[field] !== undefined && (typeof input[field] !== "string" || input[field].trim() === "")) {
       return failure(CONTEXT_ERROR_CODES.INVALID_FIELD, `${field} must be a non-empty string when provided`);
     }

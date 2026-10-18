@@ -9,6 +9,37 @@ const { resolveShellInvocation } = require("../../../agent/tools/process/exec-co
 const { MAX_COMMAND_SLOTS } = require("../../../agent/tools/process/command-queue.js");
 const { redactSecrets } = require("../../../shared/secret-redaction.js");
 const { sampleProcessTree } = require("./process-tree-sampler.js");
+const { atomicWriteText } = require("../../storage/memory/memory-storage-utils.js");
+
+function createEncryptedProcessHandleStore({ baseDir, protector, fsImpl = fs, pathImpl = path } = {}) {
+  if (!baseDir || !protector) throw new TypeError("A protected process handle directory and protector are required.");
+  function fileFor(workspace) {
+    const digest = crypto.createHash("sha256").update(pathImpl.resolve(workspace)).digest("hex");
+    return pathImpl.join(pathImpl.resolve(baseDir), `${digest}.enc.json`);
+  }
+  function requireProtection() {
+    if (!protector.available?.()) throw Object.assign(new Error("Protected process metadata storage is unavailable."), { code: "PROCESS_SECURE_STORAGE_UNAVAILABLE" });
+  }
+  return {
+    read(workspace) {
+      requireProtection();
+      const file = fileFor(workspace);
+      if (!fsImpl.existsSync(file)) return [];
+      const envelope = JSON.parse(fsImpl.readFileSync(file, "utf8"));
+      if (envelope.version !== 1 || envelope.encrypted !== true) throw new Error("Invalid protected process metadata.");
+      const value = JSON.parse(protector.decrypt(envelope.payload));
+      if (value.workspace !== pathImpl.resolve(workspace) || !Array.isArray(value.handles)) throw new Error("Process metadata belongs to another workspace.");
+      return value.handles;
+    },
+    write(workspace, handles) {
+      requireProtection();
+      const encrypted = protector.encrypt(JSON.stringify({ workspace: pathImpl.resolve(workspace), handles }));
+      const payload = Buffer.isBuffer(encrypted) ? encrypted.toString("base64") : String(encrypted);
+      atomicWriteText({ fs: fsImpl, path: pathImpl, crypto }, fileFor(workspace), JSON.stringify({ version: 1, encrypted: true, payload }), { backup: false, strictAtomic: true });
+      return { ok: true, encrypted: true, durable: true };
+    },
+  };
+}
 
 const DEFAULT_MONITOR_INTERVAL_MS = 30_000;
 const DEFAULT_OUTPUT_POLL_MS = 250;
@@ -28,20 +59,56 @@ function createDurableProcessManager({
   outputPollMs = DEFAULT_OUTPUT_POLL_MS,
   reviewIntervalMs = DEFAULT_REVIEW_INTERVAL_MS,
   cpuCount = Math.max(1, os.cpus?.().length || 1),
+  handleStore = null,
 } = {}) {
+  const managerId = crypto.randomUUID();
   const live = new Map();
   const records = new Map();
   const commandQueues = new Map();
   const queuedTasks = new Map();
   const launchingSlots = new Map();
+  const launchingTasks = new Map();
+  const loadedWorkspaces = new Set();
+  const persistedHandles = new Map();
+  function handleMetadata(record) {
+    const fields = ["id", "pid", "status", "sessionId", "runId", "operationId", "inputHash", "managerId", "startedAt", "queuedAt", "completedAt", "terminationReason", "exitCode", "signal"];
+    return Object.fromEntries(fields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]]));
+  }
+  function loadRecords(workspace) {
+    const root = pathImpl.resolve(workspace);
+    if (loadedWorkspaces.has(root)) return;
+    const restored = handleStore?.read(root) || [];
+    for (const value of restored) {
+      if (!value || !/^process-[a-zA-Z0-9-]+$/.test(value.id) || typeof value.status !== "string") throw new Error("Invalid persisted process handle.");
+      const record = { ...handleMetadata(value), command: "", cwd: root, stdoutFile: "", stderrFile: "", stdout: "", stderr: "" };
+      if (["running", "starting", "queued"].includes(record.status)) {
+        record.status = "reconciliation_required";
+        record.reconciliation = "The previous host's process handle is unavailable. A PID alone does not prove process identity or authorize replay.";
+      }
+      records.set(recordKey(root, record.id), record);
+    }
+    loadedWorkspaces.add(root);
+  }
 
   function rootFor(workspace) {
     const digest = crypto.createHash("sha256").update(pathImpl.resolve(workspace)).digest("hex").slice(0, 16);
     return pathImpl.join(os.tmpdir(), "xekute-processes", digest);
   }
   function recordKey(workspace, id) { return `${pathImpl.resolve(workspace)}::${id}`; }
-  function writeRecord(workspace, record) { records.set(recordKey(workspace, record.id), record); }
+  function writeRecord(workspace, record) {
+    loadRecords(workspace);
+    records.set(recordKey(workspace, record.id), record);
+    if (!handleStore) return;
+    const root = pathImpl.resolve(workspace);
+    const handles = [...records.entries()].filter(([key]) => key.startsWith(`${root}::`)).map(([, value]) => handleMetadata(value));
+    const signature = JSON.stringify(handles);
+    if (persistedHandles.get(root) === signature) return;
+    const result = handleStore.write(root, handles);
+    if (result?.ok !== true || result.encrypted !== true || result.durable !== true) throw Object.assign(new Error("The process handle was not durably encrypted."), { code: "PROCESS_METADATA_WRITE_FAILED" });
+    persistedHandles.set(root, signature);
+  }
   function readRecord(workspace, id) {
+    loadRecords(workspace);
     return records.get(recordKey(workspace, id)) || live.get(id)?.record || null;
   }
   function isAlive(pid) {
@@ -148,6 +215,8 @@ function createDurableProcessManager({
     delete projected.logsUnlinked;
     delete projected.retainedStdout;
     delete projected.retainedStderr;
+    delete projected.managerId;
+    delete projected.inputHash;
     if (projected.metrics) projected.metrics = projectMetrics(projected.metrics);
     if (projected.health && typeof projected.health === "object") projected.health = projectMetrics(projected.health);
     if (!projected.processId && projected.id) projected.processId = projected.id;
@@ -157,7 +226,8 @@ function createDurableProcessManager({
     if (!result?.value) return result;
     return { ...result, value: projectAgentFacing({ ...result.value }) };
   }
-  function listInternal(workspace, sessionId = "") {
+  function listInternal(workspace, sessionId = "", limit = 200) {
+    loadRecords(workspace);
     const prefix = `${pathImpl.resolve(workspace)}::`;
     const wantSession = String(sessionId || "").trim();
     const listed = [];
@@ -166,7 +236,7 @@ function createDurableProcessManager({
       if (wantSession && String(record.sessionId || "") !== wantSession) continue;
       listed.push(record);
     }
-    return listed.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).slice(0, 200);
+    return listed.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).slice(0, limit);
   }
   function snapshot(workspace, record, input = {}, entry = live.get(record.id)) {
     const { stdoutFile, stderrFile } = pathsFor(workspace, record);
@@ -375,11 +445,22 @@ function createDurableProcessManager({
   }
   async function killAndComplete(entry, intent, { reason } = {}) {
     if (!entry || entry.finished) return entry?.completion;
+    if (entry.record.managerId !== managerId || entry.child?.pid !== entry.record.pid) throw new Error("The owned child handle does not match this process.");
+    if (entry.child.exitCode != null || entry.child.signalCode != null) {
+      return completeEntry(entry, { status: entry.child.exitCode === 0 ? "complete" : "failed", exitCode: entry.child.exitCode, signal: entry.child.signalCode });
+    }
     entry.killIntent = intent;
     try {
-      await terminateProcessTree(entry.child, entry.tree);
-    } finally {
+      // A cached descendant PID can be reused. The terminator resolves the
+      // current tree from the live root instead of receiving stale PID lists.
+      await terminateProcessTree(entry.child, null);
+      if (entry.child.exitCode == null && entry.child.signalCode == null && isAlive(entry.child.pid)) throw new Error("Process death could not be confirmed.");
       if (!entry.finished) completeEntry(entry, { status: intent, terminationReason: reason || intent });
+    } catch (error) {
+      entry.killIntent = null;
+      entry.record.terminationReason = "stop_unconfirmed";
+      persist(entry);
+      throw error;
     }
     return entry.completion;
   }
@@ -575,6 +656,7 @@ function createDurableProcessManager({
     task.record.status = "starting";
     task.record.updatedAt = now().toISOString();
     writeRecord(task.workspace, task.record);
+    launchingTasks.set(task.processId, task);
     launchingSlots.set(task.key, (launchingSlots.get(task.key) || 0) + 1);
     Promise.resolve()
       .then(() => launchProcess(task.workspace, task.input, task.runtime, task))
@@ -584,26 +666,48 @@ function createDurableProcessManager({
           settleQueuedStart(task, result);
           return;
         }
+        const held = live.get(task.processId);
+        const saved = records.get(recordKey(task.workspace, task.processId));
+        if (held && !held.finished) {
+          task.state = "running";
+          task.record = held.record;
+          settleQueuedStart(task, result);
+          return;
+        }
+        if (saved && ["stopped", "complete", "timeout"].includes(saved.status)) {
+          task.state = saved.status;
+          task.record = saved;
+          settleQueuedStart(task, result);
+          return;
+        }
         task.state = "failed";
         task.record.status = "failed";
         task.record.completedAt = now().toISOString();
         task.record.updatedAt = task.record.completedAt;
-        writeRecord(task.workspace, task.record);
+        try { writeRecord(task.workspace, task.record); } catch { /* The last durable state requires reconciliation after restart. */ }
         const failed = { ...task.record, processId: task.processId, terminalId: task.record.terminalId, status: "failed", exitCode: null, signal: result?.error?.code || null, stdout: "", stderr: "", outputCompleteness: "complete", finishedAt: task.record.completedAt };
         try { task.runtime?.onComplete?.(failed); } catch { /* observer is best effort */ }
         settleQueuedStart(task, result || processFailure(null, task));
       })
       .catch((error) => {
+        const held = live.get(task.processId);
+        if (held && !held.finished) {
+          task.state = "running";
+          task.record = held.record;
+          settleQueuedStart(task, { ok: false, error: { code: "PROCESS_START_OUTCOME_UNKNOWN", message: "The process started but its acknowledgement failed. Reconcile the existing handle before retrying.", retryable: false }, value: { processId: task.processId, status: "reconciliation_required" } });
+          return;
+        }
         task.state = "failed";
         task.record.status = "failed";
         task.record.completedAt = now().toISOString();
         task.record.updatedAt = task.record.completedAt;
-        writeRecord(task.workspace, task.record);
+        try { writeRecord(task.workspace, task.record); } catch { /* Preserve the live handle when metadata persistence fails. */ }
         const failed = { ...task.record, processId: task.processId, terminalId: task.record.terminalId, status: "failed", exitCode: null, signal: error?.code || null, stdout: "", stderr: "", outputCompleteness: "complete", finishedAt: task.record.completedAt };
         try { task.runtime?.onComplete?.(failed); } catch { /* observer is best effort */ }
         settleQueuedStart(task, processFailure(error, task));
       })
       .finally(() => {
+        launchingTasks.delete(task.processId);
         const pending = Math.max(0, (launchingSlots.get(task.key) || 1) - 1);
         if (pending) launchingSlots.set(task.key, pending);
         else launchingSlots.delete(task.key);
@@ -620,12 +724,20 @@ function createDurableProcessManager({
         continue;
       }
       if (occupiedSlots(task) >= MAX_COMMAND_SLOTS) break;
-      launchTask(task);
+      try { launchTask(task); }
+      catch {
+        task.state = "failed";
+        task.record.status = "failed";
+        settleQueuedStart(task, { ok: false, error: { code: "PROCESS_METADATA_WRITE_FAILED", message: "Protected process metadata could not be saved. No command was launched.", retryable: true } });
+      }
     }
     if (!queue.length) commandQueues.delete(key);
   }
   function createTask(workspace, input, runtime, resolved, selected) {
-    const processId = `process-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+    const operationId = String(runtime.operationId || "");
+    const processId = operationId
+      ? `process-${crypto.createHash("sha256").update(JSON.stringify([pathImpl.resolve(workspace), runtime.sessionId || "", runtime.runId || "", operationId])).digest("hex").slice(0, 32)}`
+      : `process-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
     const command = redactSecrets(input.command || [input.executable, ...(input.args || [])].join(" "));
     const cwd = resolved.target || resolved.root;
     const stamp = now().toISOString();
@@ -650,6 +762,10 @@ function createDurableProcessManager({
       resumable: false,
       terminalId: runtime.terminalId || "",
       sessionId: runtime.sessionId || "",
+      runId: runtime.runId || "",
+      operationId,
+      inputHash: crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+      managerId,
     };
     let resolveStarted;
     const started = new Promise((resolve) => { resolveStarted = resolve; });
@@ -686,16 +802,33 @@ function createDurableProcessManager({
     emit(task.runtime, { type: "terminal_queued", processId: task.processId, terminalId: task.record.terminalId, command: task.record.command, cwd: task.record.cwd });
   }
   async function submitProcess(workspace, input = {}, runtime = {}, { waitForStart = false, maxWaitMs = null } = {}) {
+    try { loadRecords(workspace); }
+    catch { return { ok: false, error: { code: "PROCESS_METADATA_READ_FAILED", message: "Protected process metadata is unavailable. No command was launched.", retryable: true } }; }
     const resolved = resolveWorkspaceTarget(workspace, input.cwd || "");
     if (resolved.error) return { ok: false, error: { code: "WORKSPACE_OUT_OF_SCOPE", message: resolved.error, retryable: false } };
     const selected = invocation(input);
     if (!selected?.executable) return { ok: false, error: { code: "PROCESS_ARGUMENT_INVALID", message: "No executable could be resolved.", retryable: false } };
     const task = createTask(workspace, input, runtime, resolved, selected);
+    if (task.record.operationId) {
+      const existing = readRecord(workspace, task.processId);
+      if (existing) {
+        if (existing.inputHash !== task.record.inputHash) return { ok: false, error: { code: "PROCESS_OPERATION_CONFLICT", message: "The operation ID was already used with different command arguments.", retryable: false } };
+        if (existing.status === "reconciliation_required") return { ok: false, error: { code: "PROCESS_RECONCILIATION_REQUIRED", message: "The previous command outcome is unknown. Reconcile it before retrying.", retryable: false }, value: { processId: existing.id, status: existing.status, replaySafe: false } };
+        const launching = launchingTasks.get(existing.id) || queuedTasks.get(existing.id);
+        if (launching) return launching.started;
+        return projectResult({ ok: true, value: { ...snapshot(workspace, existing), processId: existing.id, reused: true } });
+      }
+    }
     if (occupiedSlots(task) < MAX_COMMAND_SLOTS && !commandQueues.get(task.key)?.length) {
-      launchTask(task);
+      try { launchTask(task); }
+      catch {
+        records.delete(recordKey(workspace, task.processId));
+        return { ok: false, error: { code: "PROCESS_METADATA_WRITE_FAILED", message: "Protected process metadata could not be saved. No command was launched.", retryable: true } };
+      }
       return task.started;
     }
-    queueTask(task);
+    try { queueTask(task); }
+    catch { return { ok: false, error: { code: "PROCESS_METADATA_WRITE_FAILED", message: "Protected process metadata could not be saved. No command was queued.", retryable: true } }; }
     pumpQueue(task.key);
     if (task.state !== "queued") return task.started;
     if (!waitForStart) return projectResult({ ok: true, value: queuedValue(task) });
@@ -714,6 +847,7 @@ function createDurableProcessManager({
     return submitProcess(workspace, input, runtime);
   }
   async function launchProcess(workspace, input = {}, runtime = {}, task) {
+    if (task.stopRequested || runtime.signal?.aborted) return { ok: false, error: { code: "PROCESS_STOPPED", message: "The command was stopped before launch.", retryable: false } };
     const { resolved, selected } = task;
     const id = task.processId;
     const processRoot = rootFor(workspace);
@@ -738,11 +872,15 @@ function createDurableProcessManager({
     try { fsImpl.closeSync(stdoutFd); fsImpl.closeSync(stderrFd); } catch {}
     const stamp = now().toISOString();
     const record = { ...task.record, pid: child.pid, status: "running", stdoutFile: stdoutFile.replace(/\\/g, "/"), stderrFile: stderrFile.replace(/\\/g, "/"), startedAt: stamp, updatedAt: stamp, lastOutputAt: stamp, exitCode: null, signal: null, detached: launchDetached, resumable: launchDetached };
-    writeRecord(workspace, record);
     const entry = makeEntry(workspace, record, child, runtime);
     live.set(id, entry);
-    runtime.claimForegroundReview?.(entry);
     attachChild(entry);
+    try { writeRecord(workspace, record); }
+    catch (error) {
+      try { await killAndComplete(entry, "stopped", { reason: "metadata_write_failed" }); } catch { /* Retain the live handle for explicit Stop. */ }
+      return { ok: false, error: { code: "PROCESS_METADATA_WRITE_FAILED", message: "The launched process metadata could not be saved. Reconcile this handle before retrying.", retryable: false }, value: { processId: id, status: entry.finished ? "stopped" : "reconciliation_required" } };
+    }
+    runtime.claimForegroundReview?.(entry);
     runtime.childProcess?.({ processId: id, pid: child.pid, terminalId: runtime.terminalId || "", detached: launchDetached });
     runtime.onStarted?.({ processId: id, pid: child.pid, terminalId: runtime.terminalId || "", command: record.command, cwd: record.cwd, startedAt: stamp });
     activateMonitoring(entry);
@@ -772,6 +910,9 @@ function createDurableProcessManager({
       : runtime;
     const started = await submitProcess(workspace, input, startRuntime, { waitForStart: true, maxWaitMs: waitMs });
     if (!started.ok) return started;
+    if (started.value?.reused && !["running", "queued", "starting"].includes(started.value.status)) {
+      return projectResult({ ok: started.value.status === "complete" && started.value.exitCode === 0, value: { ...started.value, mode: "command" } });
+    }
     if (started.value?.status === "queued") {
       const value = { ...started.value, mode: "terminal_wait", waiting: true, outputCompleteness: "partial" };
       runtime.onDetached?.(value);
@@ -845,6 +986,8 @@ function createDurableProcessManager({
   async function status(workspace, input = {}, runtime = {}) {
     let record = readRecord(workspace, input.process_id);
     if (!record) return { ok: false, error: { code: "PROCESS_NOT_FOUND", message: `Unknown durable process: ${input.process_id}`, retryable: false } };
+    if (!inScope(workspace, record, runtime)) return scopeFailure();
+    if (record.status === "reconciliation_required") return { ok: true, value: projectAgentFacing({ ...record, processId: record.id, alive: null, outputCompleteness: "unknown", replaySafe: false }) };
     const queuedTask = queuedTasks.get(record.id);
     if (queuedTask?.state === "queued") {
       return projectResult({ ok: true, value: queuedValue(queuedTask) });
@@ -885,9 +1028,16 @@ function createDurableProcessManager({
     runtime.progress?.({ kind: "durable_process_status", processId: record.id, status: record.status, alive: value.alive, health: value.metrics });
     return projectResult({ ok: true, value });
   }
-  async function stop(workspace, input = {}) {
+  function inScope(workspace, record, runtime = {}) {
+    const sessionId = String(runtime.sessionId || "");
+    const runId = String(runtime.runId || "");
+    return (!sessionId || record.sessionId === sessionId) && (!runId || record.runId === runId);
+  }
+  function scopeFailure() { return { ok: false, error: { code: "PROCESS_SCOPE_MISMATCH", message: "This process belongs to another task or chat.", retryable: false } }; }
+  async function stop(workspace, input = {}, runtime = {}) {
     const record = readRecord(workspace, input.process_id);
     if (!record) return { ok: false, error: { code: "PROCESS_NOT_FOUND", message: `Unknown durable process: ${input.process_id}`, retryable: false } };
+    if (!inScope(workspace, record, runtime)) return scopeFailure();
     const queuedTask = queuedTasks.get(record.id);
     if (queuedTask?.state === "queued") {
       const value = cancelQueuedTask(queuedTask, input.reason || "user_requested");
@@ -900,32 +1050,37 @@ function createDurableProcessManager({
         const value = await killAndComplete(entry, "stopped", { reason: input.reason || "user_requested" });
         return projectResult({ ok: true, value: { ...value, processId: record.id, pid: record.pid, status: "stopped", completedAt: record.completedAt } });
       } catch (error) {
-        return { ok: false, error: { code: "PROCESS_STOP_FAILED", message: error.message, retryable: true } };
+        return { ok: false, error: { code: "PROCESS_STOP_FAILED", message: "Process termination could not be confirmed. The owned handle remains available for another Stop.", retryable: true }, value: { processId: record.id, status: record.status } };
       }
     }
-    let tree = null;
-    let treeAlive;
-    if (record.status === "running") {
-      try {
-        tree = await sampleTree(record.pid, { fsImpl, platform: process.platform });
-        treeAlive = Boolean(tree?.alive);
-      } catch { treeAlive = undefined; }
+    if (["running", "starting", "queued", "reconciliation_required"].includes(record.status)) {
+      return { ok: false, error: { code: "PROCESS_IDENTITY_UNPROVEN", message: "The owned process handle is unavailable. Reconcile the previous process before stopping or replaying it.", retryable: false }, value: { processId: record.id, status: "reconciliation_required", replaySafe: false } };
     }
-    if (record.status === "running" && (treeAlive || isAlive(record.pid))) {
-      try {
-        await terminateProcessTree({ pid: record.pid, kill: () => process.kill(record.pid) }, tree);
-      } catch (error) {
-        return { ok: false, error: { code: "PROCESS_STOP_FAILED", message: error.message, retryable: true } };
+    return projectResult({ ok: true, value: { ...snapshot(workspace, record, {}, null), processId: record.id, completedAt: record.completedAt } });
+  }
+  async function stopOwned({ workspace, sessionId, runId = "", reason = "task_stopped" } = {}) {
+    if (!workspace || typeof sessionId !== "string" || !sessionId.trim()) return { ok: false, error: { code: "PROCESS_STOP_SCOPE_REQUIRED", message: "A workspace and chat ID are required to stop owned processes.", retryable: false } };
+    try { loadRecords(workspace); }
+    catch { return { ok: false, error: { code: "PROCESS_METADATA_READ_FAILED", message: "Protected process ownership metadata is unavailable.", retryable: true } }; }
+    const root = pathImpl.resolve(workspace);
+    const matches = (task) => pathImpl.resolve(task.workspace) === root && inScope(workspace, task.record, { sessionId, runId });
+    const pending = [...queuedTasks.values(), ...launchingTasks.values()].filter(matches);
+    for (const task of pending) task.stopRequested = true;
+    const results = [];
+    for (const task of pending) if (task.state === "queued") {
+      try { results.push({ ok: true, value: cancelQueuedTask(task, reason) }); }
+      catch { results.push({ ok: false, error: { code: "PROCESS_METADATA_WRITE_FAILED", message: "The queued command was cancelled but its receipt could not be saved.", retryable: true }, value: { processId: task.processId, status: "stopped" } }); }
+    }
+    const targets = [...records.entries()].filter(([key, record]) => key.startsWith(`${root}::`) && record.sessionId === sessionId && (!runId || record.runId === runId)).map(([, record]) => record);
+    for (const record of targets) {
+      if (!["running", "starting", "queued", "reconciliation_required"].includes(record.status)) continue;
+      if (launchingTasks.get(record.id)?.stopRequested && !live.has(record.id)) {
+        results.push({ ok: true, value: { processId: record.id, status: "launch_cancelled" } });
+        continue;
       }
+      results.push(await stop(workspace, { process_id: record.id, reason }, { sessionId, runId }));
     }
-    if (record.status === "running") {
-      record.status = "stopped";
-      record.completedAt = now().toISOString();
-      record.updatedAt = record.completedAt;
-      record.terminationReason = input.reason || "user_requested";
-      writeRecord(workspace, record);
-    }
-    return projectResult({ ok: true, value: { ...snapshot(workspace, record, {}, null), processId: record.id, pid: record.pid, status: "stopped", completedAt: record.completedAt } });
+    return { ok: results.every((result) => result.ok), value: { results, stopped: results.filter((result) => result.ok).map((result) => result.value.processId), unresolved: results.filter((result) => !result.ok).map((result) => result.value?.processId).filter(Boolean) } };
   }
   async function list(workspace, input = {}, runtime = {}) {
     // Session filter comes only from host/runtime. Never from model input —
@@ -933,6 +1088,11 @@ function createDurableProcessManager({
     const sessionId = String(runtime?.sessionId || "").trim();
     const processes = [];
     for (const record of listInternal(workspace, sessionId)) {
+      if (!inScope(workspace, record, runtime)) continue;
+      if (record.status === "reconciliation_required") {
+        processes.push(projectAgentFacing({ ...record, processId: record.id, alive: null, replaySafe: false }));
+        continue;
+      }
       let alive = record.status === "running" ? (live.has(record.id) || isAlive(record.pid)) : false;
       // After an app restart there is no in-memory entry. If the detached
       // shell exited while a descendant remains, sample the persisted PID's
@@ -947,6 +1107,7 @@ function createDurableProcessManager({
   async function reconcile(workspace) {
     const changed = [];
     for (const record of listInternal(workspace)) {
+      if (record.status === "reconciliation_required") { changed.push(record.id); continue; }
       let alive = record.status === "running" ? (live.has(record.id) || isAlive(record.pid)) : false;
       if (record.status === "running" && !live.has(record.id)) {
         try {
@@ -964,7 +1125,18 @@ function createDurableProcessManager({
     }
     return changed;
   }
-  return { list, reconcile, start, run, status, stop, sampleTree, runningCommands };
+  function referenceCommands(workspace) {
+    return listInternal(workspace, "", Infinity).map(record => ({
+      id: record.id, command: record.command, shell: record.shell, cwd: record.cwd,
+      sessionId: record.sessionId, startedAt: record.startedAt, exitCode: record.exitCode,
+      running: record.status === "running" && live.has(record.id),
+    }));
+  }
+  function readReferenceCommand(workspace, id) {
+    const record = listInternal(workspace, "", Infinity).find(item => item.id === id);
+    return record ? snapshot(workspace, record, { tail_chars: 50000 }) : null;
+  }
+  return { list, reconcile, start, run, status, stop, stopOwned, sampleTree, runningCommands, referenceCommands, readReferenceCommand };
 }
 
-module.exports = { createDurableProcessManager };
+module.exports = { createDurableProcessManager, createEncryptedProcessHandleStore };

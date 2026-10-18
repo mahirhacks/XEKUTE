@@ -10,7 +10,6 @@ const {
   createRuntimeDelegationProvider,
   oneLiner,
   buildChildContextText,
-  requestedWorkspaceMutation,
 } = require("../src/agent/runtime/delegation-provider.js");
 const { createDelegateAgentTool } = require("../src/agent/tools/process/delegate-agent.js");
 const { createExecutionContext, projectExecutionContext } = require("../src/contracts/tool/execution-context");
@@ -56,12 +55,6 @@ test("buildChildContextText is bounded and includes the parent invocation", () =
   assert.ok(text.length < 40_000);
 });
 
-test("workspace mutation detection recognizes delegated file writes", () => {
-  assert.deepEqual(requestedWorkspaceMutation({ task: "Create test.txt with content test" }), { required: true, target: "test.txt" });
-  assert.deepEqual(requestedWorkspaceMutation({ task: "write a test2.txt file" }), { required: true, target: "test2.txt" });
-  assert.equal(requestedWorkspaceMutation({ task: "Analyze the login flow" }).required, false);
-});
-
 test("child tools exclude delegate_agent and include the rest", async () => {
   const received = {};
   const provider = createRuntimeDelegationProvider({
@@ -99,7 +92,7 @@ test("child tools exclude delegate_agent and include the rest", async () => {
   const result = await runProvider(provider, input, execContext("G:/ws"));
 
   const toolNames = received.tools.map((tool) => tool.function.name);
-  assert.ok(!toolNames.includes("apply_patch"), "child must not edit files");
+  assert.ok(toolNames.includes("apply_patch"), "children may edit files");
   assert.ok(toolNames.includes("read_file"));
   assert.ok(!toolNames.includes("delegate_agent"), "child must not get delegate_agent");
   assert.equal(received.userMessage, input.task);
@@ -162,14 +155,12 @@ test("child runs inherit tool metadata, browser scope, and checkpoints", async (
     tools: PARENT_TOOLS,
     intelligence: { status: () => ({ ok: true }) },
     toolMetadataForName: (name, sessionId) => ({ name, sessionId }),
-    getBrowserTarget: (workspace, sessionId) => `${workspace}/${sessionId}`,
     checkpointRun: (_patch, context) => { checkpointContexts.push(context); },
     runAgentTurn: async (payload) => {
       received.payload = payload;
       assert.equal(payload.nested, true);
       assert.equal(payload.mode, "agent");
       assert.deepEqual(payload.toolMetadataForName("read_file"), { name: "read_file", sessionId: payload.sessionId });
-      assert.equal(payload.getBrowserTarget("G:/ws", payload.sessionId), `G:/ws/${payload.sessionId}`);
       await payload.executeToolCall({
         workspace: "G:/ws",
         toolCall: { function: { name: "read_file", arguments: {} } },
@@ -256,39 +247,6 @@ test("assessment intelligence exposes an awaitable idle boundary for child hando
     await service.dispose();
     fs.rmSync(root, { recursive: true, force: true });
   }
-});
-
-test("tool-less child cannot report a requested file mutation as completed", async () => {
-  const events = [];
-  const provider = createRuntimeDelegationProvider({
-    senderId: "s",
-    runKey: "s::parent",
-    parentModel: "m",
-    workspace: "G:/ws",
-    sessionId: "parent-session-1",
-    tools: PARENT_TOOLS,
-    runAgentTurn: async () => ({
-      ok: true,
-      finalText: "Created test.txt successfully",
-      executedTools: false,
-      runState: { status: "completed" },
-    }),
-    runModelRound: async () => ({ fullText: "", toolCalls: [endTurnCall()] }),
-    executeToolCall: async () => ({ ok: true }),
-    beginChildSession: async () => ({ ok: true, sessionId: "child-no-write" }),
-    sendToRenderer: (event) => events.push(event),
-  });
-
-  const outcome = await provider({
-    task: "Create test.txt with content test",
-    contextPackage: { role: "agent", authority: "approve_for_me", scope: {}, identity: {}, resources: {} },
-    expectedOutput: { description: "created file", format: "text" },
-  }, execContext("G:/ws"), {});
-
-  assert.equal(outcome.status, "completed");
-  assert.equal(outcome.output.finding.status, "blocked");
-  assert.match(outcome.output.finding.unverified.join("\n"), /parent must edit/i);
-  assert.ok(events.some((event) => event.type === "subagent_completed"));
 });
 
 test("unavailable dedicated model falls back once to the working parent model before tools run", async () => {
@@ -558,10 +516,8 @@ test("child runs apply_patch through the provided executeToolCall and the file l
   }, execContext(root));
 
   assert.equal(seenToolCalls.length, 1);
-  assert.equal(seenToolCalls[0].ok, false);
-  assert.equal(seenToolCalls[0].error.code, "CHILD_TOOL_DENIED");
-  assert.equal(fs.existsSync(target), false, "a child must not create files");
-  assert.equal(result.output.finding.status, "blocked");
+  assert.equal(seenToolCalls[0].ok, true, JSON.stringify(seenToolCalls[0]));
+  assert.equal(fs.readFileSync(target, "utf8"), "test");
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -677,4 +633,104 @@ test("a model timeout retries the child once and a second failure stays terminal
   assert.equal(attempts, 2);
   assert.equal(outcome.metadata.retried, true);
   assert.equal(outcome.status, "failed");
+});
+
+test("child accepts original steering after tools in one engine with cumulative counters", async (t) => {
+  const { createSubagentCoordinator } = require("../src/agent/runtime/subagent-coordinator.js");
+  const { runAgentTurn } = require("../src/agent/controller/agent-controller.js");
+  const coordinator = createSubagentCoordinator();
+  const fixture = require("./helpers/agent-session-store.js").sessionFixture(t);
+  const childStore = require("../src/agent/runtime/delegated-child-store.js").createDelegatedChildStore({ v3SessionStore: fixture.store });
+  const requests = [];
+  const engineRequests = [];
+  const checkpoints = [];
+  const original = "  Use Arial, including headings.\nKeep the original wording.  ";
+  let receipt;
+  let terminalResolve;
+  const terminal = new Promise((resolve) => { terminalResolve = resolve; });
+  const provider = createRuntimeDelegationProvider({
+    senderId: "s", runKey: "s::parent", parentModel: "m", workspace: "", sessionId: "parent", tools: PARENT_TOOLS,
+    coordinator,
+    ...childStore,
+    runAgentTurn: (payload) => { engineRequests.push(payload); return runAgentTurn(payload); },
+    runModelRound: async (_sender, payload) => {
+      requests.push(JSON.parse(JSON.stringify(payload.messages)));
+      return requests.length <= 2
+        ? { fullText: "Inspecting", toolCalls: [{ id: `read-${requests.length}`, type: "function", function: { name: "read_file", arguments: { path: "report.txt" } } }] }
+        : { fullText: "Report uses Arial.", toolCalls: [endTurnCall()] };
+    },
+    executeToolCall: async ({ childInvocationId }) => {
+      if (!receipt) receipt = coordinator.enqueueSteer({ parentKey: "s::parent", childInvocationId, instruction: original });
+      return { ok: true, value: { content: `Report draft ${requests.length}` } };
+    },
+    beginChildSession: async ({ childSessionId }) => ({ ok: true, sessionId: childSessionId }),
+    checkpointRun: async (patch) => { checkpoints.push(patch); },
+    sendToRenderer: (event) => { if (event.type === "subagent_completed" || event.type === "subagent_failed") terminalResolve(event); },
+  });
+  const acceptance = await provider({ task: "Inspect the report and recommend improvements", contextPackage: { role: "agent", resources: {} }, expectedOutput: { format: "text" } }, execContext(""));
+  const event = await terminal;
+  assert.equal(event.type, "subagent_completed");
+  assert.equal(engineRequests.length, 1);
+  assert.equal(engineRequests[0].maxAgentRounds, Infinity);
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].some((message) => message.content === original), false);
+  for (const messages of requests.slice(1)) {
+    assert.equal(messages.filter((message) => message.content === original).length, 1);
+    assert.equal(messages.some((message) => message.content === "Inspect the report and recommend improvements"), true);
+    assert.equal(messages.find((message) => message.content === original).source_message_id, receipt.messageId);
+  }
+  assert.equal(coordinator.peekSteerQueue(acceptance.childInvocationId, "s::parent").length, 0);
+  const snapshot = checkpoints.map((patch) => patch.checkpoint?.engineSnapshot).filter(Boolean).at(-1);
+  assert.equal(snapshot.accounting.providerAttempts, 3);
+  assert.equal(snapshot.accounting.operationalRounds, 3);
+  assert.equal(snapshot.inputMessages.filter((message) => message.source_message_id === receipt.messageId).length, 1);
+});
+
+test("a failed child input checkpoint leaves the steering message available", async () => {
+  const { createSubagentCoordinator } = require("../src/agent/runtime/subagent-coordinator.js");
+  const { runAgentTurn } = require("../src/agent/controller/agent-controller.js");
+  const coordinator = createSubagentCoordinator();
+  let receipt;
+  let terminalResolve;
+  const terminal = new Promise((resolve) => { terminalResolve = resolve; });
+  const provider = createRuntimeDelegationProvider({
+    senderId: "s", runKey: "s::parent", parentModel: "m", workspace: "", sessionId: "parent", tools: PARENT_TOOLS, coordinator, runAgentTurn,
+    runModelRound: async () => ({ toolCalls: [{ id: "read", type: "function", function: { name: "read_file", arguments: { path: "report.txt" } } }] }),
+    executeToolCall: async ({ childInvocationId }) => {
+      receipt = coordinator.enqueueSteer({ parentKey: "s::parent", childInvocationId, instruction: "Use Arial" });
+      return { ok: true, value: { content: "draft" } };
+    },
+    checkpointRun: async (patch) => {
+      if (patch.checkpoint?.engineSnapshot?.appliedInputIds.includes(receipt?.messageId)) throw Object.assign(new Error("disk unavailable"), { code: "CHECKPOINT_FAILED" });
+    },
+    beginChildSession: async ({ childSessionId }) => ({ ok: true, sessionId: childSessionId }),
+    sendToRenderer: (event) => { if (event.type === "subagent_completed" || event.type === "subagent_failed") terminalResolve(event); },
+  });
+  const acceptance = await provider({ task: "Inspect the report", contextPackage: { role: "agent", resources: {} }, expectedOutput: { format: "text" } }, execContext(""));
+  assert.equal((await terminal).type, "subagent_failed");
+  assert.deepEqual(coordinator.peekSteerQueue(acceptance.childInvocationId, "s::parent").map((item) => [item.id, item.instruction]), [[receipt.messageId, "Use Arial"]]);
+});
+
+test("a child retry retains run identity, engine snapshot and accounting", async () => {
+  const payloads = [];
+  const snapshot = { accounting: { providerAttempts: 3, operationalRounds: 1 }, appliedInputIds: [], revision: 0 };
+  const provider = createRuntimeDelegationProvider({
+    senderId: "s", runKey: "s::parent", parentModel: "m", workspace: "", sessionId: "parent", tools: PARENT_TOOLS,
+    runAgentTurn: async (payload) => {
+      payloads.push(payload);
+      return payloads.length === 1
+        ? { ok: false, error: "request timeout", runState: { status: "failed", stopReason: "timeout" }, engineSnapshot: snapshot, appendedMessages: [{ role: "assistant", content: "Preserved output" }] }
+        : { ok: true, finalText: "Done", runState: { status: "completed" } };
+    },
+    runModelRound: async () => ({ toolCalls: [endTurnCall()] }), executeToolCall: async () => ({ ok: true }),
+    beginChildSession: async () => ({ ok: true, sessionId: "child" }),
+  });
+  const result = await provider({ task: "Inspect the report", contextPackage: { role: "agent", resources: {} }, expectedOutput: { format: "text" } }, execContext(""));
+  assert.equal(result.status, "completed");
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0].runId, payloads[1].runId);
+  assert.equal(payloads[1].engineSnapshot, snapshot);
+  assert.deepEqual(payloads[1].roundAccountingSnapshot, snapshot.accounting);
+  assert.deepEqual(payloads[1].chatHistory, [{ role: "assistant", content: "Preserved output" }]);
+  assert.equal(payloads[1].userMessage, "Inspect the report");
 });

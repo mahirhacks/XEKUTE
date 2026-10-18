@@ -145,7 +145,16 @@ async function captureOpenRouterStream(readable, callbacks = {}, options = {}) {
 
 function normalizeOpenRouterMessages(messages = []) {
   return (Array.isArray(messages) ? messages : []).map((message) => {
-    const out = { role: message.role, content: message.content == null ? "" : String(message.content) };
+    const content = Array.isArray(message.content) ? message.content.map((part) => {
+      if (part?.type === "text" && typeof part.text === "string") return { type: "text", text: part.text };
+      if (part?.type === "image_url" && typeof part.image_url?.url === "string"
+        && /^(?:https:\/\/|data:image\/(?:png|jpeg|webp);base64,)/.test(part.image_url.url)
+        && (part.image_url.detail == null || ["auto", "low", "high"].includes(part.image_url.detail))) {
+        return { type: "image_url", image_url: { url: part.image_url.url, ...(part.image_url.detail ? { detail: part.image_url.detail } : {}) } };
+      }
+      throw Object.assign(new Error("OpenRouter message contains an unsupported content part."), { code: "OPENROUTER_CONTENT_PART_UNSUPPORTED" });
+    }) : message.content == null ? "" : String(message.content);
+    const out = { role: message.role, content };
     if (message.name) out.name = message.name;
     if (message.tool_call_id) out.tool_call_id = message.tool_call_id;
     if (Array.isArray(message.tool_calls)) out.tool_calls = message.tool_calls.map((call) => ({ id: call.id, type: "function", function: { name: call.function?.name, arguments: typeof call.function?.arguments === "string" ? call.function.arguments : JSON.stringify(call.function?.arguments || {}) } }));

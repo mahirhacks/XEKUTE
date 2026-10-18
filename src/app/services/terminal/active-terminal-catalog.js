@@ -6,8 +6,10 @@ const MAX_TAIL_CHARS = 50_000;
 
 function appendTerminalOutput(record, chunk, maxChars = DEFAULT_MAX_OUTPUT_CHARS) {
   if (!record) return "";
+  record.outputLength = (record.outputLength ?? String(record.outputTail || "").length) + String(chunk ?? "").length;
   const next = `${record.outputTail || ""}${chunk == null ? "" : String(chunk)}`;
   record.outputTail = next.length > maxChars ? next.slice(next.length - maxChars) : next;
+  record.outputOffset = record.outputLength - record.outputTail.length;
   return record.outputTail;
 }
 

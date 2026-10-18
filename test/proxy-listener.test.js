@@ -86,6 +86,29 @@ test("client TLS disconnects are connection-local and do not poison a running li
   }
 });
 
+test("an occupied listener port returns a startup error and the same service can retry", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-proxy-bind-"));
+  const occupied = http.createServer();
+  const port = await listen(occupied);
+  const service = createProxyListenerService({ fs, path, assessmentWorkspace: {} });
+  try {
+    let timer;
+    const result = await Promise.race([
+      service.configure(root, { settings: listenerSettings({ listener: { port } }), targets: [] }),
+      new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), 5000); }),
+    ]).finally(() => clearTimeout(timer));
+    assert.notEqual(result.timedOut, true, "a bind failure must settle instead of hanging browser admission");
+    assert.equal(result.code, "PROXY_START_FAILED");
+    assert.match(result.error, /EADDRINUSE/);
+    assert.equal(service.getStatus().running, false);
+    const retry = await service.configure(root, { settings: listenerSettings(), targets: [] });
+    assert.equal(retry.running, true);
+  } finally {
+    await service.stop(); await close(occupied);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("proxy client error classification covers browser-close TLS failures", () => {
   assert.equal(isConnectionProxyError(null, new Error("SSLV3_ALERT_CERTIFICATE_UNKNOWN"), "HTTPS_CLIENT_ERROR"), true);
   assert.equal(isConnectionProxyError(null, new Error("listener failed"), "PROXY_ERROR"), false);

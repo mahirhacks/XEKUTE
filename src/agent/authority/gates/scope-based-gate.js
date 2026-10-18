@@ -14,7 +14,7 @@ function createScopeBasedGate({ evaluateScope } = {}) {
   return gate("scope_based_gate", async ({ context, toolName, args, entry, state, runtime }) => {
     const evaluator = runtime?.evaluateScope || evaluateScope;
     const scope = typeof evaluator === "function"
-      ? await evaluator({ workspace: context.workspace?.root || "", toolName, args, normalizedTargets: state.normalizedTargets, toolMetadata: entry?.metadata || null, projectProfile: runtime?.projectProfile || null, browserTarget: runtime?.browserTarget || "" })
+      ? await evaluator({ workspace: context.workspace?.root || "", toolName, args, normalizedTargets: state.normalizedTargets, toolMetadata: entry?.metadata || null, projectProfile: runtime?.projectProfile || null, browserTarget: runtime?.browserTarget || "", browserPolicy: runtime?.browserPolicy || null })
       : { ok: true, code: "SCOPE_NOT_REQUIRED" };
     state.scope = scope;
     state.scopeDecision = classifyScope(scope);

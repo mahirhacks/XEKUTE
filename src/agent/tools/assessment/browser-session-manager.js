@@ -52,7 +52,7 @@ function createBrowserSessionManager({
   onStatus = () => {},
   sharedContextProvider = null,
 } = {}) {
-  const provider = chromium || require("playwright-core").chromium;
+  const provider = () => chromium || require("playwright-core").chromium;
   const contexts = new Map();
   const loginContexts = new Map();
   const locks = new Map();
@@ -123,7 +123,7 @@ function createBrowserSessionManager({
       error.code = "BROWSER_RUNTIME_NOT_FOUND";
       throw error;
     }
-    return provider.launch({ headless, executablePath: selected.executablePath });
+    return provider().launch({ headless, executablePath: selected.executablePath });
   }
 
   async function ensureBrowser() {

@@ -41,6 +41,17 @@ function uniqueTemporaryPath(pathImpl, target, cryptoImpl = nodeCrypto, suffix =
   return `${target}.${process.pid}.${Date.now()}.${random}.${suffix}`;
 }
 
+// Directories this process has already created and secured. Writes skip the
+// mkdir/chmod pair for them and redo it only if the directory has gone.
+const ensuredDirectories = new WeakMap();
+function ensureDirectoryOnce(fsImpl, pathImpl, directory) {
+  if (!ensuredDirectories.has(fsImpl)) ensuredDirectories.set(fsImpl, new Set());
+  const known = ensuredDirectories.get(fsImpl);
+  if (known.has(directory)) return;
+  ensureDirectory(fsImpl, pathImpl, directory);
+  known.add(directory);
+}
+
 function ensureDirectory(fsImpl = nodeFs, pathImpl = nodePath, directory) {
   fsImpl.mkdirSync(directory, { recursive: true, mode: DEFAULT_DIRECTORY_MODE });
   try { fsImpl.chmodSync(directory, DEFAULT_DIRECTORY_MODE); } catch { /* Windows ACLs protect the workspace. */ }
@@ -59,21 +70,30 @@ function atomicWriteText({ fs: fsImpl = nodeFs, path: pathImpl = nodePath, crypt
   mode = DEFAULT_MODE,
   backup: createBackup = true,
   validate = null,
+  strictAtomic = false,
 } = {}) {
   const file = String(target || "");
   if (!file) throw new TypeError("An atomic-write target is required.");
   const text = String(content == null ? "" : content);
   if (typeof validate === "function") validate(text);
 
-  ensureDirectory(fsImpl, pathImpl, pathImpl.dirname(file));
+  const directory = pathImpl.dirname(file);
+  ensureDirectoryOnce(fsImpl, pathImpl, directory);
   const temporary = uniqueTemporaryPath(pathImpl, file, cryptoImpl, "tmp");
   const backupPath = `${file}.bak`;
   const backupTemporary = uniqueTemporaryPath(pathImpl, backupPath, cryptoImpl, "tmp");
   let descriptor = null;
   try {
-    descriptor = fsImpl.openSync(temporary, "wx", mode);
+    try { descriptor = fsImpl.openSync(temporary, "wx", mode); } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      ensureDirectory(fsImpl, pathImpl, directory);
+      descriptor = fsImpl.openSync(temporary, "wx", mode);
+    }
     fsImpl.writeFileSync(descriptor, text, "utf8");
-    try { fsImpl.fsyncSync(descriptor); } catch { /* Best effort on filesystems without fsync. */ }
+    if (strictAtomic) fsImpl.fsyncSync(descriptor);
+    else {
+      try { fsImpl.fsyncSync(descriptor); } catch { /* Best effort on filesystems without fsync. */ }
+    }
   } catch (error) {
     if (descriptor !== null) closeDescriptor(fsImpl, descriptor);
     try { fsImpl.rmSync(temporary, { force: true }); } catch { /* Best effort cleanup. */ }
@@ -88,18 +108,26 @@ function atomicWriteText({ fs: fsImpl = nodeFs, path: pathImpl = nodePath, crypt
         fsImpl.copyFileSync(file, backupTemporary);
         try {
           const backupDescriptor = fsImpl.openSync(backupTemporary, "r");
-          try { fsImpl.fsyncSync(backupDescriptor); } catch { /* Best effort. */ }
-          closeDescriptor(fsImpl, backupDescriptor);
-        } catch { /* Best effort. */ }
+          try {
+            if (strictAtomic) fsImpl.fsyncSync(backupDescriptor);
+            else {
+              try { fsImpl.fsyncSync(backupDescriptor); } catch { /* Best effort. */ }
+            }
+          } finally { closeDescriptor(fsImpl, backupDescriptor); }
+        } catch (error) {
+          if (strictAtomic) throw error;
+        }
         try { fsImpl.rmSync(backupPath, { force: true }); } catch { /* Rename below may replace it. */ }
         try {
           fsImpl.renameSync(backupTemporary, backupPath);
-        } catch {
+        } catch (error) {
+          if (strictAtomic) throw error;
           fsImpl.copyFileSync(backupTemporary, backupPath);
           fsImpl.rmSync(backupTemporary, { force: true });
         }
-      } catch {
+      } catch (error) {
         try { fsImpl.rmSync(backupTemporary, { force: true }); } catch { /* Best effort cleanup. */ }
+        if (strictAtomic) throw error;
         // A backup failure must not prevent a valid primary write. The
         // previous primary remains available in the filesystem until replace.
       }
@@ -108,6 +136,7 @@ function atomicWriteText({ fs: fsImpl = nodeFs, path: pathImpl = nodePath, crypt
     try {
       fsImpl.renameSync(temporary, file);
     } catch (renameError) {
+      if (strictAtomic) throw renameError;
       try {
         fsImpl.copyFileSync(temporary, file);
         fsImpl.rmSync(temporary, { force: true });

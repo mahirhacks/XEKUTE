@@ -29,6 +29,14 @@ function normalizeUpdaterFailure(error, phase = "check") {
       userMessage: "This installation is missing its updater configuration. Download and run the latest XEKUTESetup.exe once; automatic updates will work after that.",
     };
   }
+  if (originalCode === "ENOSPC" || /ENOSPC|no space left/i.test(message)) {
+    return {
+      message,
+      code: "UPDATE_DISK_FULL",
+      phase,
+      userMessage: "There is not enough free disk space to download the update. Free some space and retry.",
+    };
+  }
   if (/sha(?:512)?|checksum|digest/i.test(message)) {
     return {
       message,
@@ -113,6 +121,10 @@ function createElectronUpdaterBackend({ autoUpdater, feedUrl, provider = null, a
     initialized = true;
     try { autoUpdater.autoDownload = false; } catch { /* optional */ }
     try { autoUpdater.allowPrerelease = Boolean(allowPrerelease); } catch { /* optional */ }
+    // A feed that lists an older release must never roll the install back.
+    try { autoUpdater.allowDowngrade = false; } catch { /* optional */ }
+    // A deferred download (agent run active) still installs when XEKUTE quits.
+    try { autoUpdater.autoInstallOnAppQuit = true; } catch { /* optional */ }
     if (provider) {
       try { autoUpdater.setFeedURL(provider); } catch { /* electron-updater may use app-update.yml */ }
     } else if (feedUrl) {
@@ -255,6 +267,17 @@ function compareVersions(left, right) {
 
 // ── Service ─────────────────────────────────────────────────────────────────
 
+const INSTALL_PAINT_DELAY_MS = 600;
+const PREPARE_INSTALL_TIMEOUT_MS = 15_000;
+const QUIT_FALLBACK_MS = 10_000;
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
 /**
  * @param {object} deps
  * @param {object} deps.app            Electron `app`
@@ -262,9 +285,22 @@ function compareVersions(left, right) {
  * @param {object} deps.settingsStore  store from createUpdateSettingsStore
  * @param {(payload: object) => void} deps.sendEvent  forwards update events to the renderer
  * @param {boolean} deps.updatedLaunch true when NSIS relaunched with --updated
+ * @param {() => (Promise<void>|void)} [deps.prepareInstall]  flushes and closes durable state before the installer replaces files
+ * @param {() => boolean} [deps.isBusy]  true while an agent run is active; a finished download then waits for the operator
  */
-function createUpdateService({ app, backend, settingsStore, sendEvent, updatedLaunch = false, onInstallReady = null, log = console.debug }) {
+function createUpdateService({
+  app,
+  backend,
+  settingsStore,
+  sendEvent,
+  updatedLaunch = false,
+  prepareInstall = null,
+  isBusy = () => false,
+  prepareTimeoutMs = PREPARE_INSTALL_TIMEOUT_MS,
+  log = console.debug,
+}) {
   let checking = false;
+  let applying = false;
   let checkContext = { manual: false, reason: "launch" };
   let installing = false;
   let installRequested = false;
@@ -426,15 +462,40 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, updatedLa
   });
 
   backend.emitter.on("downloaded", (info) => {
-    downloadedVersion = info.version;
+    downloadedVersion = String(info.version || "");
+    installing = false;
     settingsStore.write({ ignoredVersion: "", deferredVersion: "" });
-    emit({ type: "downloaded", version: info.version });
-    try { onInstallReady?.(); } catch { /* never block install */ }
-    // Close the app and reopen on the new build. Give the renderer a beat to
-    // paint the "Installing…" state before the process exits.
-    setTimeout(() => backend.quitAndInstall(), 600);
+    let busy = false;
+    try { busy = Boolean(isBusy()); } catch { /* treat as idle */ }
+    if (busy) {
+      // Never restart under a running agent. The operator restarts from the
+      // toast, or the update installs when XEKUTE next quits.
+      emit({ type: "downloaded", version: downloadedVersion, deferred: true });
+      return;
+    }
+    emit({ type: "downloaded", version: downloadedVersion });
+    applyDownloadedUpdate();
   });
   /* c8 ignore stop */
+
+  function applyDownloadedUpdate() {
+    if (applying) return { ok: true, skipped: true };
+    applying = true;
+    emit({ type: "installing", version: downloadedVersion });
+    const prepared = Promise.resolve()
+      .then(() => prepareInstall?.())
+      .catch((error) => log(`[updates] prepare before install failed: ${error?.message || error}`));
+    const timedOut = delay(prepareTimeoutMs).then(() => log("[updates] prepare before install timed out; installing anyway"));
+    // The paint delay lets the renderer show "Installing…" before the window closes.
+    Promise.all([Promise.race([prepared, timedOut]), delay(INSTALL_PAINT_DELAY_MS)]).then(() => {
+      try { backend.quitAndInstall(); } catch (error) { log(`[updates] quitAndInstall threw: ${error?.message || error}`); }
+      // Durable state is closed at this point, so a failed installer spawn must
+      // not leave a half-disposed app running. Quitting still installs through
+      // electron-updater's install-on-quit path.
+      delay(QUIT_FALLBACK_MS).then(() => { try { app?.quit?.(); } catch { /* already quitting */ } });
+    });
+    return { ok: true, installing: true };
+  }
 
   function beginCheck({ manual = false, reason = "launch", force = false } = {}) {
     if (checking) return { ok: true, skipped: true };
@@ -463,6 +524,7 @@ function createUpdateService({ app, backend, settingsStore, sendEvent, updatedLa
     },
 
     install() {
+      if (downloadedVersion) return applyDownloadedUpdate();
       if (installing) return { ok: true, skipped: true };
       installRequested = true;
       if (availableVersion) return startDownload();

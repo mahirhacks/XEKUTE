@@ -117,7 +117,6 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(renderer, /source === "parent_continuation"/);
   assert.match(renderer, /function renderParentContinuationEvent\(/);
   assert.match(main, /function scheduleParentContinuation\(/);
-  assert.match(main, /onResultReady: \(readyResult\) => \{[\s\S]*?scheduleParentContinuation\(coordinationKey, readyResult\)/);
   assert.match(main, /agent:pendingParentContinuations/);
   assert.match(renderer, /pendingParentContinuations/);
   assert.match(renderer, /getBoundingClientRect\(\)/);
@@ -143,7 +142,9 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(layoutStyles, /\.chat-session-label \{[\s\S]*?line-height: 1;/);
   assert.match(layoutStyles, /\.chat-tab-close \{[\s\S]*?align-self: center;[\s\S]*?line-height: 1;/);
   assert.match(layoutStyles, /\.chat-tab-close::before \{[\s\S]*?display: block;[\s\S]*?line-height: 1;[\s\S]*?transform: translateY\([12]px\);/);
-  assert.doesNotMatch(chatMarkup, /12\s*Files|paperclip|microphone|attachment/i);
+  // The old mock attachment bar stays gone; the clip button attaches images.
+  assert.doesNotMatch(chatMarkup, /12\s*Files|paperclip|microphone/i);
+  assert.match(chatMarkup, /id="context-usage-btn"[\s\S]*?id="attach-image-btn"[\s\S]*?clip_icon\.svg[\s\S]*?id="send-btn"/);
   assert.doesNotMatch(chatMarkup, /chat-sticky-user/);
   assert.match(read("src/ui/react/main.jsx"), /import "\.\.\/styles\/chat\.css"/);
   assert.doesNotMatch(renderer, /chatStickyUser|syncStickyUserTurn/);
@@ -249,7 +250,8 @@ test("running chats stay navigable and signal background completion per tab", ()
   assert.match(renderer, /if \(isChatSessionRunning\(id\)\) return/);
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /eventSessionId !== runEventSessionId/);
-  assert.match(renderer, /sendBtn\.disabled = editingQueue[\s\S]*?: !activeRunning && \(\s*delegatedLocked/);
+  assert.match(renderer, /const canSend = hasText \|\| \(!running && composerImages\.length > 0\);/);
+  assert.match(renderer, /sendBtn\.disabled = stopMode \? false : !canSend/);
   assert.doesNotMatch(renderer, /Another agent is running/);
   assert.match(main, /sender\.send\("agent:event", \{ \.\.\.data, sessionId \}\)/);
   assert.match(styles, /\.chat-tab-running-icon\s*\{/);
@@ -273,8 +275,10 @@ test("question-tool cards use the refreshed UI and stay scoped to their owning c
   assert.doesNotMatch(renderer, /let pendingComposerQuestions\s*=/);
 
   assert.match(chatStyles, /\.agent-questions-card\s*\{[\s\S]*?border: 1px solid #303030[\s\S]*?background: #181818/);
-  assert.match(chatStyles, /\.agent-questions-option:has\(input\[type="radio"\]:checked\)[\s\S]*?border-color: #2f8cf4[\s\S]*?rgba\(47, 140, 244, \.11\)/);
-  assert.match(chatStyles, /data-questions-action="submit"\][\s\S]*?background: #2f8cf4/);
+  // Black, white and gray only: the selected option and Submit carry no accent color.
+  assert.match(chatStyles, /\.agent-questions-option:has\(input\[type="radio"\]:checked\)[\s\S]*?border-color: #6f6f6f[\s\S]*?rgba\(255, 255, 255, \.06\)/);
+  assert.match(chatStyles, /data-questions-action="submit"\][\s\S]*?background: #e6e6e6/);
+  assert.doesNotMatch(chatStyles.slice(chatStyles.indexOf(".agent-questions-card {"), chatStyles.indexOf(".composer-questions {")), /#2f8cf4|47, 140, 244|#6aaef7|#8fc4fb|#8ab4f8/);
   assert.match(chatStyles, /\.composer-questions\s*\{[\s\S]*?margin-bottom: 8px/);
   assert.match(chatStyles, /#input-bar\.has-composer-questions \.composer\s*\{[\s\S]*?border-color: #3b3b3b/);
   assert.match(renderer, /function questionOptionsWithFreeWrite\(/);
@@ -302,7 +306,7 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   assert.match(renderer, /"system-command": "System Commands"/);
   assert.match(renderer, /\.\.\.SYSTEM_SKILL_SLASH_COMMANDS/);
   assert.match(renderer, /SYSTEM_SKILL_COMMANDS\.has\(command\.toLowerCase\(\)\)/);
-  assert.match(renderer, /let text = hasExplicitText[\s\S]*?: effectiveChatInputValue\(\)\.trim\(\)/);
+  assert.match(renderer, /let text = hasExplicitText[\s\S]*?: effectiveChatInputValue\(\)/);
   assert.match(html, /class="composer-input-row">[\s\S]*?id="chat-input"[\s\S]*?id="selected-slash-command"/);
   assert.doesNotMatch(html, /selected-slash-command-clear/);
   assert.match(renderer, /\["Tab", "Shift"\]\.includes\(e\.key\)[\s\S]*?chooseSlashSuggestion\(slashSuggestionIndex, \{ clicked: true \}\)/);
@@ -312,7 +316,7 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   assert.match(renderer, /function reconcileSelectedSlashCommandAfterEdit\(\)[\s\S]*?tokenRemoved[\s\S]*?tokenEdited[\s\S]*?classList\.remove\("selected-slash-command"\)/);
   assert.match(renderer, /\[contenteditable\]:not\(\[contenteditable=\\"false\\"\]\)/);
   assert.match(chatStyles, /\.composer-input-row #chat-input\s*\{[\s\S]*?width:100%;[\s\S]*?white-space:pre-wrap/);
-  assert.match(chatStyles, /\.selected-slash-command\s*\{[\s\S]*?display:inline-flex[\s\S]*?background:rgba\(215,173,43,\.14\)[\s\S]*?user-select:text/);
+  assert.match(chatStyles, /\.selected-slash-command\s*\{[\s\S]*?display:inline-flex[\s\S]*?background:rgba\(215,173,43,\.08\)[\s\S]*?user-select:text/);
   assert.match(chatStyles, /#chat-input\.chat-input-empty::before[\s\S]*?content:attr\(data-placeholder\)/);
   assert.doesNotMatch(renderer, /name: "\/active"/);
   assert.doesNotMatch(parser, /"\/active"\s*:/);
@@ -395,9 +399,9 @@ test("long user prompts clamp to two lines and expand only on demand", () => {
   const chatStyles = read("src/ui/styles/chat.css");
 
   assert.match(renderer, /function syncUserPromptDisclosure\(box\)[\s\S]*?content\.scrollHeight > content\.clientHeight \+ 1/);
-  assert.match(renderer, /function createUserPromptBox\(text\)[\s\S]*?user-prompt-preview/);
+  assert.match(renderer, /function createUserPromptBox\(text, images = \[\]\)[\s\S]*?user-prompt-preview/);
   assert.match(renderer, /function renderCanonicalChatHistory[\s\S]*?createUserPromptBox\(content\)/);
-  assert.match(renderer, /function addUserMessage\(text\)[\s\S]*?createUserPromptBox\(value\)/);
+  assert.match(renderer, /function addUserMessage\(text, sourceMessageId = "", images = \[\]\)[\s\S]*?createUserPromptBox\(value, images\)/);
   assert.match(renderer, /messages\?\.addEventListener\("mousedown"[\s\S]*?activateUserPromptSelection\(promptBox, e\.clientX, e\.clientY\)/);
   assert.match(renderer, /messages\?\.addEventListener\("dblclick"[\s\S]*?selectWholeUserPrompt\(content\)/);
   assert.match(renderer, /function selectWholeUserPrompt\(content\)[\s\S]*?range\.selectNodeContents\(content\)/);
@@ -413,7 +417,8 @@ test("V3 checkpointing never hides or removes visible chat history", () => {
   const renderEnd = renderer.indexOf("function ensureChatEmptyState", renderStart);
   const renderBody = renderer.slice(renderStart, renderEnd);
 
-  assert.match(renderBody, /for \(const message of sourceHistory\) \{[\s\S]*?renderMessage\(message, fragment\);[\s\S]*?\}/);
+  assert.match(renderBody, /for \(const message of sourceHistory\) renderMessage\(message, fragment\);/);
+  assert.doesNotMatch(renderBody, /previousUserContent/);
   assert.match(renderBody, /messages\.replaceChildren\(fragment\)/);
   assert.doesNotMatch(renderBody, /archivedThroughMessageId|chat-archive-marker/);
   assert.doesNotMatch(renderer, /maybeCompactContext|v3_checkpoint_owned|renderCanonicalChatHistory\(chatHistory\)/);
@@ -426,7 +431,7 @@ test("stopped streamed responses enter history before the durable outcome is wri
   const finalizeEnd = renderer.indexOf("const runIsVisible", finalizeStart);
   const finalizeBody = renderer.slice(finalizeStart, finalizeEnd);
   const stopStart = renderer.indexOf("function stopGeneration()");
-  const stopEnd = renderer.indexOf("sendBtn.addEventListener", stopStart);
+  const stopEnd = renderer.indexOf("bindLiveInputComposer({", stopStart);
   const stopBody = renderer.slice(stopStart, stopEnd);
 
   assert.match(renderer, /function syncAssistantDraftToHistory\([\s\S]*?history\.push\(message\)[\s\S]*?schedulePersistChatSessions\(session\)/);
@@ -435,6 +440,12 @@ test("stopped streamed responses enter history before the durable outcome is wri
   assert.match(stopBody, /syncAssistantDraftToHistory\(run, run\.assistant, \{ persist: false \}\)[\s\S]*?persistChatHistorySnapshot\(activeChatPersistenceScope, run\.session\)/);
   assert.match(stopBody, /abortActiveChatRun\(run\)/);
   assert.match(stopBody, /dropAutoContinuationsForSession/);
+  // The send control becomes a stop button while a run is active, and clicking
+  // it (or pressing Enter) stops the agent instead of sending.
+  assert.match(renderer, /function submitChatComposer\(\) \{\s*if \(sendBtn\.classList\.contains\("stop"\)\) \{ stopGeneration\(\); return; \}/);
+  assert.match(renderer, /const running = isRunningChatActive\(\);\s*const stopMode = running && !hasText;[\s\S]*?sendBtn\.classList\.toggle\("stop", stopMode\);/);
+  assert.match(renderer, /icon\.className = `codicon \$\{stopMode \? "codicon-primitive-square" : "codicon-arrow-up"\}`/);
+  assert.match(read("src/ui/styles/layout-revamp.css"), /\.send-btn\.stop::before \{[\s\S]*?background: currentColor;/);
   assert.match(renderer, /function abortActiveChatRun\([\s\S]*?abortChat\?\.\(\{ sessionId \}\)/);
   assert.match(renderer, /isChatSessionStoppedByOperator/);
   assert.match(main, /function abortAgentSession\(/);
@@ -607,10 +618,9 @@ test("command completion settles timers immediately across call, process, and te
   assert.match(renderer, /function bindCommandTimelineIdentity/);
   assert.match(renderer, /completedCommandLifecycles/);
   assert.match(renderer, /if \(type === "terminal_complete"\) \{\s*finalizeCommandTimeline\(payload/);
-  assert.match(renderer, /type === "agent_command_output"/);
-  assert.match(renderer, /function deliverAgentCommandOutput/);
-  assert.match(renderer, /phase === "command_output"/);
-  assert.match(renderer, /only the transcript continuation waits for the active turn to finish/);
+  assert.doesNotMatch(renderer, /type === "agent_command_output"/);
+  assert.doesNotMatch(renderer, /function deliverAgentCommandOutput/);
+  assert.doesNotMatch(renderer, /phase === "command_output"/);
   assert.match(renderer, /const completion = commandCompletionForRow\(row\)/);
   assert.match(renderer, /updateCommandTimelineRow\(row, completion\.state\)/);
   assert.doesNotMatch(renderer, /querySelectorAll\("\.agent-command-event\[data-process-id\]"\)/);

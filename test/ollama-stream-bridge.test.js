@@ -28,5 +28,5 @@ test("parent agent delegation launches a bounded child model round with the sele
   assert.match(delegationSource, /selectedChildModel\s*=\s*String\(subagentModel\s*\|\|\s*parentModel/);
   assert.match(delegationSource, /runAgentTurn\(\{[\s\S]*?model:\s*childModel,[\s\S]*?tools:\s*childTools/);
   assert.match(delegationSource, /workingReferences,/);
-  assert.match(mainSource, /delegationProvider,\s*\n\s*\}\),/);
+  assert.match(mainSource, /delegationProvider,/);
 });

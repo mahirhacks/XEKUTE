@@ -136,7 +136,10 @@ function createTier1ContextCoordinator({
         // secret scan is defense in depth for older files written before the
         // current redaction contract existed.
         const validation = schemas.validate("ConversationCheckpointV3", value);
-        if (validation.ok) state.summary = value;
+        if (validation.ok) {
+          state.summary = value;
+          state.workflow = value.workflow_continuity?.state === "completed" ? null : clone(value.workflow_continuity || null);
+        }
       }
     } catch { /* secure storage is optional; keep process-only state empty */ }
     return state;

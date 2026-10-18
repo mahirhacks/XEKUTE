@@ -2,7 +2,10 @@
 
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const fs = require("node:fs");
 const asar = require("@electron/asar");
+const { getCurrentFuseWire } = require("@electron/fuses");
+const { isIgnoredPackagePath, PACKAGED_FUSES } = require("../forge.config.js");
 
 const root = path.resolve(__dirname, "..");
 const archive = path.resolve(process.argv[2] || path.join(root, "out", `XEKUTE-${process.platform}-${process.arch}`, "resources", "app.asar"));
@@ -53,4 +56,41 @@ for (const asset of assets) {
   assert.ok(extractFile(path.posix.join(uiRoot, asset)).length > 0);
 }
 
-console.log(`Package verified: archive links resolve internally, node-forge ${manifest.version} and the compiled UI are bundled.`);
+// Only allowlisted runtime files may ship (no .env, tmp scripts, tests, notes).
+function checkAllowlist(files, directory = "") {
+  for (const [name, entry] of Object.entries(files)) {
+    const relative = `${directory}/${name}`;
+    assert.ok(!isIgnoredPackagePath(relative), `Packaged file is outside the runtime allowlist: ${relative}`);
+    if (entry.files) checkAllowlist(entry.files, relative);
+  }
+}
+checkAllowlist(header.files);
+assert.throws(() => statFile("src/ui/index.legacy.html"), "The legacy UI shell must not ship");
+
+// Native modules load from app.asar.unpacked, for the packaged platform only.
+const resourcesDir = path.dirname(archive);
+const unpacked = path.join(resourcesDir, "app.asar.unpacked", "node_modules");
+const target = `${process.platform}-${process.arch}`;
+const ptyPrebuilds = path.join(unpacked, "node-pty", "prebuilds");
+for (const binary of ["pty.node", "conpty.node"]) {
+  assert.ok(fs.existsSync(path.join(ptyPrebuilds, target, binary)), `node-pty ${target}/${binary} is not unpacked`);
+}
+assert.deepEqual(fs.readdirSync(ptyPrebuilds), [target], "node-pty ships prebuilds for other platforms");
+const ortBinding = path.join(unpacked, "onnxruntime-node", "bin", "napi-v3", process.platform, process.arch, "onnxruntime_binding.node");
+assert.ok(fs.existsSync(ortBinding), `onnxruntime-node binding for ${target} is not unpacked`);
+
+async function checkFuses() {
+  const executable = path.join(path.dirname(resourcesDir), process.platform === "win32" ? "XEKUTE.exe" : "XEKUTE");
+  const wire = await getCurrentFuseWire(executable);
+  for (const [option, enabled] of Object.entries(PACKAGED_FUSES)) {
+    const expected = enabled ? 49 : 48; // FuseState.ENABLE / FuseState.DISABLE
+    assert.equal(wire[option], expected, `Electron fuse ${option} is ${wire[option]}, expected ${expected}`);
+  }
+}
+
+checkFuses().then(() => {
+  console.log(`Package verified: archive links resolve internally, node-forge ${manifest.version} and the compiled UI are bundled, only allowlisted files ship, ${target} native modules are unpacked, and fuses are set.`);
+}, (error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -9,6 +9,16 @@ function createAuthorityPolicyGate() {
       return allow("authority_policy_gate", "Operator-input tools do not require approval to ask a question.");
     }
     const mode = profile?.approvalMode || "conditional";
+    const browserPolicy = toolName === "browser_action" ? state.scope?.browserPolicy : null;
+    if (browserPolicy) {
+      if (browserPolicy.decision !== "require_approval") return allow("authority_policy_gate", "The browser policy permits this action.", { browserPolicy });
+      return decision("authority_policy_gate", {
+        decision: "require_approval",
+        terminal: false,
+        reason: browserPolicy.reason,
+        metadata: { profile: profile.id, browserPolicy, browserScopeApproval: Boolean(browserPolicy.scopeException) },
+      });
+    }
     const softScope = state.scopeDecision === "soft_violation";
     const allowRulesConfigured = Array.isArray((runtime?.authorityRules || {}).allow) && runtime.authorityRules.allow.length > 0;
     const unlisted = (allowRulesConfigured || state.allowList?.required) && !state.allowList?.matched;

@@ -66,7 +66,7 @@ test("G0/G20/C1 registry contains exactly one resolver, 19 resolved stages, and 
     assert.equal(profile.modulePipeline.includes("authority_profile_resolver"), false);
     assert.equal(new Set(profile.modulePipeline).size, profile.modulePipeline.length);
   }
-  assert.equal(composition.registry.profile("full_authority").modulePipeline.includes("approval_gate"), false);
+  assert.equal(composition.registry.profile("full_authority").modulePipeline.includes("approval_gate"), true);
 });
 
 test("G1 role access enforces every canonical mode surface under every authority", async () => {
@@ -402,7 +402,7 @@ test("G19/C2/C4 pipeline executes once in order, redacts output, and audits Full
   assert.equal(result.ok, true);
   assert.equal(result.value.authorization, "[REDACTED]");
   assert.equal(events.filter((event) => event.stage === "authority_profile_resolver").length, 1);
-  assert.equal(events.some((event) => event.stage === "approval_stage_skipped"), true);
+  assert.equal(events.some((event) => event.stage === "approval_gate" && event.decision?.metadata?.skipped === true), true);
   assert.equal(events.at(-1).stage, "audit_module");
   assert.ok(result.auditReference);
   const auditVerification = auditStore.verify(root);

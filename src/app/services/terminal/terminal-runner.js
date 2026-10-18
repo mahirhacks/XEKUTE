@@ -3,6 +3,7 @@
 const { spawn } = require("node:child_process");
 const { resolveShellInvocation } = require("../../../agent/tools/process/exec-command.js");
 const { createTerminalOutputBatcher } = require("./terminal-output-batcher.js");
+const { appendTerminalOutput } = require("./active-terminal-catalog.js");
 
 const ANSI_RE = /[\u001B\u009B][[\]()#;?]*(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?[?-??-??-??-?a-zA-Z\d])|\u001B\][^\x07]*(?:\x07|\u001B\\)/g;
 
@@ -47,20 +48,22 @@ function createAgentTerminalRunner({
   }
 
   function registerTerminal(webContents, id, term, meta = {}) {
-    terminals.set(id, {
+    Object.assign(meta, {
       pty: term,
       ownerId: webContents.id,
       agent: true,
       readOnly: true,
-      buffer: "",
-      ...meta,
+      exited: false,
     });
+    meta.createdAt = new Date().toISOString();
+    terminals.set(id, meta);
   }
 
   function attachBuffer(term, webContents, id, record) {
     const batch = createTerminalOutputBatcher((data) => sendTerminalData(webContents, id, data));
     record.flushTerminalOutput = () => batch.flush();
     term.onData((data) => {
+      appendTerminalOutput(record, data);
       record.buffer = takeLimited(String(record.buffer || "") + data, 50000);
       record.stdout = record.buffer;
       batch.push(data);
@@ -83,7 +86,7 @@ function createAgentTerminalRunner({
       useConpty: process.platform === "win32",
     });
 
-    const record = { buffer: "", command, toolName, cwd: resolved.root, running: true };
+    const record = { buffer: "", command, toolName, workspace, cwd: resolved.root, running: true };
     registerTerminal(webContents, id, term, record);
     attachBuffer(term, webContents, id, record);
 
@@ -118,6 +121,8 @@ function createAgentTerminalRunner({
       timedOut: Boolean(timedOut),
     });
     record.running = false;
+    record.exited = true;
+    record.exitCode = exitCode;
     return {
       ok: !timedOut && exitCode === 0,
       mode: "command",
@@ -236,16 +241,14 @@ function createAgentTerminalRunner({
         };
         if (signal?.aborted) abortProcess();
         else signal?.addEventListener("abort", abortProcess, { once: true });
-        terminals.set(id, {
-          pty: terminalPty,
+        const terminalRecord = {
           child,
-          ownerId: webContents.id,
-          agent: true,
-          readOnly: true,
           command,
           toolName,
+          workspace,
           cwd: resolved.target || resolved.root,
-        });
+        };
+        registerTerminal(webContents, id, terminalPty, terminalRecord);
         onChildProcess?.({ pid: child.pid, terminalId: id, executable: resolvedExecutable });
         if (exposeTerminal) {
           announceAgentTerminal(webContents, sendAgentEvent, {
@@ -257,11 +260,13 @@ function createAgentTerminalRunner({
           ? createTerminalOutputBatcher((data) => sendTerminalData(webContents, id, data))
           : null;
         child.stdout?.on("data", (chunk) => {
+          appendTerminalOutput(terminalRecord, chunk.toString());
           stdout = append(stdout, chunk);
           onProgress?.({ stream: "stdout", bytes: chunk.length || Buffer.byteLength(String(chunk)) });
           if (outputBatch) outputBatch.push(chunk.toString());
         });
         child.stderr?.on("data", (chunk) => {
+          appendTerminalOutput(terminalRecord, chunk.toString());
           stderr = append(stderr, chunk);
           onProgress?.({ stream: "stderr", bytes: chunk.length || Buffer.byteLength(String(chunk)) });
           if (outputBatch) outputBatch.push(chunk.toString());
@@ -273,6 +278,7 @@ function createAgentTerminalRunner({
         }, Math.max(1, Math.min(requestedTimeout, 86_400_000))) : null;
         child.on("error", (error) => {
           if (settled) return;
+          terminalRecord.exited = true;
           if (timer) clearTimeout(timer);
           signal?.removeEventListener("abort", abortProcess);
           outputBatch?.flush();
@@ -285,6 +291,8 @@ function createAgentTerminalRunner({
         });
         child.on("close", (exitCode, closeSignal) => {
           if (settled) return;
+          terminalRecord.exited = true;
+          terminalRecord.exitCode = exitCode;
           if (timer) clearTimeout(timer);
           signal?.removeEventListener("abort", abortProcess);
           outputBatch?.flush();
@@ -389,6 +397,7 @@ function createAgentTerminalRunner({
 
       term.onExit(({ exitCode, signal }) => {
         record.running = false;
+        record.exited = true;
         record.exitCode = exitCode;
         record.signal = signal;
         terminals.delete(id);

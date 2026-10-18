@@ -49,9 +49,6 @@ function createInvocationPipeline({ authorityRegistry, concurrency } = {}) {
         const value = await adapter.evaluate({ context, state, profile: resolved.profile, toolName, args, entry, runtime });
         recordDecision(state, value);
         auditEvent(adapter.name, { decision: value });
-        if (adapter.name === "authority_policy_gate" && !resolved.profile.modulePipeline.includes("approval_gate")) {
-          auditEvent("approval_stage_skipped", { reason: "The resolved Full Authorization profile has no approval stage." });
-        }
         if (value.terminal) { terminalDecision = value; break; }
       }
 

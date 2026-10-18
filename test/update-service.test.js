@@ -127,7 +127,7 @@ test("full lifecycle: check → available → progress → downloaded → quitAn
   backend.emitter.emit("progress", { percent: 42.7 });
   backend.emitter.emit("downloaded", { version: "0.2.0" });
   const types = events.map((event) => event.type);
-  assert.deepEqual(types, ["checking", "available", "downloading", "progress", "downloaded"]);
+  assert.deepEqual(types, ["checking", "available", "downloading", "progress", "downloaded", "installing"]);
   const progress = events.find((event) => event.type === "progress");
   assert.equal(progress.percent, 43);
   assert.equal(service.downloadedVersion(), "0.2.0");
@@ -253,6 +253,12 @@ test("electron-updater classifies a missing packaged update config during downlo
   assert.match(errors[0].userMessage, /latest XEKUTESetup\.exe once/);
 });
 
+test("a full disk is reported as a disk-space problem, not a connection problem", () => {
+  const failure = normalizeUpdaterFailure(Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" }), "download");
+  assert.equal(failure.code, "UPDATE_DISK_FULL");
+  assert.match(failure.userMessage, /disk space/);
+});
+
 test("install promise rejection is forwarded as an error event", async () => {
   const backend = createScriptedBackend();
   backend.install = () => Promise.reject(new Error("Please check update first"));
@@ -345,21 +351,91 @@ test("development backend never invokes an updater and reports disabled", async 
   assert.throws(() => backend.install(), /disabled in development/i);
 });
 
-test("downloaded update marks the process ready for an immediate quit", async () => {
-  let ready = 0;
-  const events = [];
+test("downloaded update prepares durable state before quitAndInstall", async () => {
+  const order = [];
   const backend = createScriptedBackend();
+  backend.quitAndInstall = () => order.push("quitAndInstall");
+  const events = [];
   const service = createUpdateService({
-    app: { relaunch() {}, exit() {} },
+    app: { relaunch() {}, exit() {}, quit() {} },
     backend,
     settingsStore: tempSettings(),
     sendEvent: (payload) => events.push(payload),
-    onInstallReady: () => { ready += 1; },
+    prepareInstall: async () => {
+      order.push("prepare:start");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      order.push("prepare:done");
+    },
+    log: () => {},
   });
   service.check({ manual: true });
   backend.emitter.emit("downloaded", { version: "0.2.8" });
-  assert.equal(ready, 1);
-  assert.equal(events.at(-1).type, "downloaded");
+  assert.deepEqual(events.slice(-2).map((event) => event.type), ["downloaded", "installing"]);
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  assert.deepEqual(order, ["prepare:start", "prepare:done", "quitAndInstall"]);
+});
+
+test("a hung prepare step still installs after its timeout", async () => {
+  const backend = createScriptedBackend();
+  const service = createUpdateService({
+    app: { relaunch() {}, exit() {}, quit() {} },
+    backend,
+    settingsStore: tempSettings(),
+    sendEvent: () => {},
+    prepareInstall: () => new Promise(() => {}),
+    prepareTimeoutMs: 100,
+    log: () => {},
+  });
+  service.check({ manual: true });
+  backend.emitter.emit("downloaded", { version: "0.2.8" });
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  assert.equal(backend.counts().quit, 1);
+});
+
+test("a download that finishes during an agent run waits for the operator", async () => {
+  let busy = true;
+  let prepared = 0;
+  const events = [];
+  const backend = createScriptedBackend();
+  const service = createUpdateService({
+    app: { relaunch() {}, exit() {}, quit() {} },
+    backend,
+    settingsStore: tempSettings(),
+    sendEvent: (payload) => events.push(payload),
+    isBusy: () => busy,
+    prepareInstall: () => { prepared += 1; },
+    log: () => {},
+  });
+  service.check({ manual: true });
+  backend.emitter.emit("available", { version: "0.2.8" });
+  service.install();
+  backend.emitter.emit("downloaded", { version: "0.2.8" });
+  assert.deepEqual(events.at(-1), { type: "downloaded", version: "0.2.8", deferred: true });
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  assert.equal(prepared, 0);
+  assert.equal(backend.counts().quit, 0);
+
+  // Explicit operator consent installs the downloaded build without re-downloading.
+  busy = true;
+  assert.deepEqual(service.install(), { ok: true, installing: true });
+  assert.deepEqual(service.install(), { ok: true, skipped: true });
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  assert.equal(prepared, 1);
+  assert.equal(backend.counts().installed, 1);
+  assert.equal(backend.counts().quit, 1);
+});
+
+test("electron-updater backend forbids downgrades and keeps install-on-quit", () => {
+  const autoUpdater = {
+    allowDowngrade: true,
+    autoInstallOnAppQuit: false,
+    on() {},
+    setFeedURL() {},
+    checkForUpdates() {},
+  };
+  createElectronUpdaterBackend({ autoUpdater, provider: { provider: "github", owner: "o", repo: "r" } }).check();
+  assert.equal(autoUpdater.allowDowngrade, false);
+  assert.equal(autoUpdater.autoInstallOnAppQuit, true);
 });
 
 test("nextMinorVersion bumps the minor and resets patch", () => {

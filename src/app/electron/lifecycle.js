@@ -5,10 +5,21 @@
  * window/menu/container functions; this module owns only process-level
  * startup, single-instance behavior, and the final durable-memory flush.
  */
+
+// Must equal electron-builder's appId: the NSIS shortcuts carry this AUMID,
+// and Windows groups taskbar windows and toasts by it.
+const APP_USER_MODEL_ID = "com.xekute.securityworkspace";
+
 let allowImmediateQuit = false;
+let activeShutdown = null;
 
 function setAllowImmediateQuit(value) {
   allowImmediateQuit = Boolean(value);
+}
+
+/** Flushes and disposes durable state before an installer replaces app files. */
+function prepareForUpdateInstall() {
+  return activeShutdown ? activeShutdown() : Promise.resolve();
 }
 
 function registerLifecycle({
@@ -19,7 +30,7 @@ function registerLifecycle({
   createWindow,
   createApplicationMenu,
   shutdown = null,
-  applicationId = "com.pointer.securityworkspace",
+  applicationId = APP_USER_MODEL_ID,
 } = {}) {
   if (!app || !BrowserWindow || !session || !container) {
     throw new TypeError("registerLifecycle requires app, BrowserWindow, session, and container");
@@ -31,7 +42,6 @@ function registerLifecycle({
     return false;
   }
 
-  let shuttingDown = false;
   app.on("second-instance", () => {
     const window = typeof createWindow === "function" ? createWindow() : null;
     if (!window || window.isDestroyed?.()) return;
@@ -57,20 +67,31 @@ function registerLifecycle({
     return Promise.all([runtimeShutdown, chatHistoryFlush, tier1Flush].map((pending) => Promise.resolve(pending)));
   }
 
+  // One graceful shutdown per process, shared by a normal quit and an update
+  // install, so the installer never races half-closed stores or live ptys.
+  let shutdownPromise = null;
+  let shutdownDone = false;
+  function shutdownOnce() {
+    if (!shutdownPromise) {
+      shutdownPromise = flushDurableState()
+        .catch((error) => console.warn("Chat history flush failed during shutdown:", error?.message || error))
+        .then(() => container.dispose?.())
+        .catch((error) => console.warn("Shutdown dispose failed:", error?.message || error))
+        .finally(() => { shutdownDone = true; });
+    }
+    return shutdownPromise;
+  }
+  activeShutdown = shutdownOnce;
+
   app.on("before-quit", (event) => {
+    if (shutdownDone) return;
     if (allowImmediateQuit) {
-      shuttingDown = true;
-      flushDurableState().catch((error) => console.warn("Chat history flush failed during update install:", error?.message || error));
+      // The update installer is already waiting on this process; never hold it.
+      shutdownOnce();
       return;
     }
-    if (shuttingDown) return;
-    shuttingDown = true;
     event.preventDefault?.();
-    flushDurableState()
-      .catch((error) => console.warn("Chat history flush failed during shutdown:", error?.message || error))
-      .finally(async () => {
-        try { await container.dispose?.(); } finally { app.quit(); }
-      });
+    shutdownOnce().finally(() => app.quit());
   });
 
   app.on("window-all-closed", () => {
@@ -84,4 +105,4 @@ function registerLifecycle({
   return true;
 }
 
-module.exports = { registerLifecycle, setAllowImmediateQuit };
+module.exports = { registerLifecycle, setAllowImmediateQuit, prepareForUpdateInstall, APP_USER_MODEL_ID };

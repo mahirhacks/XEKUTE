@@ -65,7 +65,8 @@ test("renderer keeps Ollama thinking separate from OpenRouter effort selection",
   assert.match(renderer, /reasoningEffort: runContextPlan\.provider === "openrouter"/);
   assert.match(renderer, /function renderReasoningOptions\(/);
   assert.match(renderer, /className = "reasoning-option"[\s\S]*?codicon codicon-check/);
-  assert.match(renderer, /model-item-effort/);
+  assert.match(markup, /id="model-effort-value"/);
+  assert.match(renderer, /modelEffortValue\.textContent = selected \? reasoningEffortLabel\(selected\)/);
   assert.match(renderer, /if \(!editingModel \|\| isOpenRouterProvider\(\)\) return;/);
   assert.match(styles, /\.model-edit-section\[hidden\],[\s\S]*?display: none !important;/);
   assert.match(styles, /\.reasoning-options\s*\{[\s\S]*?flex-direction: column;/);

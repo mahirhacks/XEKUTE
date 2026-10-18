@@ -1,9 +1,13 @@
 /* Structured chat timeline matching chat.json: two-lane Cursor-style events
  * (prose vs activity). Capture still walks the live DOM; normalize is the persist shape. */
 
+import { QUESTION_ANSWER_CLASS, questionAnswerEvent, questionAnswerFromEvent, readQuestionAnswerCard } from "./question-answers.js";
+import { validPromptImages } from "./image-attachments.js";
+
 export const CHAT_TRANSCRIPT_VERSION = 2;
 const MAX_RUNS = 200;
 const MAX_EVENTS = 400;
+const MAX_TIMELINE_ITEMS = 500;
 const MAX_ITEMS = 200;
 const MAX_CHAT_TEXT = 200_000;
 const MAX_THINKING_TEXT = 50_000;
@@ -90,17 +94,21 @@ function normalizeTool(item = {}) {
   const args = item.args && typeof item.args === "object" && !Array.isArray(item.args)
     ? { ...item.args }
     : {};
+  const name = clip(item.name || item.toolName || item.action || "", MAX_NAME);
   const target = clip(item.target || item.path || args.path || args.file || "", MAX_PATH);
-  if (target && !args.path) args.path = target;
+  // Older saves used the tool name as the target of non-file rows; it is not a path.
+  const pathTarget = target === name ? "" : target;
+  if (pathTarget && !args.path) args.path = pathTarget;
   const verb = clip(item.verb || "", 40);
   return compact({
     type: "tool",
     lane: eventLane("tool", item),
     verb: verb || undefined,
-    name: clip(item.name || item.toolName || item.action || "", MAX_NAME),
+    name,
     target,
-    path: clip(item.path || target, MAX_PATH),
+    path: clip(item.path === name ? "" : item.path || pathTarget, MAX_PATH),
     args,
+    label: clip(item.label || "", 240) || undefined,
     status: String(item.status || "ok").toLowerCase() === "error" ? "error" : "ok",
   });
 }
@@ -142,6 +150,7 @@ function normalizeChatEvent(event = {}) {
     lane: eventLane("chat", event),
     created_at: toIso(event.created_at || event.createdAt),
     verdict: event.verdict === true ? true : undefined,
+    answered: event.answered === true ? true : undefined,
     text: clip(event.text || event.content || "", MAX_CHAT_TEXT),
   });
 }
@@ -184,6 +193,7 @@ function normalizeEvent(event) {
   if (type === "command") return normalizeCommand(event);
   if (type === "tool_group") return normalizeToolGroup(event);
   if (type === "subagent") return normalizeSubagent(event);
+  if (type === "questions") return questionAnswerEvent(questionAnswerFromEvent(event));
   return null;
 }
 
@@ -198,8 +208,10 @@ function normalizeSubagent(item = {}) {
     child_invocation_id: childInvocationId,
     child_session_id: childSessionId,
     parent_session_id: clip(item.parent_session_id || item.parentSessionId || "", 160),
+    independent: Boolean(item.independent),
+    task_id: clip(item.task_id || item.taskId || "", 240) || undefined,
     model: clip(item.model || "", 160),
-    status: ["queued", "working", "running", "completed", "stopped", "failed"].includes(status) ? status : "completed",
+    status: ["queued", "working", "running", "waiting", "completed", "stopped", "failed"].includes(status) ? status : "completed",
     summary: clip(item.summary || "", 240),
   });
 }
@@ -209,9 +221,54 @@ function normalizeRun(run = {}, index = 0) {
     .map(normalizeEvent)
     .filter(Boolean)
     .slice(0, MAX_EVENTS);
+  let timelineEventCount = 0;
+  const timeline = (Array.isArray(run.timeline) ? run.timeline : [])
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      if (item.type === "user") {
+        const message = clip(item.message || item.text || "", MAX_CHAT_TEXT);
+        if (!message) return null;
+        const images = validPromptImages(item.images);
+        return compact({
+          type: "user",
+          created_at: toIso(item.created_at || item.createdAt),
+          message,
+          images: images.length ? images : undefined,
+          source_message_id: clip(item.source_message_id || item.sourceMessageId, 240) || undefined,
+          task_id: clip(item.task_id || item.taskId, 240) || undefined,
+        });
+      }
+      if (item.type === "assistant") {
+        const remaining = Math.max(0, MAX_EVENTS - timelineEventCount);
+        if (!remaining) return null;
+        const assistantEvents = (Array.isArray(item.events) ? item.events : [])
+          .map(normalizeEvent)
+          .filter(Boolean)
+          .slice(0, remaining);
+        timelineEventCount += assistantEvents.length;
+        return assistantEvents.length ? { type: "assistant", events: assistantEvents } : null;
+      }
+      return null;
+    })
+    .filter(Boolean)
+    .slice(0, MAX_TIMELINE_ITEMS);
   const user = run.user && typeof run.user === "object" ? run.user : {};
   const message = clip(user.message || user.text || "", MAX_CHAT_TEXT);
-  if (!message && !events.length) return null;
+  const messages = (Array.isArray(user.messages) ? user.messages : [])
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const text = clip(item.message || item.text || "", MAX_CHAT_TEXT);
+      if (!text) return null;
+      return compact({
+        created_at: toIso(item.created_at || item.createdAt),
+        message: text,
+        source_message_id: clip(item.source_message_id || item.sourceMessageId, 240) || undefined,
+        task_id: clip(item.task_id || item.taskId, 240) || undefined,
+      });
+    })
+    .filter(Boolean)
+    .slice(0, 100);
+  if (!message && !messages.length && !events.length) return null;
   const worked = finiteMs(run.worked_for_ms ?? run.workedForMs);
   const status = String(run.status || "").toLowerCase();
   return compact({
@@ -223,8 +280,12 @@ function normalizeRun(run = {}, index = 0) {
     user: compact({
       created_at: toIso(user.created_at || user.createdAt || run.started_at),
       message,
+      source_message_id: clip(user.source_message_id || user.sourceMessageId, 240) || undefined,
+      task_id: clip(user.task_id || user.taskId, 240) || undefined,
+      messages: messages.length ? messages : undefined,
     }),
     events,
+    timeline: timeline.length ? timeline : undefined,
   });
 }
 
@@ -324,6 +385,8 @@ function captureSubagentItem(card) {
     child_invocation_id: childInvocationId,
     child_session_id: childSessionId,
     parent_session_id: clip(dataset(card).parentSessionId || "", 160),
+    independent: dataset(card).independent === "true",
+    task_id: clip(dataset(card).taskId || "", 240) || undefined,
     model: clip(dataset(card).model || "", 160),
     status: clip(dataset(card).state || "completed", 40) || "completed",
     summary: clip(detail, 240),
@@ -333,9 +396,12 @@ function captureSubagentItem(card) {
 function captureToolItem(card) {
   if (!card || card.hidden) return null;
   const name = clip(dataset(card).toolAction || "", MAX_NAME);
-  const path = clip(dataset(card).path || dataset(card).file || "", MAX_PATH);
+  // A row's file is only its real path; display names such as a browser
+  // action's are not paths.
+  const path = clip(dataset(card).path || "", MAX_PATH);
+  const file = dataset(card).file === name ? "" : dataset(card).file;
   const target = clip(
-    dataset(card).file || path.split(/[/\\]/).filter(Boolean).at(-1) || "",
+    file || path.split(/[/\\]/).filter(Boolean).at(-1) || "",
     MAX_PATH,
   );
   if (!name && !target && !path) return null;
@@ -346,7 +412,8 @@ function captureToolItem(card) {
     name,
     target: target.split(/[/\\]/).filter(Boolean).at(-1) || target,
     path: path || target,
-    args: path || target ? { path: path || target } : {},
+    args: path ? { path } : {},
+    label: clip(String(card.querySelector?.(".tool-card-file")?.textContent || "").trim(), 240) || undefined,
     status: dataset(card).state === "error" ? "error" : "ok",
   });
 }
@@ -437,12 +504,18 @@ function captureNode(node, events, { verdict = false } = {}) {
       lane: "prose",
       created_at: toIso(dataset(node).createdAt),
       verdict: verdict || isVerdictReply(node) ? true : undefined,
+      answered: dataset(node).answered === "true" ? true : undefined,
       text: clip(replyText(node), MAX_CHAT_TEXT),
     }));
     return;
   }
   if (classListContains(node, "agent-thinking-fold")) {
     events.push(captureThinkingEvent(node));
+    return;
+  }
+  if (classListContains(node, QUESTION_ANSWER_CLASS)) {
+    const event = questionAnswerEvent(readQuestionAnswerCard(node));
+    if (event) events.push(event);
     return;
   }
   if (classListContains(node, "agent-file-stack")) {
@@ -499,19 +572,54 @@ function lastEventTime(events = []) {
 
 function captureExchangeRun(exchange, index) {
   const body = exchange.querySelector?.(":scope > .chat-exchange-body") || exchange;
-  const userTurn = body.querySelector?.(":scope > .chat-turn.user")
+  const userTurns = [...(body.querySelectorAll?.(":scope > .chat-turn.user") || [])];
+  const userTurn = userTurns[0]
     || exchange.querySelector?.(".chat-turn.user");
   const userText = userTurn ? userMessageText(userTurn) : "";
+  const userMessages = userTurns.map((turn) => compact({
+    created_at: toIso(dataset(turn).createdAt),
+    message: userMessageText(turn),
+    source_message_id: dataset(turn).sourceMessageId || undefined,
+    task_id: dataset(turn).taskId || undefined,
+  })).filter((item) => item.message);
   const events = [];
-  const host = body.querySelector?.(":scope > .agent-response-host") || body;
-  for (const turn of host.querySelectorAll?.(".chat-turn.assistant") || []) {
-    if (classListContains(turn, "agent-run-stop") || turn.closest?.(".agent-run-stop")) continue;
-    captureAssistantTurn(turn, events);
+  const timeline = [];
+  const captureTurn = (turn) => {
+    if (classListContains(turn, "agent-run-stop") || turn.closest?.(".agent-run-stop")) return;
+    const assistantEvents = [];
+    captureAssistantTurn(turn, assistantEvents);
+    if (!assistantEvents.length) return;
+    const normalizedEvents = mergeConsecutiveFileEvents(assistantEvents);
+    events.push(...normalizedEvents);
+    timeline.push({ type: "assistant", events: normalizedEvents });
+  };
+  for (const child of childList(body)) {
+    if (classListContains(child, "chat-turn") && classListContains(child, "user")) {
+      const message = userMessageText(child);
+      const images = validPromptImages([...(child.querySelectorAll?.(".user-prompt-images img") || [])]
+        .map((img) => ({ thumb: img.getAttribute("src"), id: img.dataset?.imageId || "" })));
+      if (message) timeline.push({
+        type: "user",
+        created_at: toIso(dataset(child).createdAt),
+        message,
+        images: images.length ? images : undefined,
+        source_message_id: dataset(child).sourceMessageId || undefined,
+        task_id: dataset(child).taskId || undefined,
+      });
+      continue;
+    }
+    if (classListContains(child, "agent-response-host")) {
+      for (const turn of child.querySelectorAll?.(".chat-turn.assistant") || []) captureTurn(turn);
+      continue;
+    }
+    if (classListContains(child, "chat-turn") && classListContains(child, "assistant")) captureTurn(child);
   }
   if (!userText && !events.length) return null;
-  const fold = host.querySelector?.(".chat-turn.assistant > .agent-work-fold");
+  const hosts = [...(body.querySelectorAll?.(":scope > .agent-response-host") || [])];
+  const workRoot = hosts.length ? hosts : [body];
+  const fold = workRoot.map((host) => host.querySelector?.(".chat-turn.assistant > .agent-work-fold")).find(Boolean);
   const header = fold?.querySelector?.(":scope > .agent-work-header")
-    || host.querySelector?.(".chat-turn.assistant > .agent-work-header, .chat-turn.assistant > .agent-work-fold");
+    || workRoot.map((host) => host.querySelector?.(".chat-turn.assistant > .agent-work-header, .chat-turn.assistant > .agent-work-fold")).find(Boolean);
   const startedAt = toIso(dataset(header).startedAt) || toIso(dataset(userTurn).createdAt)
     || toIso(events[0]?.created_at || events[0]?.started_at);
   return compact({
@@ -523,8 +631,12 @@ function captureExchangeRun(exchange, index) {
     user: compact({
       created_at: toIso(dataset(userTurn).createdAt) || startedAt,
       message: userText,
+      source_message_id: dataset(userTurn).sourceMessageId || undefined,
+      task_id: dataset(userTurn).taskId || undefined,
+      messages: userMessages.length ? userMessages : undefined,
     }),
     events: mergeConsecutiveFileEvents(events),
+    timeline,
   });
 }
 

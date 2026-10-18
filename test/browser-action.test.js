@@ -148,3 +148,26 @@ test("browser_action contains no authority or scope decision", async () => {
   assert.equal("scope" in result.value, false);
   assert.equal("authorized" in result.value, false);
 });
+
+test("browser_action rejects mixed legacy selectors and explicit targets before dispatch", async () => {
+  let dispatched = 0;
+  const tool = createBrowserActionTool({ browserProvider: fakeProvider(async () => { dispatched++; return { ok: true }; }) });
+  for (const action of ["click", "double_click", "move", "hover", "type", "select", "upload", "scroll"]) {
+    const result = await tool.execute({ action, selector: "#different-element", target: { kind: "element", observationId: "obs-1", ref: "e-1" },
+      text: "fixture", paths: ["fixture.txt"], deltaX: 0, deltaY: 100 }, execContext());
+    assert.equal(result.error.code, "INVALID_BROWSER_ACTION_INPUT", action);
+  }
+  assert.equal(dispatched, 0);
+});
+
+test("browser_action exposes and forwards canonical extract fields", async () => {
+  const seen = [];
+  const tool = createBrowserActionTool({ browserProvider: fakeProvider(async input => { seen.push(input); return { attribute: "https://fixture.test/" }; }) });
+  assert.ok(tool.inputSchema.properties.type.enum.includes("attribute"));
+  assert.equal(tool.inputSchema.properties.attribute.type, "string");
+  const input = { action: "extract", selector: "a", type: "attribute", attribute: "href" };
+  assert.equal((await tool.execute(input, execContext())).ok, true);
+  assert.deepEqual(seen, [input]);
+  assert.equal((await tool.execute({ action: "extract", type: "attribute", attribute: "href" }, execContext())).error.code, "INVALID_BROWSER_ACTION_INPUT");
+  assert.equal(seen.length, 1);
+});

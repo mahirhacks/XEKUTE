@@ -25,14 +25,19 @@ function createMemorySchemaRegistry({ ajv = null, schemas = SCHEMAS } = {}) {
   const source = schemas && typeof schemas === "object" ? schemas : {};
   for (const [name, schema] of Object.entries(source)) {
     if (!schema || typeof schema !== "object" || !schema.$id) throw new Error(`V3 schema '${name}' is missing a stable $id.`);
-    compiled.set(name, validator.compile(schema));
   }
 
+  // Schemas register and compile on first use, keeping them off the startup path.
+  let registered = false;
   function resolve(name) {
     const key = String(name || "");
-    const check = compiled.get(key);
-    if (!check) throw new MemoryContractError("MEMORY_SCHEMA_NOT_FOUND", `Unknown V3 memory schema: ${key || "<empty>"}.`, { schema: key });
-    return check;
+    if (!Object.hasOwn(source, key)) throw new MemoryContractError("MEMORY_SCHEMA_NOT_FOUND", `Unknown V3 memory schema: ${key || "<empty>"}.`, { schema: key });
+    if (!registered) {
+      for (const schema of Object.values(source)) validator.addSchema(schema);
+      registered = true;
+    }
+    if (!compiled.has(key)) compiled.set(key, validator.getSchema(source[key].$id));
+    return compiled.get(key);
   }
 
   function validate(name, value) {
@@ -51,8 +56,8 @@ function createMemorySchemaRegistry({ ajv = null, schemas = SCHEMAS } = {}) {
     return result.value;
   }
 
-  function has(name) { return compiled.has(String(name || "")); }
-  function list() { return [...compiled.keys()]; }
+  function has(name) { return Object.hasOwn(source, String(name || "")); }
+  function list() { return Object.keys(source); }
 
   return Object.freeze({
     version: V3_SCHEMA_VERSION,

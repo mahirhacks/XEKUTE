@@ -49,6 +49,7 @@
 !macro customInstall
   ${If} $desktopShortcutChoice == ${BST_CHECKED}
     CreateShortCut "$DESKTOP\${SHORTCUT_NAME}.lnk" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+    WinShell::SetLnkAUMI "$DESKTOP\${SHORTCUT_NAME}.lnk" "${APP_ID}"
     DetailPrint "Created desktop shortcut."
   ${Else}
     DetailPrint "Desktop shortcut skipped."
@@ -56,10 +57,21 @@
 
   ${If} $taskbarShortcutChoice == ${BST_CHECKED}
     CreateShortCut "$SMPROGRAMS\${SHORTCUT_NAME}.lnk" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+    WinShell::SetLnkAUMI "$SMPROGRAMS\${SHORTCUT_NAME}.lnk" "${APP_ID}"
     DetailPrint "Created Start Menu shortcut. Pin it to the taskbar manually if desired."
   ${Else}
     DetailPrint "Start Menu shortcut skipped."
   ${EndIf}
 
   DetailPrint "NSIS will create uninstall.exe in the selected installation directory."
+!macroend
+
+; electron-builder only removes the shortcuts it creates itself. These are
+; created above, so remove them on a real uninstall. Silent updates skip the
+; shortcut page and keep the existing shortcuts.
+!macro customUnInstall
+  ${ifNot} ${isUpdated}
+    Delete "$DESKTOP\${SHORTCUT_NAME}.lnk"
+    Delete "$SMPROGRAMS\${SHORTCUT_NAME}.lnk"
+  ${endIf}
 !macroend

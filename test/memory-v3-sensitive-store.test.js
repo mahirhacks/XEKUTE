@@ -179,3 +179,67 @@ test("Tier 1 rejects an active conversation bound to another session", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Tier 1 transcript reads never return a cached value after the file changes or disappears", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-memory-v3-transcript-cache-"));
+  const protector = {
+    available: () => true,
+    encrypt: (value) => Buffer.from(String(value), "utf8").toString("base64"),
+    decrypt: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+  };
+  const writer = createTier1SensitiveStore({ fs, path, crypto, baseDir: root, protector });
+  const other = createTier1SensitiveStore({ fs, path, crypto, baseDir: root, protector });
+  const project = "proj_00000000-0000-4000-8000-000000009030";
+  const session = "session_00000000-0000-4000-8000-000000009031";
+  const block = (content) => ({ blocks: [{ block_id: "block_00000000-0000-4000-8000-000000009032", messages: [{ role: "user", content }] }] });
+  try {
+    assert.equal(writer.writeTranscript(project, session, block("first")).ok, true);
+    const read = writer.readTranscript(project, session);
+    read.value.blocks[0].messages[0].content = "mutated by caller";
+    assert.equal(writer.readTranscript(project, session).value.blocks[0].messages[0].content, "first");
+
+    assert.equal(other.writeTranscript(project, session, block("second, written elsewhere")).ok, true);
+    assert.equal(writer.readTranscript(project, session).value.blocks[0].messages[0].content, "second, written elsewhere");
+    // Same-size rewrites in the same instant still invalidate the cached copy.
+    for (let i = 0; i < 200; i += 1) {
+      writer.writeTranscript(project, session, block(`aaaa${i % 10}`));
+      writer.readTranscript(project, session);
+      other.writeTranscript(project, session, block(`bbbb${i % 10}`));
+      assert.equal(writer.readTranscript(project, session).value.blocks[0].messages[0].content, `bbbb${i % 10}`);
+    }
+
+    assert.equal(writer.deleteSession(project, session).ok, true);
+    assert.equal(writer.readTranscript(project, session).exists, false);
+    assert.equal(writer.writeTranscript(project, session, block("after delete")).ok, true);
+    assert.equal(other.readTranscript(project, session).value.blocks[0].messages[0].content, "after delete");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("chat images are stored encrypted with their session at full quality and removed with it", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-memory-v3-chat-images-"));
+  const protector = {
+    available: () => true,
+    encrypt: (value) => Buffer.from(String(value), "utf8").toString("base64"),
+    decrypt: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+  };
+  const store = createTier1SensitiveStore({ fs, path, crypto, baseDir: root, protector });
+  const projectId = "proj_00000000-0000-4000-8000-000000004151";
+  const sessionId = "session_00000000-0000-4000-8000-000000004152";
+  const data = Buffer.from("full quality image bytes").toString("base64");
+  const written = store.writeChatImage(projectId, sessionId, { mediaType: "image/png", data });
+  assert.equal(written.ok, true);
+  assert.equal(written.imageId, crypto.createHash("sha256").update(data).digest("hex"));
+  assert.doesNotMatch(fs.readFileSync(written.path, "utf8"), new RegExp(data), "the image is not stored in the clear");
+  assert.equal(store.writeChatImage(projectId, sessionId, { mediaType: "image/png", data }).changed, false);
+
+  const read = store.readChatImage(projectId, sessionId, written.imageId);
+  assert.deepEqual({ exists: read.exists, mediaType: read.mediaType, data: read.data }, { exists: true, mediaType: "image/png", data });
+  assert.equal(store.readChatImage(projectId, sessionId, "0".repeat(64)).exists, false);
+  assert.equal(store.readChatImage(projectId, sessionId, "../escape").ok, false);
+  assert.equal(store.writeChatImage(projectId, sessionId, { mediaType: "image/svg+xml", data }).ok, false);
+
+  store.deleteSession(projectId, sessionId);
+  assert.equal(store.readChatImage(projectId, sessionId, written.imageId).exists, false);
+});

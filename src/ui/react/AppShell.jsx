@@ -88,6 +88,12 @@ export default memo(function AppShell() {
           <header><div className="notification-panel-heading"><span className="codicon codicon-bell" aria-hidden="true"></span><strong>Notifications</strong></div><button type="button" id="notification-clear" className="icon-btn" title="Clear notifications" aria-label="Clear notifications"><span className="codicon codicon-clear-all"></span></button></header>
           <div id="notification-list" className="notification-list"><div className="notification-empty">No notifications</div></div>
         </div>
+        <div id="security-proxy-browser-wrap" className="security-proxy-browser-wrap">
+          <button type="button" id="security-proxy-browser" className="topbar-icon browser-topbar-icon" aria-label="Open browser" title="Open browser. Right-click to open a tab with an identity." aria-haspopup="menu" aria-expanded="false">
+            <span className="codicon codicon-globe" aria-hidden="true"></span>
+          </button>
+          <div id="security-proxy-browser-menu" className="security-proxy-browser-menu" role="menu" hidden></div>
+        </div>
         <button type="button" id="btn-top-terminal" className="topbar-icon active" title="Toggle terminal">
           <img className="chrome-icon" src="assets/icons/terminal_collapse_expand_icon.svg" alt="" aria-hidden="true" />
         </button>
@@ -436,6 +442,14 @@ export default memo(function AppShell() {
                         </div>
                       </div>
                       <div className="project-settings-card">
+                        <h3>Browser transfers</h3>
+                        <div className="project-field-grid compact">
+                          <label>Agent uploads <small>Files from this project only</small><select data-project-field="browser.uploads"><option value="allowed">Allowed</option><option value="blocked">Blocked</option></select></label>
+                          <label>Downloads in agent tabs<select data-project-field="browser.downloads"><option value="allowed">Allowed</option><option value="blocked">Blocked</option></select></label>
+                          <label>Download size limit (MiB)<input type="number" min="1" max="12" data-project-field="browser.maxDownloadMiB" data-project-kind="number" /></label>
+                        </div>
+                      </div>
+                      <div className="project-settings-card">
                         <h3>Technique boundaries</h3>
                         <div className="project-field-grid">
                           <label>Allowed technique IDs <small>One adapter or technique ID per line</small><textarea data-project-field="rulesOfEngagement.allowedTechniques" data-project-kind="array" rows="6" placeholder="httpx&#10;nmap&#10;T1595"></textarea></label>
@@ -582,7 +596,7 @@ export default memo(function AppShell() {
                       <div className="models-api-row">
                         <div>
                           <strong>Active provider</strong>
-                          <p>Only one provider is used for chat, agents, model listing, and verification.</p>
+                          <p>Select the provider for the main agent and chat.</p>
                         </div>
                         <select id="llm-provider" className="models-select" aria-label="Active LLM provider">
                           <option value="ollama">Ollama</option>
@@ -676,13 +690,6 @@ export default memo(function AppShell() {
                   </div>
                 </div>
                 <div id="security-workspace-tools" className="security-workspace-tools">
-                  <div id="security-proxy-browser-wrap" className="security-proxy-browser-wrap">
-                    <button type="button" id="security-proxy-browser" className="security-proxy-browser" aria-label="Open browser through XEKUTE proxy" title="Open browser through XEKUTE proxy" aria-haspopup="menu" aria-expanded="false">
-                      <span className="codicon codicon-globe" aria-hidden="true"></span>
-                      <span>Browser</span>
-                    </button>
-                    <div id="security-proxy-browser-menu" className="security-proxy-browser-menu" role="menu" hidden></div>
-                  </div>
                   <button type="button" id="security-history-toggle" className="security-history-toggle" aria-pressed="false" title="Show Traffic/Raw history">
                     <span className="codicon codicon-history" aria-hidden="true"></span>
                     <span>History</span>
@@ -836,9 +843,6 @@ export default memo(function AppShell() {
                     <span className="codicon codicon-symbol-event"></span><span><strong>Intruder</strong><small>Payload-position testing</small></span><span className="codicon codicon-check"></span>
                   </button>
                 </div>
-                <button type="button" id="security-analyze-button" className="security-analyze-button" title="Analyze request and response with AI" aria-label="Analyze exchange with AI" hidden>
-                  <span className="codicon codicon-copilot security-analyze-icon" aria-hidden="true"></span>
-                </button>
               </div>
               <div className="terminal-actions">
                 <button type="button" id="terminal-active-session" className="terminal-session-button terminal-shell-action" title="Select terminal or shell" aria-haspopup="menu" aria-expanded="false" disabled={true}>
@@ -1047,7 +1051,7 @@ export default memo(function AppShell() {
             </div>
             <div className="composer">
               <div id="slash-command-suggestions" className="slash-command-suggestions" role="listbox" aria-label="Available slash commands" hidden></div>
-              <div id="prompt-queue" className="prompt-queue" hidden></div>
+              <div id="composer-attachments" className="composer-attachments" aria-label="Attached images" hidden></div>
               <div className="composer-input-row">
                 <div id="chat-input" contentEditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Chat message" data-placeholder="Ask, investigate, run, or search" className="chat-input-empty"><span id="selected-slash-command" className="selected-slash-command" hidden></span></div>
               </div>
@@ -1061,7 +1065,7 @@ export default memo(function AppShell() {
                       <span className="codicon codicon-chevron-down chat-mode-chevron"></span>
                     </button>
                   </div>
-                  <button type="button" id="model-picker" className="model-pill composer-pill" title="Select model">
+                  <button type="button" id="model-picker" className="model-pill composer-pill" title="Select model" aria-haspopup="menu" aria-controls="model-controls-menu" aria-expanded="false">
                     <span id="model-label">Select model</span>
                     <span className="codicon codicon-chevron-down model-chevron"></span>
                   </button>
@@ -1078,6 +1082,10 @@ export default memo(function AppShell() {
                       <circle id="context-ring-fill" className="context-ring-fill" cx="10" cy="10" r="8"></circle>
                     </svg>
                   </button>
+                  <button type="button" id="attach-image-btn" className="composer-attach-btn" title="Attach images (up to 10)" aria-label="Attach images">
+                    <img className="composer-attach-icon" src="assets/icons/clip_icon.svg" alt="" aria-hidden="true" />
+                  </button>
+                  <input type="file" id="attach-image-input" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" multiple hidden />
                   <button type="button" id="send-btn" className="send-btn" title="Send message" aria-label="Send message" disabled={true}>
                     <span className="codicon codicon-arrow-up"></span>
                   </button>
@@ -1237,6 +1245,10 @@ export default memo(function AppShell() {
       </div>
     
       <div id="security-history-menu" className="security-history-menu" role="menu" hidden>
+        <button type="button" id="security-history-analyze" className="security-history-menu-item" data-action="analyze-agent" role="menuitem">
+          <span className="codicon codicon-copilot" aria-hidden="true"></span>
+          <span>Analyze with agent</span>
+        </button>
         <button type="button" className="security-history-menu-item" data-action="send-repeater" role="menuitem">
           <span className="codicon codicon-sync"></span>
           <span id="security-history-repeater-label">Send to Repeater</span>
@@ -1283,7 +1295,19 @@ export default memo(function AppShell() {
         </div>
       </div>
     
-      <div id="model-menu" className="model-menu" hidden>
+      <div id="model-controls-menu" className="model-controls-menu" role="menu" aria-label="Model settings" hidden>
+        <button type="button" id="model-context-trigger" className="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-edit-menu">
+          <span>Context</span><span id="model-context-value" className="model-control-value">Auto</span><span className="codicon codicon-chevron-right" aria-hidden="true"></span>
+        </button>
+        <button type="button" id="model-effort-trigger" className="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-edit-menu">
+          <span>Effort</span><span id="model-effort-value" className="model-control-value">Auto</span><span className="codicon codicon-chevron-right" aria-hidden="true"></span>
+        </button>
+        <div className="model-menu-divider" role="separator"></div>
+        <button type="button" id="model-browse-trigger" className="model-control-option model-browse-trigger" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="model-menu">
+          <span id="model-current-name">Select model</span><span className="codicon codicon-chevron-right" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div id="model-menu" className="model-menu" aria-label="Models" hidden>
         <input id="model-search" type="text" placeholder="Search models" spellCheck="false" />
         <div id="model-list" className="model-list"></div>
         <div className="model-menu-divider"></div>
@@ -1311,7 +1335,6 @@ export default memo(function AppShell() {
             </button>
           </div>
         </div>
-        <div className="model-edit-divider"></div>
         <div id="model-context-section" className="model-edit-section">
           <div className="model-edit-label">Context</div>
           <div id="context-options" className="context-options"></div>

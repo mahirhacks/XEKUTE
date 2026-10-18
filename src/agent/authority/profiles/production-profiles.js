@@ -7,9 +7,7 @@ function registerProductionProfiles(registry) {
   for (const profile of Object.values(PROFILES)) {
     registry.registerProfile({
       ...profile,
-      modulePipeline: profile.id === "full_authority"
-        ? moduleOrder.filter((name) => name !== "approval_gate")
-        : [...moduleOrder],
+      modulePipeline: [...moduleOrder],
     });
   }
   return registry;

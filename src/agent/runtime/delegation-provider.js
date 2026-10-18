@@ -6,7 +6,8 @@
 
 const crypto = require("node:crypto");
 const { redactStructuredValue, redactSecrets } = require("../../shared/secret-redaction.js");
-const { inferEditTarget, isEditRequest } = require("./prompt-context.js");
+const { requireReceipt } = require("./delegated-child-store.js");
+const { identifyToolCalls } = require("./tool-protocol.js");
 
 const MAX_TASK_CHARS = 12_000;
 const MAX_CONTEXT_CHARS = 32_000;
@@ -106,7 +107,7 @@ function buildChildContextText(input, executionContext, steeringSections = []) {
     "Return one JSON object only, at most 2000 characters in summary:",
     '{"status":"done|blocked|needs_operator","summary":"...","evidenceRefs":["workspace-relative path or evidence id"],"unverified":["claim you could not check"]}',
     "status done means you checked the claim. status blocked means you could not finish. status needs_operator means the parent must ask the user.",
-    "Do not edit files. Do not call apply_patch or delegate_agent. Investigate, then return the JSON object.",
+    "Complete the task, editing workspace files with apply_patch when it asks for changes. Do not call delegate_agent. Then return the JSON object.",
     String(expectedOutput.format || "").slice(0, 500),
   ];
   let contextText = sections.join("\n");
@@ -147,20 +148,13 @@ function isRetryableChildFailure(result = {}) {
   return /timeout|timed out|econnreset|econnrefused|rate limit|too many requests|\b429\b|\b502\b|\b503\b|unavailable|network/i.test(detail);
 }
 
-function requestedWorkspaceMutation(input = {}) {
-  const task = String(input?.task || "");
-  const target = inferEditTarget(task, null, "")
-    || (/\b(?:create|write|edit|modify|update|patch|replace|save)\b[\s\S]{0,120}?\b([\w./\\-]+\.[a-z0-9]{1,12})\b/i.exec(task)?.[1] || "");
-  return { required: Boolean(target && isEditRequest(task)), target: String(target || "").replace(/\\/g, "/") };
-}
-
 function isModelAvailabilityFailure(result = {}) {
   if (result?.ok !== false || result?.aborted) return false;
   const detail = `${result?.code || ""} ${result?.error || ""}`;
   return /(?:openrouter[^\n]*\b404\b|no endpoints? available|model[^\n]*(?:not found|unavailable)|provider[^\n]*(?:not available|unavailable))/i.test(detail);
 }
 
-function childResultStatus(result = {}, mutation = {}, actions = []) {
+function childResultStatus(result = {}) {
   if (result?.aborted) return "stopped";
   if (result?.ok === false) return "failed";
   const runtimeStatus = String(result?.runState?.status || "").toLowerCase();
@@ -225,10 +219,15 @@ function createRuntimeDelegationProvider({
   getActiveProvider = () => "",
   intelligence = null,
   tier1Context = null,
+  loadChatReferenceSnapshot = null,
   workingReferences = [],
   toolMetadataForName = () => null,
-  getBrowserTarget = () => "",
   checkpointRun = () => Promise.resolve(),
+  checkpointChild = null,
+  loadChild = null,
+  onChildCheckpoint = null,
+  beforeChildFinalize = null,
+  parentSessionAliases = [],
   onResultReady = null,
   onQuestionEnqueued = null,
   registerDelegatedQuestion = null,
@@ -326,7 +325,7 @@ function createRuntimeDelegationProvider({
     return (Array.isArray(source) ? source : [])
       .filter((tool) => {
         const name = String(tool?.function?.name || tool?.name || "");
-        return name !== "delegate_agent" && name !== "apply_patch";
+        return name !== "delegate_agent";
       });
   }
 
@@ -424,8 +423,7 @@ function createRuntimeDelegationProvider({
     return binding;
   }
 
-  function buildRun({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation, operation, previousHistory = [], model = "", steeringSections = [] }) {
-    const mutation = requestedWorkspaceMutation(input);
+  function buildRun({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation, operation, previousHistory = [], model = "", steeringSections = [], engine }) {
     const inheritedContext = executionContext || { mode, role: mode, workspace: { root: workspace }, invocationId: childInvocationId };
     const contextText = buildChildContextText(input, inheritedContext, steeringSections);
     const childModel = String(model || subagentModel || parentModel || "").trim();
@@ -467,22 +465,36 @@ function createRuntimeDelegationProvider({
       : null;
     const executeChildToolCall = async (request) => {
       const toolName = String(request?.toolCall?.function?.name || request?.toolCall?.toolName || "");
-      if (toolName === "apply_patch" || toolName === "delegate_agent") {
-        const denied = { ok: false, error: { code: "CHILD_TOOL_DENIED", message: "Delegated children cannot edit files or spawn agents." } };
+      if (toolName === "delegate_agent") {
+        const denied = { ok: false, error: { code: "CHILD_TOOL_DENIED", message: "Delegated children cannot spawn agents." } };
         childActions.push({ toolName, target: targetFromToolCall(request), ok: false, code: "CHILD_TOOL_DENIED" });
         return denied;
       }
       let toolResult;
+      const effectId = `${engine.cachedRound?.id || engine.runId}:${request.toolCall?.id || request.toolCall?.callId || crypto.randomUUID()}`;
+      const signature = crypto.createHash("sha256").update(JSON.stringify(request.toolCall)).digest("hex");
+      const prior = engine.completedEffects.get(effectId);
+      if (prior) {
+        if (prior.signature !== signature) throw Object.assign(new Error("The saved child tool call has different arguments."), { code: "CHILD_EFFECT_CONFLICT" });
+        return prior.result;
+      }
       try {
+        if (checkpointChild) await engine.persist({ effect: { id: effectId, roundId: engine.cachedRound?.id, signature, toolName, status: "started" } });
         toolResult = await executeToolCall({
           ...request,
           sessionId: childSessionId,
+          model: childModel,
+          provider: engine.contextPlan.provider,
           blockId,
           nested: true,
-          authorityProfile,
+          authorityProfile: engine.binding.authorityProfile,
           childInvocationId,
+          durableRunId: engine.runId,
+          operationId: effectId,
           ...(toolName === "ask_questions" && delegatedQuestionProvider ? { questionProvider: delegatedQuestionProvider } : {}),
         });
+        if (checkpointChild) await engine.persist({ effect: { id: effectId, roundId: engine.cachedRound?.id, signature, toolName, status: "completed", result: toolResult } });
+        engine.completedEffects.set(effectId, { signature, result: toolResult });
       } catch (error) {
         childActions.push({ toolName, target: targetFromToolCall(request), ok: false, code: String(error?.code || "TOOL_EXECUTION_FAILED") });
         throw error;
@@ -493,45 +505,92 @@ function createRuntimeDelegationProvider({
         ok: Boolean(toolResult?.ok && !toolResult?.error),
         code: String(toolResult?.error?.code || toolResult?.errorCode || toolResult?.code || ""),
       });
-      if (coordinator?.drainSteerQueue) {
-        coordinator.drainSteerQueue(childInvocationId, runKey);
-      }
       return toolResult;
     };
     return {
-      mutation,
       childActions,
       run: async () => {
-        let chatHistory = Array.isArray(previousHistory) ? [...previousHistory] : [];
-        let lastResult = null;
-        for (let roundIndex = 0; roundIndex < 256; roundIndex += 1) {
-          const steers = coordinator?.drainSteerQueue?.(childInvocationId, runKey) || [];
-          if (steers.length) {
-            chatHistory.push({
-              role: "user",
-              content: appendSteeringUpdate("", steers.map((item) => item.instruction)),
-            });
-          }
-          lastResult = await runAgentTurn({
+        const liveInput = coordinator?.peekSteerQueue && coordinator?.acknowledgeSteers && coordinator?.sealSteering ? {
+          boundary: async ({ revision }) => {
+            if (engine.cachedRound) return { ok: true, revision, cancellationEpoch: 0, deliveries: [], pendingPlan: engine.cachedRound };
+            for (const item of coordinator.peekSteerQueue(childInvocationId, runKey)) {
+              if (!engine.deliveries.has(item.id)) {
+                engine.revision += 1;
+                engine.deliveries.set(item.id, { id: item.id, text: item.instruction, contextText: item.contextText, revision: engine.revision, ...(item.intentScope ? { intentScope: item.intentScope } : {}) });
+              }
+            }
+            return { ok: true, revision: engine.revision, cancellationEpoch: 0,
+              deliveries: [...engine.deliveries.values()].filter((item) => item.revision > revision) };
+          },
+          prepareRound: async ({ revision, result, engineSnapshot }) => {
+            const id = `child-round:${crypto.randomUUID()}`;
+            const plan = { id, revision, result: identifyToolCalls(result, id), accounting: engineSnapshot.accounting };
+            if (checkpointChild) await engine.persist({ engineSnapshot: { ...engineSnapshot, pendingPlan: plan } });
+            engine.cachedRound = plan;
+            return { ok: true, plan };
+          },
+          checkpoint: async ({ engineSnapshot, appendedMessages, consumedPlanId }) => {
+            const pending = coordinator.peekSteerQueue(childInvocationId, runKey);
+            const applied = new Set(engineSnapshot.appliedInputIds || []);
+            if (!checkpointChild && pending.some((item) => applied.has(item.id))) throw Object.assign(new Error("The child steering checkpoint requires encrypted durable storage."), { code: "CHILD_DURABILITY_REQUIRED" });
+            const pendingPlan = consumedPlanId === engine.cachedRound?.id ? null : engine.cachedRound;
+            engineSnapshot = { ...engineSnapshot, pendingPlan };
+            if (checkpointChild) await engine.persist({ engineSnapshot, appendedMessages });
+            engine.cachedRound = pendingPlan;
+            await checkpointRun({ runId: engine.runId, status: engineSnapshot.runState?.status || "running",
+              checkpoint: { accounting: engineSnapshot.accounting, engineSnapshot }, appendedMessages },
+            { childSessionId, childInvocationId, generation, operation });
+            engine.snapshot = engineSnapshot;
+            coordinator.acknowledgeSteers(childInvocationId, runKey, engineSnapshot.appliedInputIds || []);
+            return { ok: true };
+          },
+          finalize: async ({ engineSnapshot, appendedMessages }) => {
+            if (checkpointChild) {
+              const prepared = { ...engineSnapshot, pendingCompletion: { revision: engineSnapshot.revision },
+                runState: { ...engineSnapshot.runState, status: "running", completedAt: "" } };
+              engine.preparedCompletion = prepared.pendingCompletion;
+              const receipt = await engine.persist({ engineSnapshot: prepared, appendedMessages });
+              if (typeof beforeChildFinalize === "function") {
+                const gate = await beforeChildFinalize({ childInvocationId, childSessionId, engineRef: receipt.value.engineRef, engineSnapshot: prepared });
+                if (gate?.ok !== true) throw Object.assign(new Error(gate?.error || "The parent did not accept the child completion checkpoint."), { code: gate?.code || "CHILD_FINALIZATION_FAILED" });
+                if (typeof gate.completed !== "boolean") throw Object.assign(new Error("The parent child-completion response has no terminal decision."), { code: "CHILD_FINALIZATION_INVALID" });
+                if (gate.completed !== true) return gate;
+              }
+              engine.finalizationAccepted = true;
+              await engine.persist({ engineSnapshot: { ...engineSnapshot, pendingCompletion: null }, appendedMessages, terminal: true });
+              engine.preparedCompletion = null;
+            }
+            return coordinator.sealSteering(childInvocationId, runKey);
+          },
+        } : null;
+        const lastResult = await runAgentTurn({
             workspace,
+            runId: engine.runId,
+            engineSnapshot: engine.snapshot,
+            releasePendingEndTurn: Boolean(engine.snapshot?.pendingCompletion),
+            roundAccountingSnapshot: engine.snapshot?.accounting || null,
             model: childModel,
-            numCtx: Math.max(4_096, Number(numCtx) || 8_192),
+            numCtx: Math.max(4_096, Number(engine.binding.numCtx) || 8_192),
             contextBudget: Math.max(4_096, Number(contextPlan?.promptBudgetTokens || numCtx) || 8_192),
-            contextPlan: contextPlan || null,
-            thinking,
-            reasoningEffort,
+            contextPlan: engine.contextPlan,
+            thinking: engine.binding.thinking,
+            reasoningEffort: engine.binding.reasoningEffort,
             tools: childTools,
-            mode,
-            modeFamily,
+            mode: engine.binding.mode,
+            modeFamily: engine.binding.modeFamily,
             projectProfile,
             intelligence,
             tier1Context,
+            loadChatReferenceSnapshot,
             workingReferences,
-            authorityProfile,
+            authorityProfile: engine.binding.authorityProfile,
             sessionId: childSessionId,
             memorySessionId: memorySessionIdFor(childSessionId, childInvocationId),
-            userMessage: roundIndex === 0 ? String(input?.task || "") : "",
-            chatHistory,
+            userMessage: String(input?.task || ""),
+            initialInputId: `${engine.runId}:initial`,
+            chatHistory: [...engine.history],
+            specialSkill: { prompt: contextText },
+            liveInput,
             signal: childController.signal,
             sendEvent: (event) => sendChildEvent(childSessionId, childInvocationId, event),
             runModelRound: (roundPayload) => runModelRound(senderId, roundPayload, {
@@ -539,39 +598,61 @@ function createRuntimeDelegationProvider({
               onToken: roundPayload.onToken,
               onToolCalls: roundPayload.onToolCalls,
               onStreamEvent: roundPayload.onStreamEvent,
-            }, `${runKey}::${childInvocationId}::${generation || operation || "run"}::${roundIndex}`),
+            }, engine.runId),
             executeToolCall: executeChildToolCall,
             listRunningCommands,
             toolMetadataForName: (name) => toolMetadataForName(name, childSessionId),
-            getBrowserTarget,
-            checkpointRun: (patch) => checkpointRun(patch, { childSessionId, childInvocationId, generation, operation }),
+            checkpointRun: async (patch) => {
+              await checkpointRun(patch, { childSessionId, childInvocationId, generation, operation });
+              if (patch.checkpoint?.engineSnapshot) engine.snapshot = patch.checkpoint.engineSnapshot;
+            },
             nested: true,
-            maxAgentRounds: 1,
+            maxAgentRounds: Infinity,
           });
-          if (Array.isArray(lastResult?.appendedMessages) && lastResult.appendedMessages.length) {
-            chatHistory = [...chatHistory, ...lastResult.appendedMessages];
-          }
-          if (childController.signal.aborted || lastResult?.aborted) break;
-          const runtimeStatus = String(lastResult?.runState?.status || "").toLowerCase();
-          const terminal = ["completed", "stopped", "failed"].includes(runtimeStatus);
-          const pendingSteers = coordinator?.getChild?.(childInvocationId, runKey)?.steerQueue?.length || 0;
-          if (terminal && !pendingSteers) break;
-          if (terminal && pendingSteers) {
-            continue;
-          }
-          if (!terminal && runtimeStatus !== "inconclusive") break;
-        }
+        if (lastResult?.engineSnapshot && !(engine.finalizationAccepted && engine.preparedCompletion)) engine.snapshot = lastResult.engineSnapshot;
+        if (checkpointChild && !liveInput && lastResult?.engineSnapshot) await engine.persist({ engineSnapshot: lastResult.engineSnapshot, appendedMessages: lastResult.appendedMessages || [] });
+        if (Array.isArray(lastResult?.appendedMessages)) engine.history.push(...lastResult.appendedMessages);
         return lastResult;
       },
     };
   }
 
-  async function executeChild({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation = 1, operation = "spawn", previousHistory = [], model = "", dispatch = null, assignment = null, cleanup = null } = {}) {
+  async function executeChild({ input, executionContext = null, childSessionId, blockId = "", childInvocationId, childController, generation = 1, operation = "spawn", previousHistory = [], model = "", dispatch = null, assignment = null, cleanup = null, restored = null } = {}) {
     const selectedChildModel = String(subagentModel || parentModel || "").trim();
     let effectiveModel = String(model || selectedChildModel).trim();
     const requestedModel = effectiveModel;
     let fallbackUsed = false;
-    let runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel });
+    const engine = {
+      runId: restored?.engineRef.runId || `child:${crypto.createHash("sha256").update(`${runKey}|${childInvocationId}|${generation}|${operation}`).digest("hex").slice(0, 40)}`,
+      history: restored?.history || (Array.isArray(previousHistory) ? [...previousHistory] : []),
+      prefixMessages: restored?.prefixMessages || [], snapshot: restored?.engineSnapshot || null,
+      revision: restored?.engineSnapshot?.revision || 0, deliveries: new Map(),
+      contextPlan: restored?.binding?.contextPlan || (contextPlan ? { ...contextPlan, provider: contextPlan.provider || getActiveProvider() } : { provider: getActiveProvider() }),
+      binding: restored?.binding || { numCtx, thinking, reasoningEffort, authorityProfile, mode, modeFamily },
+      preparedCompletion: restored?.engineSnapshot?.pendingCompletion || null,
+      cachedRound: restored?.engineSnapshot?.pendingPlan || null,
+      completedEffects: new Map((restored?.completedEffects || []).map((effect) => [effect.id, effect])),
+    };
+    for (const message of engine.snapshot?.inputMessages || []) if (message.source_message_id && message.task_revision > 0) engine.deliveries.set(message.source_message_id, { id: message.source_message_id, text: message.content, revision: message.task_revision, ...(message.intent_scope ? { intentScope: message.intent_scope } : {}) });
+    engine.persist = async ({ engineSnapshot = engine.snapshot, appendedMessages = engine.appendedMessages || [], effect = null, terminal = false } = {}) => {
+      if (!terminal && engineSnapshot && engine.preparedCompletion) {
+        if (engineSnapshot.revision === engine.preparedCompletion.revision) engineSnapshot = { ...engineSnapshot, pendingCompletion: engine.preparedCompletion,
+          runState: { ...engineSnapshot.runState, status: "running", completedAt: "" } };
+        else engine.preparedCompletion = null;
+      }
+      const receipt = requireReceipt(await checkpointChild({ workspace, childSessionId, childInvocationId, parentSessionId: sessionId,
+        blockId, runId: engine.runId, originalGoal: String(input?.task || ""), input, generation, operation,
+        binding: { ...(restored?.binding || {}), provider: engine.contextPlan.provider, contextPlan: engine.contextPlan,
+          model: effectiveModel, ...engine.binding },
+        engineSnapshot, prefixMessages: engine.prefixMessages, appendedMessages, effect }));
+      const child = coordinator?.getChild?.(childInvocationId, runKey);
+      if (child) child.engineRef = receipt.value.engineRef;
+      if (typeof onChildCheckpoint === "function") await onChildCheckpoint({ childSessionId, childInvocationId, engineRef: receipt.value.engineRef });
+      engine.snapshot = engineSnapshot;
+      engine.appendedMessages = appendedMessages;
+      return receipt;
+    };
+    let runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel, engine });
     sendChildEvent(childSessionId, childInvocationId, {
       type: "subagent_started",
       status: "working",
@@ -581,35 +662,28 @@ function createRuntimeDelegationProvider({
       summary: oneLiner(input?.task || "", "Working on delegated task"),
     });
     try {
+      if (checkpointChild) await engine.persist();
       let result = await runSpec.run();
       let retried = false;
-      if (isRetryableChildFailure(result) && !childController.signal.aborted && childResultStatus(result, runSpec.mutation, runSpec.childActions) === "failed") {
+      if (!engine.finalizationAccepted && runSpec.childActions.length === 0 && isRetryableChildFailure(result) && !childController.signal.aborted && childResultStatus(result) === "failed") {
         retried = true;
         sendChildEvent(childSessionId, childInvocationId, { type: "subagent_activity", model: effectiveModel, summary: "Retrying the child once after a model or timeout failure." });
-        runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel });
+        runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel, engine });
         result = await runSpec.run();
       }
       const fallbackModel = String(parentModel || "").trim();
-      if (fallbackModel && effectiveModel !== fallbackModel && runSpec.childActions.length === 0 && isModelAvailabilityFailure(result) && !childController.signal.aborted) {
+      if (!engine.finalizationAccepted && fallbackModel && effectiveModel !== fallbackModel && runSpec.childActions.length === 0 && isModelAvailabilityFailure(result) && !childController.signal.aborted) {
         sendChildEvent(childSessionId, childInvocationId, { type: "subagent_activity", model: fallbackModel, summary: `Selected sub-agent model was unavailable; retrying with ${fallbackModel}.` });
         fallbackUsed = true;
         effectiveModel = fallbackModel;
-        runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel });
+        runSpec = buildRun({ input, executionContext, childSessionId, blockId, childInvocationId, childController, generation, operation, previousHistory, model: effectiveModel, engine });
         result = await runSpec.run();
       }
       const runtimeStatus = String(result?.runState?.status || "").toLowerCase();
       const status = childController.signal.aborted
         ? "stopped"
-        : childResultStatus(result, runSpec.mutation, runSpec.childActions);
+        : childResultStatus(result);
       let finding = parseChildFinding(result?.finalText || "");
-      if (runSpec.mutation.required) {
-        finding = {
-          status: "blocked",
-          summary: finding.summary,
-          evidenceRefs: finding.evidenceRefs,
-          unverified: [...finding.unverified, `The parent must edit ${runSpec.mutation.target || "the workspace"}. Delegated children cannot apply patches.`],
-        };
-      }
       const childSummary = finding.summary.slice(0, MAX_SUMMARY_CHARS);
       const error = String(result?.error || result?.runState?.stopReason || "").slice(0, MAX_SUMMARY_CHARS);
       const terminalType = status === "completed" ? "subagent_completed" : status === "stopped" ? "subagent_stopped" : "subagent_failed";
@@ -650,13 +724,11 @@ function createRuntimeDelegationProvider({
           requestedModel,
           fallbackUsed,
           retried,
-          provider: getActiveProvider(),
+          provider: engine.contextPlan.provider,
           sessionId: childSessionId,
           runtimeStatus,
           executedTools: Boolean(result?.executedTools),
           actions: actionSummary(runSpec.childActions),
-          mutationRequired: runSpec.mutation.required,
-          mutationTarget: runSpec.mutation.target,
           evidenceIds: Array.isArray(result?.evidenceIds) ? result.evidenceIds : [],
           provisionalPlan: result?.provisionalPlan || null,
           error,
@@ -794,7 +866,7 @@ function createRuntimeDelegationProvider({
     };
   }
 
-  return async function delegate(input, executionContext, runtime = {}) {
+  const delegate = async function delegate(input, executionContext, runtime = {}) {
     const operation = String(input?.operation || "spawn").toLowerCase();
     if (!coordinator) {
       if (operation !== "spawn" && operation !== "follow_up") {
@@ -1075,6 +1147,44 @@ function createRuntimeDelegationProvider({
 
     throw Object.assign(new Error("Delegation coordinator is unavailable."), { code: "DELEGATE_AGENT_PROVIDER_UNAVAILABLE" });
   };
+  delegate.recoverChildren = async (runtime = {}) => {
+    const recovered = [];
+    for (const child of coordinator?.recoverableChildren?.(runKey) || []) {
+      try {
+        if (!loadChild || !checkpointChild) throw Object.assign(new Error("Durable child recovery is unavailable."), { code: "CHILD_RECOVERY_UNAVAILABLE" });
+        const receipt = requireReceipt(await loadChild({ workspace, engineRef: child.engineRef }));
+        const saved = receipt.value;
+        const parentIds = new Set([sessionId, ...(Array.isArray(parentSessionAliases) ? parentSessionAliases : [])].map(String));
+        if (saved.childInvocationId !== child.childInvocationId || !parentIds.has(saved.parentSessionId)) throw Object.assign(new Error("The child engine belongs to another parent."), { code: "CHILD_REFERENCE_INVALID" });
+        if (saved.pendingEffects?.length) throw Object.assign(new Error("A child tool effect has an unknown outcome. Reconcile it before resuming."), { code: "CHILD_EFFECT_UNKNOWN" });
+        coordinator.acknowledgeSteers(child.childInvocationId, runKey, saved.engineSnapshot?.appliedInputIds || []);
+        if (["completed", "stopped", "failed"].includes(saved.status) && !child.steerQueue.length) {
+          const status = saved.status === "stopped" ? "stopped" : childResultStatus({ runState: { status: saved.status }, executedTools: saved.engineSnapshot?.executedTools });
+          const finding = parseChildFinding(saved.engineSnapshot?.finalText || "");
+          coordinator.completeChild(child.childInvocationId, { status, output: { text: finding.summary, format: "json", finding }, metadata: { recovered: true, engineRef: child.engineRef, executedTools: Boolean(saved.engineSnapshot?.executedTools) } });
+          recovered.push({ childInvocationId: child.childInvocationId, status });
+          continue;
+        }
+        const state = createChildController(runtime);
+        childSessionBindings.set(child.childSessionId, { sessionId: child.childSessionId, blockId: saved.engineRef.blockId, projectId: receipt.projectId });
+        registerChildRun?.({ parentRunKey: runKey, childSessionId: child.childSessionId, controller: state.controller });
+        const resumed = coordinator.resumeRestoredChild({ childInvocationId: child.childInvocationId, parentKey: runKey, controller: state.controller,
+          onCancel: state.cleanup,
+          start: () => executeChild({ input: saved.input, childSessionId: child.childSessionId, blockId: saved.engineRef.blockId,
+            childInvocationId: child.childInvocationId, childController: state.controller, generation: saved.generation,
+            operation: saved.operation, model: saved.binding.model || child.model, restored: saved,
+            cleanup: () => { state.cleanup(); unregisterChildRun?.(child.childSessionId); } }) });
+        if (!resumed.ok) { state.cleanup(); unregisterChildRun?.(child.childSessionId); throw Object.assign(new Error(resumed.error), { code: resumed.code }); }
+        recovered.push({ childInvocationId: child.childInvocationId, status: "working", runId: saved.engineRef.runId });
+      } catch (error) {
+        coordinator.completeChild(child.childInvocationId, { status: "failed", output: { text: "", summary: error.message },
+          metadata: { error: error.message, code: error.code || "CHILD_RECOVERY_FAILED", engineRef: child.engineRef } });
+        recovered.push({ childInvocationId: child.childInvocationId, status: "failed", code: error.code || "CHILD_RECOVERY_FAILED" });
+      }
+    }
+    return { ok: true, recovered };
+  };
+  return delegate;
 }
 
 module.exports = {
@@ -1085,7 +1195,6 @@ module.exports = {
   oneLiner,
   buildChildContextText,
   appendSteeringUpdate,
-  requestedWorkspaceMutation,
   isModelAvailabilityFailure,
   childResultStatus,
   parseChildFinding,

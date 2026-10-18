@@ -84,3 +84,34 @@ test("streaming markdown still sanitizes untrusted content", () => {
   renderer.renderToElement(reply, '<img src="x" onerror="alert(1)"><script>alert(1)</script>\n\n[bad](javascript:alert(1))', { streaming: true });
   assert.equal(reply.querySelector("script, [onerror], [href^='javascript:']"), null);
 });
+
+test("block-cached rendering matches a whole-document parse and sanitize for every prefix", () => {
+  const { renderer, window } = setup();
+  const doc = [
+    "# T",
+    "",
+    "Para **b** [r][x].",
+    "",
+    "[x]: https://example.com",
+    "",
+    "- a",
+    "- b",
+    "",
+    "```js",
+    "const a = 1;",
+    "",
+    "b();",
+    "```",
+    "",
+    "| a | b |",
+    "|---|---|",
+    "| 1 | 2 |",
+    "",
+    "<img src=x onerror=alert(1)> tail",
+  ].join("\n");
+  const options = { ADD_TAGS: ["button"], ADD_ATTR: ["class", "data-code", "data-mermaid-source", "title", "type"] };
+  for (let end = 1; end <= doc.length; end += 1) {
+    const md = doc.slice(0, end);
+    assert.equal(renderer.render(md), window.DOMPurify.sanitize(window.marked.parse(md), options), md);
+  }
+});

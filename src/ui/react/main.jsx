@@ -7,6 +7,9 @@ import "../styles/base.css";
 import "../styles/chat.css";
 import "../styles/settings.css";
 import "../styles/layout-revamp.css";
+import "../styles/tooltips.css";
+import "../styles/browser.css";
+import "../styles/settings-system.css";
 import "./vendor-globals.js";
 import App from "./App.jsx";
 

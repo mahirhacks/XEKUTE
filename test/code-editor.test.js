@@ -27,8 +27,8 @@ test("workspace files open in the Monaco-powered center editor", () => {
   assert.match(renderer, /path: INTERCEPTOR_TAB_PATH[\s\S]*?special: "interceptor"/);
   assert.doesNotMatch(renderer, /APPLICATION_GRAPH_TAB_PATH|special: "application-graph"/);
   assert.match(renderer, /function showSecurityWorkspace\(tool = ""\) \{\s*openInterceptorTab\(tool\);/);
-  assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
-  assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
+  assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\) \|\| isBrowserTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
+  assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\) \|\| isBrowserTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
   assert.match(renderer, /if \(specialWorkspaceTab\) el\.classList\.add\("special-workspace-tab"\)/);
   assert.match(renderer, /isSettingsTab\(tab\)[\s\S]*?codicon-settings-gear[\s\S]*?isInterceptorTab\(tab\)[\s\S]*?codicon-debug-disconnect/);
   assert.doesNotMatch(renderer, /isApplicationGraphTab/);
@@ -169,7 +169,7 @@ test("workspace context menu analyzes every single file in a visible Agent sessi
   assert.doesNotMatch(renderer.match(/async function startWorkspaceFileAnalysis[\s\S]*?async function runWorkspaceContextAction/)?.[0] || "", /window\.api\.readFile/);
   assert.match(renderer, /const runMode = options\?\.modeOverride[\s\S]*?canonicalChatMode\(options\.modeOverride\)/);
   assert.match(renderer, /const hasExplicitText = Object\.prototype\.hasOwnProperty\.call\(options \|\| \{\}, "text"\)/);
-  assert.match(renderer, /let text = hasExplicitText[\s\S]*?String\(options\.text \|\| ""\)\.trim\(\)[\s\S]*?effectiveChatInputValue\(\)\.trim\(\)/);
+  assert.match(renderer, /let text = hasExplicitText[\s\S]*?String\(options\.text \|\| ""\)[\s\S]*?effectiveChatInputValue\(\)/);
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /const providedContextFiles = Array\.isArray\(options\?\.contextFiles\)/);
   assert.match(renderer, /const hasActiveFileOverride = Object\.prototype\.hasOwnProperty\.call\(options \|\| \{\}, "activeFile"\)/);

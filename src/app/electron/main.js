@@ -7,11 +7,14 @@ const { pathToFileURL } = require("url");
 const pty = require("node-pty");
 const { spawn } = require("child_process");
 const { createAgentTerminalRunner } = require("../services/terminal/terminal-runner.js");
+const { createShellCommandTracker } = require("../services/terminal/shell-command-tracker.js");
 const { sameTerminalOwner, findLiveTerminal } = require("../services/terminal/terminal-ownership.js");
 const { appendTerminalOutput } = require("../services/terminal/active-terminal-catalog.js");
 const { createTerminalOutputBatcher } = require("../services/terminal/terminal-output-batcher.js");
+const { normalizeUserImages, attachUserImages } = require("../services/chat/user-images.js");
 const { HIDDEN_COMMAND_REVEAL_MS, createHiddenCommandReveal } = require("../services/terminal/agent-terminal-reveal.js");
 const { createAgentTerminalHost } = require("../services/terminal/agent-terminal-host.js");
+const { createCommandReferences } = require("../services/terminal/command-references.js");
 const { defaultRegistry } = require("../../prompts/skills/internal/registry.js");
 const { selectInternalSkill } = require("../../prompts/skills/internal/runner.js");
 const {
@@ -23,6 +26,10 @@ const {
 const { resolveSecurityExecutable } = require("../../agent/tools/process/executable-resolver.js");
 const { normalizeAuthorityProfile } = require("../../agent/authority/profiles/profile-manifest.js");
 const Tunables = require("../../agent/runtime/tunables.js");
+const { createAgentSessionRuntime, assignTaskWave } = require("../../agent/runtime/agent-session-runtime.js");
+const { createChatReferenceResolver } = require("../../agent/runtime/chat-references.js");
+const { createResourceReservations } = require("../../agent/runtime/resource-reservations.js");
+const { createDelegatedChildStore } = require("../../agent/runtime/delegated-child-store.js");
 const { createAssessmentWorkspace, validateCustomEntryPath, JSON_TEMPLATES } = require("../../domain/assessment/assessment-workspace");
 const { buildIntruderRequests, createSecurityHttpWorkbench } = require("../../interceptor/http-workbench.js");
 const { createProxyListenerService } = require("../../interceptor/proxy-listener.js");
@@ -32,10 +39,12 @@ const { computeOrchestrationHold } = require("../../agent/runtime/orchestration-
 const { createSubagentCoordinator, DEFAULT_MAX_ACTIVE_CHILDREN } = require("../../agent/runtime/subagent-coordinator.js");
 const { normalizeProfile } = require("../../agent/modes/mode-registry.js");
 const { evaluateToolScopeAsync } = require("../../agent/authority/scope/scope-policy.js");
+const { evaluateBrowserPolicyAsync, browserScopeStanding, browserPolicyStillHolds } = require("../../agent/authority/scope/browser-scope.js");
 const AgentVerifier = require("../../agent/runtime/verifier.js");
 const { captureOllamaStream } = require("../../agent/llm/ollama/ollama-stream.js");
 const { captureOpenRouterStream, normalizeOpenRouterMessages, openRouterHeaders, openRouterTools } = require("../../agent/llm/openrouter/openrouter-stream.js");
 const { DEFAULT_OPENROUTER_BASE_URL, normalizeProvider, normalizeBaseUrl, buildChatRequest } = require("../../agent/llm/openrouter/providers.js");
+const { prepareBrowserImageMessages, validateBrowserVisionModel, estimateBrowserImageTokens } = require("../../agent/llm/openrouter/browser-images.js");
 const ContextBudget = require("../../agent/runtime/context-budget.js");
 const { estimateTokenCount } = ContextBudget;
 const { createWorkspaceFiles } = require("../services/workspace/workspace-files.js");
@@ -43,6 +52,7 @@ const { createProjectProfileStore } = require("../storage/project-profile-store.
 const { validateIpcRequest } = require("../../contracts/ipc/IpcContracts");
 const { registerIpcHandler } = require("../ipc/register");
 const { registerProjectIpc } = require("../ipc/project.js");
+const { registerBrowserIpc } = require("../ipc/browser.js");
 const { parseCommand } = require("../commands/command-parser.js");
 const { ingest: ingestAssessmentRecords, listDatasets, datasetExists, RESOURCE_SPECS } = require("../services/assessment/assessment-ingest.js");
 const { buildContext } = require("../services/assessment/parse-context.js");
@@ -57,7 +67,8 @@ const {
   writeGuidanceFile,
 } = require("../services/guidance/custom-guidance.js");
 const { createContainer } = require("../../infrastructure/di/container");
-const { registerLifecycle, setAllowImmediateQuit } = require("./lifecycle.js");
+const { registerLifecycle, setAllowImmediateQuit, prepareForUpdateInstall, APP_USER_MODEL_ID } = require("./lifecycle.js");
+const { createMainLog } = require("./main-log.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { isMemoryId } = require("../../contracts/memory/index.js");
@@ -69,38 +80,23 @@ function toolCatalogFromRegistry(registry) {
 }
 
 // Execute a normalized tool call against the registry-backed adapters.
-const browserTargets = new Map();
-function browserWorkspaceKey(workspace) {
-  try { return encodeURIComponent(path.resolve(String(workspace || ".")).toLowerCase()); }
-  catch { return encodeURIComponent(String(workspace || "").toLowerCase()); }
+// Approved browser scope exceptions, keyed by tab, ownership generation and
+// origin. A takeover bumps the generation, so it revokes every grant.
+const browserScopeGrants = new Set();
+function ownedBrowserTab(workspace, args, owner) {
+  const id = args.tabId || args.pageId;
+  const tab = id ? container?.nativeBrowserTab?.(workspace, id) : null;
+  if (tab) return tab.owner.kind === "chat" && tab.owner.sessionId === owner ? tab : null;
+  if (id) return null;
+  const owned = container?.nativeBrowserTabs?.(workspace, owner) || [];
+  return owned.length === 1 ? owned[0] : null;
 }
-function browserKeyPart(value) { return encodeURIComponent(String(value || "")); }
-function browserTargetKey(workspace, sessionId, identityId = "", pageId = "main") {
-  return [browserWorkspaceKey(workspace), browserKeyPart(sessionId), browserKeyPart(identityId), browserKeyPart(pageId || "main")].join("::");
-}
-function getBrowserTarget(workspace, sessionId, identityId = "", pageId = "main") {
-  const remembered = browserTargets.get(browserTargetKey(workspace, sessionId, identityId, pageId)) || "";
-  if (remembered) return remembered;
-  // A human can navigate the dedicated proxied browser before the agent acts.
-  // Use its current main-page URL solely as the follow-up scope target; the
-  // live BrowserContext itself remains private to the browser provider.
-  return container?.proxyBrowser?.getAgentPageTarget?.(workspace, identityId, pageId) || "";
-}
-function clearBrowserTarget(workspace, sessionId, identityId = "", pageId = "main") {
-  browserTargets.delete(browserTargetKey(workspace, sessionId, identityId, pageId));
-}
-function clearBrowserSessionTargets(workspace, sessionId) {
-  const prefix = `${browserWorkspaceKey(workspace)}::${browserKeyPart(sessionId)}::`;
-  for (const key of [...browserTargets.keys()]) if (key.startsWith(prefix)) browserTargets.delete(key);
-}
-function clearBrowserIdentityTargets(workspace, identityId) {
-  const prefix = `${browserWorkspaceKey(workspace)}::`;
-  const expectedIdentity = browserKeyPart(identityId);
-  for (const key of [...browserTargets.keys()]) {
-    const parts = key.split("::");
-    if (key.startsWith(prefix) && parts[2] === expectedIdentity) browserTargets.delete(key);
-  }
-}
+const BROWSER_STANDING_NOTE = {
+  restricted: "Reading is allowed here; interacting needs the user's approval.",
+  off_scope: "The next browser action on this page needs the user's approval.",
+  denied: "Browser actions on this page are denied.",
+  unconfigured: "Browser actions are denied until a project scope is set.",
+};
 
 function displayExecCommand(executable, args = []) {
   const quote = (value) => {
@@ -110,7 +106,7 @@ function displayExecCommand(executable, args = []) {
   return [quote(executable), ...(Array.isArray(args) ? args.map(quote) : [])].join(" ").trim();
 }
 
-async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", blockId = "", mode = "agent", processManager = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", delegationProvider = null, specialSkill = null, tier1Memory = false, artifactProvenance = null, ownerId = "" }) {
+async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", browserSessionId = "", model = "", provider = "", blockId = "", mode = "agent", processManager = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", operationId = "", delegationProvider = null, specialSkill = null, tier1Memory = false, artifactProvenance = null, ownerId = "" }) {
   const name = toolCall?.function?.name || toolCall?.toolName || "";
   const args = toolCall?.function?.arguments || {};
   const specialEntry = createSpecialSkillToolEntry(specialSkill, name);
@@ -128,6 +124,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     : null;
   let context;
   try {
+    const browserOwner = browserSessionId || controlSessionOwners.get(sessionId) || sessionId;
     context = createExecutionContext({
       invocationId: `agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       toolName: name,
@@ -135,6 +132,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
       authority: normalizeAuthorityProfile(authorityProfile),
       workspace: { root: workspace },
       sessionId,
+      ...(browserOwner ? { browserSessionId: browserOwner } : {}),
       mode,
       requestMetadata: {
         actorId: "local-user",
@@ -177,8 +175,35 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     inputSchema: dynamicEntry?.inputSchema || dynamicEntry?.parameters || dynamicEntry?.schema || { type: "object", properties: {} },
     metadata: dynamicEntry || {},
   };
+  const elementTarget = args.target || args.from;
+  const describeElement = (tab) => (tab && elementTarget ? container.describeBrowserTarget?.(tab.id, elementTarget) : null);
+  const decideBrowser = (profile, tab) => evaluateBrowserPolicyAsync({
+    workspace, projectProfile: profile, input: args, tab, element: describeElement(tab),
+    profileId: normalizeAuthorityProfile(authorityProfile), granted: (key) => browserScopeGrants.has(key),
+  });
+  const browserTab = name === "browser_action" ? ownedBrowserTab(workspace, args, context.browserSessionId) : null;
+  const browserPolicy = name === "browser_action" ? await decideBrowser(projectProfile, browserTab) : null;
+  // Set when the action queued for a lease or waited on the user; only then
+  // can scope or the page have changed before dispatch.
+  let browserWaited = false;
+  const runtimeApproval = name === "browser_action" && typeof approvalProvider === "function" ? async (proposal) => {
+    browserWaited = true;
+    const element = describeElement(browserTab);
+    const hint = `${args.selector || ""} ${args.target?.selector || ""} ${element?.name || ""}`;
+    const secretInput = args.action === "insert_text" || (args.action === "type" && (Boolean(element?.secret) || /pass(word|code)?|secret|token|\botp\b|\bpin\b/i.test(hint)));
+    const answer = await approvalProvider({ ...proposal, secretInput });
+    const policy = browserPolicy?.browserPolicy;
+    if (answer?.approved && policy?.scopeException && policy.grantKey) browserScopeGrants.add(policy.grantKey);
+    return answer;
+  } : approvalProvider;
   const executeRaw = async (monitorRuntime) => {
     const rawContext = projectExecutionContext(context);
+    if (name === "browser_action" && browserWaited) {
+      const current = await decideBrowser(readProjectProfile(workspace)?.profile || null, ownedBrowserTab(workspace, args, context.browserSessionId));
+      if (!browserPolicyStillHolds(browserPolicy, current)) {
+        return { ok: false, error: { code: "BROWSER_POLICY_CHANGED", message: `The browser policy changed while this action waited. ${current.reason || ""}`.trim(), retryable: false } };
+      }
+    }
     const commandRuntime = name === "exec_command" || name === "view_active_terminal"
       ? {
         ...monitorRuntime,
@@ -186,6 +211,8 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
         commandInvocationId: String(context.invocationId || ""),
         sessionId,
         durableRunId,
+        runId: durableRunId,
+        operationId,
         ownerId,
         terminals,
         ...(processManager ? { processManager } : {}),
@@ -212,29 +239,19 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
           ...monitorRuntime,
           ...(name === "delegate_agent" && typeof delegationProvider === "function" ? { delegationProvider } : {}),
           ...(name === "ask_questions" && typeof questionProvider === "function" ? { questionProvider } : {}),
+          ...(name === "browser_action" ? {
+            assertVision: () => assertBrowserVision({ model, provider, signal: monitorRuntime.signal }),
+            expectedTab: browserTab ? { id: browserTab.id, controlGeneration: browserTab.controlGeneration, url: browserTab.url } : null,
+          } : {}),
         });
-    }
-    if (name === "browser_action" && !result?.ok && result?.error?.code === "BROWSER_ACTION_STOPPED") {
-      // Cancellation closes the active page in the browser provider. Do not
-      // leave its old URL available as a follow-up scope target.
-      clearBrowserTarget(workspace, sessionId, args.identityId, args.pageId || "main");
     }
     if (name === "browser_action" && result?.ok) {
-      const observedUrl = result?.value?.evidence?.url || result?.value?.url || result?.evidence?.url || "";
-      if (observedUrl && /^https?:\/\//i.test(String(observedUrl))) {
-        const observedScope = await evaluateToolScopeAsync({
-          workspace,
-          toolName: "browser_action",
-          args: { action: "navigate", url: String(observedUrl) },
-          projectProfile,
-        });
-        if (!observedScope.ok) {
-          clearBrowserTarget(workspace, sessionId, args.identityId, args.pageId || "main");
-          return { ok: false, error: observedScope.reason, code: observedScope.code, scope: observedScope, retryable: false };
-        }
-        browserTargets.set(browserTargetKey(workspace, sessionId, args.identityId, args.pageId || "main"), String(observedUrl));
+      const landed = result.value?.evidence?.tab;
+      if (landed?.url && /^https?:/i.test(landed.url)) {
+        const standing = browserScopeStanding(landed.url, { workspace, projectProfile, purpose: landed.purpose });
+        const granted = ["restricted", "off_scope"].includes(standing.standing) && browserScopeGrants.has(`${landed.id}:${landed.controlGeneration}:${standing.origin}`);
+        if (BROWSER_STANDING_NOTE[standing.standing] && !granted) result.value.scope = { standing: standing.standing, reason: `${standing.reason} ${BROWSER_STANDING_NOTE[standing.standing]}` };
       }
-      if (result?.ok && args.action === "close_page") clearBrowserTarget(workspace, sessionId, args.identityId, args.pageId || "main");
     }
     return result;
   };
@@ -254,21 +271,30 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
         evaluateScope: evaluateToolScopeAsync,
         projectProfile,
         authorityRules: projectProfile?.authorityRules || projectProfile?.rulesOfEngagement?.authorityRules || {},
-        browserTarget: name === "browser_action" ? getBrowserTarget(workspace, sessionId, args.identityId, args.pageId || "main") : "",
+        browserPolicy,
+        browserAdmission: name === "browser_action" ? {
+          tabId: browserTab?.id || "",
+          identityId: browserTab ? browserTab.identityId || "" : args.action === "open_page" && args.purpose !== "research" ? args.identityId || "" : "",
+          traffic: ["interact", "sensitive"].includes(browserPolicy?.browserPolicy?.actionClass),
+          slots: context.resourceLimits?.maximumConcurrency,
+        } : null,
         identityExists: (identityId) => Boolean(container.identityVault?.().metadataFor?.(workspace, identityId)),
         resourceUsage: async () => {
           const listed = await container.durableProcessManager?.list?.(workspace, {});
           const processes = Array.isArray(listed?.value?.processes) ? listed.value.processes : [];
           return { processCount: processes.filter((record) => record.alive || record.status === "running").length };
         },
-        approvalProvider,
+        approvalProvider: runtimeApproval,
         audit: container.toolAuditStore,
-        checkpoint: (patch) => container.longHorizonRunStore.checkpoint(workspace, durableRunId || sessionId, { checkpoint: { invocationId: context.invocationId, toolName: name, ...patch } }).catch(() => {}),
-        onEvent: (eventPayload) => processManager?.sendLifecycleEvent?.(eventPayload),
+        checkpoint: (patch) => container.longHorizonRunStore.checkpoint(workspace, durableRunId || sessionId, { checkpoint: { invocationId: context.invocationId, toolName: name, ...patch } }).catch(mainLog.ignored("run.checkpoint")),
+        onEvent: (eventPayload) => {
+          if (eventPayload?.stage === "concurrency_queued") browserWaited = true;
+          processManager?.sendLifecycleEvent?.(eventPayload);
+        },
       },
     });
     const materialAssessmentTool = ["replay_request", "browser_action", "manage_identity"].includes(name);
-    if (materialAssessmentTool) container.assessmentIntelligence.refresh(workspace).catch(() => {});
+    if (materialAssessmentTool) container.assessmentIntelligence.refresh(workspace).catch(mainLog.ignored("intelligence.refresh"));
     return result;
   } catch (error) {
     return { ok: false, error: error.message, code: "TOOL_EXECUTION_FAILED", retryable: false };
@@ -279,14 +305,27 @@ const APP_ROOT = path.join(__dirname, "..", "..", "..");
 const IS_DEV = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
 const UI_DIST_PATH = path.join(__dirname, "..", "..", "ui", "dist", "index.html");
 const UI_LEGACY_PATH = path.join(__dirname, "..", "..", "ui", "index.legacy.html");
-const APP_INDEX_PATH = fs.existsSync(UI_DIST_PATH) ? UI_DIST_PATH : UI_LEGACY_PATH;
+// The legacy shell is a development fallback only; a package without the
+// compiled UI must fail visibly instead of loading stale markup.
+const APP_INDEX_PATH = app.isPackaged || fs.existsSync(UI_DIST_PATH) ? UI_DIST_PATH : UI_LEGACY_PATH;
 const APP_INDEX_URL = pathToFileURL(APP_INDEX_PATH).href;
 
 function loadRenderer(mainWindow) {
   mainWindow.loadFile(APP_INDEX_PATH).catch((error) => {
     console.error("Failed to load renderer:", APP_INDEX_PATH, error);
+    if (app.isPackaged) {
+      dialog.showErrorBox("XEKUTE could not start", `The application interface is missing or damaged (${APP_INDEX_PATH}). Reinstall XEKUTE from the latest XEKUTESetup.exe; your projects and settings are kept.`);
+    }
   });
 }
+
+const mainLog = createMainLog({ directory: () => path.join(app.getPath("userData"), "logs") });
+process.on("unhandledRejection", (reason) => mainLog.write("unhandledRejection", reason));
+process.on("uncaughtException", (error) => {
+  mainLog.write("uncaughtException", error);
+  // Keep the visible report that Electron shows when no handler is installed.
+  dialog.showErrorBox("A JavaScript error occurred in the main process", String(error?.stack || error));
+});
 
 let mainWindow;
 // DI container owns the state maps so dispose() cleans up exactly the live
@@ -295,9 +334,11 @@ const container = createContainer({
   app,
   safeStorage,
   getMainWindow: () => mainWindow,
+  browserRuntimeSettings: effectiveOperatorRuntimeSettings,
   verifyFindingCandidate,
 });
 const terminals = container.terminals;
+const terminalReferences = createCommandReferences({ terminals, sessionStore: container.v3SessionStore, processManager: container.durableProcessManager });
 const toolProcesses = container.toolProcesses;
 const ollamaControllers = container.ollamaControllers;
 const llmControllers = ollamaControllers;
@@ -306,6 +347,67 @@ const webClonePreviewDocuments = container.webClonePreviewDocuments;
 const agentRunControllers = new Map();
 const sessionAgentSenders = new Map();
 const resumeInFlight = new Set();
+const liveInputWakeups = new Set();
+// Commands a parked run is still waiting for, by run key. Their outputs reach
+// the task inbox as they finish; the task wakes once the last one is in.
+const parkedCommandWaits = new Map();
+const controlSessionOwners = new Map();
+const delegatedChildren = createDelegatedChildStore({ v3SessionStore: container.v3SessionStore });
+const taskResources = createResourceReservations({ listProcesses: async (workspace) => {
+  if (!workspace) return [];
+  const listed = await container.durableProcessManager.list(workspace, {});
+  if (!listed?.ok) throw Object.assign(new Error("Process ownership could not be read before reserving the workspace."), { code: "RESOURCE_OWNERSHIP_UNAVAILABLE" });
+  return listed?.value?.processes || [];
+} });
+const agentSessionRuntime = createAgentSessionRuntime({
+  store: container.v3SessionStore,
+  resolveChatReferences: createChatReferenceResolver({ store: container.v3SessionStore, tier1Context: container.memoryTier1Coordinator,
+    captureTerminal: input => terminalReferences.capture(input) }),
+  wake: ({ workspace, sessionId }) => scheduleLiveInputWake({ workspace, sessionId: controlSessionOwners.get(sessionId) || sessionId }),
+  emit: (data) => {
+    const sessionId = controlSessionOwners.get(data.sessionId) || data.sessionId;
+    const target = senderForSession(sessionId);
+    if (target && !target.isDestroyed()) target.send("agent:event", { ...data, sessionId });
+  },
+  onDelivery: async ({ workspace, sessionId, target, input, delivery }) => {
+    if (!target.delegatedChild) return;
+    const { parentRunKey, childInvocationId } = target.delegatedChild;
+    const receipt = subagentCoordinator.enqueueSteer({ parentKey: parentRunKey, childInvocationId, instruction: input.text, contextText: input.contextText || "", messageId: input.id, intentScope: delivery.intentScope || null });
+    if (!receipt.ok) throw Object.assign(new Error(receipt.error), { code: receipt.code });
+    const saved = await container.v3SessionStore.transactSession(workspace, sessionId, (document) => {
+      assignTaskWave(document.run_control, document.run_control.tasks.find((task) => task.id === target.dependencyOfTaskId)?.runId, subagentCoordinator.exportWave(parentRunKey));
+      return { ok: true };
+    });
+    if (!saved.ok) throw Object.assign(new Error(saved.error), { code: saved.code });
+  },
+});
+function scheduleLiveInputWake({ workspace = "", sessionId }) {
+  const key = sessionRunKey(sessionId);
+  if (liveInputWakeups.has(key) || agentRunControllers.has(key) || agentRunControllers.has(sessionRunKey(sessionId, true))) return;
+  const descriptor = parentRunDescriptors.get(key);
+  const sender = senderForSession(sessionId);
+  if (!descriptor || !sender || sender.isDestroyed()) return;
+  const snapshot = agentSessionRuntime.supervisor.snapshot({ workspace, sessionId: descriptor.payload?.memorySessionId || tier1SessionIdForRun(sessionId, key) });
+  if (!snapshot.ok || !snapshot.batch.length) return;
+  liveInputWakeups.add(key);
+  setImmediate(async () => {
+    try {
+      const task = snapshot.control.tasks.find((entry) => entry.id === snapshot.control.activeTaskId
+        && ["running", "waiting"].includes(entry.status));
+      const initial = snapshot.batch.find((input) => !input.id.startsWith("result:"));
+      if (!task && !initial) return;
+      const response = await handleAgentRun({ sender }, { ...descriptor.payload, ...(!task ? snapshot.control.intakeBinding || {} : {}), workspace, sessionId,
+        runId: task?.runId || `run:${crypto.randomUUID()}`, taskId: task?.id,
+        userMessage: task?.objective || initial?.text, inputId: task?.initialInputId || initial?.id,
+        blockId: task?.blockId || "", backgroundRuntime: true,
+      }, { automaticContinuation: true, liveInputContinuation: Boolean(task) });
+      if (!sender.isDestroyed()) sender.send("agent:event", { type: "parent_run_settled", sessionId,
+        orchestrationHold: Boolean(response?.orchestrationHold), pendingEndTurn: Boolean(response?.pendingEndTurn), commandWait: Boolean(response?.commandWait) });
+    } catch (error) {
+      if (!sender.isDestroyed()) sender.send("agent:event", { type: "input_resume_failed", sessionId, error: error.message });
+    } finally { liveInputWakeups.delete(key); }
+  });
+}
 let powerSaveBlockerId = null;
 function syncPowerSaveBlocker() {
   const live = agentRunControllers.size > 0;
@@ -586,6 +688,7 @@ function abortPendingOperatorQuestions({ senderId, sessionId = "" } = {}) {
   }
 }
 function abortAgentSession(senderId, sessionId = "") {
+  void Promise.resolve().then(() => container.cancelNativeBrowserChat(sessionId)).catch(error => console.warn("Browser cancellation failed:", error.message));
   const abortMatching = (map) => {
     for (const [key, controller] of map.entries()) {
       if (!matchesAgentRunKey(key, senderId, sessionId)) continue;
@@ -629,6 +732,7 @@ function abortAgentSession(senderId, sessionId = "") {
   }
 }
 async function shutdownAgentRuntime() {
+  await container.shutdownNativeBrowser().catch(error => console.warn("Browser shutdown failed:", error.message));
   for (const controller of agentRunControllers.values()) {
     try { controller.abort("APP_SHUTDOWN"); } catch { /* best effort */ }
   }
@@ -641,7 +745,7 @@ async function shutdownAgentRuntime() {
     }
   }
   const result = await subagentCoordinator.shutdown({ reason: "APP_SHUTDOWN", timeoutMs: 5_000 });
-  await container.longHorizonRunStore?.flush?.().catch(() => {});
+  await container.longHorizonRunStore?.flush?.().catch(mainLog.ignored("run.flush"));
   parentContinuationTasks.clear();
   parentRunDescriptors.clear();
   parentContinuationOutbox.clear();
@@ -1035,7 +1139,7 @@ function createWindow() {
     },
   });
 
-  mainWindow.setAppDetails?.({ appId: "com.pointer.securityworkspace", appIconPath: process.execPath });
+  mainWindow.setAppDetails?.({ appId: APP_USER_MODEL_ID, appIconPath: process.execPath });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (targetUrl !== APP_INDEX_URL) event.preventDefault();
@@ -1059,7 +1163,10 @@ function createWindow() {
   const senderId = mainWindow.webContents.id;
   mainWindow.webContents.on("destroyed", () => {
     stopWorkspaceWatch(senderId);
+    void Promise.resolve(container.closeNativeBrowserProject()).catch(error => console.warn("Browser cleanup failed:", error.message));
   });
+  mainWindow.on("blur", () => container.hideNativeBrowser());
+  mainWindow.on("minimize", () => container.hideNativeBrowser());
 }
 
 function stopWorkspaceWatch(senderId) {
@@ -1160,10 +1267,12 @@ function ensureWebClonePreviewServer() {
 function normalizeWebClonePreviewBounds(bounds = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return null;
   const content = mainWindow.getContentBounds();
-  const x = Math.max(0, Math.round(Number(bounds.x) || 0));
-  const y = Math.max(0, Math.round(Number(bounds.y) || 0));
-  const width = Math.max(1, Math.min(Math.round(Number(bounds.width) || 1), Math.max(1, content.width - x)));
-  const height = Math.max(1, Math.min(Math.round(Number(bounds.height) || 1), Math.max(1, content.height - y)));
+  // The renderer measures in CSS pixels; views are placed in window pixels.
+  const zoom = mainWindow.webContents.getZoomFactor() || 1;
+  const x = Math.max(0, Math.round((Number(bounds.x) || 0) * zoom));
+  const y = Math.max(0, Math.round((Number(bounds.y) || 0) * zoom));
+  const width = Math.max(1, Math.min(Math.round((Number(bounds.width) || 1) * zoom), Math.max(1, content.width - x)));
+  const height = Math.max(1, Math.min(Math.round((Number(bounds.height) || 1) * zoom), Math.max(1, content.height - y)));
   return { x, y, width, height };
 }
 
@@ -1209,7 +1318,6 @@ registerLifecycle({
   BrowserWindow,
   session,
   container,
-  applicationId: "com.pointer.securityworkspace",
   shutdown: shutdownAgentRuntime,
   createApplicationMenu,
   createWindow: () => {
@@ -1223,10 +1331,15 @@ registerLifecycle({
 
 // ── Tools IPC ─────────────────────────────────────────────────────────────────
 
+registerBrowserIpc({ ipcMain, container, getMainWindow: () => mainWindow });
+
 registerProjectIpc({
   ipcMain,
   app,
-  dialog,
+  dialog: {
+    showOpenDialog: async (...args) => { container.hideNativeBrowser(); return dialog.showOpenDialog(...args); },
+    showSaveDialog: async (...args) => { container.hideNativeBrowser(); return dialog.showSaveDialog(...args); },
+  },
   shell,
   container,
   getMainWindow: () => mainWindow,
@@ -1278,9 +1391,6 @@ registerProjectIpc({
   listGuidanceEntries,
   normalizeGuidanceKind,
   readGuidanceEntry,
-  clearBrowserTarget,
-  clearBrowserSessionTargets,
-  clearBrowserIdentityTargets,
 });
 
 ipcMain.handle("window:minimize", () => {
@@ -1736,13 +1846,18 @@ ipcMain.handle("terminal:shells", () => ({
   profiles: availableTerminalShells().map(({ id, label, default: isDefault }) => ({ id, label, default: isDefault })),
 }));
 
-ipcMain.handle("terminal:create", (event, { id, cwd, profileId }) => {
+ipcMain.handle("terminal:references", (_event, { workspace, includeHistory = true } = {}) => ({
+  ok: true, terminals: terminalReferences.list({ workspace, includeHistory }),
+}));
+
+ipcMain.handle("terminal:create", (event, { id, cwd, profileId, workspace }) => {
   if (terminals.has(id)) return { error: "Terminal already exists" };
 
   try {
     const profile = resolveTerminalShell(String(profileId || ""));
     const shell = profile.path;
-    const term = pty.spawn(shell, getShellArgs(shell), {
+    const commandTracker = createShellCommandTracker(shell, getShellArgs(shell));
+    const term = pty.spawn(shell, commandTracker.args, {
       name: "xterm-color",
       cwd: cwd && fs.existsSync(cwd) ? cwd : process.env.USERPROFILE || process.cwd(),
       env: { ...process.env, TERM: "xterm-256color" },
@@ -1755,16 +1870,23 @@ ipcMain.handle("terminal:create", (event, { id, cwd, profileId }) => {
     const outputBatch = createTerminalOutputBatcher((data) => {
       if (!event.sender.isDestroyed()) event.sender.send("terminal:data", { id, data });
     });
-    terminals.set(id, { pty: term, ownerId, profileId: profile.id, agent: false, outputTail: "", exited: false, flushTerminalOutput: () => outputBatch.flush() });
+    const terminalRecord = { pty: term, ownerId, profileId: profile.id, shell, workspace, agent: false, outputTail: "", exited: false, cwd: cwd || workspace || "", flushTerminalOutput: () => outputBatch.flush() };
+    terminals.set(id, terminalRecord);
 
     term.onData((data) => {
       const record = terminals.get(id);
-      if (record) appendTerminalOutput(record, data);
-      outputBatch.push(data);
+      const visible = record ? commandTracker.output(record, data) : data;
+      if (record) appendTerminalOutput(record, visible);
+      outputBatch.push(visible);
     });
 
     term.onExit(({ exitCode, signal }) => {
       const record = terminals.get(id);
+      if (record) {
+        const tail = commandTracker.flush(record);
+        appendTerminalOutput(record, tail);
+        outputBatch.push(tail);
+      }
       record?.flushTerminalOutput?.();
       if (record) {
         record.exited = true;
@@ -2092,9 +2214,15 @@ async function listOpenRouterModels() {
     const preferred = String(llmPreferences().openrouter?.model || "").trim();
     const modelMeta = {};
     const models = [];
+    const decisionOnlyIds = new Set();
     for (const item of (data.data || [])) {
       const id = String(item?.id || "").trim();
       if (!id) continue;
+      const outputModalities = Array.isArray(item.architecture?.output_modalities) ? item.architecture.output_modalities : [];
+      if (outputModalities.includes("decisions") && !outputModalities.includes("text")) {
+        decisionOnlyIds.add(id);
+        continue;
+      }
       models.push(id);
       modelMeta[id] = {
         id,
@@ -2104,6 +2232,9 @@ async function listOpenRouterModels() {
         maxCompletionTokens: Number(item.top_provider?.max_completion_tokens || item.max_output_length) || null,
         topProviderContextLength: Number(item.top_provider?.context_length) || null,
         supportedParameters: Array.isArray(item.supported_parameters) ? item.supported_parameters : [],
+        architecture: item.architecture && typeof item.architecture === "object" ? { ...item.architecture } : {},
+        inputModalities: Array.isArray(item.architecture?.input_modalities) ? [...item.architecture.input_modalities] : [],
+        outputModalities: [...outputModalities],
         expirationDate: String(item.expiration_date || ""),
         available: item.available !== false && item.status !== "unavailable",
         pricing: item.pricing && typeof item.pricing === "object" ? item.pricing : {},
@@ -2113,7 +2244,7 @@ async function listOpenRouterModels() {
         fetchedAt: new Date().toISOString(),
       };
     }
-    if (preferred && !models.includes(preferred)) models.unshift(preferred);
+    if (preferred && !decisionOnlyIds.has(preferred) && !models.includes(preferred)) models.unshift(preferred);
     openRouterModelsCache = { modelMeta };
     return { models: [...new Set(models)].sort(), provider: "openrouter", host: "OpenRouter", modelMeta };
   } catch (error) {
@@ -2128,16 +2259,17 @@ function parseOpenRouterModelSlug(modelId) {
   return { author: raw.slice(0, idx), slug: raw.slice(idx + 1) };
 }
 
-async function fetchOpenRouterModelRecord(modelId) {
+async function fetchOpenRouterModelRecord(modelId, { signal = AbortSignal.timeout(5_000) } = {}) {
   const slug = parseOpenRouterModelSlug(modelId);
   if (!slug) return null;
   const path = `/models/${encodeURIComponent(slug.author)}/${encodeURIComponent(slug.slug)}`;
   let response = null;
   try {
-    response = getOpenRouterApiKey() ? await openRouterFetch(path) : await fetch(`${getOpenRouterBaseUrl()}${path}`);
+    response = getOpenRouterApiKey() ? await openRouterFetch(path, { signal }) : await fetch(`${getOpenRouterBaseUrl()}${path}`, { signal });
   } catch {
     try {
-      response = await fetch(`${getOpenRouterBaseUrl()}${path}`);
+      if (signal.aborted) return null;
+      response = await fetch(`${getOpenRouterBaseUrl()}${path}`, { signal });
     } catch {
       return null;
     }
@@ -2149,6 +2281,35 @@ async function fetchOpenRouterModelRecord(modelId) {
   } catch {
     return null;
   }
+}
+
+async function refreshBrowserModelMetadata(model, { signal } = {}) {
+  const record = await fetchOpenRouterModelRecord(model, { ...(signal ? { signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]) } : {}) });
+  if (!record) return null;
+  const metadata = { ...record, id: model, provider: "openrouter", inputModalities: record.architecture?.input_modalities,
+    supportedParameters: record.supported_parameters, source: "detail", fetchedAt: new Date().toISOString() };
+  if (!openRouterModelsCache) openRouterModelsCache = { modelMeta: {} };
+  openRouterModelsCache.modelMeta[model] = metadata;
+  return metadata;
+}
+
+async function assertBrowserVision({ model, provider, signal } = {}) {
+  if (signal?.aborted) throw Object.assign(new Error("Browser action stopped."), { code: "BROWSER_ACTION_STOPPED" });
+  const selectedProvider = provider || getActiveProvider();
+  const selectedModel = model || (selectedProvider === "openrouter" ? llmPreferences().openrouter?.model : "");
+  const metadata = await validateBrowserVisionModel({ provider: selectedProvider, model: selectedModel,
+    metadata: openRouterModelsCache?.modelMeta?.[selectedModel], refreshMetadata: model => refreshBrowserModelMetadata(model, { signal }) });
+  if (signal?.aborted) throw Object.assign(new Error("Browser action stopped."), { code: "BROWSER_ACTION_STOPPED" });
+  return metadata;
+}
+
+async function browserMessagesForRequest({ messages, model, workspace = "", signal }) {
+  const selectedModel = model || llmPreferences().openrouter?.model;
+  const prepared = await prepareBrowserImageMessages({ messages, provider: "openrouter", model: selectedModel,
+    metadata: openRouterModelsCache?.modelMeta?.[selectedModel], refreshMetadata: model => refreshBrowserModelMetadata(model, { signal }),
+    artifactStore: container.browserArtifacts(),
+    projectId: workspace ? container.identityVault().projectIdFor(workspace) : container.nativeBrowserProjectId() });
+  return normalizeOpenRouterMessages(prepared.messages);
 }
 
 async function getOpenRouterModelContexts(modelId) {
@@ -2192,6 +2353,8 @@ async function getOpenRouterModelContexts(modelId) {
         maxCompletionTokens: Number(record.top_provider?.max_completion_tokens || record.max_output_length) || null,
         topProviderContextLength: Number(record.top_provider?.context_length) || null,
         supportedParameters: Array.isArray(record.supported_parameters) ? record.supported_parameters : [],
+        architecture: record.architecture && typeof record.architecture === "object" ? { ...record.architecture } : {},
+        inputModalities: Array.isArray(record.architecture?.input_modalities) ? [...record.architecture.input_modalities] : [],
         expirationDate: String(record.expiration_date || ""),
         available: record.available !== false && record.status !== "unavailable",
         pricing: record.pricing && typeof record.pricing === "object" ? record.pricing : {},
@@ -2230,7 +2393,7 @@ async function getOpenRouterModelContexts(modelId) {
     modelMeta: catalogMeta ? ContextBudget.normalizeModelMetadata(catalogMeta, model) : null,
   };
 }
-async function runOpenRouterChat(event, { messages, model, reasoningEffort, tools, contextPlan, maxCompletionTokens, signal = null, idleTimeoutMs, totalTimeoutMs } = {}, hooks = {}, controllerKey = event.sender.id) {
+async function runOpenRouterChat(event, { messages, model, workspace, reasoningEffort, tools, contextPlan, maxCompletionTokens, signal = null, idleTimeoutMs, totalTimeoutMs } = {}, hooks = {}, controllerKey = event.sender.id) {
   const senderId = event.sender.id; const previous = llmControllers.get(controllerKey); if (previous) previous.abort(); const controller = new AbortController(); llmControllers.set(controllerKey, controller); let fullText = "", toolCalls = [];
   const abortBridge = () => { if (!controller.signal.aborted) controller.abort(signal?.reason || "AGENT_RUN_ABORTED"); };
   if (signal?.aborted) abortBridge();
@@ -2246,7 +2409,7 @@ async function runOpenRouterChat(event, { messages, model, reasoningEffort, tool
       baseUrl: getOpenRouterBaseUrl(),
       apiKey: getOpenRouterApiKey(),
       model: model || llmPreferences().openrouter?.model,
-      messages: normalizeOpenRouterMessages(messages),
+      messages: await browserMessagesForRequest({ messages, model, workspace, signal: controller.signal }),
       tools: openRouterTools(tools),
       stream: true,
       // Do not turn the compiler's context reserve into a per-call output cap.
@@ -2302,12 +2465,12 @@ async function runOpenRouterAgentRound(senderId, payload, hooks = {}, controller
     totalTimeoutMs: payload?.totalTimeoutMs ?? 0,
   }, hooks, controllerKey);
 }
-async function runOpenRouterJson({ model, messages, temperature = 0, maxCompletionTokens, reasoningEffort, contextPlan, timeoutMs = 0, responseFormat = { type: "json_object" } }) {
+async function runOpenRouterJson({ model, messages, workspace, temperature = 0, maxCompletionTokens, reasoningEffort, contextPlan, timeoutMs = 0, responseFormat = { type: "json_object" } }) {
   const request = buildChatRequest({
     baseUrl: getOpenRouterBaseUrl(),
     apiKey: getOpenRouterApiKey(),
     model: model || llmPreferences().openrouter?.model,
-    messages: normalizeOpenRouterMessages(messages),
+    messages: await browserMessagesForRequest({ messages, model, workspace }),
     stream: false,
     temperature,
     maxCompletionTokens: maxCompletionTokens || contextPlan?.responseReserveTokens || undefined,
@@ -2457,7 +2620,7 @@ ipcMain.handle("ollama:runtime", async (_event, { model } = {}) => {
 });
 
 ipcMain.handle("ollama:countTokens", async (_event, { model, messages = [], tools = [] } = {}) => {
-  if (getActiveProvider() === "openrouter") return { ok: true, count: estimateTokenCount(JSON.stringify({ messages, tools })), source: "estimate" };
+  if (getActiveProvider() === "openrouter") return { ok: true, count: estimateTokenCount(JSON.stringify({ messages, tools })) + estimateBrowserImageTokens(messages), source: "estimate" };
   const prompt = serializeTokenPayload(messages, tools);
   const fallback = estimateTokenCount(prompt) + (Array.isArray(messages) ? messages.length * 4 : 0);
 
@@ -2555,7 +2718,7 @@ function objectiveFromRun(run = {}) {
   return String(run?.objective || "").slice(0, 4000);
 }
 
-async function resumeInterruptedRuns(event, sessionIds = []) {
+async function resumeInterruptedRuns(event, sessionIds = [], requestedWorkspace = "") {
   const store = container.longHorizonRunStore;
   if (!store) return [];
   const workspaces = new Set(store.known?.() || []);
@@ -2564,27 +2727,56 @@ async function resumeInterruptedRuns(event, sessionIds = []) {
     if (workspace) workspaces.add(workspace);
   }
   const started = [];
+  if (agentSessionRuntime && container.v3SessionStore?.load) {
+    const requested = new Set(sessionIds);
+    for (const workspace of new Set(["", requestedWorkspace, ...workspaces])) {
+      const chats = container.v3SessionStore.load(workspace);
+      for (const chat of chats.sessions || []) {
+        if (requested.size && !requested.has(chat.id)) continue;
+        const location = { workspace, sessionId: chat.id };
+        const snapshot = agentSessionRuntime.supervisor.snapshot(location);
+        if (!snapshot.ok || (!snapshot.control.tasks.length && !snapshot.batch.length)) continue;
+        if (snapshot.control.tasks.some((entry) => entry.childRun)) continue;
+        bindAgentSender(chat.id, event.sender); controlSessionOwners.set(chat.id, chat.id);
+        const task = snapshot.control.tasks.find((entry) => entry.id === snapshot.control.activeTaskId);
+        const prior = task || [...snapshot.control.tasks].reverse().find((entry) => entry.kind === "primary");
+        if (prior) rememberParentRunDescriptor(sessionRunKey(chat.id), event, { ...prior.binding, workspace, sessionId: chat.id,
+          userMessage: prior.objective, runId: prior.runId, taskId: prior.id, blockId: prior.blockId, memorySessionId: chat.id }, true);
+        else if (snapshot.batch.length) rememberParentRunDescriptor(sessionRunKey(chat.id), event, { ...snapshot.control.intakeBinding, workspace, sessionId: chat.id,
+          userMessage: "", memorySessionId: chat.id, provider: snapshot.control.intakeBinding?.provider || getActiveProvider(), model: snapshot.control.intakeBinding?.model || chat.selectedModel || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" }, false);
+        if (!task && snapshot.batch.length) { scheduleLiveInputWake(location); started.push(`intake:${chat.id}`); }
+        if (task && !liveRunForSession(chat.id) && !resumeInFlight.has(task.runId)) {
+          started.push(task.runId); resumeInFlight.add(task.runId);
+          setImmediate(() => handleAgentRun(event, { ...task.binding, workspace, sessionId: chat.id, userMessage: task.objective,
+            runId: task.runId, taskId: task.id, blockId: task.blockId, backgroundRuntime: true }, { automaticContinuation: true, liveInputContinuation: true })
+            .catch(mainLog.ignored("run.resumeTask")).finally(() => resumeInFlight.delete(task.runId)));
+        }
+      }
+    }
+  }
   for (const workspace of workspaces) {
-    await store.reconcile(workspace, { staleAfterMs: Tunables.LONG_HORIZON_STALE_RUN_MS }).catch(() => {});
+    await store.reconcile(workspace, { staleAfterMs: Tunables.LONG_HORIZON_STALE_RUN_MS }).catch(mainLog.ignored("run.reconcile"));
     for (const run of store.listResumeEligible(workspace, sessionIds)) {
       if (!run?.sessionId || liveRunForSession(run.sessionId) || resumeInFlight.has(run.runId)) continue;
       const resumed = await store.resume(workspace, run.runId).catch(() => null);
       if (!resumed) continue;
       const payload = {
         workspace,
+        runId: run.runId,
         sessionId: run.sessionId,
         userMessage: objectiveFromRun(run) || "Continue the interrupted long-horizon run from the last checkpoint.",
         model: run.model,
         mode: run.mode || "agent",
         modeFamily: "xekute",
         authorityProfile: run.authorityProfile,
+        roundAccountingSnapshot: run.checkpoint?.accounting || null,
         chatHistory: [],
       };
       started.push(run.runId);
       resumeInFlight.add(run.runId);
       setImmediate(() => {
         handleAgentRun(event, payload, { automaticContinuation: true })
-          .catch(() => {})
+          .catch(mainLog.ignored("run.resumeInterrupted"))
           .finally(() => resumeInFlight.delete(run.runId));
       });
     }
@@ -2592,9 +2784,9 @@ async function resumeInterruptedRuns(event, sessionIds = []) {
   return started;
 }
 
-ipcMain.handle("agent:pendingParentContinuations", async (event, { sessionIds = [] } = {}) => {
+ipcMain.handle("agent:pendingParentContinuations", async (event, { sessionIds = [], workspace = "" } = {}) => {
   rebindLiveAgentSender(event.sender, sessionIds);
-  const resumed = await resumeInterruptedRuns(event, sessionIds).catch(() => []);
+  const resumed = await resumeInterruptedRuns(event, sessionIds, workspace).catch(() => []);
   const requested = new Set((Array.isArray(sessionIds) ? sessionIds : [])
     .map((value) => String(value || ""))
     .filter(Boolean));
@@ -2756,7 +2948,7 @@ ipcMain.handle("ollama:chat", async (event, { messages, model, numCtx, thinking,
 });
 
 async function runOllamaAgentRound(senderId, payload, hooks = {}, controllerKey = senderId) {
-  if (getActiveProvider() === "openrouter") return runOpenRouterAgentRound(senderId, payload, hooks, controllerKey);
+  if ((payload.provider || payload.contextPlan?.provider || getActiveProvider()) === "openrouter") return runOpenRouterAgentRound(senderId, payload, hooks, controllerKey);
   const { messages, model, numCtx, thinking, tools, temperature = 0.1, signal = null } = payload;
   const url = `${getOllamaBaseUrl()}/api/chat`;
   const mdl = model ?? "qwen2.5-coder:7b";
@@ -3009,20 +3201,32 @@ function requestOperatorQuestions(sender, proposal) {
 
 const { formatCommandForApproval } = require("../services/approval/command-approval.js");
 
+function formatBrowserActionForApproval(args = {}, { secret = false } = {}) {
+  const target = args.url || args.target?.selector || args.selector || (args.target?.ref ? `element ${args.target.ref}` : args.target?.kind === "point" ? `point ${args.target.x},${args.target.y}` : "");
+  const text = typeof args.text !== "string" ? ""
+    : secret ? ` (${args.text.length} characters, hidden)`
+      : ` "${args.text.length > 80 ? `${args.text.slice(0, 80)}…` : args.text}"`;
+  const key = args.key ? ` ${args.key}` : "";
+  const paths = Array.isArray(args.paths) ? ` ${args.paths.join(", ")}` : "";
+  return `${args.action || "browser action"}${key}${text}${target ? ` → ${target}` : ""}${paths}`;
+}
+
 async function requestToolApproval(sender, proposal = {}) {
   const requestId = `approval-${String(proposal.invocationId || Date.now())}`;
-  if (proposal.toolName !== "exec_command") {
-    return { id: requestId, approved: false, reason: "Interactive approval is available only for exec_command." };
+  if (!["exec_command", "browser_action"].includes(proposal.toolName)) {
+    return { id: requestId, approved: false, reason: "Interactive approval is available only for commands and browser actions." };
   }
+  const browser = proposal.toolName === "browser_action";
   const response = await requestOperatorQuestions(sender, {
     requestId,
     sessionId: String(proposal.sessionId || ""),
-    reason: `${proposal.toolName || "Tool"} requires approval under ${String(proposal.profile || "the selected authority profile").replace(/_/g, " ")}. Risk: ${proposal.risk?.level || "unknown"}.`,
+    reason: browser ? String(proposal.reason || "This browser action requires approval.") : `${proposal.toolName || "Tool"} requires approval under ${String(proposal.profile || "the selected authority profile").replace(/_/g, " ")}. Risk: ${proposal.risk?.level || "unknown"}.`,
     topic: "tool-approval",
     expiresInMs: 0,
     approval: {
       kind: "command",
-      command: formatCommandForApproval(proposal.args),
+      command: browser ? `${String(proposal.reason || "")}\n${formatBrowserActionForApproval(proposal.args, { secret: Boolean(proposal.secretInput) })}`.trim() : formatCommandForApproval(proposal.args),
+      ...(browser ? { title: "Allow this browser action?" } : {}),
     },
     questions: [{
       id: "approval",
@@ -3066,13 +3270,13 @@ function buildSubagentResultPrompt(result = {}) {
   ].join("\n\n");
 }
 
-function rememberParentRunDescriptor(runKey, event, payload, continuationResultId = "") {
+function rememberParentRunDescriptor(runKey, event, payload, continuation = false) {
   const key = String(runKey || "");
   if (!key) return null;
   const incoming = payload && typeof payload === "object" ? { ...payload } : {};
   delete incoming.continuation;
   const existing = parentRunDescriptors.get(key);
-  if (!existing || !continuationResultId) {
+  if (!existing || !continuation) {
     const descriptor = {
       event,
       payload: incoming,
@@ -3199,8 +3403,9 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
 
 async function handleAgentRun(event, payload = {}, options = {}) {
   const sender = event.sender;
+  const userImages = normalizeUserImages(payload.userImages);
+  if (!userImages.ok) return { ok: false, error: userImages.error, code: "USER_IMAGES_INVALID" };
   const sessionId = String(payload.sessionId || payload.memorySessionId || "");
-  bindAgentSender(sessionId, sender);
   const foregroundRunKey = sessionRunKey(sessionId);
   const backgroundRuntime = Boolean(payload.backgroundRuntime || options.automaticContinuation);
   const runKey = backgroundRuntime
@@ -3208,15 +3413,15 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     : foregroundRunKey;
   // Main-owned delegated-result continuations still claim their FIFO packet
   // from the foreground parent coordinator even though execution is hidden.
-  const coordinationKey = options.automaticContinuation || payload.continuation?.resultId
+  const coordinationKey = options.automaticContinuation || payload.continuation?.resultId || payload.internalRuntimeInput
     ? foregroundRunKey
     : runKey;
   const requestedProjectId = String(payload.projectId || payload.memoryProjectId || "").trim();
   const requestedTier1ProjectId = isMemoryId(requestedProjectId, "proj") ? requestedProjectId : "";
   let tier1Identity = null;
   let tier1ProjectId = "";
-  const tier1SessionId = tier1SessionIdForRun(sessionId, runKey);
-  const replyBlockId = tier1BlockId(payload.blockId, runKey, payload.userMessage || "");
+  let tier1SessionId = tier1SessionIdForRun(sessionId, runKey);
+  let replyBlockId = tier1BlockId(payload.blockId, runKey, payload.userMessage || "");
   const artifactWorkspace = Boolean(payload.workspace && fs.existsSync(path.join(payload.workspace, ".xekute")));
   if (payload.workspace) {
     tier1Identity = container.memoryProjectIdentityStore?.resolveV3Project?.(payload.workspace, { persist: true, projectId: requestedTier1ProjectId }) || null;
@@ -3234,43 +3439,66 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       if (!artifactsReady?.ok) return { ok: false, code: artifactsReady?.code || "ARTIFACT_BOOTSTRAP_FAILED", error: artifactsReady?.error || "Canonical project artifacts could not be initialized.", retryable: false, validation: artifactsReady?.validation || null };
     }
   }
+  // Keep the sent originals with the chat so a reopened chat can show them at
+  // full quality. Saving is best effort; the run never depends on it.
+  if (tier1ProjectId && userImages.images.length) {
+    for (const image of userImages.images) {
+      try { container.tier1SensitiveStore?.writeChatImage?.(tier1ProjectId, tier1SessionId, image); }
+      catch (error) { mainLog.write("chatImage.save", error); }
+    }
+  }
   const continuationResultId = String(payload.continuation?.resultId || "");
   const continuationQuestionId = String(payload.continuation?.questionRequestId || "");
-  const parentDescriptor = rememberParentRunDescriptor(coordinationKey, event, payload, continuationResultId);
-  if (payload.workspace && !continuationResultId && !subagentCoordinator.listChildren(coordinationKey).length) {
+  const previousDescriptor = parentRunDescriptors.get(coordinationKey);
+  if (previousDescriptor?.aborted && (options.automaticContinuation || payload.backgroundRuntime)
+    && (continuationResultId || continuationQuestionId || options.liveInputContinuation || payload.runId === previousDescriptor.durableRunId)) {
+    return { ok: false, aborted: true, error: "The agent turn was stopped." };
+  }
+  const canonicalControl = agentSessionRuntime?.supervisor.snapshot({ workspace: payload.workspace, sessionId: tier1SessionId });
+  const canonicalWave = canonicalControl?.control?.orchestrationWave;
+  if (!continuationResultId && !subagentCoordinator.listChildren(coordinationKey).length && canonicalWave?.value && canonicalWave.runId === payload.runId) {
+    subagentCoordinator.restoreWave(coordinationKey, canonicalWave.value);
+  } else if (payload.workspace && (options.automaticContinuation || payload.internalRuntimeInput) && !continuationResultId && !subagentCoordinator.listChildren(coordinationKey).length && !canonicalWave) {
     const savedWave = container.longHorizonRunStore.listBySession(payload.workspace, sessionId)
       .map((run) => run?.checkpoint?.orchestrationWave)
       .find((wave) => wave && (wave.resultQueue?.length || (wave.wave && !wave.wave.sealed)));
     if (savedWave) subagentCoordinator.restoreWave(coordinationKey, savedWave);
   }
-  if (parentDescriptor?.aborted && (options.automaticContinuation || payload.backgroundRuntime)) {
-    return { ok: false, aborted: true, error: "The agent turn was stopped." };
-  }
-  const claimedContinuation = continuationResultId
+  const isContinuation = Boolean(continuationResultId || continuationQuestionId || payload.internalRuntimeInput || options.liveInputContinuation || options.releasePendingEndTurn || payload.releasePendingEndTurn);
+  if (!isContinuation && !canonicalControl?.control?.tasks.some((task) => task.kind === "primary" && ["running", "waiting"].includes(task.status))) subagentCoordinator.resetParentForTask?.(coordinationKey);
+  const parentTurn = continuationResultId
     ? subagentCoordinator.claimResult(coordinationKey, continuationResultId)
-    : null;
-  if (continuationResultId && !claimedContinuation?.ok) {
-    return { ok: false, error: claimedContinuation?.error || "The delegated result is no longer ready.", code: claimedContinuation?.code || "SUBAGENT_RESULT_NOT_READY" };
-  }
-  const questionHead = continuationQuestionId || options.questionContinuation
-    ? subagentCoordinator.peekQuestionHead(coordinationKey)
-    : null;
-  const parentTurn = subagentCoordinator.beginParentTurn(coordinationKey, { continuation: Boolean(continuationResultId || continuationQuestionId || options.releasePendingEndTurn) });
-  if (!parentTurn.ok) {
+    : subagentCoordinator.beginParentTurn(coordinationKey, { continuation: isContinuation });
+  if (!parentTurn.ok || (!continuationResultId && parentTurn.state === "PROCESSING_RESULT")) {
     return { ok: false, error: parentTurn.error || "The parent agent is already processing a turn.", code: parentTurn.code || "PARENT_BUSY" };
   }
+  const claimedContinuation = continuationResultId ? parentTurn : null;
   let releasedParentTurn = false;
   let agentOutcome = null;
+  let continuationResultAccepted = false;
+  let runController = null;
+  let detachExternalAbort = () => {};
   const releaseParentTurn = (stopped = false) => {
     if (releasedParentTurn) return;
     releasedParentTurn = true;
     subagentCoordinator.finishParentTurn(coordinationKey, {
       resultId: continuationResultId,
       stopped: Boolean(stopped),
+      accepted: continuationResultAccepted,
     });
   };
   try {
+  const parentDescriptor = rememberParentRunDescriptor(coordinationKey, event, payload, isContinuation);
+  bindAgentSender(sessionId, sender);
+  const questionHead = continuationQuestionId || options.questionContinuation
+    ? subagentCoordinator.peekQuestionHead(coordinationKey)
+    : null;
   const sendAgentEvent = (data) => {
+    if (data?.type === "agent_command_output") {
+      if (data.deliverToSession) deliverCommandReport(data).catch(mainLog.ignored("command.report"));
+      return;
+    }
+    if (data?.type === "terminal_checkpoint") deliverCommandReport(data, { checkpoint: true }).catch(mainLog.ignored("command.checkpoint"));
     const target = senderForSession(sessionId, sender);
     if (target && !target.isDestroyed()) {
       const routedSessionId = String(data?.sessionId || sessionId);
@@ -3287,6 +3515,26 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       });
     }
   };
+  // A command that outlived its round reports to the task inbox: its exit, or
+  // its periodic live status. The task wakes once every command it parked on
+  // has finished, and on every live status so it can decide to keep waiting.
+  async function deliverCommandReport(data, { checkpoint = false } = {}) {
+    if (!agentSessionRuntime || !supervisedRun) return;
+    const processId = String(data.processId || "");
+    const command = String(data.command || "").slice(0, 500);
+    const output = [data.stdout, data.stderr].map((value) => String(value || "").trim()).filter(Boolean).join("\n").slice(-50_000);
+    const exit = data.exitCode == null ? "" : ` with exit code ${data.exitCode}`;
+    const text = checkpoint
+      ? `The command "${command}" (${processId}) is still running after ${Math.round((Number(data.elapsedMs) || 0) / 60_000)} minutes and holds a command slot. Leave it running, or stop it with exec_command operation=stop.${output ? `\nRecent output:\n${output}` : ""}`
+      : `The command "${command}" (${processId}) finished: ${data.status || "complete"}${exit}.${output ? `\n${output}` : ""}`;
+    const id = checkpoint ? `result:checkpoint:${processId}:${Date.now()}` : `result:command:${processId}`;
+    const receipt = await agentSessionRuntime.supervisor.receive({ workspace: payload.workspace, sessionId: tier1SessionId,
+      input: { id: id.replace(/[^a-zA-Z0-9:_./-]/g, "_").slice(0, 240), text, targetTaskId: supervisedRun.taskId } });
+    if (!receipt.ok) return;
+    const waiting = parkedCommandWaits.get(foregroundRunKey);
+    if (!checkpoint) waiting?.delete(processId);
+    if (checkpoint || !waiting?.size) scheduleLiveInputWake({ workspace: payload.workspace, sessionId });
+  }
   const agentTerminalHost = createAgentTerminalHost({
     webContents: sender,
     sendAgentEvent,
@@ -3298,10 +3546,15 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     displayExecCommand,
     agentTerminalRunner,
   });
-  const listRunningCommands = ({ workspace: commandWorkspace, sessionId: commandSessionId } = {}) => {
+  const listRunningCommands = async ({ workspace: commandWorkspace, sessionId: commandSessionId } = {}) => {
     const manager = container.durableProcessManager;
     if (typeof manager?.runningCommands !== "function") return [];
-    return manager.runningCommands(commandWorkspace || payload.workspace || "", String(commandSessionId || ""));
+    const workspace = commandWorkspace || payload.workspace || "";
+    const session = String(commandSessionId || "");
+    const running = manager.runningCommands(workspace, session);
+    const listed = await manager.list?.(workspace, {});
+    const unknown = (listed?.value?.processes || []).filter((record) => record.status === "reconciliation_required" && (!session || record.sessionId === session));
+    return [...running, ...unknown.map((record) => ({ ...record, processId: record.id }))];
   };
   const delegationProvider = createRuntimeDelegationProvider({
     senderId: event.sender.id,
@@ -3321,21 +3574,63 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     tools: toolCatalogFromRegistry(container.toolRegistry).tools,
     getTools: () => selectedCatalog?.tools || toolCatalogFromRegistry(container.toolRegistry).tools,
     coordinator: subagentCoordinator,
+    checkpointChild: delegatedChildren.checkpointChild,
+    loadChild: delegatedChildren.loadChild,
+    onChildCheckpoint: async ({ childSessionId, childInvocationId, engineRef }) => {
+      const saved = await delegatedChildren.loadChild({ workspace: payload.workspace, engineRef });
+      if (!agentSessionRuntime || !supervisedRun) return;
+      const started = await agentSessionRuntime.supervisor.startTask({ workspace: payload.workspace, sessionId: tier1SessionId,
+        task: { taskId: engineRef.taskId, runId: engineRef.runId, kind: "dependent", objective: saved.value.originalGoal,
+          dependencyOfTaskId: supervisedRun.taskId, binding: saved.value.binding } });
+      if (!started.ok) throw Object.assign(new Error(started.error), { code: started.code });
+      const receipt = await container.v3SessionStore.transactSession(payload.workspace, tier1SessionId, (document) => {
+        const target = document.run_control.tasks.find((task) => task.id === engineRef.taskId);
+        target.childSessionId = childSessionId;
+        target.delegatedChild = { parentRunKey: coordinationKey, childInvocationId, engineRef };
+        const appliedIds = new Set(saved.value.engineSnapshot?.appliedInputIds || []);
+        let applied = 0;
+        for (const delivery of target.deliveries) { if (!appliedIds.has(delivery.messageId)) break; applied = delivery.revision; }
+        target.appliedRevision = applied;
+        target.engine = { engineRef, revision: saved.value.engineSnapshot?.revision, accounting: saved.value.engineSnapshot?.accounting };
+        if (["stopped", "failed", "inconclusive"].includes(saved.value.status)) target.status = saved.value.status;
+        assignTaskWave(document.run_control, durableRunId, subagentCoordinator.exportWave(coordinationKey));
+        return { ok: true };
+      });
+      if (!receipt.ok) throw Object.assign(new Error(receipt.error), { code: receipt.code });
+      sendAgentEvent({ type: "task_started", sessionId: childSessionId, taskId: engineRef.taskId, runId: engineRef.runId, blockId: engineRef.blockId, memorySessionId: engineRef.sessionId, parentMemorySessionId: tier1SessionId });
+      for (const delivery of started.value.deliveries || []) if (saved.value.engineSnapshot?.appliedInputIds?.includes(delivery.messageId)) sendAgentEvent({ type: "input_applied", taskId: engineRef.taskId, messageId: delivery.messageId, revision: delivery.revision });
+    },
+    beforeChildFinalize: async ({ engineRef, engineSnapshot }) => {
+      if (!agentSessionRuntime || !supervisedRun) return { ok: true, completed: true };
+      const receipt = await container.v3SessionStore.transactSession(payload.workspace, tier1SessionId, (document) => {
+        const control = document.run_control;
+        const target = control.tasks.find((task) => task.id === engineRef.taskId);
+        if (!target || target.status === "stopped") return { ok: false, code: "TASK_STOPPED", error: "The delegated task stopped." };
+        if (target.status === "completed") return { ok: true, write: false, value: { completed: true, duplicate: true } };
+        const applied = new Set(engineSnapshot.appliedInputIds || []);
+        if (control.arrival !== control.routed || target.deliveries.some((delivery) => !applied.has(delivery.messageId))) return { ok: true, write: false, value: { completed: false, reason: "PENDING_INPUT" } };
+        target.status = "completed";
+        target.completionIntent = { revision: target.revision, committedAt: new Date().toISOString() };
+        assignTaskWave(control, durableRunId, subagentCoordinator.exportWave(coordinationKey));
+        return { ok: true, value: { completed: true } };
+      });
+      return { ...receipt, ...receipt.value };
+    },
     runAgentTurn,
-    runModelRound: (senderId, roundPayload, hooks, controllerKey) => runOllamaAgentRound(senderId, roundPayload, hooks, controllerKey),
-    executeToolCall: (request) => executeToolCall({
+    runModelRound: (senderId, roundPayload, hooks, controllerKey) => runOllamaAgentRound(senderId, { ...roundPayload, workspace: payload.workspace }, hooks, controllerKey),
+    executeToolCall: (request) => taskResources.execute({ workspace: payload.workspace || "", runId: request.durableRunId, toolCall: request.toolCall, signal: request.signal }, () => executeToolCall({
       ...request,
       ownerId: event.sender.id,
+      browserSessionId: request.sessionId,
       blockId: request?.blockId || "",
       tier1Memory: Boolean(tier1ProjectId),
       processManager: agentTerminalHost,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
       approvalProvider: (proposal) => requestToolApproval(event.sender, { ...proposal, sessionId: proposal?.sessionId || sessionId }),
       durableRunId: request?.durableRunId || durableRunId,
-    }),
+    })),
     listRunningCommands,
-    beginChildSession: (childDeps) => (payload.workspace
-      ? container.v3SessionStore.begin(payload.workspace, {
+    beginChildSession: (childDeps) => container.v3SessionStore.begin(payload.workspace || "", {
         sessionId: childDeps.childSessionId,
         title: childDeps.title,
         userPrompt: childDeps.task,
@@ -3345,18 +3640,15 @@ async function handleAgentRun(event, payload = {}, options = {}) {
           childInvocationId: childDeps.childInvocationId,
           model: childDeps.model,
         },
-      })
-      : Promise.resolve({ ok: true, sessionId: "" })),
-    recordChildSession: (childResult) => (childResult?.workspace
-      ? container.v3SessionStore.record(childResult.workspace, {
+      }),
+    recordChildSession: (childResult) => container.v3SessionStore.record(childResult.workspace || "", {
         type: "outcome",
         sessionId: childResult.sessionId,
         blockId: childResult.blockId,
         text: childResult.output?.text || childResult.output?.summary || "",
         outcome: childResult.status === "completed" ? "completed" : childResult.status === "stopped" ? "stopped" : "failed",
         transcript: Array.isArray(childResult.metadata?.appendedMessages) ? childResult.metadata.appendedMessages : [],
-      })
-      : Promise.resolve({ ok: true, skipped: true })),
+      }),
     finalizeChildContext: async (childResult = {}) => {
       await (container.assessmentIntelligence?.flush?.() || Promise.resolve({ ok: true, skipped: true }));
       await (container.assessmentIntelligence?.whenIdle?.(childResult.workspace) || Promise.resolve());
@@ -3385,6 +3677,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     // V3 owns context assembly; retired compiler/assembly services are not
     // supplied to delegated turns.
     tier1Context: tier1ProjectId ? container.memoryTier1Coordinator : null,
+    loadChatReferenceSnapshot: (input) => agentSessionRuntime.loadChatReferenceSnapshot(input),
     tier1Model: tier1ProjectId
       ? (input = {}) => {
         // The Tier 1 coordinator sends a structured semantic-checkpoint
@@ -3419,15 +3712,25 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       sessionId: childSessionId,
       mode: requestedProfile.key,
     }) || null,
-    getBrowserTarget,
-    onResultReady: (readyResult) => {
+    onResultReady: async (readyResult) => {
       const snapshot = subagentCoordinator.exportWave(coordinationKey);
       const descriptor = parentRunDescriptors.get(coordinationKey);
       if (descriptor) descriptor.payload = { ...(descriptor.payload || {}), orchestrationWave: snapshot };
       if (descriptor?.payload?.workspace && descriptor.durableRunId && snapshot) {
         container.longHorizonRunStore.checkpoint(descriptor.payload.workspace, descriptor.durableRunId, {
           checkpoint: { orchestrationWave: snapshot },
-        }).catch(() => {});
+        }).catch(mainLog.ignored("wave.checkpoint"));
+      }
+      if (agentSessionRuntime) {
+        const receipt = await container.v3SessionStore.transactSession(payload.workspace, tier1SessionId, (document) => {
+          for (const childResult of readyResult.children || [readyResult]) {
+            const target = document.run_control.tasks.find((task) => task.delegatedChild?.childInvocationId === childResult.childInvocationId && task.dependencyOfTaskId === supervisedRun?.taskId && ["running", "waiting"].includes(task.status));
+            if (target) target.status = childResult.status === "completed" ? "completed" : childResult.status === "stopped" ? "stopped" : "failed";
+          }
+          assignTaskWave(document.run_control, durableRunId, subagentCoordinator.exportWave(coordinationKey));
+          return { ok: true };
+        });
+        if (!receipt.ok) throw Object.assign(new Error(receipt.error), { code: receipt.code });
       }
       return scheduleParentContinuation(coordinationKey, readyResult);
     },
@@ -3475,7 +3778,13 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   }
   const previousRun = agentRunControllers.get(runKey);
   if (previousRun) previousRun.abort();
-  const runController = new AbortController();
+  runController = new AbortController();
+  if (options.abortSignal) {
+    const abort = () => runController.abort(options.abortSignal.reason);
+    if (options.abortSignal.aborted) abort();
+    else options.abortSignal.addEventListener("abort", abort, { once: true });
+    detachExternalAbort = () => options.abortSignal.removeEventListener("abort", abort);
+  }
   agentRunControllers.set(runKey, runController);
   syncPowerSaveBlocker();
   const leasedTools = container.mcpRuntime?.definitionsForSession?.(sessionId, { workspace: payload.workspace, mode: requestedProfile.key }) || [];
@@ -3488,7 +3797,30 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }
   }
   const runtimeTools = selectedCatalog.tools;
-  const durableRunId = String(parentDescriptor?.durableRunId || assessmentRun?.id || `run-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`);
+  let durableRunId = String(payload.runId || (isContinuation ? parentDescriptor?.durableRunId : "") || assessmentRun?.id || `run-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`);
+  let supervisedRun = null;
+  if (agentSessionRuntime) {
+    supervisedRun = await agentSessionRuntime.admit({ workspace: payload.workspace, sessionId: tier1SessionId,
+      runId: durableRunId, blockId: replyBlockId, taskId: payload.taskId, resume: isContinuation,
+      snapshotWave: ({ acceptedResultId }) => subagentCoordinator.exportWave(coordinationKey, { acceptedResultId }), continuationResultId,
+      completionBarrier: () => computeOrchestrationHold(subagentCoordinator, coordinationKey),
+      inputId: payload.inputId || payload.userMessageId, userMessage: isContinuation ? parentDescriptor?.payload?.userMessage || payload.userMessage : payload.userMessage,
+      binding: { ...payload, provider: payload.provider || getActiveProvider() } });
+    if (!supervisedRun.ok) return supervisedRun;
+    if (supervisedRun.fresh) subagentCoordinator.resetParentForTask?.(coordinationKey);
+    durableRunId = supervisedRun.runId;
+    tier1SessionId = supervisedRun.sessionId;
+    replyBlockId = supervisedRun.blockId;
+    controlSessionOwners.set(tier1SessionId, sessionId);
+    payload = { ...payload, ...supervisedRun.task.binding, chatHistory: supervisedRun.chatHistory };
+    if (parentDescriptor) parentDescriptor.payload = { ...parentDescriptor.payload, ...supervisedRun.task.binding,
+      runId: durableRunId, taskId: supervisedRun.taskId, blockId: replyBlockId, memorySessionId: tier1SessionId };
+    sendAgentEvent({ type: "task_started", taskId: supervisedRun.taskId, runId: durableRunId, blockId: replyBlockId, memorySessionId: tier1SessionId });
+  }
+  await delegationProvider.recoverChildren?.({ signal: runController.signal });
+  const roundAccountingSnapshot = payload.roundAccountingSnapshot
+    || (payload.workspace ? container.longHorizonRunStore.get(payload.workspace, durableRunId)?.checkpoint?.accounting : null)
+    || null;
   if (parentDescriptor) parentDescriptor.durableRunId = durableRunId;
   if (payload.workspace) {
     await Promise.allSettled([
@@ -3503,7 +3835,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       objective: continuationResultId ? buildSubagentResultPrompt(claimedContinuation.result) : payload.userMessage || "",
       mode: requestedProfile.key,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
-    }).catch(() => {});
+    }).catch(mainLog.ignored("run.begin"));
   }
   const workingReferences = Array.isArray(payload.workingReferences) ? [...payload.workingReferences] : [];
   let result;
@@ -3513,6 +3845,9 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     if (options.releasePendingEndTurn || payload.releasePendingEndTurn) {
       result = await runAgentTurn({
         workspace: payload.workspace,
+        runId: durableRunId,
+        roundAccountingSnapshot,
+        ...(supervisedRun ? { liveInput: supervisedRun.liveInput, engineSnapshot: supervisedRun.engineSnapshot, initialInputId: supervisedRun.initialInputId, userMessage: supervisedRun.task.objective } : {}),
         sessionId,
         signal: runController.signal,
         sendEvent: sendAgentEvent,
@@ -3525,6 +3860,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     } else {
     result = await runAgentTurn({
     workspace: payload.workspace,
+    loadChatReferenceSnapshot: (input) => agentSessionRuntime.loadChatReferenceSnapshot(input),
     model: payload.model,
     numCtx: payload.numCtx,
     contextBudget: payload.contextBudget,
@@ -3537,6 +3873,8 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     modeFamily: payload.modeFamily || "xekute",
     projectProfile: readProjectProfile(payload.workspace)?.profile || null,
     runId: durableRunId,
+    roundAccountingSnapshot,
+    ...(supervisedRun ? { liveInput: supervisedRun.liveInput, engineSnapshot: supervisedRun.engineSnapshot, initialInputId: supervisedRun.initialInputId } : {}),
     authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
     chatHistory: payload.chatHistory || [],
     sessionId,
@@ -3591,17 +3929,37 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     signal: runController.signal,
     globalGuidanceRoot: globalGuidanceRoot(),
     sendEvent: sendAgentEvent,
-    runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, roundPayload, {
+    runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, {
+      ...roundPayload,
+      // Attached images go to the model on every round of this run only.
+      messages: attachUserImages(roundPayload.messages, {
+        text: payload.userMessage,
+        images: userImages.images,
+        provider: payload.provider || roundPayload.contextPlan?.provider || getActiveProvider(),
+      }),
+      provider: payload.provider,
+      workspace: payload.workspace,
+    }, {
       onThinking: roundPayload.onThinking,
       onToken: roundPayload.onToken,
       onToolCalls: roundPayload.onToolCalls,
       onStreamEvent: roundPayload.onStreamEvent,
       onHeartbeat: () => payload.workspace
-        ? container.longHorizonRunStore.heartbeat(payload.workspace, durableRunId, { phase: "stream" }).catch(() => {})
+        ? container.longHorizonRunStore.heartbeat(payload.workspace, durableRunId, { phase: "stream" }).catch(mainLog.ignored("run.heartbeat"))
         : null,
     }, runKey),
-    executeToolCall: (request) => executeToolCall({
+    executeToolCall: (request) => (supervisedRun ? supervisedRun.execute(request, (owned) => taskResources.execute({ workspace: payload.workspace, runId: durableRunId, toolCall: owned.toolCall, signal: owned.signal }, () => executeToolCall({
+      ...owned,
+      browserSessionId: payload.chatSessionId || sessionId, model: payload.model, provider: payload.provider || getActiveProvider(),
+      ownerId: event.sender.id, blockId: owned.blockId || replyBlockId, tier1Memory: Boolean(tier1ProjectId),
+      processManager: agentTerminalHost, specialSkill: activeSpecialSkill,
+      authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
+      approvalProvider: (proposal) => requestToolApproval(event.sender, { ...proposal, sessionId }),
+      questionProvider: (proposal) => requestOperatorQuestions(event.sender, { ...proposal, sessionId }),
+      durableRunId, delegationProvider,
+    }))) : executeToolCall({
       ...request,
+      browserSessionId: payload.chatSessionId || sessionId, model: payload.model, provider: payload.provider || getActiveProvider(),
       ownerId: event.sender.id,
       blockId: request?.blockId || payload.blockId || replyBlockId,
       tier1Memory: Boolean(tier1ProjectId),
@@ -3612,14 +3970,14 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       questionProvider: (proposal) => requestOperatorQuestions(event.sender, { ...proposal, sessionId }),
       durableRunId,
       delegationProvider,
-    }),
+    })),
     listRunningCommands,
     checkpointRun: (patch) => payload.workspace
-      ? container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(() => {})
+      ? container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(mainLog.ignored("run.checkpoint"))
       : Promise.resolve(),
     persistTurnProgress: async (patch = {}) => {
       if (payload.workspace) {
-        await container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(() => {});
+        await container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(mainLog.ignored("run.checkpoint"));
       }
       if (!tier1ProjectId || !container.v3SessionStore?.record) return;
       const transcriptPrompt = continuationResultId
@@ -3640,9 +3998,8 @@ async function handleAgentRun(event, payload = {}, options = {}) {
           model: String(payload.model || "").slice(0, 240),
           provider: String(payload.provider || getActiveProvider() || "ollama").slice(0, 120),
         },
-      }).catch(() => {});
+      }).catch(mainLog.ignored("chatHistory.outcome"));
     },
-    getBrowserTarget,
     toolMetadataForName: (name) => container.mcpRuntime?.metadata?.(name, { workspace: payload.workspace, sessionId, mode: requestedProfile.key }) || null,
     requestQuestions: (proposal) => requestOperatorQuestions(event.sender, { ...proposal, sessionId }),
     findWorkspaceFiles,
@@ -3661,28 +4018,21 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }
   } catch (error) {
     result = { ok: false, error: error.message, code: error.code || "AGENT_RUN_FAILED", runState: { status: "failed" } };
-  } finally {
-    if (agentRunControllers.get(runKey) === runController) agentRunControllers.delete(runKey);
-    syncPowerSaveBlocker();
-    if (payload.workspace) {
-      const status = result?.aborted ? "stopped" : result?.runState?.status || (result?.ok ? "completed" : "failed");
-      await container.longHorizonRunStore.finish(payload.workspace, durableRunId, status, {
-        evidenceIds: result?.evidenceIds || [],
-        error: result?.error ? String(result.error).slice(0, 2000) : "",
-      }).catch(() => {});
-    }
-    agentOutcome = result;
-    releaseParentTurn(result?.aborted);
-    const waveSnapshot = subagentCoordinator.exportWave(coordinationKey);
-    if (parentDescriptor && waveSnapshot) parentDescriptor.payload = { ...(parentDescriptor.payload || {}), orchestrationWave: waveSnapshot };
-    if (payload.workspace && parentDescriptor?.durableRunId && waveSnapshot) {
-      await container.longHorizonRunStore.checkpoint(payload.workspace, parentDescriptor.durableRunId, {
-        checkpoint: { orchestrationWave: waveSnapshot },
-      }).catch(() => {});
-    }
   }
+  agentOutcome = result;
   let tier1Transcript = null;
-  if (tier1ProjectId && container.v3SessionStore?.record) {
+  if (supervisedRun) {
+    tier1Transcript = await supervisedRun.settle(result);
+    if (tier1Transcript?.value?.reconciledCompletion) {
+      const engine = tier1Transcript.value.engineSnapshot;
+      result = { ...result, ok: true, error: undefined, code: undefined, finalText: engine.finalText, runState: engine.runState };
+      agentOutcome = result;
+    }
+    if (!tier1Transcript?.ok) {
+      result = { ...result, ok: false, code: tier1Transcript?.code || "MEMORY_TRANSCRIPT_WRITE_FAILED", error: tier1Transcript?.error || "The task checkpoint could not be stored.", runState: { ...result?.runState, status: "failed" } };
+      agentOutcome = result;
+    }
+  } else if (tier1ProjectId && container.v3SessionStore?.record) {
     const transcriptPrompt = continuationResultId
       ? buildSubagentResultPrompt(claimedContinuation?.result || {})
       : String(payload.userMessage || "");
@@ -3702,13 +4052,25 @@ async function handleAgentRun(event, payload = {}, options = {}) {
         provider: String(payload.provider || getActiveProvider() || "ollama").slice(0, 120),
       },
     }).catch((error) => ({ ok: false, code: error.code || "MEMORY_TRANSCRIPT_WRITE_FAILED", error: error.message }));
+    const transcriptPersisted = tier1Transcript?.ok === true
+      && tier1Transcript?.encrypted === true && tier1Transcript?.durable !== false;
     if (result && typeof result === "object" && Object.isExtensible(result)) result.tier1Transcript = {
-      ok: tier1Transcript?.ok !== false,
+      ok: transcriptPersisted,
       durable: tier1Transcript?.durable !== false,
       encrypted: Boolean(tier1Transcript?.encrypted),
       duplicate: Boolean(tier1Transcript?.duplicate),
-      code: tier1Transcript?.ok === false ? tier1Transcript.code || "MEMORY_TRANSCRIPT_WRITE_FAILED" : "",
+      code: transcriptPersisted ? "" : tier1Transcript?.code || "MEMORY_TRANSCRIPT_WRITE_FAILED",
     };
+    if (!transcriptPersisted) {
+      result = {
+        ...result,
+        ok: false,
+        code: tier1Transcript?.code || "MEMORY_TRANSCRIPT_WRITE_FAILED",
+        error: tier1Transcript?.error || "The agent transcript could not be persisted durably.",
+        runState: { ...(result?.runState || {}), status: "failed" },
+      };
+      agentOutcome = result;
+    }
   }
   if (assessmentRun?.id) {
     const runtimeStatus = result?.runState?.status;
@@ -3722,14 +4084,49 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       notes: String(result?.finalText || result?.error || "").slice(0, 2000),
     });
   }
+  if (supervisedRun && (!result?.ok || result.aborted || ["failed", "stopped", "inconclusive"].includes(result.runState?.status))) {
+    const state = agentSessionRuntime.supervisor.snapshot({ workspace: payload.workspace, sessionId: tier1SessionId });
+    const children = state.control?.tasks.filter((task) => task.kind === "dependent" && task.dependencyOfTaskId === supervisedRun.taskId) || [];
+    for (const child of children) {
+      if (["running", "waiting"].includes(child.status)) await agentSessionRuntime.cancel({ workspace: payload.workspace, sessionId: tier1SessionId, taskId: child.id });
+      if (child.childSessionId) {
+        abortAgentSession(event.sender.id, child.childSessionId);
+        await container.durableProcessManager?.stopOwned?.({ workspace: payload.workspace, sessionId: child.childSessionId, runId: child.runId });
+      }
+    }
+    subagentCoordinator.cancelChildrenForParent(coordinationKey, "PARENT_TASK_ENDED");
+  }
   appendParentRunHistory(coordinationKey, payload, result);
+  if (payload.workspace) {
+    const status = result?.aborted ? "stopped" : result?.runState?.status || (result?.ok ? "completed" : "failed");
+    await container.longHorizonRunStore.finish(payload.workspace, durableRunId, status, {
+      evidenceIds: result?.evidenceIds || [],
+      error: result?.error ? String(result.error).slice(0, 2000) : "",
+    }).catch(mainLog.ignored("run.finish"));
+  }
+  const acceptContinuationResult = Boolean(result?.ok && !result?.aborted
+    && !["failed", "stopped", "inconclusive", "artifact_sync_failed"].includes(result?.runState?.status));
+  const waveSnapshot = subagentCoordinator.exportWave(coordinationKey, {
+    acceptedResultId: acceptContinuationResult ? continuationResultId : "",
+  });
+  if (parentDescriptor && waveSnapshot) parentDescriptor.payload = { ...(parentDescriptor.payload || {}), orchestrationWave: waveSnapshot };
+  if (payload.workspace && parentDescriptor?.durableRunId && waveSnapshot) {
+    await container.longHorizonRunStore.checkpoint(payload.workspace, parentDescriptor.durableRunId, {
+      checkpoint: { orchestrationWave: waveSnapshot },
+    }).catch(mainLog.ignored("wave.checkpoint"));
+  }
+  continuationResultAccepted = acceptContinuationResult;
+  releaseParentTurn(result?.aborted);
   const flags = refreshParentOrchestrationFlags(coordinationKey);
+  if (result?.commandWait) parkedCommandWaits.set(foregroundRunKey, new Set((result.waitingProcessIds || []).map(String)));
+  else parkedCommandWaits.delete(foregroundRunKey);
   const response = {
     ...(result && typeof result === "object" ? result : { ok: false }),
     orchestrationHold: Boolean(flags?.orchestrationHold),
     pendingEndTurn: Boolean(flags?.pendingEndTurn),
     pendingSubagentResults: subagentCoordinator.pendingResultsForSender(event.sender.id).map((item) => item.resultId),
     continuationOwner: "main",
+    ...(supervisedRun ? { taskId: supervisedRun.taskId, runId: durableRunId, blockId: replyBlockId, memorySessionId: tier1SessionId } : {}),
   };
   if (options.automaticContinuation) {
     const pending = parentContinuationOutbox.get(coordinationKey) || [];
@@ -3755,11 +4152,70 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   }
   return response;
   } finally {
-    releaseParentTurn(Boolean(agentOutcome?.aborted));
+    try {
+      detachExternalAbort();
+      if (runController && agentRunControllers.get(runKey) === runController) agentRunControllers.delete(runKey);
+      syncPowerSaveBlocker();
+    } finally {
+      releaseParentTurn(Boolean(agentOutcome?.aborted));
+      // A failed checkpoint must not strand input accepted while this model
+      // turn owned the session controller. Wake is idempotent: it only starts
+      // work when the durable supervisor still has an unclaimed input batch.
+      if (agentSessionRuntime) scheduleLiveInputWake({ workspace: payload.workspace, sessionId });
+    }
   }
 }
 
 ipcMain.handle("agent:run", handleAgentRun);
+ipcMain.handle("agent:submitInput", async (event, payload = {}) => {
+  const sessionId = String(payload.sessionId || "");
+  if (!sessionId) return { ok: false, code: "SESSION_ID_REQUIRED", error: "Choose a chat before sending input." };
+  const key = sessionRunKey(sessionId);
+  let descriptor = parentRunDescriptors.get(key);
+  const memorySessionId = descriptor?.payload?.memorySessionId || tier1SessionIdForRun(sessionId, key);
+  bindAgentSender(sessionId, event.sender);
+  controlSessionOwners.set(memorySessionId, sessionId);
+  const workspace = payload.workspace || descriptor?.payload?.workspace || "";
+  if (!descriptor && !payload.deferStart && agentSessionRuntime.supervisor) {
+    const snapshot = agentSessionRuntime.supervisor.snapshot({ workspace, sessionId: memorySessionId });
+    const prior = [...(snapshot.control?.tasks || [])].reverse().find((task) => task.kind === "primary");
+    if (prior) descriptor = rememberParentRunDescriptor(key, event, { ...prior.binding, workspace, sessionId, chatSessionId: payload.chatSessionId, userMessage: prior.objective,
+      memorySessionId, runId: prior.runId, taskId: prior.id, blockId: prior.blockId }, true);
+    else if (container.v3SessionStore?.load) {
+      const chat = container.v3SessionStore.load(workspace).sessions?.find((session) => session.id === memorySessionId);
+      descriptor = rememberParentRunDescriptor(key, event, { workspace, sessionId, chatSessionId: payload.chatSessionId, memorySessionId, userMessage: "", provider: getActiveProvider(),
+        model: payload.model || chat?.selectedModel || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" }, false);
+    }
+  }
+  const receipt = await agentSessionRuntime.receive({ workspace, sessionId: memorySessionId,
+    binding: { provider: getActiveProvider(), model: payload.model || descriptor?.payload?.model || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" },
+    input: { id: payload.messageId, text: payload.text, targetTaskId: payload.targetTaskId || "" } });
+  return receipt;
+});
+ipcMain.handle("agent:cancelTask", async (event, payload = {}) => {
+  const descriptor = parentRunDescriptors.get(sessionRunKey(payload.sessionId));
+  const taskId = payload.taskId || descriptor?.payload?.taskId;
+  if (!taskId && payload.scope !== "session") {
+    abortAgentSession(event.sender.id, payload.sessionId);
+    return { ok: true, pendingAdmission: true };
+  }
+  const result = await agentSessionRuntime.cancel({ workspace: payload.workspace || descriptor?.payload?.workspace || "",
+    sessionId: descriptor?.payload?.memorySessionId || tier1SessionIdForRun(payload.sessionId, sessionRunKey(payload.sessionId)), taskId, scope: payload.scope || "task" });
+  if (result.ok) {
+    if (payload.scope === "session" || result.value.taskIds.includes(descriptor?.payload?.taskId)) abortAgentSession(event.sender.id, payload.sessionId);
+    for (const stoppedTaskId of result.value.taskIds) {
+      const state = agentSessionRuntime.supervisor.snapshot({ workspace: payload.workspace || descriptor?.payload?.workspace || "", sessionId: descriptor?.payload?.memorySessionId || tier1SessionIdForRun(payload.sessionId, sessionRunKey(payload.sessionId)) });
+      const task = state.control?.tasks.find((entry) => entry.id === stoppedTaskId);
+      if (task?.childSessionId) abortAgentSession(event.sender.id, task.childSessionId);
+      const ownedSessionId = task?.childSessionId || payload.sessionId;
+      const descendants = [...parentRunChildren.entries()].filter(([runKey]) => matchesAgentRunKey(runKey, event.sender.id, ownedSessionId))
+        .flatMap(([, children]) => [...children.keys()]);
+      for (const childSessionId of descendants) await container.durableProcessManager.stopOwned?.({ workspace: payload.workspace || descriptor?.payload?.workspace || "", sessionId: childSessionId });
+      await container.durableProcessManager.stopOwned?.({ workspace: payload.workspace || descriptor?.payload?.workspace || "", sessionId: task?.childSessionId || payload.sessionId, runId: task?.runId });
+    }
+  }
+  return result;
+});
 
 // The context meter reads Tier 1 directly so its rows are the same accounting
 // the next turn will use. This is a read-only assembly: it starts no run,
@@ -3868,7 +4324,11 @@ const updateService = createUpdateService({
   backend: updateBackend,
   settingsStore: updateSettingsStore,
   updatedLaunch: process.argv.includes("--updated"),
-  onInstallReady: () => setAllowImmediateQuit(true),
+  isBusy: () => agentRunControllers.size > 0,
+  prepareInstall: async () => {
+    await prepareForUpdateInstall();
+    setAllowImmediateQuit(true);
+  },
   sendEvent: (payload) => {
     try { mainWindow?.webContents.send("updates:event", payload); } catch { /* window gone */ }
   },

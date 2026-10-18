@@ -119,7 +119,7 @@ test("clarification UI is compact, hides internal metadata, and pages questions"
   assert.match(renderer, /class="agent-questions-recommended">\(Recommended\)<\/span>/);
   assert.match(chatStyles, /\.agent-questions-card \{[\s\S]*?border: 1px solid #303030[\s\S]*?background: #181818/);
   assert.match(chatStyles, /\.agent-questions-option \{[\s\S]*?grid-template-columns: 14px minmax\(0, 1fr\) auto/);
-  assert.match(chatStyles, /\.agent-questions-option\.is-selected \{[\s\S]*?border-color: #2f8cf4[\s\S]*?background: rgba\(47, 140, 244, \.11\)/);
+  assert.match(chatStyles, /\.agent-questions-option\.is-selected \{[\s\S]*?border-color: #6f6f6f[\s\S]*?background: rgba\(255, 255, 255, \.06\)/);
   assert.match(chatStyles, /\.agent-questions-field\[hidden\] \{ display: none !important; \}/);
   assert.match(chatStyles, /\.composer-questions \{[\s\S]*?z-index: 1;[\s\S]*?margin-bottom: 8px/);
   assert.match(chatStyles, /\.composer-questions:not\(\[hidden\]\) ~ \.composer \{[\s\S]*?z-index: 2[\s\S]*?border-color: #3b3b3b/);
@@ -152,7 +152,7 @@ test("agent question tool supports recommended-first single select and explicit 
   assert.match(renderer, /Select more than one if applicable/);
   assert.match(chatStyles, /data-questions-action="skip"\] \{ order: 1/);
   assert.match(chatStyles, /data-questions-action="back"\] \{ order: 2; margin-left: auto/);
-  assert.match(chatStyles, /data-questions-action="submit"\] \{ order: 3; background: #2f8cf4/);
+  assert.match(chatStyles, /data-questions-action="submit"\] \{ order: 3; background: #e6e6e6/);
 });
 
 test("large Agent work uses a temporary collapsible composer checklist", () => {
@@ -302,7 +302,7 @@ test("the Worked for section is one container, not a lane of stamped siblings", 
 
   // Live prose stays beside the fold; narration enters history when a tool starts.
   assert.match(renderer, /conversationMount\(\) \{\s*return this.replyMount\(\);/);
-  assert.match(renderer, /const fold = this\.ensureWorkFold\(\);\s*return workFoldBody\(fold\) \|\| this\.workHostTurn\(\);/);
+  assert.match(renderer, /toolWorkMount\(\) \{\s*return this\.activityBody\(\) \|\| this\.workHostTurn\(\);/);
   assert.match(workFold, /!replyHasFollowingWork\(child\)/);
   assert.match(workFold, /!isStopRoundReply\(child\)/);
   assert.match(workFold, /fold\.after\(answer\);/);

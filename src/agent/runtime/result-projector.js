@@ -1,5 +1,33 @@
 "use strict";
 
+function boundedPayload(payload, limit = 32_000) {
+  const cloned = JSON.parse(JSON.stringify(payload));
+  let serialized = JSON.stringify(cloned);
+  if (serialized.length <= limit) return serialized;
+  cloned.projectionTruncated = true;
+  for (let attempt = 0; attempt < 200 && serialized.length > limit; attempt++) {
+    let largest = null;
+    function visit(value) {
+      if (!value || typeof value !== "object") return;
+      for (const [key, child] of Object.entries(value)) {
+        if (key === "screenshot") continue;
+        if ((typeof child === "string" && child.length > 160) || (Array.isArray(child) && child.length > 1)) {
+          const size = JSON.stringify(child).length;
+          if (!largest || size > largest.size) largest = { parent: value, key, value: child, size };
+        }
+        visit(child);
+      }
+    }
+    visit(cloned);
+    if (!largest) break;
+    largest.parent[largest.key] = typeof largest.value === "string"
+      ? largest.value.slice(0, Math.floor(largest.value.length / 2)) + "\n[truncated]"
+      : largest.value.slice(0, Math.ceil(largest.value.length / 2));
+    serialized = JSON.stringify(cloned);
+  }
+  return serialized.length <= limit ? serialized : JSON.stringify({ projectionTruncated: true, error: "Tool result exceeds the model projection limit. Request a smaller result." });
+}
+
 /** Keep model-facing tool results bounded and stable across adapters. */
 function toolResultContentForModel(result) {
   const value = result?.value && typeof result.value === "object" ? result.value : {};
@@ -15,7 +43,7 @@ function toolResultContentForModel(result) {
     error: result?.error || "",
     errorCode: result?.errorCode || result?.code || "",
     evidenceIds: result?.evidenceIds || result?.evidence_refs || value.evidenceIds || [],
-    payload: JSON.stringify(payload).slice(0, 32_000),
+    payload: boundedPayload(payload),
   });
 }
 

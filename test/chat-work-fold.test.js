@@ -138,6 +138,43 @@ test("the reply before a stop-round recap is the visible answer", async () => {
   assert.equal(card.parentElement, body);
 });
 
+test("a completion-grade answer wins over a weaker recap that closed the run after extra work", async () => {
+  const { ensureTurnWorkFold, workFoldBody, promoteFinalAnswer } = await load();
+  const opening = node("assistant-reply", { text: "Let me fetch the product detail." });
+  const fetchCard = node("agent-file-row tool-card", { text: "Replayed GET /api/catalog" });
+  const answer = node("assistant-reply", { text: "Here are all three color variants with hex codes and stock." });
+  answer.dataset.answered = "true";
+  const extraCard = node("agent-file-row tool-card", { text: "Replayed GET /api/catalog again" });
+  const recap = node("assistant-reply", { text: "Got the catalog data. Now let me fetch its product detail." });
+  recap.dataset.stopRound = "true";
+  const turn = assistantTurn(opening, fetchCard, answer, extraCard, recap);
+
+  const fold = ensureTurnWorkFold(turn);
+  const body = workFoldBody(fold);
+  // The real answer has tool work after it, so the old rule would have promoted
+  // the recap. The completion-grade mark keeps the answer as the visible one.
+  assert.equal(promoteFinalAnswer(turn), answer);
+  assert.equal(answer.previousElementSibling, fold);
+  assert.equal(recap.parentElement, body);
+  assert.equal(extraCard.parentElement, body);
+});
+
+test("a normal final answer that closed the run with end_turn is still promoted", async () => {
+  const { ensureTurnWorkFold, workFoldBody, promoteFinalAnswer } = await load();
+  const narration = node("assistant-reply", { text: "Let me read the file." });
+  const card = node("agent-file-row tool-card", { text: "Read README.md" });
+  const answer = node("assistant-reply", { text: "The start script runs electron." });
+  answer.dataset.stopRound = "true";
+  const turn = assistantTurn(narration, card, answer);
+
+  const fold = ensureTurnWorkFold(turn);
+  const body = workFoldBody(fold);
+  // Nothing is completion-graded here (the answer closed with end_turn), so the
+  // narration must not be promoted over the real stop-round answer.
+  assert.equal(promoteFinalAnswer(turn), answer);
+  assert.equal(narration.parentElement, body);
+});
+
 test("the last real reply stays the visible answer even if an empty segment follows later work", async () => {
   const { ensureTurnWorkFold, workFoldBody, promoteFinalAnswer } = await load();
   const opening = node("assistant-reply", { text: "Checking the workspace." });

@@ -359,7 +359,7 @@ const TerminalManager = (() => {
     updateActiveSessionUi();
   }
 
-  function switchTerminal(id) {
+  function switchTerminal(id, { focus = true } = {}) {
     if (!sessions.has(id)) return;
     activeId = id;
     const active = sessions.get(id);
@@ -371,7 +371,7 @@ const TerminalManager = (() => {
     renderTabsList();
     requestAnimationFrame(() => {
       fitVisibleSessions();
-      active.term.focus();
+      if (focus) active.term.focus();
     });
     publishUserActiveTerminal();
   }
@@ -505,6 +505,7 @@ const TerminalManager = (() => {
       const result = await window.api.terminalCreate({
         id,
         cwd: requestedCwd || cwd || undefined,
+        workspace: cwd || undefined,
         profileId: profileId || undefined,
       });
 
@@ -647,7 +648,7 @@ const TerminalManager = (() => {
     if (!id) return null;
     if (sessions.has(id)) {
       setAgentSessionQueued(id, queued);
-      switchTerminal(id);
+      switchTerminal(id, { focus: false });
       globalThis.expandTerminalPanel?.({ createIfMissing: false });
       return id;
     }
@@ -717,11 +718,10 @@ const TerminalManager = (() => {
 
     clearTerminalError();
     updateEmptyState();
-    switchTerminal(id);
+    switchTerminal(id, { focus: false });
 
     requestAnimationFrame(() => {
       fitSession(session);
-      session.term.focus();
     });
 
     return id;

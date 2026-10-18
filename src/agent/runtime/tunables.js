@@ -24,6 +24,11 @@ const Tunables = {
   ROUNDS_LEFT_WARNING_THRESHOLD: 3,
   TASK_BRIEF_UPDATE_AFTER_ROUND: 1,
   MODEL_ROUND_RETRIES: 3,
+  // After an operator message arrives, a running tool gets this long to finish
+  // before its round moves on and it continues in the background.
+  TOOL_DETACH_GRACE_MS: 250,
+  // Retry delays for saving a background tool's late result to the task inbox.
+  LATE_RESULT_RETRY_MS: [500, 2000, 5000, 15000, 30000],
   MAX_ACTIVE_CHILDREN: 8,
   OLLAMA_KEEP_ALIVE: -1,
   OPENROUTER_AGENT_IDLE_TIMEOUT_MS: 0,

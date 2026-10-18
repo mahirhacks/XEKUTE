@@ -14,6 +14,106 @@ function deferred() {
   return { promise, resolve };
 }
 
+test("a fresh primary task keeps its admitted turn and clears prior failed packets", async () => {
+  const packets = [];
+  const coordinator = createSubagentCoordinator({ onResultReady: (result) => { packets.push(result); return true; } });
+  coordinator.beginParentTurn("parent");
+  coordinator.submitChild({ parentKey: "parent", childInvocationId: "old", childSessionId: "old-session", task: "Prior task",
+    start: async () => ({ status: "failed", output: { text: "Prior failure" } }) });
+  await tick();
+  coordinator.finishParentTurn("parent", { stopped: true });
+  assert.equal(coordinator.hasUnconsumedResults("parent"), true);
+  assert.equal(coordinator.beginParentTurn("parent").ok, true);
+  const reset = coordinator.resetParentForTask("parent");
+  assert.equal(reset.state, "BUSY");
+  assert.equal(reset.removed, 1);
+  assert.equal(coordinator.beginParentTurn("parent").code, "PARENT_BUSY");
+  assert.equal(coordinator.hasUnconsumedResults("parent"), false);
+  assert.deepEqual(coordinator.listChildren("parent"), []);
+  assert.equal(coordinator.exportWave("parent").wave, null);
+  coordinator.submitChild({ parentKey: "parent", childInvocationId: "fresh", childSessionId: "fresh-session", task: "Fresh task",
+    start: async () => ({ status: "completed", output: { text: "Fresh answer" } }) });
+  await tick();
+  assert.equal(packets.length, 0, "the fresh turn owns result delivery until it finishes");
+  coordinator.finishParentTurn("parent");
+  assert.equal(packets.length, 1);
+  assert.deepEqual(packets[0].children.map((child) => [child.childInvocationId, child.output.text]), [["fresh", "Fresh answer"]]);
+});
+
+test("fresh task reset aborts old children and ignores their late completion even when IDs are reused", async () => {
+  const coordinator = createSubagentCoordinator({ maxActiveChildren: 1 });
+  const oldWait = deferred();
+  const freshWait = deferred();
+  const otherWait = deferred();
+  const oldController = new AbortController();
+  const queuedController = new AbortController();
+  const otherController = new AbortController();
+  let queuedStarted = 0;
+  let queuedCancelled = 0;
+  coordinator.beginParentTurn("parent");
+  coordinator.submitChild({ parentKey: "parent", childInvocationId: "same-id", childSessionId: "old-session", task: "Old work", controller: oldController, start: () => oldWait.promise });
+  coordinator.submitChild({ parentKey: "parent", childInvocationId: "old-queued", childSessionId: "queued-session", task: "Old queued work", controller: queuedController,
+    start: async () => { queuedStarted += 1; return { status: "completed" }; }, onCancel: () => { queuedCancelled += 1; } });
+  coordinator.submitChild({ parentKey: "other", childInvocationId: "other-child", childSessionId: "other-session", task: "Other work", controller: otherController, start: () => otherWait.promise });
+  await tick();
+  coordinator.enqueueSteer({ parentKey: "parent", childInvocationId: "same-id", instruction: "Old steering" });
+  coordinator.enqueueQuestion({ parentKey: "parent", childInvocationId: "same-id", childSessionId: "old-session", questionRequestId: "old-question", payload: { question: "Old question" } });
+  const reset = coordinator.resetParentForTask("parent");
+  assert.equal(reset.cancelled, 2);
+  assert.deepEqual(reset.questionRequestIds, ["old-question"]);
+  assert.equal(oldController.signal.reason, "PARENT_TASK_REPLACED");
+  assert.equal(queuedController.signal.aborted, true);
+  assert.equal(queuedCancelled, 1);
+  assert.equal(queuedStarted, 0);
+  assert.equal(otherController.signal.aborted, false);
+  assert.equal(coordinator.peekQuestionHead("parent"), null);
+  assert.equal(coordinator.snapshot("parent").state, "BUSY");
+  assert.equal(coordinator.snapshot("parent").activeCount, 0);
+  assert.deepEqual(coordinator.snapshot("parent").queuedChildren, []);
+  coordinator.submitChild({ parentKey: "parent", childInvocationId: "same-id", childSessionId: "fresh-session", task: "Fresh work", start: () => freshWait.promise });
+  await tick();
+  oldWait.resolve({ status: "failed", output: { text: "Stale answer" } });
+  await tick();
+  assert.equal(coordinator.getChild("same-id", "parent").childSessionId, "fresh-session");
+  assert.equal(coordinator.getChild("same-id", "parent").status, "working");
+  assert.equal(coordinator.snapshot("parent").activeCount, 1);
+  assert.equal(coordinator.hasUnconsumedResults("parent"), false);
+  freshWait.resolve({ status: "completed", output: { text: "Fresh answer" } });
+  otherWait.resolve({ status: "completed", output: { text: "Other answer" } });
+  await tick();
+  const fresh = coordinator.exportWave("parent");
+  assert.deepEqual(fresh.resultQueue[0].children.map((child) => child.output.text), ["Fresh answer"]);
+  assert.equal(fresh.children.some((child) => child.childSessionId === "old-session"), false);
+  assert.equal(coordinator.getChild("other-child", "other").status, "completed");
+});
+
+test("steering preserves original text and IDs until explicit acknowledgment", async () => {
+  const coordinator = createSubagentCoordinator();
+  const wait = deferred();
+  coordinator.submitChild({ parentKey: "parent", parentSessionId: "session", childInvocationId: "child", childSessionId: "child-session", task: "Inspect", start: () => wait.promise });
+  await tick();
+  const original = `  Arial\n${"x".repeat(13_000)}  `;
+  const first = coordinator.enqueueSteer({ parentKey: "parent", childInvocationId: "child", instruction: original });
+  const second = coordinator.enqueueSteer({ parentKey: "parent", childInvocationId: "child", instruction: "Keep headings" });
+  assert.equal(first.ok, true);
+  assert.notEqual(first.messageId, second.messageId);
+  const peeked = coordinator.peekSteerQueue("child", "parent");
+  assert.equal(peeked[0].instruction, original);
+  peeked[0].instruction = "changed by caller";
+  assert.equal(coordinator.peekSteerQueue("child", "parent")[0].instruction, original);
+  assert.deepEqual(coordinator.acknowledgeSteers("child", "parent", [first.messageId]), { ok: true, acknowledged: 1 });
+  assert.deepEqual(coordinator.acknowledgeSteers("child", "parent", [first.messageId]), { ok: true, acknowledged: 0 });
+  assert.equal(coordinator.peekSteerQueue("child", "parent")[0].id, second.messageId);
+  assert.equal(coordinator.enqueueSteer({ parentKey: "parent", childInvocationId: "child", instruction: "x".repeat(100_001) }).code, "STEER_TOO_LARGE");
+  assert.equal(coordinator.peekSteerQueue("child", "parent").length, 1);
+  assert.deepEqual(coordinator.sealSteering("child", "parent"), { ok: true, completed: false, reason: "PENDING_INPUT" });
+  coordinator.acknowledgeSteers("child", "parent", [second.messageId]);
+  assert.deepEqual(coordinator.sealSteering("child", "parent"), { ok: true, completed: true });
+  assert.equal(coordinator.enqueueSteer({ parentKey: "parent", childInvocationId: "child", instruction: "Late message" }).code, "SUBAGENT_NOT_ACTIVE");
+  wait.resolve({ status: "completed" });
+  await tick();
+});
+
 test("coordinator admits three children, queues the fourth, and starts it FIFO", async () => {
   const starts = [];
   const lifecycle = [];
@@ -496,9 +596,10 @@ test("a sealed wave retries delivery without waiting for another parent turn", a
   assert.equal(coordinator.hasUnconsumedResults("p"), true);
 });
 
-test("spawn admission rejects a second spawn while children are active", () => {
+test("a spawn while children work joins their wave, and a finished unreviewed wave blocks the next spawn", async () => {
   const coordinator = createSubagentCoordinator({ maxActiveChildren: 5 });
-  const start = () => Promise.resolve({ status: "completed", output: { text: "ok" } });
+  let finish;
+  const start = () => new Promise((resolve) => { finish = () => resolve({ status: "completed", output: { text: "ok" } }); });
   coordinator.submitChild({
     parentKey: "parent-key",
     childInvocationId: "child-1",
@@ -506,7 +607,11 @@ test("spawn admission rejects a second spawn while children are active", () => {
     start,
   });
   assert.equal(coordinator.openChildCount("parent-key"), 1);
-  const second = coordinator.validateSpawnAdmission("parent-key", 1);
-  assert.equal(second.ok, false);
-  assert.equal(second.code, "SPAWN_WHILE_CHILDREN_ACTIVE");
+  assert.equal(coordinator.validateSpawnAdmission("parent-key", 1).ok, true);
+  for (let i = 0; i < 5 && !finish; i += 1) await new Promise(setImmediate);
+  finish();
+  for (let i = 0; i < 5 && coordinator.openChildCount("parent-key"); i += 1) await new Promise(setImmediate);
+  const blocked = coordinator.validateSpawnAdmission("parent-key", 1);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, "SPAWN_WHILE_CHILDREN_ACTIVE");
 });

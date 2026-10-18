@@ -2,6 +2,7 @@
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 import "./core/runtime-modules.js";
+import { createBrowserWorkspace } from "./features/browser/browser-workspace.js";
 import {
   fitHistoryTitle,
   groupHistoryByAge,
@@ -9,6 +10,9 @@ import {
   sortHistorySessions,
 } from "./features/history/history-model.js";
 import { ensureChatMemorySessionId } from "./features/history/chat-memory-session.js";
+import { QUESTION_ICON_SRC, createQuestionAnswerCard, questionAnswerFromEvent, questionAnswerRecord } from "./features/chat/question-answers.js";
+import { MAX_CHAT_IMAGES, isSupportedImageFile, mergeImageAttachments, prepareImageAttachment, validPromptImages } from "./features/chat/image-attachments.js";
+import { openImageLightbox } from "./features/chat/image-lightbox.js";
 import { createChatScroller } from "./features/chat/chat-scroll.js";
 import {
   captureChatTranscript,
@@ -31,14 +35,21 @@ import {
   workFoldBody,
   workFoldHeader,
 } from "./features/chat/chat-work-fold.js";
+import { createLiveInputController, normalizeLiveInputs, bindLiveInputComposer } from "./features/chat/live-input.js";
 import {
-  enqueuePrompt,
-  movePrompt,
-  promptQueueEntries,
-  removePromptAt,
-  shiftPromptQueue,
-  updatePromptAt,
-} from "./features/chat/prompt-queue.js";
+  appendFileTagText,
+  createFileTagChip,
+  createChatTagChip,
+  createTerminalTagChip,
+  terminalTagQueryAt,
+  topTerminalTagMatches,
+  fileTagDisplayText,
+  fileTagName,
+  fileTagQueryAt,
+  topContextTagMatches,
+  projectChatsForTags,
+  splitFileTags,
+} from "./features/chat/file-tags.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
 const SetiIconTheme = globalThis.XekuteSetiIconTheme;
@@ -194,6 +205,11 @@ const messages         = $("messages");
 const chatInput        = $("chat-input");
 const chatInputMeasure = $("chat-input-measure");
 const sendBtn          = $("send-btn");
+const attachImageBtn   = $("attach-image-btn");
+const attachImageInput = $("attach-image-input");
+const composerAttachmentsEl = $("composer-attachments");
+// Declared with the elements: updateSendBtn reads it during startup.
+let composerImages = [];
 const chatModeToggle   = $("chat-mode-toggle");
 const chatModeButton   = $("chat-mode-button");
 const chatModeIcon     = $("chat-mode-icon");
@@ -300,6 +316,13 @@ const authorityPicker  = $("authority-picker");
 const authorityLabel   = $("authority-label");
 const authorityMenu    = $("authority-menu");
 const modelMenu        = $("model-menu");
+const modelControlsMenu = $("model-controls-menu");
+const modelContextTrigger = $("model-context-trigger");
+const modelEffortTrigger = $("model-effort-trigger");
+const modelBrowseTrigger = $("model-browse-trigger");
+const modelContextValue = $("model-context-value");
+const modelEffortValue = $("model-effort-value");
+const modelCurrentName = $("model-current-name");
 const modelSearch      = $("model-search");
 const modelList        = $("model-list");
 const modelAddBtn      = $("model-add-btn");
@@ -515,7 +538,7 @@ const securityToolButton = $("security-tool-button");
 const securityToolMenu = $("security-tool-menu");
 const securityToolIcon = $("security-tool-icon");
 const securityToolLabel = $("security-tool-label");
-const securityAnalyzeButton = $("security-analyze-button");
+const securityHistoryAnalyzeButton = $("security-history-analyze");
 const securityWorkbench = $("security-workbench");
 const securityWorkbenchMode = $("security-workbench-mode");
 const securityWorkbenchStatus = $("security-workbench-status");
@@ -670,13 +693,25 @@ const chatSessionsNeedingAttention = new Set();
 const waitCardTickers = new Map();
 const commandTimelineTickers = new Map();
 const completedCommandLifecycles = new Map();
+const completedAgentProcessIds = new Set();
 let activeStreamContent = "";
 let contextFilesCache = [];
 let chatSessionCounter = 0;
 let activeChatSessionId = "";
 const chatSessions = [];
-let promptQueueExpanded = false;
-let promptQueueEdit = null;
+function paintLiveInputRecord(session, record) {
+  const host = activeChatRuns.get(session.id)?.viewHost || (activeChatSessionId === session.id ? messages : null);
+  const turn = [...(host?.querySelectorAll(".chat-turn.user") || [])].find((node) => node.dataset.sourceMessageId === record.id);
+  turn?.querySelector(".chat-input-status")?.remove();
+  if (turn && record.taskId) turn.dataset.taskId = record.taskId;
+  const message = session.history?.find((item) => item?.id === record.id || item?.source_message_id === record.id);
+  if (message && record.taskId) message.task_id = record.taskId;
+}
+const liveInputController = createLiveInputController({ api: window.api, onChange(session, record) {
+  paintLiveInputRecord(session, record);
+  schedulePersistChatSessions();
+} });
+const queueMigrationInFlight = new Set();
 const closedChatSessions = [];
 const archivedChatSessions = [];
 let chatHistoryShowAllRecent = false;
@@ -703,6 +738,8 @@ const LEGACY_DEFAULT_CONTEXT = "8K";
 
 const SETTINGS_TAB_PATH = "xekute:settings";
 const INTERCEPTOR_TAB_PATH = "xekute:interceptor";
+const BROWSER_TAB_PATH = "xekute:browser";
+let browserWorkspace = null;
 /** @type {Map<string, { path: string, diskPath: string, name: string, content: string | null, savedContent: string, dirty: boolean, error: string | null, preview?: boolean, special?: string, securityTool?: string }>} */
 const openTabs      = new Map();
 let activeTabPath   = null;
@@ -819,6 +856,7 @@ let resolvedContextCapacity = {
 };
 let contextCapacitySeq = 0;
 let editingModel  = null;
+let modelEditRequest = 0;
 let modelLoadSeq  = 0;
 let modelLoadInFlight = null;
 function canonicalChatMode(value) {
@@ -834,6 +872,15 @@ const storedChatMode = localStorage.getItem(CHAT_MODE_KEY) || "agent";
 let chatFamily = "xekute";
 let chatMode = canonicalChatMode(storedChatMode);
 let assessmentPath = localStorage.getItem(BUG_BOUNTY_PATH_KEY) || "";
+if (editorPane) browserWorkspace = createBrowserWorkspace({
+  document,
+  api: window.api,
+  host: editorPane,
+  getAssessmentPath: () => assessmentPath,
+  getSessionId: () => activeChatSessionId,
+  onError: message => setSecurityStatus(message, "error"),
+});
+appLifecycle.add(() => browserWorkspace?.dispose());
 let assessmentRefreshSequence = 0;
 let assessmentVerification = null;
 let assessmentModuleActive = false;
@@ -1197,7 +1244,7 @@ function sanitizePersistedChatHtml(html) {
   const clean = globalThis.DOMPurify
     ? globalThis.DOMPurify.sanitize(raw, {
       ADD_TAGS: ["button", "img"],
-       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "data-expanded", "data-file", "data-file-action-kind", "data-file-verb", "data-tool-action", "data-tool-key", "data-call-id", "data-running-label", "data-completed-label", "data-work-verdict", "data-sealed", "data-started-at", "data-ended-at", "data-duration-ms", "data-worked-for-ms", "data-command-text", "data-command-context", "data-cwd", "data-exit-code", "data-stdout", "data-lane", "data-path", "data-verb", "data-foldable", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
+       ADD_ATTR: ["class", "src", "alt", "width", "height", "data-code", "data-mermaid-source", "data-raw-md", "data-task-step", "data-task-status", "data-task-target", "data-chat-starter", "data-child-invocation-id", "data-child-session-id", "data-parent-session-id", "data-model", "data-state", "data-state-key", "data-final", "data-used-tools", "data-expanded", "data-file", "data-file-action-kind", "data-file-verb", "data-tool-action", "data-tool-key", "data-call-id", "data-running-label", "data-completed-label", "data-work-verdict", "data-answered", "data-sealed", "data-started-at", "data-ended-at", "data-duration-ms", "data-worked-for-ms", "data-command-text", "data-command-context", "data-cwd", "data-exit-code", "data-stdout", "data-lane", "data-path", "data-verb", "data-foldable", "data-open-project-settings", "title", "type", "role", "tabindex", "hidden", "aria-hidden", "aria-expanded", "aria-current", "aria-label"],
     })
     : "";
   const template = document.createElement("template");
@@ -1276,7 +1323,12 @@ function normalizePersistedChatSession(value) {
     parentSessionId: String(value.parentSessionId || "").slice(0, 240),
     childInvocationId: String(value.childInvocationId || "").slice(0, 240),
     forkedFromSessionId: String(value.forkedFromSessionId || "").slice(0, 240),
-    draftText: "",
+    taskId: String(value.taskId || ""),
+    parentMemorySessionId: String(value.parentMemorySessionId || value.parentSessionId || ""),
+    sourceMessageIds: Array.isArray(value.sourceMessageIds) ? value.sourceMessageIds.map(String) : [],
+    liveInputs: normalizeLiveInputs(value.liveInputs),
+    ...(value.promptQueue && typeof value.promptQueue === "object" ? { promptQueue: structuredClone(value.promptQueue) } : {}),
+    draftText: String(value.draftText || ""),
     draftSlashCommand: "",
     createdAt: value.createdAt || value.created_at || null,
     updatedAt: value.updatedAt || value.updated_at || value.createdAt || value.created_at || null,
@@ -1299,6 +1351,12 @@ function serializeChatSession(session) {
     parentSessionId: session.parentSessionId || "",
     childInvocationId: session.childInvocationId || "",
     forkedFromSessionId: session.forkedFromSessionId || "",
+    taskId: session.taskId || "",
+    parentMemorySessionId: session.parentMemorySessionId || "",
+    sourceMessageIds: session.sourceMessageIds || [],
+    liveInputs: normalizeLiveInputs(session.liveInputs),
+    draftText: session.draftText || "",
+    ...(session.promptQueue ? { promptQueue: session.promptQueue } : {}),
     createdAt: session.createdAt || null,
     updatedAt: session.updatedAt || null,
     status: isChatSessionRunning(session.id) ? "interrupted" : "complete",
@@ -1471,10 +1529,6 @@ function finishChatHistoryBlock({ session = activeChatSession(), assistant = nul
   return persisted;
 }
 
-function persistChatSessionsNow(scope = activeChatPersistenceScope, session = activeChatSession()) {
-  return persistChatHistorySnapshot(scope, session);
-}
-
 function clearScheduledChatPersistence() {
   for (const timer of chatPersistenceTimers.values()) clearTimeout(timer);
   chatPersistenceTimers.clear();
@@ -1509,7 +1563,7 @@ function schedulePersistChatSessions(session = activeChatSession()) {
   if (chatPersistenceTimers.has(key)) return;
   const timer = setTimeout(() => {
     chatPersistenceTimers.delete(key);
-    persistChatSessionsNow(scope, session);
+    persistChatHistorySnapshot(scope, session);
   }, 120);
   chatPersistenceTimers.set(key, timer);
 }
@@ -1567,12 +1621,27 @@ function refreshUserPromptDisclosures(root = messages) {
   root?.querySelectorAll(".chat-turn.user .chat-box").forEach(syncUserPromptDisclosure);
 }
 
-function createUserPromptBox(text) {
+function createUserPromptBox(text, images = []) {
   const box = document.createElement("div");
   box.className = "chat-box";
+  const promptImages = validPromptImages(images);
+  if (promptImages.length) {
+    const strip = document.createElement("div");
+    strip.className = "user-prompt-images";
+    for (const image of promptImages) {
+      const img = document.createElement("img");
+      img.src = image.thumb;
+      if (image.id) img.dataset.imageId = image.id;
+      img.alt = "Attached image";
+      img.title = "View image";
+      strip.appendChild(img);
+    }
+    box.appendChild(strip);
+  }
   const content = document.createElement("div");
   content.className = "chat-box-content user-prompt-preview";
-  content.textContent = text;
+  content.dataset.promptText = text;
+  appendFileTagText(content, text);
   box.appendChild(content);
   requestAnimationFrame(() => syncUserPromptDisclosure(box));
   return box;
@@ -1667,7 +1736,8 @@ function disableUserPromptReading(content) {
   content.removeAttribute("role");
   content.removeAttribute("aria-readonly");
   content.blur();
-  content.textContent = text;
+  content.replaceChildren();
+  appendFileTagText(content, content.dataset.promptText ?? text);
 }
 
 function deactivateUserPromptSelection(except = null) {
@@ -1739,20 +1809,74 @@ function ensureAgentResponseHost(root) {
     : root?.closest?.(".chat-exchange");
   const body = exchange ? chatExchangeBody(exchange) : root;
   if (!body?.appendChild) return null;
-  let host = body.querySelector(":scope > .agent-response-host");
+  const hosts = [...body.children].filter((child) => child.classList.contains("agent-response-host"));
+  let host = hosts.at(-1);
   if (!host) {
     host = document.createElement("div");
     host.className = "agent-response-host agent-stream";
-    const user = [...body.children].find((child) => child.classList.contains("chat-turn") && child.classList.contains("user"));
+    const user = [...body.children].findLast((child) => child.classList.contains("chat-turn") && child.classList.contains("user"));
     if (user) user.after(host);
     else body.appendChild(host);
   } else {
     host.classList.add("agent-stream");
   }
-  [...body.children].forEach((child) => {
-    if (child !== host && isAgentResponseChild(child)) host.appendChild(child);
-  });
+  // Migrate pre-exchange history once. Multiple hosts are chronological
+  // segments separated by steering prompts and must stay separate.
+  if (hosts.length <= 1) {
+    [...body.children].forEach((child) => {
+      if (child !== host && isAgentResponseChild(child)) host.appendChild(child);
+    });
+  }
   return host;
+}
+
+function createAgentResponseHost(body, after = null) {
+  if (!body?.appendChild) return null;
+  const host = document.createElement("div");
+  host.className = "agent-response-host agent-stream";
+  if (after?.parentElement === body) body.insertBefore(host, after.nextSibling);
+  else body.appendChild(host);
+  return host;
+}
+
+function startAssistantSteeringSegment(assistant, responseHost) {
+  if (!assistant || !responseHost) return null;
+  const exchange = responseHost.closest(".chat-exchange");
+  exchange?.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
+  assistant.sealCurrentContentSegment?.();
+  assistant.finishThinking?.({ collapse: true });
+
+  // The round keeps one Working for header under the main prompt, and its
+  // timer keeps running. Steering output lists its work under the steering
+  // prompt without a header of its own.
+  const turn = document.createElement("div");
+  turn.className = "chat-turn assistant agent-stream";
+  turn.setAttribute("aria-busy", "true");
+  turn.dataset.createdAt = new Date().toISOString();
+  turn.dataset.steeringSegment = "true";
+  const reply = document.createElement("div");
+  reply.className = "assistant-reply streaming";
+  reply.dataset.lane = "prose";
+  reply.dataset.liveReply = "true";
+  reply.hidden = true;
+  turn.appendChild(reply);
+  responseHost.appendChild(turn);
+  wrapAssistantInRunChunk(turn);
+
+  assistant.turn = turn;
+  assistant.contentEl = reply;
+  assistant.contentSegments.push({ el: reply, raw: "" });
+  assistant.thinkingFoldEl = null;
+  assistant.thinkingContentEl = null;
+  assistant.thinkingRaw = "";
+  assistant.activityLogEl = null;
+  assistant.reasoningActivityLine = null;
+  assistant.exploredFoldEl = null;
+  assistant.exploredBodyEl = null;
+  assistant.verdictOpen = false;
+  assistant.pendingVerdictBreak = false;
+  assistant.lastActivityKey = "";
+  return turn;
 }
 
 function markActivityNode(node) {
@@ -1844,6 +1968,13 @@ function normalizeAssistantTurns(root) {
       coalesceAdjacentReplyRuns(turn);
       continue;
     }
+    // Work under a steering prompt belongs to the run's single Worked for
+    // header. It stays flat; a fold an older save gave it is removed.
+    if (turn.dataset.steeringSegment === "true") {
+      const fold = turnWorkFold(turn);
+      if (fold) unwrapWorkFold(fold);
+      continue;
+    }
     if (!hasWorkNode(turn)) {
       pruneEmptyWorkFolds(turn);
       coalesceAdjacentReplyRuns(turn);
@@ -1873,7 +2004,7 @@ function setCollapsibleFoldExpanded(fold, expanded, { user = false } = {}) {
   if (user) fold.dataset.userToggled = "true";
   const next = Boolean(expanded);
   fold.dataset.expanded = String(next);
-  fold.querySelector(":scope > .agent-status-line, :scope > .agent-explored-toggle, :scope > .agent-thinking-toggle, :scope > .agent-file-stack-toggle")?.setAttribute("aria-expanded", String(next));
+  fold.querySelector(":scope > .agent-status-line, :scope > .agent-explored-toggle, :scope > .agent-thinking-toggle, :scope > .agent-file-stack-toggle, :scope > .agent-question-toggle")?.setAttribute("aria-expanded", String(next));
 }
 
 function toggleCollapsibleFold(fold) {
@@ -2159,6 +2290,7 @@ function turnHasWorkVerdict(turn) {
 
 function ensureAssistantWorkFold(turn, { startedAt = 0, label } = {}) {
   if (!turn || turn.classList.contains("agent-run-stop") || turn.closest(".agent-run-stop")) return null;
+  if (turn.dataset.steeringSegment === "true") return null;
   turn.classList.add("has-agent-run", "agent-stream");
   const fold = ensureTurnWorkFold(turn, { startedAt, label });
   // Keep work visible while tools are running. Collapse only after the
@@ -2281,6 +2413,20 @@ function appendChatTurn(turn, { startsExchange = false, container = messages } =
   chatExchangeBody(exchange).appendChild(turn);
 }
 
+// A model block that is still streaming keeps writing above the steering
+// prompt. The next block starts under the latest steering prompt.
+function appendSteeringUserTurn(turn, exchange, assistant = null) {
+  if (!turn || !exchange) return;
+  const body = chatExchangeBody(exchange);
+  const pending = assistant?.pendingSteeringHost?.isConnected ? assistant.pendingSteeringHost : null;
+  const responseHost = pending || assistant?.turn?.closest?.(".agent-response-host") || ensureAgentResponseHost(exchange);
+  if (responseHost?.parentElement === body) responseHost.after(turn);
+  else body.appendChild(turn);
+  if (pending && !pending.children.length) pending.remove();
+  const nextHost = createAgentResponseHost(body, turn);
+  if (assistant) assistant.pendingSteeringHost = nextHost;
+}
+
 // Older saved chats stored every turn directly under #messages. Group the real
 // nodes in place so sticky prompts are bounded by their own response, allowing
 // the next prompt to push the previous one away instead of crossing through it.
@@ -2336,6 +2482,9 @@ function normalizeChatExchanges() {
 
 function isInternalRuntimeInputMessage(message = {}) {
   if (message?.__xekuteInternalRuntimeInput || message?.__xekuteInternalSubagentResult) return true;
+  // Late tool and command results reach the agent through its inbox as user
+  // messages. They are the agent's input, not the operator's.
+  if (String(message?.source_message_id || "").startsWith("result:")) return true;
   if (message?.role !== "user") return false;
   return /^Harness (?:checkpoint:|waited\b)/.test(String(message?.content || "").trim());
 }
@@ -2346,6 +2495,7 @@ function renderCanonicalChatHistory(history = []) {
   const sourceHistory = MessageIdentity?.ensureMessageIdentity
     ? MessageIdentity.ensureMessageIdentity(history, session?.id || "chat")
     : (Array.isArray(history) ? history : []);
+  let currentTaskId = "";
   const renderMessage = (message, container) => {
     if (isInternalRuntimeInputMessage(message)) return;
     const content = String(message?.content || "").trim();
@@ -2353,10 +2503,15 @@ function renderCanonicalChatHistory(history = []) {
       if (!content) return;
       const turn = document.createElement("div");
       turn.className = "chat-turn user";
+      turn.dataset.sourceMessageId = message.source_message_id || message.id || "";
+      turn.dataset.taskId = message.task_id || "";
       if (message.createdAt) turn.dataset.createdAt = message.createdAt;
       const box = createUserPromptBox(content);
       turn.appendChild(box);
-      appendChatTurn(turn, { startsExchange: true, container });
+      const taskId = String(message.task_id || "");
+      if (taskId && taskId === currentTaskId) appendSteeringUserTurn(turn, currentChatExchange(container));
+      else appendChatTurn(turn, { startsExchange: true, container });
+      currentTaskId = taskId;
     } else if (message.role === "assistant") {
       const commandTools = (Array.isArray(message.tool_calls) ? message.tool_calls : [])
         .map(commandToolFromHistoryCall)
@@ -2380,17 +2535,7 @@ function renderCanonicalChatHistory(history = []) {
       wrapAssistantInRunChunk(turn);
     }
   };
-  let previousUserContent = null;
-  for (const message of sourceHistory) {
-    if (message?.role === "user") {
-      const content = String(message?.content || "").trim();
-      if (content && content === previousUserContent) continue;
-      previousUserContent = content;
-    } else if (message?.role === "assistant") {
-      previousUserContent = null;
-    }
-    renderMessage(message, fragment);
-  }
+  for (const message of sourceHistory) renderMessage(message, fragment);
   // History may finish with a tool-only assistant message. Attach metadata
   // only after every turn has been grouped so the footer cannot land between
   // an earlier text reply and the final tool/activity rows.
@@ -2414,7 +2559,7 @@ function toolFromTranscriptItem(item = {}) {
   const args = item.args && typeof item.args === "object" && !Array.isArray(item.args)
     ? { ...item.args }
     : {};
-  if (item.target && !args.path) args.path = item.target;
+  if (item.target && !args.path && item.target !== name) args.path = item.target;
   if (item.command) args.command = item.command;
   if (item.cwd) args.cwd = item.cwd;
   return { toolName: name, action: name, args };
@@ -2468,6 +2613,7 @@ function createTranscriptChatReply(event = {}) {
   el.className = "assistant-reply";
   el.dataset.lane = "prose";
   if (event.verdict) el.dataset.workVerdict = "true";
+  if (event.answered) el.dataset.answered = "true";
   if (event.created_at) el.dataset.createdAt = event.created_at;
   const text = String(event.text || "").trim();
   if (!text) {
@@ -2480,10 +2626,16 @@ function createTranscriptChatReply(event = {}) {
 
 function createToolCardFromRecord(item) {
   if (!item || item.status === "error") return null;
-  const card = createToolCard(toolFromTranscriptItem(item), { pending: false });
+  const tool = toolFromTranscriptItem(item);
+  const card = createToolCard(tool, { pending: false });
   if (item.verb) card.dataset.fileVerb = item.verb;
-  if (item.path) card.dataset.path = item.path;
-  setToolCardStatus(card, "success");
+  // Older saves stored the tool name as the path of non-file rows.
+  const path = String(item.path || "").trim();
+  if (path && path !== toolActionName(tool)) card.dataset.path = path;
+  else delete card.dataset.path;
+  // Keep such older rows visible with their saved text; they no longer open anything.
+  if (!item.label && item.target && item.target === toolActionName(tool)) card.dataset.file = item.target;
+  setToolCardStatus(card, "success", keepableToolCardLabel(item.label) ? item.label : undefined);
   markActivityNode(card);
   return card?.isConnected || card ? card : null;
 }
@@ -2578,11 +2730,18 @@ function appendTranscriptEvent(host, event) {
     host.appendChild(createCommandFromRecord(event));
     return;
   }
+  if (event.type === "questions") {
+    const card = createQuestionAnswerCard(questionAnswerFromEvent(event));
+    if (card) host.appendChild(card);
+    return;
+  }
   if (event.type === "subagent") {
     createSubagentRunCard({ turn: host.closest?.(".chat-turn") || host }, {
       childInvocationId: event.child_invocation_id || event.childInvocationId || "",
       childSessionId: event.child_session_id || event.childSessionId || "",
       parentSessionId: event.parent_session_id || event.parentSessionId || "",
+      independent: Boolean(event.independent),
+      taskId: event.task_id || event.taskId || "",
       model: event.model || "",
       status: event.status || "completed",
       summary: event.summary || "",
@@ -2605,11 +2764,29 @@ function replyEndsWithStopped(reply) {
   return /(?:^|\n)Stopped$/.test(raw);
 }
 
+// With steering, the run can answer more than once: every round that ended the
+// turn, and the text after the last work in its last steering segment. Those
+// answers stay visible when Worked for is collapsed; the rest of the steering
+// output folds away with the work.
+function markSteeringAnswer(exchange) {
+  const turns = [...(exchange?.querySelectorAll?.('.chat-turn.assistant[data-steering-segment="true"]') || [])];
+  if (!turns.length) return [];
+  const isAnswer = (node) => node.classList.contains("assistant-reply") && !isEmptyAssistantReply(node);
+  const children = [...turns.at(-1).children];
+  const trailing = children.slice(children.findLastIndex(isWorkNode) + 1).filter(isAnswer);
+  const turnEnding = turns.flatMap((turn) => [...turn.querySelectorAll(':scope > .assistant-reply[data-stop-round="true"]')]).filter(isAnswer);
+  const answers = [...new Set([...turnEnding, ...trailing])];
+  for (const reply of answers) reply.dataset.workVerdict = "true";
+  return answers;
+}
+
 function appendStoppedPlainText(turn, segments = []) {
   if (!turn) return;
-  let reply = [...turn.children].reverse().find((node) => (
+  const children = [...turn.children];
+  let reply = children.findLast((node) => (
     node.classList?.contains("assistant-reply") && !node.hidden && String(node.textContent || node.dataset?.rawMd || "").trim()
   ));
+  if (reply && children.slice(children.indexOf(reply) + 1).some(isWorkNode)) reply = null;
   if (!reply) {
     reply = document.createElement("div");
     reply.className = "assistant-reply";
@@ -2642,13 +2819,89 @@ function commandResultFailed(result = {}) {
 }
 
 function renderTranscriptRun(run, container) {
-  if (run.user?.message) {
+  const renderAssistantSegment = (segment, { workHeader = false, steering = false } = {}) => {
+    const events = Array.isArray(segment?.events) ? segment.events : [];
+    if (!events.length) return null;
+    const hasActivity = events.some((event) => event.type !== "chat");
+    const turn = document.createElement("div");
+    turn.className = "chat-turn assistant agent-stream";
+    turn.setAttribute("aria-busy", "false");
+    if (steering) turn.dataset.steeringSegment = "true";
+    if (run.ended_at) turn.dataset.createdAt = run.ended_at;
+    else if (run.started_at) turn.dataset.createdAt = run.started_at;
+    let mount = turn;
+    if (workHeader) {
+      turn.classList.add("has-agent-run");
+      turn.dataset.usedTools = "true";
+      const fold = createRestoredWorkFold(run);
+      turn.appendChild(fold);
+      mount = workFoldBody(fold);
+    }
+    for (const event of events) appendTranscriptEvent(mount, event);
+    if (hasActivity || workHeader) {
+      restackFileRows(turn);
+      const answer = promoteFinalAnswer(turn);
+      if (answer) answer.dataset.workVerdict = "true";
+    }
+    if (String(run.status || "") === "stopped") appendStoppedPlainText(turn);
+    if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event, .subagent-run-card, .agent-question-answer")) return null;
+    appendChatTurn(turn, { container });
+    wrapAssistantInRunChunk(turn);
+    return turn;
+  };
+  const timeline = Array.isArray(run.timeline) ? run.timeline : [];
+  if (timeline.length) {
+    // One Worked for header per run, under the main prompt, as in the live view.
+    const usedTools = (item) => item.type === "assistant" && (item.events || []).some((event) => event.type !== "chat");
+    const firstUser = timeline.findIndex((item) => item.type === "user");
+    const firstSteering = firstUser < 0 ? -1 : timeline.findIndex((item, index) => index > firstUser && item.type === "user");
+    const mainItems = firstSteering < 0 ? timeline : timeline.slice(0, firstSteering);
+    const headerItem = mainItems.find(usedTools)
+      || (timeline.some(usedTools) ? mainItems.find((item) => item.type === "assistant" && item.events?.length) : null);
+    let startedExchange = false;
+    let steering = false;
+    for (const item of timeline) {
+      if (item.type === "user") {
+        const turn = document.createElement("div");
+        turn.className = "chat-turn user";
+        if (item.created_at) turn.dataset.createdAt = item.created_at;
+        turn.dataset.sourceMessageId = item.source_message_id || "";
+        turn.dataset.taskId = item.task_id || "";
+        turn.appendChild(createUserPromptBox(item.message, item.images));
+        if (!startedExchange) {
+          appendChatTurn(turn, { startsExchange: true, container });
+          startedExchange = true;
+        } else {
+          appendSteeringUserTurn(turn, currentChatExchange(container));
+          steering = true;
+        }
+        continue;
+      }
+      if (item.type !== "assistant") continue;
+      renderAssistantSegment(item, { workHeader: item === headerItem, steering });
+    }
+    if (steering) markSteeringAnswer([...container.querySelectorAll(".chat-exchange")].at(-1));
+    return;
+  }
+
+  const userMessages = Array.isArray(run.user?.messages) && run.user.messages.length
+    ? run.user.messages
+    : (run.user?.message ? [{
+      message: run.user.message,
+      created_at: run.user.created_at,
+      source_message_id: run.user.source_message_id,
+      task_id: run.user.task_id,
+    }] : []);
+  userMessages.forEach((message, index) => {
     const userTurn = document.createElement("div");
     userTurn.className = "chat-turn user";
-    if (run.user.created_at) userTurn.dataset.createdAt = run.user.created_at;
-    userTurn.appendChild(createUserPromptBox(run.user.message));
-    appendChatTurn(userTurn, { startsExchange: true, container });
-  }
+    if (message.created_at) userTurn.dataset.createdAt = message.created_at;
+    userTurn.dataset.sourceMessageId = message.source_message_id || "";
+    userTurn.dataset.taskId = message.task_id || "";
+    userTurn.appendChild(createUserPromptBox(message.message));
+    if (index === 0) appendChatTurn(userTurn, { startsExchange: true, container });
+    else appendSteeringUserTurn(userTurn, currentChatExchange(container));
+  });
   const events = Array.isArray(run.events) ? run.events : [];
   if (!events.length) return;
   const hasActivity = events.some((event) => event.type !== "chat");
@@ -2672,7 +2925,7 @@ function renderTranscriptRun(run, container) {
     if (answer) answer.dataset.workVerdict = "true";
   }
   if (String(run.status || "") === "stopped") appendStoppedPlainText(turn);
-  if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event, .subagent-run-card")) return;
+  if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event, .subagent-run-card, .agent-question-answer")) return;
   appendChatTurn(turn, { container });
   wrapAssistantInRunChunk(turn);
 }
@@ -2746,7 +2999,7 @@ function runWorkRoot(run) {
 
 function rootHasLiveProcesses(root) {
   if (!root?.querySelector) return false;
-  if ([...root.querySelectorAll(".subagent-run-card")].some(subagentCardIsActive)) return true;
+  if ([...root.querySelectorAll(".subagent-run-card")].some(subagentCardBlocksParent)) return true;
   if (root.querySelector(".agent-command-event[data-waiting='true']")) return true;
   if (root.querySelector(".tool-card.subagent-wait, .tool-card[data-state='waiting']")) return true;
   return false;
@@ -2814,6 +3067,7 @@ function noteParentRunSettled(payload = {}) {
   run.awaitingParentContinuation = false;
   run.orchestrationHold = Boolean(payload.orchestrationHold);
   run.pendingEndTurn = Boolean(payload.pendingEndTurn);
+  if (Object.hasOwn(payload, "commandWait")) run.commandWait = Boolean(payload.commandWait);
   if (parentRunStillWorking(run)) {
     run.state = "running";
     activeChatRuns.set(run.sessionId, run);
@@ -2823,6 +3077,7 @@ function noteParentRunSettled(payload = {}) {
     return;
   }
   settleVisibleParentRun(run);
+  queueMicrotask(drainPendingBackgroundWaitEvents);
 }
 
 function isRunningChatActive() {
@@ -2864,6 +3119,7 @@ function hydratePersistedChatTranscript(root = messages) {
   root.querySelectorAll?.(".chat-turn.assistant[aria-busy='true']").forEach((turn) => turn.setAttribute("aria-busy", "false"));
   stripFailedToolCardStubs(root);
   normalizeAssistantTurns(root);
+  (root.classList?.contains("chat-exchange") ? [root] : [...(root.querySelectorAll?.(".chat-exchange") || [])]).forEach(markSteeringAnswer);
   redactThinkingDisclosures(root);
   hydrateSubagentRunCards(root);
   hydrateContextCheckpointNotices(root);
@@ -2942,6 +3198,8 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
       childInvocationId: String(card.dataset.childInvocationId || ""),
       childSessionId: String(card.dataset.childSessionId || ""),
       parentSessionId: String(card.dataset.parentSessionId || session.id || ""),
+      independent: card.dataset.independent === "true",
+      taskId: String(card.dataset.taskId || ""),
       model: String(card.dataset.model || ""),
       status: String(card.dataset.state || "working"),
       summary: String(card.querySelector(".subagent-run-detail")?.textContent || "").slice(0, 240),
@@ -2985,10 +3243,7 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
 function prepareActiveChatSessionForSwitch(nextSessionId = "") {
   const current = activeChatSession();
   if (!current || current.id === nextSessionId) return;
-  if (promptQueueEdit?.sessionId === current.id && chatInput) {
-    chatInput.value = promptQueueEdit.priorDraft || "";
-    promptQueueEdit = null;
-  }
+
   current.draftText = chatInput?.value || "";
   current.draftSlashCommand = selectedSlashCommand;
   syncActiveChatSession();
@@ -3000,6 +3255,7 @@ function applyActiveChatSession(session) {
   prepareActiveChatSessionForSwitch(session?.id || "");
   if (!session) {
     activeChatSessionId = "";
+    browserWorkspace?.chatChanged();
     chatHistory = [];
     contextFilesCache = [];
     activeStreamContent = "";
@@ -3010,6 +3266,7 @@ function applyActiveChatSession(session) {
     return;
   }
   activeChatSessionId = session.id;
+  browserWorkspace?.chatChanged();
   session.history = MessageIdentity?.ensureMessageIdentity
     ? MessageIdentity.ensureMessageIdentity(session.history, session.id)
     : (Array.isArray(session.history) ? session.history : []);
@@ -3051,6 +3308,7 @@ function applyActiveChatSession(session) {
   restoreHistoryCommandContexts(messages, session.history);
   normalizeChatExchanges();
   ensureVisibleDelegatedPrompt(session);
+  for (const record of session.liveInputs || []) paintLiveInputRecord(session, record);
   syncChatStickyMask();
   syncChatEmptyState();
   setChatCollapsed(false);
@@ -3058,18 +3316,16 @@ function applyActiveChatSession(session) {
   resetChatInput();
   if (chatInput) chatInput.value = session.draftText || "";
   setSelectedSlashCommand(session.draftSlashCommand || "");
-  const checkpointingThisChat = contextCheckpointing && contextCheckpointingSessionId === session.id;
   if (chatInput) {
-    chatInput.disabled = checkpointingThisChat;
-    chatInput.readOnly = checkpointingThisChat;
-    chatInput.toggleAttribute("aria-disabled", checkpointingThisChat);
+    chatInput.disabled = false;
+    chatInput.readOnly = false;
+    chatInput.removeAttribute("aria-disabled");
   }
   activeStreamContent = liveRun?.activeStreamContent || "";
   resizeChatInput();
   syncChatModeUi();
   updateSendBtn();
-  renderPromptQueue();
-  queueMicrotask(() => drainPromptQueue(session.id));
+  queueMicrotask(() => migrateLegacyChatInputs(session));
   requestAnimationFrame(() => {
     messages.querySelectorAll(".assistant-reply[data-raw-md]").forEach((element) => {
       globalThis.MarkdownRenderer?.renderToElement(element, element.dataset.rawMd || "");
@@ -3116,7 +3372,7 @@ async function restoreChatSessionsForCurrentWorkspace() {
   const scope = currentChatPersistenceScope();
   if (scope === activeChatPersistenceScope) return;
   clearScheduledChatPersistence();
-  if (activeChatPersistenceScope) await persistChatSessionsNow(activeChatPersistenceScope);
+  if (activeChatPersistenceScope) await persistChatHistorySnapshot(activeChatPersistenceScope);
   activeChatPersistenceScope = scope;
 
   let saved;
@@ -3188,6 +3444,7 @@ function ensureChatSession() {
   clearChatSessionState(session);
   chatSessions.push(session);
   activeChatSessionId = session.id;
+  browserWorkspace?.chatChanged();
   chatHistory = session.history;
   contextFilesCache = session.contextFilesCache;
   activeStreamContent = "";
@@ -3220,6 +3477,7 @@ function setCodeEditorVisible(visible) {
 }
 
 function showCodeEditorWorkspace() {
+  browserWorkspace?.setVisible(false);
   if (terminalMaximized) setTerminalMaximized(false);
   currentWorkspaceMode = "editor";
   if (assessmentModuleView) assessmentModuleView.hidden = true;
@@ -3235,6 +3493,7 @@ function showCodeEditorWorkspace() {
 }
 
 function showResourceWorkspace({ focus = false } = {}) {
+  browserWorkspace?.setVisible(false);
   if (terminalMaximized) setTerminalMaximized(false);
   currentWorkspaceMode = "resource";
   setCodeEditorVisible(false);
@@ -3255,6 +3514,7 @@ function showSecurityWorkspace(tool = "") {
 }
 
 function showSecurityWorkspaceContent(tool = "") {
+  browserWorkspace?.setVisible(false);
   if (terminalMaximized) setTerminalMaximized(false);
   currentWorkspaceMode = "security";
   if (editorTabBar) editorTabBar.hidden = false;
@@ -4353,7 +4613,7 @@ async function loadLlmSettings() {
   if (statusOllamaPort) {
     if (result.provider === "openrouter") {
       statusOllamaPort.textContent = result.openrouter?.model
-        ? `OpenRouter · ${result.openrouter.model}`
+        ? `OpenRouter · ${modelDisplayName(result.openrouter.model)}`
         : "OpenRouter";
     } else if (result.ollama?.activeBaseUrl) {
       try {
@@ -5209,6 +5469,7 @@ async function toggleWebClonePreview(show = true) {
 }
 
 async function showWebCloneWorkspace() {
+  browserWorkspace?.setVisible(false);
   if (terminalMaximized) setTerminalMaximized(false);
   currentWorkspaceMode = "webclone";
   setCodeEditorVisible(false);
@@ -5435,6 +5696,7 @@ function positionNotificationPanel() {
 // ── In-app updates ──────────────────────────────────────────────────────────
 const updatesState = {
   availableVersion: "",
+  readyVersion: "",
   ignoredVersion: "",
   deferredVersion: "",
   pendingNotification: null,
@@ -5470,8 +5732,14 @@ function showUpdateToast(version) {
   if (sub) sub.textContent = "";
   updateToast.classList.remove("update-toast-downloading");
   updateToast.querySelectorAll(".update-toast-progress, .update-toast-progress-label").forEach((el) => el.remove());
-  if (updateToastInstall) updateToastInstall.hidden = false;
-  if (updateToastIgnore) updateToastIgnore.hidden = false;
+  if (updateToastInstall) {
+    updateToastInstall.hidden = false;
+    updateToastInstall.textContent = "Install";
+  }
+  if (updateToastIgnore) {
+    updateToastIgnore.hidden = false;
+    updateToastIgnore.textContent = "Ignore";
+  }
   updateToast.hidden = false;
   // Restart the entrance animation.
   updateToast.style.animation = "none";
@@ -5504,6 +5772,10 @@ function showTransientUpdateNotice(titleText, subText) {
 
 function beginUpdateInstall() {
   if (!window.api.updatesInstall) return;
+  if (updatesState.readyVersion) {
+    window.api.updatesInstall().catch(() => {});
+    return;
+  }
   showUpdateDownloading(updatesState.availableVersion || updatesState.deferredVersion);
   window.api.updatesInstall().catch(() => {});
 }
@@ -5517,7 +5789,24 @@ function showUpdateDownloading(version) {
   if (updateToastIgnore) updateToastIgnore.hidden = true;
 }
 
+// A download that finished during an agent run waits for the operator. It
+// still installs on the next quit, so "Later" only moves it to notifications.
+function showUpdateReadyToast(version) {
+  showUpdateToast(version);
+  const title = updateToast?.querySelector(".update-toast-title");
+  if (title) title.textContent = "Update ready to install";
+  const sub = updateToast?.querySelector(".update-toast-version");
+  if (sub) sub.textContent = "Agent run active. Installs when you quit.";
+  if (updateToastInstall) updateToastInstall.textContent = "Restart now";
+  if (updateToastIgnore) updateToastIgnore.textContent = "Later";
+}
+
 function ignoreCurrentUpdate() {
+  if (updatesState.readyVersion) {
+    hideUpdateToast();
+    showUpdateNotification(updatesState.readyVersion);
+    return;
+  }
   const version = updatesState.availableVersion;
   updatesState.ignoredVersion = version;
   updatesState.deferredVersion = version;
@@ -5529,12 +5818,13 @@ function ignoreCurrentUpdate() {
 function showUpdateNotification(version) {
   const v = String(version || "");
   if (!v) return;
+  const ready = v === updatesState.readyVersion;
   updatesState.pendingNotification = {
     id: "update-available",
-    title: `Update available — XEKUTE ${v}`,
-    message: "A new version has been released. Install it when you're ready.",
+    title: ready ? `Update ready — XEKUTE ${v}` : `Update available — XEKUTE ${v}`,
+    message: ready ? "Downloaded. Restart to install, or it installs when you quit." : "A new version has been released. Install it when you're ready.",
     action: "update-install",
-    actionLabel: "Install",
+    actionLabel: ready ? "Restart" : "Install",
     icon: "codicon-cloud-download",
     tone: "warning",
   };
@@ -5556,7 +5846,8 @@ function handleUpdateEvent(payload = {}) {
       updatesState.pendingNotification = null;
       setNotifications(notificationItems);
     }
-    if (ignored) {
+    // An explicit Help → Check for Updates still shows the ignored version.
+    if (ignored && !payload.manual) {
       updatesState.deferredVersion = version;
       showUpdateNotification(version);
       return;
@@ -5587,10 +5878,21 @@ function handleUpdateEvent(payload = {}) {
     updatesState.deferredVersion = "";
     updatesState.pendingNotification = null;
     setNotifications(notificationItems);
+    if (payload.deferred) {
+      updatesState.readyVersion = String(payload.version || updatesState.availableVersion || "");
+      showUpdateReadyToast(updatesState.readyVersion);
+      return;
+    }
     const label = updateToast?.querySelector(".update-toast-progress-label");
     if (label) label.textContent = "Installing…";
     else showTransientUpdateNotice("Installing update…", "XEKUTE will restart automatically.");
     // The main process quits the app shortly after this event.
+  } else if (type === "installing") {
+    updatesState.pendingNotification = null;
+    setNotifications(notificationItems);
+    const label = updateToast && !updateToast.hidden ? updateToast.querySelector(".update-toast-progress-label") : null;
+    if (label) label.textContent = "Installing…";
+    else showTransientUpdateNotice("Installing update…", "XEKUTE will restart automatically.");
   } else if (type === "none") {
     // Launch checks are silent. Explicit checks (including installing a stale
     // deferred reminder) give the user direct feedback.
@@ -5731,6 +6033,7 @@ async function refreshAssessmentState() {
   const sequence = ++assessmentRefreshSequence;
   if (!rootPath) {
     assessmentPath = "";
+    browserWorkspace?.projectChanged();
     assessmentVerification = null;
     assessmentSettingsCache = null;
     assessmentSettingsVirtual = false;
@@ -5778,6 +6081,7 @@ async function createAssessmentFolder() {
 
 function resetProjectWorkspaceState() {
   assessmentPath = "";
+  browserWorkspace?.projectChanged();
   selectedCustomFolder = "";
   selectedCustomEntries.clear();
   assessmentVerification = null;
@@ -7259,7 +7563,6 @@ function setSecurityTool(tool, { persist = true } = {}) {
 
   securityToolLabel.textContent = meta.label;
   securityToolIcon.className = `codicon ${meta.icon}`;
-  securityAnalyzeButton.hidden = false;
   securityWorkbenchMode.textContent = meta.label;
   securityRunLabel.textContent = meta.action;
   securityInterceptToggle.hidden = next !== "interceptor";
@@ -7794,6 +8097,7 @@ async function sendHistoryRecordsToIntruder(records) {
 
 function openSecurityHistoryMenu(clientX, clientY) {
   if (!securityHistoryMenu || selectedSecurityHistoryIndices.size === 0) return;
+  securityHistoryAnalyzeButton.disabled = securityBusy || isRunningChatActive();
   const count = selectedSecurityHistoryIndices.size;
   if (securityHistoryRepeaterLabel) {
     securityHistoryRepeaterLabel.textContent = count === 1 ? "Send to Repeater" : `Send ${count} to Repeater`;
@@ -8019,7 +8323,7 @@ function setSecurityBusy(busy) {
   securityBusy = Boolean(busy);
   securityRunButton.disabled = securityBusy;
   securityClearButton.disabled = securityBusy;
-  securityAnalyzeButton.disabled = securityBusy;
+  securityHistoryAnalyzeButton.disabled = securityBusy;
 }
 
 async function runSecurityRequest(rawRequest, mode) {
@@ -8174,20 +8478,23 @@ async function logSecurityExchangeIfNeeded() {
   return result;
 }
 
-async function analyzeSecurityExchange() {
+async function analyzeSecurityExchange(record) {
   if (securityBusy || isRunningChatActive()) return;
-  const request = securityRequestEditor.value.trim();
-  const response = securityResponseEditor.value.trim();
+  if (!record) return;
+  closeSecurityHistoryMenu();
+  try {
+    await hydrateSecurityHistoryRecords([record]);
+  } catch (error) {
+    setSecurityStatus(error.message || "Could not load the captured exchange", "error");
+    return;
+  }
+  if (securityBusy || isRunningChatActive()) return;
+  const request = String(record.request || "").trim();
+  const response = String(record.response || "").trim();
   if (!request && !response) {
     setSecurityStatus("Nothing to analyze", "error");
     return;
   }
-  const logged = await logSecurityExchangeIfNeeded();
-  if (logged?.error) {
-    setSecurityStatus(logged.error, "error");
-    return;
-  }
-
   openChatPane({ createIfEmpty: true });
   const clip = (value) => value.length > 14000 ? `${value.slice(0, 14000)}\n...(truncated)` : value;
   chatInput.value = [
@@ -8195,7 +8502,7 @@ async function analyzeSecurityExchange() {
     "Identify observable security issues, suspicious behavior, missing controls, and useful follow-up tests.",
     "Separate confirmed evidence from hypotheses. Do not claim a vulnerability without support.",
     "",
-    `Tool: ${SECURITY_TOOL_META[selectedSecurityTool]?.label || selectedSecurityTool}`,
+    `Captured exchange: ${record.requestId || "History entry"}`,
     "",
     "REQUEST",
     "```http",
@@ -8939,7 +9246,7 @@ function showChatOptions() {
 function maybeNameActiveChat(text) {
   const session = activeChatSession();
   if (!session || session.history.length > 1) return;
-  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  const clean = fileTagDisplayText(text).replace(/\s+/g, " ").trim();
   if (!clean) return;
   session.title = clean.length > 28 ? `${clean.slice(0, 27)}...` : clean;
   renderChatSessionSelect();
@@ -9041,6 +9348,7 @@ function setModelSetting(name, key, value) {
     getModelSettings(name).contextLimitTokens = tokens;
   }
   saveModelSettings();
+  if (name === selectedModel) syncModelControlsSummary();
   if (name === selectedModel && key === "context") {
     updateContextUsage();
     void refreshStoredContextCapacity();
@@ -9153,7 +9461,7 @@ async function applyOpenRouterModelDefaults(modelName) {
     renderContextOptions(getModelSettings(modelName).context, metadata);
     updateModelRuntimeNote(modelName);
   }
-  refreshModelEffortLabels();
+  syncModelControlsSummary();
   return metadata;
 }
 
@@ -9297,7 +9605,7 @@ const CONTEXT_SUMMARIZING_NOTICE = "Chat context being summarized...";
 const CONTEXT_SUMMARIZED_NOTICE = "Chat context summarized";
 
 function pendingContextCheckpointNotice(container = messages) {
-  if (contextCheckpointNotice?.isConnected && contextCheckpointNotice.dataset.state === "pending") return contextCheckpointNotice;
+  if (contextCheckpointNotice?.isConnected && contextCheckpointNotice.dataset.state === "pending" && container?.contains?.(contextCheckpointNotice)) return contextCheckpointNotice;
   return container?.querySelector?.(".context-checkpoint-notice[data-state='pending']") || null;
 }
 
@@ -9354,7 +9662,7 @@ function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SU
 
 function setContextCheckpointNoticeText(notice, text) {
   if (!notice) return;
-  const label = notice.querySelector(":scope > .context-checkpoint-text");
+  const label = notice.querySelector(".context-checkpoint-text");
   if (label) label.textContent = text;
   else notice.textContent = text;
 }
@@ -9362,7 +9670,7 @@ function setContextCheckpointNoticeText(notice, text) {
 function hydrateContextCheckpointNotices(root = messages) {
   for (const notice of root.querySelectorAll?.(".context-checkpoint-notice") || []) {
     notice.querySelectorAll(":scope > .context-checkpoint-icon").forEach((icon) => icon.remove());
-    if (notice.querySelector(":scope > .context-checkpoint-text")) continue;
+    if (notice.querySelector(".context-checkpoint-text")) continue;
     const text = String(notice.textContent || "").trim();
     notice.replaceChildren();
     const label = document.createElement("span");
@@ -9383,6 +9691,7 @@ function finishContextCheckpointNotice(container = messages, outcome = "complete
 }
 
 function applyContextCheckpointUi(run, payload = {}) {
+  if (run?.chatReferenceImportPending) return;
   const session = run?.session;
   const status = String(payload.status || "").toLowerCase();
   const active = status === "started" || status === "running";
@@ -9406,6 +9715,61 @@ function applyContextCheckpointUi(run, payload = {}) {
   if (run) syncChatRunSession(run);
 }
 
+function applyChatReferenceImportUi(run, payload = {}) {
+  const active = payload.status === "started" || payload.status === "running";
+  const text = "Bringing chats to this session...";
+  const container = chatRunContainer(run);
+  if (run) { run.chatReferenceImportPending = active; run.contextCheckpointPending = active; }
+  if (run?.session) contextCheckpointingSessionId = active ? run.session.id : (contextCheckpointingSessionId === run.session.id ? "" : contextCheckpointingSessionId);
+  if (active) {
+    const notice = ensureContextCheckpointNotice(container, { text, assistant: run?.assistant });
+    if (notice) {
+      notice.dataset.chatReferenceImport = "true";
+      let fold = notice.querySelector(".chat-reference-fold");
+      if (!fold) {
+        fold = document.createElement("details");
+        fold.className = "chat-reference-fold";
+        const summary = document.createElement("summary");
+        summary.className = "chat-reference-summary";
+        summary.append(notice.querySelector(".context-checkpoint-text"));
+        const caret = document.createElement("span");
+        caret.className = "chat-reference-caret";
+        caret.setAttribute("aria-hidden", "true");
+        caret.textContent = "\u203a";
+        summary.append(caret);
+        fold.append(summary);
+        const list = document.createElement("div");
+        list.className = "chat-reference-names";
+        fold.append(list);
+        notice.append(fold);
+      }
+      const list = fold.querySelector(".chat-reference-names");
+      const titles = Array.isArray(payload.titles) && payload.titles.length ? payload.titles : [payload.title || "Chat"];
+      list.replaceChildren(...titles.map(title => {
+        const item = document.createElement("div");
+        item.className = "chat-reference-name";
+        item.textContent = String(title);
+        return item;
+      }));
+    }
+    run?.assistant?.holdPlanningUntilCheckpoint?.();
+  } else {
+    const notice = container?.querySelector?.(".context-checkpoint-notice[data-chat-reference-import='true'][data-state='pending']");
+    if (payload.status === "failed") {
+      setContextCheckpointNoticeText(notice, "Could not bring chats");
+      if (notice) notice.dataset.state = "error";
+    } else {
+      setContextCheckpointNoticeText(notice, "Brought chats");
+      if (notice) notice.dataset.state = "complete";
+    }
+    if (contextCheckpointNotice === notice) contextCheckpointNotice = null;
+    run?.assistant?.releasePlanningAfterCheckpoint?.();
+  }
+  const visible = Boolean(run?.session && activeChatSessionId === run.session.id && !run.viewHost);
+  if (visible) { setContextCheckpointUi(active); setAgentStatus(active ? text : payload.status === "failed" ? "Could not bring chats" : `${modeLabel(run.mode)} working`); scrollMessages(); }
+  if (run) syncChatRunSession(run);
+}
+
 function setContextCheckpointUi(checkpointing) {
   contextCheckpointing = Boolean(checkpointing);
   if (!contextCheckpointing) contextCheckpointingSessionId = contextCheckpointingSessionId && activeChatRuns.get(contextCheckpointingSessionId)?.contextCheckpointPending
@@ -9413,12 +9777,12 @@ function setContextCheckpointUi(checkpointing) {
     : "";
   const affectsActiveChat = contextCheckpointing && (!contextCheckpointingSessionId || contextCheckpointingSessionId === activeChatSessionId);
   if (chatInput) {
-    chatInput.disabled = affectsActiveChat;
-    chatInput.readOnly = affectsActiveChat;
-    chatInput.toggleAttribute("aria-disabled", affectsActiveChat);
+    chatInput.disabled = false;
+    chatInput.readOnly = false;
+    chatInput.removeAttribute("aria-disabled");
   }
   updateSendBtn();
-  if (sendBtn && affectsActiveChat) sendBtn.disabled = true;
+
 }
 
 function normalizeContextUsageSnapshot(value) {
@@ -10027,6 +10391,7 @@ async function loadWorkspace(folder) {
 
   rootPath = folder;
   assessmentPath = folder;
+  browserWorkspace?.projectChanged();
   guidanceContext = "";
   guidanceContextRequestPath = folder;
   localStorage.setItem(BUG_BOUNTY_PATH_KEY, folder);
@@ -10142,6 +10507,45 @@ function openInterceptorTab(tool = "") {
   });
   renderTabs();
   switchToInterceptorTab();
+}
+
+function openBrowserTab() {
+  if (!openTabs.has(BROWSER_TAB_PATH)) openTabs.set(BROWSER_TAB_PATH, {
+    path: BROWSER_TAB_PATH,
+    diskPath: BROWSER_TAB_PATH,
+    name: "Browser",
+    content: null,
+    savedContent: "",
+    dirty: false,
+    error: null,
+    special: "browser",
+  });
+  switchToBrowserTab();
+}
+
+function switchToBrowserTab() {
+  if (terminalMaximized) setTerminalMaximized(false);
+  commitActiveTab();
+  activeTabPath = BROWSER_TAB_PATH;
+  editorLoadedPath = null;
+  renderTabs();
+  renderEditor({ focusEditor: false });
+}
+
+function showBrowserWorkspaceContent() {
+  currentWorkspaceMode = "browser";
+  if (editorTabBar) editorTabBar.hidden = false;
+  if (editorBody) editorBody.hidden = true;
+  if (resourceViewer) resourceViewer.hidden = true;
+  if (securityWorkspace) securityWorkspace.hidden = true;
+  if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
+  if (webcloneWorkspace) webcloneWorkspace.hidden = true;
+  if (assessmentModuleView) { assessmentModuleView.hidden = true; assessmentModuleActive = false; }
+  window.api.webCloneHidePreview?.();
+  editorPane?.setAttribute("aria-label", "Browser workspace");
+  updateEditorPathBar();
+  browserWorkspace?.setVisible(true);
+  syncWorkspaceActivity();
 }
 
 function switchToSettingsTab() {
@@ -10422,20 +10826,25 @@ document.addEventListener("click", (event) => {
   }
   if (event.target.closest("#security-proxy-browser")) {
     event.stopPropagation();
-    chooseProxyBrowserIdentity();
+    closeProxyBrowserMenu();
+    openBrowserTab();
   }
 });
 document.addEventListener("contextmenu", (event) => {
   if (!event.target.closest("#security-proxy-browser")) return;
   event.preventDefault();
   event.stopPropagation();
-  chooseProxyBrowserIdentity({ menuOnly: true });
+  chooseProxyBrowserIdentity();
 });
 securityHistoryToggle?.addEventListener("click", () => setSecurityHistoryVisible(securityHistoryPanel?.hidden));
 securityHistoryRefresh?.addEventListener("click", loadSecurityHistory);
 securityHistorySortHeaders.forEach((header) => header.querySelector("button")?.addEventListener("click", () => setSecurityHistorySort(header.dataset.historySort)));
 securityHistoryMenu?.addEventListener("click", (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
+  if (action === "analyze-agent") {
+    analyzeSecurityExchange(securityHistoryRecords[securityHistoryMenuIndex]);
+    return;
+  }
   if (action === "delete") {
     deleteSelectedSecurityHistoryRecords();
     return;
@@ -10457,7 +10866,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeSecurityHistoryMenu();
 });
 securityInterceptToggle?.addEventListener("click", toggleInterceptorCapture);
-securityAnalyzeButton?.addEventListener("click", analyzeSecurityExchange);
 securityClearButton?.addEventListener("click", clearSecurityExchange);
 securityDropButton?.addEventListener("click", dropInterceptedRequest);
 securityInspectorToggle?.addEventListener("click", () => setSecurityInspectorOpen(securityInspector?.classList.contains("collapsed")));
@@ -10781,11 +11189,30 @@ async function openFileDialog() {
   await openFile(filePath, fileName);
 }
 
-function setUiZoom(value) {
-  uiZoom = Math.max(0.8, Math.min(1.5, Number(value) || 1));
-  document.documentElement.style.setProperty("--ui-zoom", String(uiZoom));
-  localStorage.setItem(UI_ZOOM_KEY, String(uiZoom));
+// Zoom is applied as native page zoom. The chosen level is kept, but the
+// applied level is capped so the layout always has at least this many CSS
+// pixels; growing the window restores the chosen level.
+const UI_MIN_LAYOUT_WIDTH = 640;
+const UI_MIN_LAYOUT_HEIGHT = 480;
+
+function applyUiZoom() {
+  if (!window.api?.setUiZoom) return;
+  const current = Number(window.api.getUiZoom?.()) || 1;
+  const fit = Math.min(
+    (window.innerWidth * current) / UI_MIN_LAYOUT_WIDTH,
+    (window.innerHeight * current) / UI_MIN_LAYOUT_HEIGHT,
+  );
+  const next = Math.max(0.5, Math.min(uiZoom, Math.floor(fit * 100) / 100));
+  if (Math.abs(next - current) > 0.001) window.api.setUiZoom(next);
 }
+
+function setUiZoom(value) {
+  uiZoom = Math.round(Math.max(0.8, Math.min(1.5, Number(value) || 1)) * 10) / 10;
+  localStorage.setItem(UI_ZOOM_KEY, String(uiZoom));
+  applyUiZoom();
+}
+
+window.addEventListener("resize", applyUiZoom);
 
 function syncMinimapMenu() {
   const button = appMenu?.querySelector('[data-action="toggle-minimap"]');
@@ -12701,6 +13128,10 @@ function isInterceptorTab(tab) {
   return tab?.path === INTERCEPTOR_TAB_PATH || tab?.special === "interceptor";
 }
 
+function isBrowserTab(tab) {
+  return tab?.path === BROWSER_TAB_PATH || tab?.special === "browser";
+}
+
 function nestedSettingValue(object, settingPath) {
   return String(settingPath || "").split(".").reduce((value, key) => value?.[key], object);
 }
@@ -12921,7 +13352,7 @@ function syncProxyBrowserUi(status = {}) {
   button.setAttribute("aria-pressed", String(running));
   button.title = running
     ? `${status.browser === "edge" ? "Edge" : "Chrome"} is open through ${status.proxyHost || "127.0.0.1"}:${status.proxyPort || "proxy"}${status.agentShareAvailable ? "; matching agent browser actions can share it" : ""}`
-    : "Open browser through XEKUTE proxy. Right-click to choose an identity.";
+    : "Open browser. Right-click to open a tab with an identity.";
 }
 
 function closeProxyBrowserMenu() {
@@ -12953,9 +13384,7 @@ function positionProxyBrowserMenu() {
   menu.style.zIndex = "12000";
 }
 
-async function chooseProxyBrowserIdentity(options = {}) {
-  const menuOnly = Boolean(options.menuOnly);
-  if (!menuOnly) return launchProxyBrowser("");
+async function chooseProxyBrowserIdentity() {
   if (!assessmentPath) return launchProxyBrowser("");
   let identities = [];
   try {
@@ -12982,28 +13411,17 @@ async function launchProxyBrowser(identityId = "") {
     return;
   }
   const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
-  if (!window.api.proxyBrowserLaunch || button?.disabled) return;
+  if (!window.api.browserOpen || button?.disabled) return;
   const icon = button?.querySelector(".codicon");
   if (button) button.disabled = true;
   if (icon) icon.className = "codicon codicon-loading codicon-modifier-spin";
-  setSecurityStatus("Preparing XEKUTE proxy and browser…");
+  setSecurityStatus("Opening browser workspace…");
   try {
-    const result = await window.api.proxyBrowserLaunch({ assessmentPath, identityId: String(identityId || "") });
-    if (result?.ok === false || result?.error) {
-      setSecurityStatus(result.error?.message || result.error || "The proxied browser could not be opened.", "error");
-      syncProxyBrowserUi({ running: false });
-      return;
-    }
-    if (result.proxy) syncProxyListenerUi(result.proxy);
-    syncProxyBrowserUi(result);
-    setSecurityHistoryVisible(true);
-    const agentSessionHint = result.identityId && result.identityId !== "anonymous"
-      ? `Agent browser actions using identity ${result.identityId} can share this session.`
-      : "Agent browser actions without an identity can share this session.";
-    setSecurityStatus(`${result.browser === "edge" ? "Edge" : "Chrome"} opened as ${result.identityLabel || "Anonymous"} through XEKUTE at ${result.proxyHost}:${result.proxyPort}. ${agentSessionHint} Traffic and in-scope JavaScript will be indexed passively.`, "success");
+    closeProxyBrowserMenu();
+    openBrowserTab();
+    await browserWorkspace?.open({ identityId: String(identityId || ""), purpose: "assessment" });
   } catch (error) {
-    setSecurityStatus(error?.message || "The proxied browser could not be opened.", "error");
-    syncProxyBrowserUi({ running: false });
+    setSecurityStatus(error?.message || "The browser could not be opened.", "error");
   } finally {
     if (icon) icon.className = "codicon codicon-globe";
     if (button) button.disabled = false;
@@ -13189,6 +13607,7 @@ async function openFile(filePath, fileName, {
 function commitActiveTab() {
   if (!activeTabPath || !openTabs.has(activeTabPath)) return;
   const tab = openTabs.get(activeTabPath);
+  if (isBrowserTab(tab)) return;
   if (tab.error || tab.content === null) return;
   if (isAssessmentSettingsTab(tab) && settingsEditorMode === "ui") {
     tab.dirty = tab.content !== tab.savedContent;
@@ -13203,6 +13622,10 @@ function commitActiveTab() {
 
 function switchToTab(filePath, { focusEditor = true } = {}) {
   if (!openTabs.has(filePath)) return;
+  if (isBrowserTab(openTabs.get(filePath))) {
+    switchToBrowserTab();
+    return;
+  }
   if (isSettingsTab(openTabs.get(filePath))) {
     switchToSettingsTab();
     return;
@@ -13223,7 +13646,7 @@ async function saveActiveTab() {
   commitActiveTab();
   if (!activeTabPath) return;
   const tab = openTabs.get(activeTabPath);
-  if (!tab || tab.error) return;
+  if (!tab || tab.error || isBrowserTab(tab)) return;
   if (!tab.dirty) {
     EditorManager.clearChangeDecorations(activeTabPath);
     if (isAssessmentSettingsTab(tab)) await configureProxyListener();
@@ -13256,7 +13679,7 @@ function focusExplorerSidebar() {
 }
 
 function getEditorTabAbsolutePath(tab) {
-  if (!tab || isSettingsTab(tab) || isInterceptorTab(tab)) return null;
+  if (!tab || isSettingsTab(tab) || isInterceptorTab(tab) || isBrowserTab(tab)) return null;
   const rawPath = tab.diskPath || tab.path || "";
   if (!rawPath || String(rawPath).startsWith("xekute:")) return null;
   if (rootPath) {
@@ -13399,6 +13822,7 @@ async function closeTab(filePath, e, { force = false } = {}) {
 
   if (filePath === activeTabPath) commitActiveTab();
   const tab = openTabs.get(filePath);
+  if (isBrowserTab(tab)) browserWorkspace?.setVisible(false);
   if (tab?.dirty && !force) {
     if (!await AppDialog.confirm(`"${tab.name}" has unsaved changes. Close anyway?`, { title: "Unsaved changes", confirmLabel: "Close", tone: "danger" })) return;
   }
@@ -13446,7 +13870,7 @@ function renderTabs() {
     el.className = "editor-tab"
       + (path === activeTabPath ? " active" : "")
       + (tab.pinned ? " editor-tab-pinned" : "");
-    const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab);
+    const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab) || isBrowserTab(tab);
     if (specialWorkspaceTab) el.classList.add("special-workspace-tab");
     el.title = specialWorkspaceTab
       ? tab.name
@@ -13505,7 +13929,7 @@ function renderTabs() {
       ? "codicon-settings-gear"
       : isInterceptorTab(tab)
         ? "codicon-debug-disconnect"
-        : "";
+        : isBrowserTab(tab) ? "codicon-globe" : "";
     if (specialIcon) {
       icon.className = `tab-icon codicon ${specialIcon}`;
     } else {
@@ -13579,7 +14003,7 @@ function renderTabs() {
 function updateEditorPathBar() {
   if (!editorPathBar || !editorPathLabel) return;
   const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
-  if (!activeTab || isSettingsTab(activeTab) || isInterceptorTab(activeTab)) {
+  if (!activeTab || isSettingsTab(activeTab) || isInterceptorTab(activeTab) || isBrowserTab(activeTab)) {
     editorPathBar.hidden = true;
     editorPathLabel.textContent = "";
     editorPathLabel.removeAttribute("title");
@@ -13605,6 +14029,11 @@ async function renderEditor({ focusEditor = true } = {}) {
   if (markdownPreview) markdownPreview.hidden = true;
 
   const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
+  if (isBrowserTab(activeTab)) {
+    showBrowserWorkspaceContent();
+    return;
+  }
+  browserWorkspace?.setVisible(false);
   if (isSettingsTab(activeTab)) {
     if (editorEmpty) editorEmpty.setAttribute("hidden", "");
     if (editorView) editorView.setAttribute("hidden", "");
@@ -13819,13 +14248,18 @@ function escapeHtml(str) {
 
 // ── Model picker ──────────────────────────────────────────────────────────────
 
+function modelDisplayName(name = "") {
+  return name.slice(name.lastIndexOf("/") + 1);
+}
+
 function syncModelLabel() {
   if (!modelLabel) return;
-  modelLabel.textContent = selectedModel || "Select model";
+  modelLabel.textContent = modelDisplayName(selectedModel) || "Select model";
   if (modelPicker) {
     modelPicker.title = selectedModel ? `Model: ${selectedModel}` : "Select model";
   }
   updateContextUsage();
+  syncModelControlsSummary();
 }
 
 const CHAT_INPUT_MAX_LINES = 12;
@@ -13879,7 +14313,7 @@ function resizeChatInput() {
 
   if (chatInputMeasure) {
     syncChatInputMeasureStyles();
-    let measureText = chatInput.value || " ";
+    let measureText = fileTagDisplayText(chatInput.value) || " ";
     if (measureText.endsWith("\n")) measureText += " ";
     chatInputMeasure.textContent = measureText;
     contentH = chatInputMeasure.scrollHeight;
@@ -13906,50 +14340,85 @@ function resetChatInput() {
   resizeChatInput();
 }
 
-function positionModelMenu() {
-  if (!modelPicker || !modelMenu) return;
-  const rect = modelPicker.getBoundingClientRect();
-  const openRouter = isOpenRouterProvider();
-  modelMenu.classList.toggle("is-openrouter", openRouter);
-  const targetWidth = openRouter
-    ? Math.max(160, Math.min(230, window.innerWidth - 16))
-    : Math.min(340, Math.max(260, window.innerWidth - 16));
-  modelMenu.style.width = `${targetWidth}px`;
-  const menuW = modelMenu.offsetWidth || targetWidth;
-  const menuH = modelMenu.offsetHeight || 320;
-  const pad = 8;
-  const viewportH = window.innerHeight;
-  const viewportW = window.innerWidth;
-
-  let top = rect.top - menuH - pad;
-  if (top < pad) top = rect.bottom + pad;
-  if (top + menuH > viewportH - pad) {
-    top = Math.max(pad, viewportH - menuH - pad);
+function syncModelControlsSummary() {
+  if (!modelControlsMenu) return;
+  const settings = getModelSettings(selectedModel);
+  const metadata = openRouterModelMeta[selectedModel] || {};
+  const maximum = isOpenRouterProvider()
+    ? Math.max(Number(metadata.contextWindowTokens) || 0, ...(metadata.endpointContextLengths || []))
+    : Number(ollamaRuntimeContext[selectedModel]) || 0;
+  const configured = settings.contextMode === "custom" ? Number(settings.contextLimitTokens) || contextLabelToTokens(settings.context) : null;
+  const resolved = resolvedContextCapacity?.plan?.model === selectedModel ? resolvedContextCapacity.tokens : null;
+  const tokens = configured ? (maximum ? Math.min(configured, maximum) : configured) : resolved || maximum;
+  modelContextValue.textContent = tokens ? formatOpenRouterContextLabel(tokens) : AUTO_CONTEXT;
+  modelContextTrigger.disabled = !selectedModel;
+  if (isOpenRouterProvider()) {
+    const { reasoning, selected } = openRouterReasoningState(selectedModel);
+    modelEffortValue.textContent = selected ? reasoningEffortLabel(selected) : reasoning?.mandatory ? "Required" : reasoning?.available ? "Auto" : "Unavailable";
+    modelEffortTrigger.disabled = !selectedModel || !reasoning?.available;
+  } else {
+    modelEffortValue.textContent = settings.thinkingConfigured ? (modelThinkingEnabled(settings) ? "On" : "Off") : "Auto";
+    modelEffortTrigger.disabled = !selectedModel;
   }
-
-  let left = rect.left;
-  if (openRouter && viewportW >= targetWidth + 246 + (pad * 2)) {
-    left = Math.min(left, viewportW - targetWidth - 246 - pad);
-  }
-  if (left + menuW > viewportW - pad) {
-    left = viewportW - menuW - pad;
-  }
-  if (left < pad) left = pad;
-
-  modelMenu.style.top = `${top}px`;
-  modelMenu.style.left = `${left}px`;
+  modelCurrentName.textContent = modelDisplayName(selectedModel) || "Select model";
+  modelBrowseTrigger.title = selectedModel || "Select model";
 }
 
-function closeModelEditMenu() {
-  modelEditMenu.hidden = true;
-  editingModel = null;
-  modelList.querySelectorAll(".model-item.editing").forEach((el) => {
-    el.classList.remove("editing");
+function openModelControlsMenu() {
+  closeModelMenu();
+  closeChatModeMenu();
+  closeAuthorityMenu();
+  syncModelControlsSummary();
+  modelControlsMenu.hidden = false;
+  modelPicker.classList.add("open");
+  modelPicker.setAttribute("aria-haspopup", "menu");
+  modelPicker.setAttribute("aria-expanded", "true");
+  positionModelPanel(modelControlsMenu, modelPicker);
+  modelControlsMenu.querySelector("button:not(:disabled)")?.focus();
+  const modelName = selectedModel;
+  void refreshModelContextCapacity().then(() => {
+    if (modelControlsMenu.hidden || selectedModel !== modelName) return;
+    syncModelControlsSummary();
+    positionModelPanel(modelControlsMenu, modelPicker);
   });
 }
 
+function positionModelPanel(menu, anchor, beside = false) {
+  const rect = anchor.getBoundingClientRect();
+  const menuW = menu.offsetWidth;
+  const menuH = menu.offsetHeight;
+  const pad = 8;
+  let left = rect.left;
+  let top = rect.top - menuH - pad;
+  if (beside) {
+    const parent = modelControlsMenu.getBoundingClientRect();
+    left = parent.right + 4;
+    if (left + menuW > window.innerWidth - pad) left = parent.left - menuW - 4;
+    top = rect.top;
+  } else if (top < pad) top = rect.bottom + pad;
+  menu.style.left = `${Math.max(pad, Math.min(left, window.innerWidth - menuW - pad))}px`;
+  menu.style.top = `${Math.max(pad, Math.min(top, window.innerHeight - menuH - pad))}px`;
+}
+
+function positionModelMenu() {
+  modelMenu.classList.toggle("is-openrouter", isOpenRouterProvider());
+  modelMenu.style.width = `${isOpenRouterProvider() ? 230 : 340}px`;
+  positionModelPanel(modelMenu, modelBrowseTrigger, true);
+}
+
+function closeModelEditMenu() {
+  modelEditRequest++;
+  modelEditMenu.hidden = true;
+  editingModel = null;
+  modelContextTrigger.setAttribute("aria-expanded", "false");
+  modelEffortTrigger.setAttribute("aria-expanded", "false");
+}
+
 function closeModelMenu() {
+  modelControlsMenu.hidden = true;
   modelMenu.hidden = true;
+  modelBrowseTrigger.setAttribute("aria-expanded", "false");
+  modelPicker.setAttribute("aria-expanded", "false");
   modelMenu.style.visibility = "";
   modelPicker.classList.remove("open");
   modelAddForm.hidden = true;
@@ -13961,33 +14430,24 @@ function closeModelMenu() {
 
 function positionModelEditMenu(anchorEl) {
   if (!anchorEl) return;
-  modelEditMenu.hidden = false;
-  const mainRect = modelMenu.getBoundingClientRect();
-  const anchorRect = anchorEl.getBoundingClientRect();
-  const menuW = modelEditMenu.offsetWidth || 200;
-  const menuH = modelEditMenu.offsetHeight || 280;
-
-  let left = mainRect.right + 2;
-  let top = anchorRect.top;
-
-  if (left + menuW > window.innerWidth - 8) left = mainRect.left - menuW - 2;
-  if (left < 8) left = 8;
-  if (top + menuH > window.innerHeight - 8) {
-    top = Math.max(8, window.innerHeight - menuH - 8);
-  }
-
-  modelEditMenu.style.left = `${left}px`;
-  modelEditMenu.style.top = `${top}px`;
+  positionModelPanel(modelEditMenu, anchorEl, true);
 }
 
-async function openModelEditMenu(modelName, rowEl) {
-  if (!modelEditMenu || !thinkingToggle || !contextOptions) return;
+async function openModelEditMenu(panel, anchor) {
+  if (!selectedModel) return;
+  if (!modelEditMenu.hidden && modelEditMenu.dataset.panel === panel) {
+    closeModelEditMenu();
+    return;
+  }
+  closeModelEditMenu();
+  modelMenu.hidden = true;
+  modelBrowseTrigger.setAttribute("aria-expanded", "false");
+  const modelName = selectedModel;
+  const request = ++modelEditRequest;
   editingModel = modelName;
-  modelList.querySelectorAll(".model-item.editing").forEach((el) => {
-    el.classList.remove("editing");
-  });
-  rowEl.classList.add("editing");
-
+  modelEditMenu.dataset.panel = panel;
+  modelEditMenu.hidden = false;
+  anchor.setAttribute("aria-expanded", "true");
   const settings = getModelSettings(modelName);
   renderReasoningOptions(isOpenRouterProvider() ? (openRouterModelMeta[modelName] || null) : null);
   const thinkingEnabled = modelThinkingEnabled(settings);
@@ -13997,7 +14457,10 @@ async function openModelEditMenu(modelName, rowEl) {
     ? (thinkingEnabled ? "Thinking enabled" : "Thinking disabled")
     : "Thinking automatic for supported models";
   if (isOpenRouterProvider()) {
+    renderContextOptions(settings.context, openRouterModelMeta[modelName] || null);
+    positionModelEditMenu(anchor);
     const metadata = await ensureOpenRouterModelContext(modelName);
+    if (request !== modelEditRequest || selectedModel !== modelName || modelEditMenu.hidden) return;
     renderReasoningOptions(metadata);
     renderContextOptions(getModelSettings(modelName).context, metadata);
   } else {
@@ -14005,17 +14468,20 @@ async function openModelEditMenu(modelName, rowEl) {
     renderContextOptions(settings.context, null);
     if (window.api?.runtimeModel) {
       void window.api.runtimeModel({ model: modelName }).then((result) => {
-        if (editingModel !== modelName || !result?.ok) return;
+        if (request !== modelEditRequest || editingModel !== modelName || !result?.ok) return;
         if (result.contextLength) ollamaRuntimeContext[modelName] = result.contextLength;
         renderContextOptions(getModelSettings(modelName).context, {
           contextWindowTokens: result.contextLength,
         });
+        syncModelControlsSummary();
+        positionModelEditMenu(anchor);
       }).catch(() => {});
     }
   }
-  updateModelRuntimeNote(modelName);
-
-  requestAnimationFrame(() => positionModelEditMenu(rowEl));
+  syncModelControlsSummary();
+  positionModelEditMenu(anchor);
+  const section = panel === "context" ? contextOptions : isOpenRouterProvider() ? reasoningOptions : ollamaThinkingSection;
+  (section.querySelector("button.selected") || section.querySelector("button"))?.focus();
 }
 
 function reasoningEffortLabel(value) {
@@ -14045,21 +14511,7 @@ function openRouterReasoningState(modelName, openRouterMetadata = null) {
 
 function renderModelPrimaryLabel(primary, modelName) {
   if (!primary) return;
-  const slashIndex = modelName.lastIndexOf("/");
-  primary.textContent = slashIndex >= 0 ? modelName.slice(slashIndex + 1) : modelName;
-  if (!isOpenRouterProvider()) return;
-  const { selected } = openRouterReasoningState(modelName);
-  if (!selected) return;
-  const effort = document.createElement("span");
-  effort.className = "model-item-effort";
-  effort.textContent = reasoningEffortLabel(selected);
-  primary.appendChild(effort);
-}
-
-function refreshModelEffortLabels() {
-  for (const row of modelList?.querySelectorAll?.(".model-item") || []) {
-    renderModelPrimaryLabel(row.querySelector(".model-item-primary"), row.dataset.model || "");
-  }
+  primary.textContent = modelDisplayName(modelName);
 }
 
 function renderReasoningOptions(openRouterMetadata = null) {
@@ -14118,7 +14570,9 @@ function renderReasoningOptions(openRouterMetadata = null) {
       if (!editingModel) return;
       setModelSetting(editingModel, "reasoningEffort", effort);
       renderReasoningOptions(metadata);
-      refreshModelEffortLabels();
+      syncModelControlsSummary();
+      closeModelEditMenu();
+      modelEffortTrigger.focus();
     });
     reasoningOptions.appendChild(button);
   }
@@ -14186,7 +14640,8 @@ function renderContextOptions(selected, metadataHint = null) {
     if (!editingModel) return;
     setModelSetting(editingModel, "context", AUTO_CONTEXT);
     renderContextOptions(AUTO_CONTEXT, metadataHint);
-    updateModelRuntimeNote(editingModel);
+    closeModelEditMenu();
+    modelContextTrigger.focus();
   });
   contextOptions.appendChild(autoBtn);
 
@@ -14203,7 +14658,8 @@ function renderContextOptions(selected, metadataHint = null) {
       if (!editingModel) return;
       setModelSetting(editingModel, "context", tokens);
       renderContextOptions(tokens, metadataHint);
-      updateModelRuntimeNote(editingModel);
+      closeModelEditMenu();
+      modelContextTrigger.focus();
     });
     contextOptions.appendChild(btn);
   }
@@ -14290,6 +14746,9 @@ thinkingToggle?.addEventListener("click", (e) => {
   thinkingToggle.classList.toggle("on", thinkingEnabled);
   thinkingToggle.setAttribute("aria-pressed", String(thinkingEnabled));
   thinkingToggle.title = thinkingEnabled ? "Thinking enabled" : "Thinking disabled";
+  syncModelControlsSummary();
+  closeModelEditMenu();
+  modelEffortTrigger.focus();
 });
 
 function showModelListLoading() {
@@ -14321,7 +14780,7 @@ function applyOllamaListResult(result) {
   }
   if (statusOllamaPort) {
     if (result?.provider === "openrouter") {
-      statusOllamaPort.textContent = selectedModel ? `OpenRouter · ${selectedModel}` : "OpenRouter";
+      statusOllamaPort.textContent = selectedModel ? `OpenRouter · ${modelDisplayName(selectedModel)}` : "OpenRouter";
     } else if (result?.host) {
       statusOllamaPort.textContent = `Ollama :${result.host}`;
     }
@@ -14346,7 +14805,7 @@ function applyOllamaListResult(result) {
   }
   syncSelectedModelFromEnabled();
   if (result.provider === "openrouter" && statusOllamaPort) {
-    statusOllamaPort.textContent = selectedModel ? `OpenRouter · ${selectedModel}` : "OpenRouter";
+    statusOllamaPort.textContent = selectedModel ? `OpenRouter · ${modelDisplayName(selectedModel)}` : "OpenRouter";
   }
   renderModelList();
   renderExploreSubagentSelect();
@@ -14410,7 +14869,8 @@ function renderModelList() {
   }
 
   for (const name of filtered) {
-    const row = document.createElement("div");
+    const row = document.createElement("button");
+    row.type = "button";
     row.className = "model-item" + (name === selectedModel ? " selected" : "");
     row.dataset.model = name;
 
@@ -14432,25 +14892,9 @@ function renderModelList() {
     const trailing = document.createElement("div");
     trailing.className = "model-item-trailing";
 
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.className = "model-edit-btn";
-    editBtn.setAttribute("aria-label", `Configure ${name}`);
-    editBtn.title = "Model options";
-    editBtn.innerHTML = '<span class="codicon codicon-chevron-right" aria-hidden="true"></span>';
-    editBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (editingModel === name && !modelEditMenu.hidden) {
-        closeModelEditMenu();
-      } else {
-        openModelEditMenu(name, row);
-      }
-    });
-
     const check = document.createElement("span");
     check.className = "codicon codicon-check";
 
-    trailing.appendChild(editBtn);
     trailing.appendChild(check);
     row.appendChild(nameEl);
     row.appendChild(trailing);
@@ -14459,11 +14903,12 @@ function renderModelList() {
       selectedModel = name;
       localStorage.setItem("pointer:model", selectedModel);
       syncModelLabel();
+      closeModelMenu();
+      modelPicker.focus();
       if (isOpenRouterProvider()) await applyOpenRouterModelDefaults(name);
       else await refreshModelContextCapacity();
       renderModelList();
       updateContextUsage();
-      closeModelMenu();
     });
 
     modelList.appendChild(row);
@@ -14481,22 +14926,43 @@ async function openModelMenu() {
   closeAuthorityMenu();
   modelMenu.style.visibility = "hidden";
   modelMenu.hidden = false;
+  modelBrowseTrigger.setAttribute("aria-expanded", "true");
   modelPicker.classList.add("open");
   if (allModels.length) renderModelList();
   else showModelListLoading();
   positionModelMenu();
   modelMenu.style.visibility = "visible";
   await loadModels({ showLoading: !allModels.length });
+  if (modelMenu.hidden) return;
   positionModelMenu();
   modelSearch.focus();
 }
 
 modelPicker.addEventListener("click", (e) => {
   e.stopPropagation();
-  if (modelMenu.hidden) {
-    openModelMenu();
+  if (modelControlsMenu.hidden) {
+    openModelControlsMenu();
   } else {
     closeModelMenu();
+  }
+});
+
+modelContextTrigger.addEventListener("click", () => openModelEditMenu("context", modelContextTrigger));
+modelEffortTrigger.addEventListener("click", () => openModelEditMenu("effort", modelEffortTrigger));
+modelBrowseTrigger.addEventListener("click", () => {
+  if (modelMenu.hidden) openModelMenu();
+  else { modelMenu.hidden = true; modelBrowseTrigger.setAttribute("aria-expanded", "false"); }
+});
+
+modelControlsMenu.addEventListener("keydown", (event) => {
+  const options = [...modelControlsMenu.querySelectorAll("button:not(:disabled)")];
+  const index = options.indexOf(document.activeElement);
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    options[(index + (event.key === "ArrowDown" ? 1 : options.length - 1)) % options.length]?.focus();
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    document.activeElement?.click();
   }
 });
 
@@ -14521,7 +14987,7 @@ authorityMenu?.addEventListener("click", async (e) => {
 modelMenu?.addEventListener("mousedown", (e) => e.stopPropagation());
 
 modelSearch.addEventListener("input", renderModelList);
-modelSearch.addEventListener("keydown", (e) => e.stopPropagation());
+modelSearch.addEventListener("keydown", (e) => { if (e.key !== "Escape") e.stopPropagation(); });
 
 modelAddBtn.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -14552,8 +15018,8 @@ modelCustom.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("click", (e) => {
-  if (!modelMenu.hidden) {
-    const inMain = modelMenu.contains(e.target) || modelPicker.contains(e.target);
+  if (!modelControlsMenu.hidden) {
+    const inMain = modelControlsMenu.contains(e.target) || modelMenu.contains(e.target) || modelPicker.contains(e.target);
     const inEdit = modelEditMenu && !modelEditMenu.hidden && modelEditMenu.contains(e.target);
     if (!inMain && !inEdit) closeModelMenu();
   }
@@ -14565,6 +15031,20 @@ document.addEventListener("click", (e) => {
     const inAuthority = authorityMenu.contains(e.target) || authorityPicker?.contains(e.target);
     if (!inAuthority) closeAuthorityMenu();
   }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (modelControlsMenu.hidden || event.key !== "Escape") return;
+  event.preventDefault();
+  if (!modelEditMenu.hidden) {
+    const anchor = modelEditMenu.dataset.panel === "context" ? modelContextTrigger : modelEffortTrigger;
+    closeModelEditMenu();
+    anchor.focus();
+  } else if (!modelMenu.hidden) {
+    modelMenu.hidden = true;
+    modelBrowseTrigger.setAttribute("aria-expanded", "false");
+    modelBrowseTrigger.focus();
+  } else { closeModelMenu(); modelPicker.focus(); }
 });
 
 window.api.onWorkspaceChanged?.((payload) => {
@@ -14579,17 +15059,17 @@ window.api.onWorkspaceChanged?.((payload) => {
 });
 
 window.addEventListener("resize", () => {
-  syncChatResizeLimit({ clamp: true });
+  // The React layout fits panels with CSS; writing the shrunk width back here
+  // would lose the chosen chat width after any small window or zoom level.
+  syncChatResizeLimit({ clamp: !globalThis.__XEKUTE_REACT_LAYOUT__ });
   resizeChatInput();
   if (!chatModeMenu?.hidden) positionChatModeMenu();
+  if (!modelControlsMenu.hidden) positionModelPanel(modelControlsMenu, modelPicker);
   if (!modelMenu.hidden) positionModelMenu();
   if (authorityMenu && !authorityMenu.hidden) positionAuthorityMenu();
   if (!contextUsagePopover.hidden) positionContextPopover();
   if (!modelEditMenu.hidden && editingModel) {
-    const row = [...modelList.querySelectorAll(".model-item")].find(
-      (el) => el.dataset.model === editingModel,
-    );
-    if (row) positionModelEditMenu(row);
+    positionModelEditMenu(modelEditMenu.dataset.panel === "context" ? modelContextTrigger : modelEffortTrigger);
   }
 });
 
@@ -14655,11 +15135,19 @@ async function collectMentionedFiles(userMessage) {
 
   const projectFiles = ToolParser.parseProjectFiles(dirMapCache);
   const activePath = getActiveFileContext()?.path;
-  const msg = (userMessage || "").toLowerCase();
+  const parts = splitFileTags(userMessage);
+  const taggedPaths = [...new Set(parts.filter(part => part.path).map(part => part.path))];
+  const projectPaths = new Set(projectFiles);
+  for (const rel of taggedPaths) {
+    if (rel === activePath || !projectPaths.has(rel)) continue;
+    const file = await readWorkspaceFile(rel);
+    if (file) files.push(file);
+  }
+  const msg = parts.map(part => part.text || "").join(" ").toLowerCase();
 
   for (const rel of projectFiles) {
     if (files.length >= 3) break;
-    if (rel === activePath) continue;
+    if (rel === activePath || taggedPaths.includes(rel)) continue;
     const base = rel.split("/").pop().toLowerCase();
     if (!msg.includes(base) && !msg.includes(rel.toLowerCase())) continue;
     const file = await readWorkspaceFile(rel);
@@ -14667,7 +15155,7 @@ async function collectMentionedFiles(userMessage) {
   }
 
   // Single-file project: always show it so the model can patch correctly.
-  if (!files.length && projectFiles.length === 1 && projectFiles[0] !== activePath) {
+  if (!files.length && !taggedPaths.length && projectFiles.length === 1 && projectFiles[0] !== activePath) {
     const file = await readWorkspaceFile(projectFiles[0]);
     if (file) files.push(file);
   }
@@ -15024,7 +15512,7 @@ function browserActionDetail(tool = {}, result = {}) {
   const args = toolArgsOf(tool);
   const action = String(args.action || result.action || "").replace(/_/g, " ").trim();
   const target = compactUrlDetail(args.url || result.url || "")
-    || compactText(args.selector || args.text || args.option || args.pageId || "", 40);
+    || compactText(args.selector || args.target?.selector || args.text || args.option || args.pageId || "", 40);
   if (action && target) return `${action} ${target}`;
   return target || action;
 }
@@ -15277,6 +15765,24 @@ function minimalToolSuccessLabel(tool = {}, result = {}) {
   return exploredToolLabel(tool, uiResult, "success");
 }
 
+// Only rows for workspace files open in the editor. Browser, replay, identity,
+// search and delegation rows describe actions, not files; deleted files and
+// new folders have nothing to open.
+const FILE_ROW_ACTIONS = new Set(["read_file", "apply_patch"]);
+
+function toolRowOpensFile(row) {
+  const path = String(row?.dataset?.path || "").trim();
+  if (!path || isPlaceholderTarget(path) || /^[a-z]+:\/\//i.test(path)) return false;
+  if (!FILE_ROW_ACTIONS.has(String(row.dataset.toolAction || ""))) return false;
+  const verb = splitToolStatusLabel(toolCardLabelText(row)).verb;
+  return !/^(Deleting|Deleted|Creating folder|Created folder|Failed)$/i.test(verb);
+}
+
+function syncToolRowOpensFile(row) {
+  if (row?.dataset) row.dataset.opensFile = String(toolRowOpensFile(row));
+  return row;
+}
+
 function createToolCard(tool, { pending = false } = {}) {
   const card = document.createElement("button");
   card.type = "button";
@@ -15335,6 +15841,7 @@ function setToolCardStatus(card, type, message) {
     }
   }
   if (fileEl) renderToolStatusLabelFromText(fileEl, label);
+  syncToolRowOpensFile(card);
   const parts = splitToolStatusLabel(label);
   if (parts.verb) card.dataset.fileVerb = stackVerbForLabel(parts.verb);
   card.dataset.state = type;
@@ -15427,7 +15934,9 @@ function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
     appendChatStreamNode(host, card);
     mounted = true;
   }
-  card.dataset.file = toolDisplayName(tool) || (!isPlaceholderTarget(fileKey) ? toolTargetBasename({ args: { path: fileKey } }, {}) : "");
+  // fileKey can fall back to the tool name (`browser_action`) for matching;
+  // the row's file is only ever a real target path.
+  card.dataset.file = toolDisplayName(tool) || (!isPlaceholderTarget(targetPath) ? toolTargetBasename({ args: { path: targetPath } }, {}) : "");
   card.dataset.toolAction = action;
   card.dataset.toolKey = key;
   if (targetPath && !isPlaceholderTarget(targetPath)) card.dataset.path = targetPath;
@@ -15834,7 +16343,15 @@ function updateCommandTimelineLabel(identity) {
 }
 
 async function applyToolResultToUi(tool, result, turn, contentEl) {
-  if (isAskQuestionsTool(tool) || isEndTurnTool(tool) || isTaskListTool(tool)) return;
+  if (isAskQuestionsTool(tool)) {
+    // The row goes into the work flow where the agent asked; later prose and
+    // work render after it.
+    const card = result?.error ? null : createQuestionAnswerCard(questionAnswerRecord(tool, result));
+    if (card) toolCardMountHost(turn, contentEl, markAssistantToolUse(turn)).appendChild(card);
+    scrollMessages();
+    return;
+  }
+  if (isEndTurnTool(tool) || isTaskListTool(tool)) return;
   const card = ensureToolCard(turn, contentEl, tool);
   if (!card) return;
 
@@ -15940,7 +16457,7 @@ function syncChatStickyMask() {
     const paneRect = chatPane.getBoundingClientRect();
     const messagesRect = messages.getBoundingClientRect();
     const maskTop = chatHeader?.getBoundingClientRect().bottom || (paneRect.top + 35);
-    const visibleBoxes = [...messages.querySelectorAll(".chat-turn.user .chat-box")]
+    const visibleBoxes = [...messages.querySelectorAll(".chat-turn.user:not(.chat-turn.user ~ .chat-turn.user) .chat-box")]
       .map((box) => ({ box, rect: box.getBoundingClientRect() }))
       .filter(({ rect }) => rect.bottom > messagesRect.top && rect.top < messagesRect.bottom);
 
@@ -16062,18 +16579,31 @@ function mergeAppendedChatMessages(history, appended) {
   return list;
 }
 
-function addUserMessage(text) {
+function addUserMessage(text, sourceMessageId = "", images = []) {
   const value = String(text || "");
-  if (value && latestExchangeUserPromptText() === value.trim()) return;
+  if (sourceMessageId && [...messages.querySelectorAll(".chat-turn.user")].some((turn) => turn.dataset.sourceMessageId === sourceMessageId)) return;
+  if (!sourceMessageId && value && latestExchangeUserPromptText() === value.trim()) return;
+  const run = activeChatRuns.get(activeChatSessionId);
+  const running = run && isChatSessionRunning(activeChatSessionId);
   const turn = document.createElement("div");
   turn.className = "chat-turn user";
+  turn.dataset.sourceMessageId = sourceMessageId;
+  turn.dataset.taskId = running ? String(run.taskId || run.session?.taskId || "") : "";
   turn.dataset.createdAt = new Date().toISOString();
-  const box = createUserPromptBox(value);
+  const box = createUserPromptBox(value, images);
   turn.appendChild(box);
-  appendChatTurn(turn, { startsExchange: true });
+  const initialUserTurn = running && run.initialInputId
+    ? [...messages.querySelectorAll(".chat-turn.user")].find((item) => item.dataset.sourceMessageId === run.initialInputId)
+    : null;
+  const exchange = running
+    ? run.assistant?.turn?.closest(".chat-exchange") || initialUserTurn?.closest(".chat-exchange")
+    : null;
+  if (exchange) appendSteeringUserTurn(turn, exchange, run.assistant);
+  else appendChatTurn(turn, { startsExchange: true });
   syncChatStickyMask();
   syncChatEmptyState();
   scrollMessages({ force: true });
+  return turn;
 }
 
 const CHAT_ERROR_TOAST_MS = 15_000;
@@ -16220,6 +16750,7 @@ function syncComposerQuestionsForActiveSession() {
 
 function showCommandApprovalPanel({
   command = "",
+  title = "Allow the below command to be executed?",
   requestId = "",
   sessionId = activeChatSessionId,
   onLiveState = null,
@@ -16238,7 +16769,7 @@ function showCommandApprovalPanel({
   block.innerHTML = `
     <div class="agent-questions-header">
       <span class="agent-questions-icon codicon codicon-terminal" aria-hidden="true"></span>
-      <strong class="agent-questions-title">Allow the below command to be executed?</strong>
+      <strong class="agent-questions-title">${escapeHtml(title)}</strong>
     </div>
     <div class="agent-questions-body">
       <button type="button" class="agent-command-approval-preview" aria-expanded="false" title="Click to show the full command">
@@ -16338,7 +16869,7 @@ function showComposerQuestionsPanel({
     return Promise.resolve({ answers: [], skipped: true, requestId });
   }
   if (approval?.kind === "command") {
-    return showCommandApprovalPanel({ command: approval.command, requestId, sessionId: ownerSessionId, onLiveState });
+    return showCommandApprovalPanel({ command: approval.command, ...(approval.title ? { title: approval.title } : {}), requestId, sessionId: ownerSessionId, onLiveState });
   }
   const isToolQuestionnaire = questionnaire?.kind === "agent_questions";
 
@@ -16384,7 +16915,7 @@ function showComposerQuestionsPanel({
   block.innerHTML = `
     ${subagentLabelHtml}
     <div class="agent-questions-header">
-      <span class="agent-questions-icon codicon codicon-question" aria-hidden="true"></span>
+      <img class="agent-questions-icon agent-questions-icon-image" src="${QUESTION_ICON_SRC}" alt="" aria-hidden="true">
       <strong class="agent-questions-title">${escapeHtml(isToolQuestionnaire ? `1. ${visibleQuestions[0]?.prompt || "Need your input"}` : visibleQuestions[0]?.prompt || "Need your input")}</strong>
       <span class="agent-questions-step">1/${visibleQuestions.length}</span>
     </div>
@@ -16682,6 +17213,7 @@ function subagentCardStatus(status = "working") {
     queued: "Queued…",
     running: "Working…",
     working: "Working…",
+    waiting: "Waiting…",
     completed: "Finished working.",
     stopped: "Stopped",
     failed: "Failed.",
@@ -16765,13 +17297,19 @@ function createSubagentRunCard(assistant, payload = {}, mount = null) {
   const existing = [...assistant.turn.querySelectorAll(".subagent-run-card")].find(
     (card) => (card.dataset.childInvocationId || card.dataset.childSessionId) === key,
   );
-  if (existing) return existing;
+  if (existing) {
+    if (payload.independent) existing.dataset.independent = "true";
+    if (payload.taskId) existing.dataset.taskId = String(payload.taskId);
+    return existing;
+  }
   markAssistantToolUse(assistant.turn);
 
   const card = document.createElement("div");
   card.className = "subagent-run-card";
   card.dataset.childInvocationId = String(payload.childInvocationId || "");
   card.dataset.childSessionId = String(payload.childSessionId || "");
+  card.dataset.independent = payload.independent ? "true" : "false";
+  card.dataset.taskId = String(payload.taskId || "");
   card.dataset.parentSessionId = String(payload.parentSessionId || "");
   card.dataset.model = String(payload.model || "");
   card.dataset.state = String(payload.status || (payload.type === "subagent_queued" ? "queued" : "working"));
@@ -16829,7 +17367,7 @@ function setSubagentCardState(card, status = "running", detail = "") {
   const detailEl = card.querySelector(".subagent-run-detail");
   if (detailEl) detailEl.textContent = String(detail || subagentCardStatus(status)).slice(0, 240);
   const stop = card.querySelector(".subagent-run-stop");
-  if (stop) stop.hidden = !["queued", "running", "working"].includes(String(status));
+  if (stop) stop.hidden = !["queued", "running", "working", "waiting"].includes(String(status));
   card.setAttribute("aria-label", title?.textContent || "Sub-agent");
   const assistant = findAssistantForTurn(card.closest(".chat-turn"));
   syncSubagentOrchestrationWaitStatus(assistant);
@@ -16857,8 +17395,12 @@ function findAssistantForTurn(turn) {
   return null;
 }
 
+function subagentCardBlocksParent(card) {
+  return card?.dataset?.independent !== "true" && subagentCardIsActive(card);
+}
+
 function subagentCardIsActive(card) {
-  return ["queued", "running", "working"].includes(String(card?.dataset?.state || ""));
+  return ["queued", "running", "working", "waiting"].includes(String(card?.dataset?.state || ""));
 }
 
 function markSubagentQuestionWaiting(payload = {}, waiting = false) {
@@ -16888,7 +17430,7 @@ function syncSubagentOrchestrationWaitStatus(source) {
   const host = assistant.toolWorkMount();
   if (!host) return;
 
-  const cards = [...host.querySelectorAll(":scope > .subagent-run-card")];
+  const cards = [...host.querySelectorAll(":scope > .subagent-run-card")].filter((card) => card.dataset.independent !== "true");
   const holdActive = Boolean(run?.orchestrationHold) && !run?.stopRequested;
   const hasActiveCards = cards.some(subagentCardIsActive);
   const shouldShow = cards.length > 0 && !run?.stopRequested && (holdActive || hasActiveCards);
@@ -16942,6 +17484,7 @@ function handleSubagentCardEvent(assistant, payload = {}) {
     setSubagentCardState(card, card.dataset.state || "working");
     return;
   }
+  if (type === "subagent_waiting") setSubagentCardState(card, "waiting");
   if (type === "subagent_completed") setSubagentCardState(card, "completed");
   if (type === "subagent_stopped") setSubagentCardState(card, "stopped");
   if (type === "subagent_failed") setSubagentCardState(card, "failed");
@@ -17051,6 +17594,8 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     workFoldBodyEl: null,
     workTimer: null,
     modelEmitting: false,
+    modelBlockOpen: true,
+    pendingSteeringHost: null,
     exploredFoldEl: null,
     exploredBodyEl: null,
     verdictOpen: false,
@@ -17119,9 +17664,18 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     workingMount() {
       return this.replyMount();
     },
-    toolWorkMount() {
+    // The round's header lives under the main prompt even after steering, so
+    // work goes in the fold only while the fold is on the current turn.
+    workFoldTurn() {
+      const host = this.workHostTurn();
+      return host?.dataset.steeringSegment === "true" ? this.rootTurn : host;
+    },
+    activityBody() {
       const fold = this.ensureWorkFold();
-      return workFoldBody(fold) || this.workHostTurn();
+      return fold?.parentElement === this.workHostTurn() ? workFoldBody(fold) : null;
+    },
+    toolWorkMount() {
+      return this.activityBody() || this.workHostTurn();
     },
     ensureExploredGroup() {
       return null;
@@ -17130,12 +17684,12 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       return this.toolWorkMount();
     },
     ensureThinkingFold() {
-      const work = this.ensureWorkFold();
+      const body = this.activityBody();
       if (streamingNodeLive(this.thinkingFoldEl) && this.thinkingFoldEl.dataset.final !== "true") {
         this.thinkingContentEl = thinkingContentOf(this.thinkingFoldEl);
         return this.thinkingFoldEl;
       }
-      const host = workFoldBody(work) || this.conversationMount();
+      const host = body || this.conversationMount();
       const fold = createThinkingFold({ startedAt: Date.now() });
       markActivityNode(fold);
       if (host) appendChatStreamNode(host, fold);
@@ -17144,8 +17698,16 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       this.thinkingRaw = "";
       return fold;
     },
+    beginModelBlock() {
+      if (this.modelBlockOpen) return;
+      this.modelBlockOpen = true;
+      const host = this.pendingSteeringHost;
+      this.pendingSteeringHost = null;
+      if (host?.isConnected) startAssistantSteeringSegment(this, host);
+    },
     appendThinking(token) {
       const value = String(token || "");
+      this.beginModelBlock();
       this.noteModelOutput();
       this.showPrivateReasoning();
       const fold = this.ensureThinkingFold();
@@ -17296,7 +17858,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     // that arrived before the first tool call moves inside the section it
     // belongs to instead of being stranded above it.
     ensureWorkFold() {
-      const fold = ensureAssistantWorkFold(this.workHostTurn(), {
+      const fold = ensureAssistantWorkFold(this.workFoldTurn(), {
         startedAt: this.startedAt,
         label: this.modelEmitting ? undefined : "Planning\u2026",
       });
@@ -17378,7 +17940,15 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     hadToolActivity() {
       return this.assistantTurns().some((turn) => boxHasToolUsage(turn));
     },
-    applyModelRound({ finishReason = "", stop = false } = {}) {
+    applyModelRound({ finishReason = "", stop = false, answerOnly = false } = {}) {
+      // A full answer from a no-tool round is completion-grade; it is marked at
+      // finalization. Raw markdown is set before the text renders.
+      if (answerOnly) {
+        const el = [...this.contentSegments].reverse().find((segment) => String(segment?.raw || "").trim())?.el;
+        if (el) (this.completionAnswerEls ||= []).push(el);
+      }
+      this.beginModelBlock();
+      this.modelBlockOpen = false;
       const reason = String(finishReason || "").trim().toLowerCase();
       if (this.turn) this.turn.dataset.finishReason = reason;
       this.finishThinking({ collapse: true });
@@ -17435,6 +18005,14 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       const fold = turnWorkFold(turn);
       const current = this.currentContentSegment()?.el;
       if (current && !isEmptyAssistantReply(current)) current.dataset.stopRound = "true";
+      // Promote a buried completion-grade answer over the recap that closed the
+      // run. A trailing answer needs no help and must not pass for the recap.
+      const laterSubstantive = (el) => [...turn.querySelectorAll(".assistant-reply, .agent-command-event, .tool-card, .agent-file-row, .subagent-run-card")]
+        .some((other) => other !== el && !isEmptyAssistantReply(other) && (el.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING));
+      for (const el of this.completionAnswerEls || []) {
+        if (!el?.isConnected || el === current || isEmptyAssistantReply(el) || el.dataset.stopRound === "true") continue;
+        if (laterSubstantive(el)) el.dataset.answered = "true";
+      }
       const answer = promoteFinalAnswer(turn)
         || (allowEmpty ? this.createContentSegment({ after: fold }).el : null);
       if (answer) {
@@ -17677,6 +18255,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
         if (isFinishedWorkFold(fold) && fold.dataset.userToggled !== "true") setWorkFoldExpanded(fold, false);
       }
       if (stopped) appendStoppedPlainText(this.workHostTurn() || this.turn, this.contentSegments);
+      markSteeringAnswer((this.rootTurn || this.turn)?.closest(".chat-exchange"));
     },
     requestQuestions({
       reason = "The agent needs your input before continuing.",
@@ -17765,6 +18344,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
     },
     appendContent(token) {
       let value = String(token || "");
+      this.beginModelBlock();
       this.noteModelOutput();
       this.ensureConversationSegment();
       const segment = this.currentContentSegment();
@@ -17871,6 +18451,7 @@ const BUG_BOUNTY_COMMANDS = new Set();
 let bugBountySlashCommands = [];
 let bugBountyReveal = 3;
 let slashSuggestionQuery = "";
+let slashSuggestionTarget = null;
 const CUSTOM_SKILL_COMMANDS = new Set();
 let customSkillSlashCommands = [];
 
@@ -17991,6 +18572,7 @@ function closeSlashSuggestions() {
   hideSlashCommandOverview();
   slashSuggestionItems = [];
   slashSuggestionIndex = -1;
+  slashSuggestionTarget = null;
 }
 
 function effectiveChatInputValue() {
@@ -18030,10 +18612,11 @@ function renderChatInputEditorValue(value = "") {
   chatInput.replaceChildren();
   if (selectedSlashCommand && selectedSlashCommandEl) {
     selectedSlashCommandEl.hidden = false;
-    chatInput.append(selectedSlashCommandEl, document.createTextNode(` ${text}`));
+    chatInput.append(selectedSlashCommandEl);
+    appendFileTagText(chatInput, ` ${text}`);
   } else {
     if (selectedSlashCommandEl) selectedSlashCommandEl.hidden = true;
-    if (text) chatInput.append(document.createTextNode(text));
+    if (text) appendFileTagText(chatInput, text);
   }
   syncChatInputEmptyState();
 }
@@ -18149,18 +18732,31 @@ function clearSelectedSlashCommand({ restoreText = false } = {}) {
   }
 }
 
+function slashQueryAtCaret() {
+  const selection = window.getSelection?.();
+  const node = selection?.anchorNode;
+  if (!selection?.isCollapsed || node?.nodeType !== Node.TEXT_NODE || node.parentNode !== chatInput) return null;
+  const match = /(^|\s)\/([\w-]*)$/.exec(node.data.slice(0, selection.anchorOffset));
+  return match && { node, start: match.index + match[1].length, end: selection.anchorOffset, query: `/${match[2]}`.toLowerCase() };
+}
+
 function chooseSlashSuggestion(index = slashSuggestionIndex, { clicked = false } = {}) {
   const command = slashSuggestionItems[index];
-  if (!command) return false;
-  const current = chatInput.value;
-  const argumentStart = current.search(/\s/);
-  const argumentsText = argumentStart >= 0 ? current.slice(argumentStart) : " ";
+  const target = slashSuggestionTarget;
+  if (!command || !target?.node.isConnected) return false;
+  const range = document.createRange();
+  range.setStart(target.node, target.start);
+  const end = target.start > 0 && target.node.data[target.start - 1] === " " && target.node.data[target.end] === " "
+    ? target.end + 1 : target.end;
+  range.setEnd(target.node, end);
+  range.deleteContents();
+  const argumentsText = chatInput.value.trimStart();
   if (clicked) {
     setSelectedSlashCommand(command.name);
-    chatInput.value = argumentsText.trimStart();
+    chatInput.value = argumentsText;
   } else {
     clearSelectedSlashCommand();
-    chatInput.value = `${command.name}${argumentsText}`;
+    chatInput.value = `${command.name} ${argumentsText}`;
   }
   closeSlashSuggestions();
   resizeChatInput(); updateSendBtn(); chatInput.focus();
@@ -18170,9 +18766,10 @@ function chooseSlashSuggestion(index = slashSuggestionIndex, { clicked = false }
 
 function renderSlashSuggestions() {
   if (!slashCommandSuggestions || isRunningChatActive()) return closeSlashSuggestions();
-  const value = chatInput.value;
-  if (!/^\/[\w-]*$/.test(value)) return closeSlashSuggestions();
-  const query = value.toLowerCase();
+  const target = slashQueryAtCaret();
+  if (!target) return closeSlashSuggestions();
+  slashSuggestionTarget = target;
+  const query = target.query;
   if (query !== slashSuggestionQuery) {
     slashSuggestionQuery = query;
     bugBountyReveal = 3;
@@ -18239,6 +18836,244 @@ function renderSlashSuggestions() {
   });
   slashCommandSuggestions.hidden = false;
   slashCommandSuggestions.querySelector(".slash-command-option.selected")?.scrollIntoView({ block: "nearest" });
+}
+
+let fileTagSuggestions = null;
+let fileTagItems = [];
+let fileTagIndex = 0;
+let fileTagTarget = null;
+let fileTagDismissed = null;
+let fileTagDirMapRefresh = null;
+let projectFilesForTags = { source: null, files: [] };
+let terminalTagCache = { workspace: "", items: [], history: [], loaded: false, error: "" };
+let terminalTagRefresh = null;
+let terminalTagTimer = null;
+let terminalTagReloadHistory = false;
+
+function refreshTerminalsForTags(includeHistory = false) {
+  window.clearTimeout(terminalTagTimer);
+  terminalTagTimer = null;
+  if (terminalTagRefresh) { terminalTagReloadHistory ||= includeHistory; return; }
+  const workspace = rootPath;
+  if (terminalTagCache.workspace !== workspace) terminalTagCache = { workspace, items: [], history: [], loaded: false, error: "" };
+  terminalTagRefresh = Promise.resolve().then(() => window.api.terminalReferences({ workspace, includeHistory })).then(result => {
+    if (rootPath !== workspace) return;
+    const incoming = result?.ok ? result.terminals || [] : [];
+    const history = includeHistory ? incoming.filter(item => item.saved) : terminalTagCache.history;
+    const live = incoming.map(item => {
+      const prior = item.processId && history.find(saved => saved.processId === item.processId);
+      return prior ? { ...item, id: prior.id } : item;
+    });
+    const items = [...new Map([...history, ...live].map(item => [item.id, item])).values()]
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    terminalTagCache = { workspace, items, history, loaded: true,
+      error: result?.ok ? "" : "Could not load project terminals" };
+  }).catch(() => {
+    if (rootPath === workspace) terminalTagCache = { workspace, items: [], history: [], loaded: true, error: "Could not load project terminals" };
+  }).finally(() => {
+    terminalTagRefresh = null;
+    if (fileTagTarget?.kind === "terminal") {
+      renderFileTagSuggestions();
+      if (terminalTagReloadHistory) {
+        terminalTagReloadHistory = false;
+        refreshTerminalsForTags(true);
+      } else if (!terminalTagRefresh && fileTagTarget?.kind === "terminal") {
+        terminalTagTimer = window.setTimeout(refreshTerminalsForTags, 1000);
+      }
+    }
+  });
+}
+
+function fileTagProjectFiles() {
+  if (projectFilesForTags.source !== dirMapCache) {
+    projectFilesForTags = { source: dirMapCache, files: ToolParser.parseProjectFiles(dirMapCache || "") };
+  }
+  return projectFilesForTags.files;
+}
+
+function fileTagQueryAtCaret() {
+  const selection = window.getSelection?.();
+  const node = selection?.anchorNode;
+  if (!selection?.isCollapsed || node?.nodeType !== Node.TEXT_NODE || node.parentNode !== chatInput) return null;
+  const before = node.data.slice(0, selection.anchorOffset);
+  const found = fileTagQueryAt(before) || terminalTagQueryAt(before);
+  return found && { ...found, node, end: selection.anchorOffset };
+}
+
+function closeFileTagSuggestions() {
+  terminalTagReloadHistory = false;
+  window.clearTimeout(terminalTagTimer);
+  terminalTagTimer = null;
+  if (fileTagSuggestions) fileTagSuggestions.hidden = true;
+  fileTagItems = [];
+  fileTagTarget = null;
+  chatInput?.removeAttribute("aria-activedescendant");
+  chatInput?.setAttribute("aria-expanded", "false");
+}
+
+function fileTagSuggestionsElement() {
+  if (fileTagSuggestions) return fileTagSuggestions;
+  fileTagSuggestions = document.createElement("div");
+  fileTagSuggestions.id = "file-tag-suggestions";
+  fileTagSuggestions.className = "file-tag-suggestions";
+  fileTagSuggestions.setAttribute("role", "listbox");
+  fileTagSuggestions.setAttribute("aria-label", "Project files and chats");
+  fileTagSuggestions.hidden = true;
+  slashCommandSuggestions?.after(fileTagSuggestions);
+  return fileTagSuggestions;
+}
+
+function renderFileTagSuggestions({ revealSelection = false } = {}) {
+  const found = rootPath && chatInput && document.activeElement === chatInput ? fileTagQueryAtCaret() : null;
+  if (!found) fileTagDismissed = null;
+  if (!found || (found.node === fileTagDismissed?.node && found.start === fileTagDismissed.start && found.kind === fileTagDismissed.kind && found.query === fileTagDismissed.query)) return closeFileTagSuggestions();
+  const opening = !fileTagTarget || found.kind !== fileTagTarget.kind;
+  const queryChanged = opening || found.query !== fileTagTarget.query;
+  const isTerminal = found.kind === "terminal";
+  if (!isTerminal) window.clearTimeout(terminalTagTimer);
+  if (opening && !isTerminal && !fileTagDirMapRefresh) {
+    fileTagDirMapRefresh = refreshDirMap().catch(() => {}).finally(() => {
+      fileTagDirMapRefresh = null;
+      if (fileTagTarget) renderFileTagSuggestions();
+    });
+  }
+  if (queryChanged) fileTagIndex = 0;
+  fileTagTarget = found;
+  if (isTerminal && (opening || terminalTagCache.workspace !== rootPath)) refreshTerminalsForTags(true);
+  const currentSession = activeChatSession();
+  const chats = projectChatsForTags([...chatSessions, ...closedChatSessions, ...archivedChatSessions], currentSession?.memorySessionId || currentSession?.id,
+    currentSession?.memoryProjectId);
+  fileTagItems = isTerminal ? topTerminalTagMatches(terminalTagCache.workspace === rootPath ? terminalTagCache.items : [], found.query, scoreQuickMatch)
+    : topContextTagMatches(fileTagProjectFiles(), chats, found.query, scoreQuickMatch);
+  fileTagIndex = Math.min(fileTagIndex, Math.max(fileTagItems.length - 1, 0));
+  const list = fileTagSuggestionsElement();
+  const previousScrollTop = list.scrollTop;
+  list.setAttribute("aria-label", isTerminal ? "Project terminals" : "Project files and chats");
+  list.replaceChildren();
+  if (!fileTagItems.length) {
+    const empty = document.createElement("div");
+    empty.className = "file-tag-empty";
+    empty.setAttribute("role", "presentation");
+    empty.textContent = isTerminal ? terminalTagCache.error || (terminalTagCache.loaded ? "No matching terminals" : "Loading project terminals…")
+      : dirMapCache ? "No matching files or chats" : "Loading project context…";
+    list.appendChild(empty);
+  }
+  fileTagItems.forEach((item, index) => {
+    const isChat = item.kind === "chat";
+    const terminal = item.kind === "terminal";
+    const path = item.path || "";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `file-tag-option${index === fileTagIndex ? " selected" : ""}`;
+    button.setAttribute("role", "option");
+    button.id = `file-tag-option-${index}`;
+    button.setAttribute("aria-selected", String(index === fileTagIndex));
+    button.title = terminal ? `${item.name}\n${item.cwd || ""}\n${item.command || ""}` : isChat ? `Chat: ${item.title}` : path;
+    const fileName = terminal ? item.name : isChat ? item.title : fileTagName(path);
+    const icon = document.createElement("span");
+    icon.className = terminal ? `file-tag-icon terminal-tag-icon terminal-tag-${item.origin === "agent" ? "agent" : "user"}`
+      : isChat ? "file-tag-icon chat-tag-icon" : "file-tag-icon seti-icon";
+    if (!isChat && !terminal) {
+      const info = SetiIconTheme.iconForFile(fileName);
+      icon.textContent = info.glyph;
+      icon.style.color = info.color;
+    }
+    icon.setAttribute("aria-hidden", "true");
+    const name = document.createElement("span");
+    name.className = "file-tag-name";
+    name.textContent = fileName;
+    const folder = document.createElement("span");
+    folder.className = "file-tag-folder";
+    folder.textContent = isChat ? "Chat" : path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    button.append(icon, name);
+    if (!terminal) button.append(folder);
+    if (terminal && item.running) {
+      const spinner = document.createElement("span");
+      spinner.className = "terminal-tag-running";
+      spinner.setAttribute("role", "img");
+      spinner.setAttribute("aria-label", "Running");
+      button.append(spinner);
+    }
+    button.addEventListener("mousedown", (event) => { event.preventDefault(); chooseFileTag(index); });
+    list.appendChild(button);
+  });
+  list.hidden = false;
+  chatInput.setAttribute("aria-controls", list.id);
+  chatInput.setAttribute("aria-autocomplete", "list");
+  chatInput.setAttribute("aria-expanded", "true");
+  if (fileTagItems.length) chatInput.setAttribute("aria-activedescendant", `file-tag-option-${fileTagIndex}`);
+  list.scrollTop = queryChanged ? 0 : previousScrollTop;
+  if (queryChanged || revealSelection) list.querySelector(".file-tag-option.selected")?.scrollIntoView({ block: "nearest" });
+}
+
+function chooseFileTag(index = fileTagIndex) {
+  const item = fileTagItems[index];
+  const target = fileTagTarget;
+  if (!item || !target?.node.isConnected) return false;
+  const range = document.createRange();
+  range.setStart(target.node, target.start);
+  range.setEnd(target.node, target.end);
+  range.deleteContents();
+  const chip = item.kind === "terminal" ? createTerminalTagChip(document, item.id, item.name, item.origin)
+    : item.kind === "chat" ? createChatTagChip(document, item.sessionId, item.title) : createFileTagChip(document, item.path);
+  range.insertNode(chip);
+  let after = chip.nextSibling;
+  if (after?.nodeType !== Node.TEXT_NODE || !/^\s/.test(after.data)) {
+    after = document.createTextNode(" ");
+    chip.after(after);
+  }
+  window.getSelection()?.collapse(after, 1);
+  closeFileTagSuggestions();
+  onChatInputChange();
+  return true;
+}
+
+function adjacentFileTag(direction) {
+  const selection = window.getSelection?.();
+  const node = selection?.anchorNode;
+  if (!selection?.isCollapsed || !node || !chatInput.contains(node)) return null;
+  const inside = (node.nodeType === Node.TEXT_NODE ? node.parentElement : node)?.closest?.(".file-tag-chip");
+  if (inside) return inside;
+  const offset = selection.anchorOffset;
+  const step = (current) => (direction < 0 ? current.previousSibling : current.nextSibling);
+  let sibling;
+  if (node.nodeType === Node.TEXT_NODE) {
+    if (direction < 0 ? offset > 0 : offset < node.data.length) return null;
+    sibling = step(node);
+  } else {
+    sibling = node.childNodes[direction < 0 ? offset - 1 : offset];
+  }
+  while (sibling?.nodeType === Node.TEXT_NODE && !sibling.data) sibling = step(sibling);
+  return sibling?.classList?.contains("file-tag-chip") ? sibling : null;
+}
+
+function handleFileTagKeydown(e) {
+  if ((e.key === "Backspace" || e.key === "Delete") && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    const chip = adjacentFileTag(e.key === "Backspace" ? -1 : 1);
+    if (!chip) return false;
+    const neighbor = e.key === "Backspace" ? chip.previousSibling : chip.nextSibling;
+    chip.remove();
+    if (neighbor?.nodeType === Node.TEXT_NODE) {
+      window.getSelection()?.collapse(neighbor, e.key === "Backspace" ? neighbor.data.length : 0);
+    }
+    onChatInputChange();
+    return true;
+  }
+  if (fileTagSuggestions?.hidden !== false) return false;
+  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && fileTagItems.length) {
+    const direction = e.key === "ArrowDown" ? 1 : -1;
+    fileTagIndex = (fileTagIndex + direction + fileTagItems.length) % fileTagItems.length;
+    renderFileTagSuggestions({ revealSelection: true });
+    return true;
+  }
+  if (e.key === "Tab" && !e.shiftKey) return chooseFileTag() || true;
+  if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) return chooseFileTag() || true;
+  if (e.key === "Escape") {
+    fileTagDismissed = fileTagTarget;
+    closeFileTagSuggestions();
+    return true;
+  }
+  return false;
 }
 
 function expandSlashCommand(raw) {
@@ -18316,6 +19151,7 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
       chatHistory: workingHistoryMessages((runSession.history || []).filter((message) => !isInternalRuntimeInputMessage(message)), runSession),
       rawSourceTokens: estimateMessagesTokens((runSession.history || []).filter((message) => !isInternalRuntimeInputMessage(message))),
       sessionId: runtimeSessionId,
+      chatSessionId: runSession.id,
       blockId: runSession.memoryBlockId || "",
       dirMap: dirMapCache,
       activeFile: runActiveFile,
@@ -18351,25 +19187,28 @@ function sendHiddenAgentRuntime(payload = {}) {
 
 async function sendMessageWithAgentRuntime(options = {}) {
   const internal = Boolean(options?.internal);
-  let drainQueuedPrompt = false;
   const targetSessionId = String(options?.sessionId || activeChatSessionId || "");
   const hasExplicitText = Object.prototype.hasOwnProperty.call(options || {}, "text");
   let text = hasExplicitText
-    ? String(options.text || "").trim()
-    : effectiveChatInputValue().trim();
+    ? String(options.text || "")
+    : effectiveChatInputValue();
   if (internal && !hasExplicitText) {
     text = "Review the delegated result and decide the next action.";
   }
   if (!internal) {
-    if (!text || isChatSessionRunning(targetSessionId) || chatSendInFlight.has(targetSessionId)) return;
+    // Images go with a new message only; a run already in progress gets text.
+    const busy = isChatSessionRunning(targetSessionId) || chatSendInFlight.has(targetSessionId);
+    const sendingImages = !busy && composerImages.length > 0;
+    if (!text.trim() && !sendingImages) return;
+    if (busy) {
+      return submitLiveChatInput(chatSessions.find((session) => session.id === targetSessionId), text);
+    }
+    if (!text.trim()) text = composerImages.length > 1 ? "See the attached images." : "See the attached image.";
     chatSendInFlight.add(targetSessionId);
     clearChatSessionStoppedByOperator(chatSessions.find((session) => session.id === targetSessionId) || { id: targetSessionId });
   } else if (!text || isChatSessionRunning(targetSessionId)) return;
   try {
-  if (!internal && isDelegatedChildRunLocked()) {
-    addErrorMessage("This sub-agent chat is running under its parent. Wait for it to finish, or stop it first.");
-    return;
-  }
+
   if (!internal && text.startsWith("/")) {
     const handled = await runSpecialSlashCommand(text);
     if (handled) { chatInput.value = ""; resetChatInput(); closeSlashSuggestions(); return; }
@@ -18411,31 +19250,37 @@ async function sendMessageWithAgentRuntime(options = {}) {
     ? options.activeFile
     : (providedContextFiles[0] || getActiveFileContext());
 
+  const initialInput = !internal ? liveInputController.prepare(runSession, text) : null;
+  const runImages = internal ? [] : takeComposerImages();
   if (!internal) {
-    if (!options?.fromQueue) {
+    {
       chatInput.value = "";
       runSession.draftText = "";
       runSession.draftSlashCommand = "";
       resetChatInput();
     }
-    if (activeChatSessionId === runSession.id) addUserMessage(text);
+    if (activeChatSessionId === runSession.id) addUserMessage(text, initialInput.id, runImages.map((image) => ({ thumb: image.thumbUrl, id: image.storedId })));
   }
   const userMessage = {
     role: "user",
     content: text,
-    id: `${runSession.id}-message-${Date.now()}-${runHistory.length + 1}`,
+    id: initialInput?.id || `${runSession.id}-message-${Date.now()}-${runHistory.length + 1}`,
+    ...(initialInput ? { source_message_id: initialInput.id } : {}),
     createdAt: new Date().toISOString(),
     ...(internal ? { __xekuteInternalRuntimeInput: true } : {}),
   };
   const lastHistoryMessage = runHistory.at(-1);
-  const reusedUserMessage = lastHistoryMessage?.role === "user" && String(lastHistoryMessage.content || "") === text
+  const reusedUserMessage = lastHistoryMessage?.id === userMessage.id
     ? lastHistoryMessage
     : null;
   if (!reusedUserMessage) runHistory.push(userMessage);
   const promptMessage = reusedUserMessage || userMessage;
   if (!internal) maybeNameActiveChat(text);
+  if (!internal) runSession.taskId = "";
   const run = {
     sessionId: runSession.id,
+    userImages: runImages,
+    initialInputId: initialInput?.id || "",
     session: runSession,
     history: runHistory,
     model: runModel,
@@ -18515,6 +19360,10 @@ async function sendMessageWithAgentRuntime(options = {}) {
       return;
     }
 
+    if (payload.type === "chat_reference_import") {
+      applyChatReferenceImportUi(run, payload);
+      return;
+    }
     if (payload.type === "context_checkpoint") {
       // Checkpointing is automatic and main-process owned. The in-chat
       // placeholder stays after completion so the operator can see that
@@ -18652,6 +19501,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
       if (!tools.length) return;
       const workTools = tools.filter((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool));
+      assistant.beginModelBlock();
       if (workTools.length) assistant.noteModelOutput();
       for (const tool of workTools) {
         if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
@@ -18766,12 +19616,15 @@ async function sendMessageWithAgentRuntime(options = {}) {
        chatHistory: workingHistoryMessages(runHistory.filter((message) => !isInternalRuntimeInputMessage(message)), runSession),
       rawSourceTokens: estimateMessagesTokens(runHistory.filter((message) => !isInternalRuntimeInputMessage(message))),
        sessionId: runSession?.memorySessionId || runSession?.id || "",
+       chatSessionId: runSession?.id || "",
        blockId: runSession?.memoryBlockId || "",
       dirMap: dirMapCache,
       activeFile: runActiveFile,
       extraFiles: run.contextFilesCache,
       subagentModel: getExploreSubagentModel(),
        userMessage: internal && options?.continuation ? "" : text,
+       userImages: (run.userImages || []).map(({ name, mediaType, dataUrl }) => ({ name, mediaType, dataUrl })),
+       userMessageId: promptMessage.id,
        internalRuntimeInput: internal,
        internalSkillId: internal ? String(options?.internalSkillId || "") : "",
        continuation: internal ? (options?.continuation || null) : null,
@@ -18784,8 +19637,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       run.pendingEndTurn = Boolean(agentRunResult.pendingEndTurn);
       run.commandWait = Boolean(agentRunResult.commandWait);
       if (run.commandWait && Array.isArray(agentRunResult.waitingProcessIds)) {
-        run.commandWaitIds = new Set(agentRunResult.waitingProcessIds.map((id) => String(id)));
-        run.commandWaitResults = run.commandWaitResults || new Map();
+        run.commandWaitIds = new Set(agentRunResult.waitingProcessIds.map((id) => String(id)).filter((id) => !completedAgentProcessIds.has(id)));
       }
     }
     const result = agentRunResult;
@@ -18919,27 +19771,31 @@ async function sendMessageWithAgentRuntime(options = {}) {
       updateContextUsage();
       refreshStoredContextCapacity();
     }
-    if (!stillWorking && !run.stopRequested) {
-      runSession.promptQueueArmed = true;
-      drainQueuedPrompt = true;
-    }
+
     if (activeChatSessionId === runSession.id) syncActiveChatSession();
     if (activeChatSessionId === runSession.id && !contextCheckpointing && !stillWorking) {
       chatInput.disabled = false;
       chatInput.readOnly = false;
       chatInput.removeAttribute("aria-disabled");
-      chatInput.focus();
     }
     queueMicrotask(drainPendingBackgroundWaitEvents);
     scheduleSubagentResultDrain();
   }
   return agentRunResult;
   } finally {
-    if (!internal) chatSendInFlight.delete(targetSessionId);
-    if (drainQueuedPrompt) {
-      const sessionId = targetSessionId;
-      queueMicrotask(() => drainPromptQueue(sessionId));
+    if (!internal) {
+      const session = chatSessions.find((item) => item.id === targetSessionId);
+      const initial = session?.liveInputs?.find((item) => item.text === text && item.status === "sending");
+      if (initial?.status === "sending") {
+        initial.status = "failed";
+        paintLiveInputRecord(session, initial);
+        if (!session.draftText) session.draftText = initial.text;
+        if (activeChatSessionId === session.id && !effectiveChatInputValue().trim()) { chatInput.value = initial.text; resizeChatInput(); }
+        schedulePersistChatSessions();
+      }
+      chatSendInFlight.delete(targetSessionId);
     }
+
   }
 }
 
@@ -18949,7 +19805,7 @@ function collapseStoppedOrchestratorTurns(run) {
   if (!primary || !exchange) return;
   const host = primary.querySelector(".agent-work-fold-body") || primary;
   for (const turn of [...exchange.querySelectorAll(".chat-turn.assistant")]) {
-    if (turn === primary) continue;
+    if (turn === primary || turn.dataset.steeringSegment === "true") continue;
     for (const card of [...turn.querySelectorAll(".subagent-run-card")]) host.appendChild(card);
     const chunk = turn.closest(".agent-run-chunk");
     if (chunk && chunk !== primary.closest(".agent-run-chunk")) chunk.remove();
@@ -18959,7 +19815,7 @@ function collapseStoppedOrchestratorTurns(run) {
   stoppedReplies.slice(1).forEach((node) => node.remove());
   if (!stoppedReplies.length) appendStoppedPlainText(primary);
   for (const card of host.querySelectorAll(".subagent-run-card")) {
-    if (["queued", "running", "working"].includes(String(card.dataset.state || ""))) {
+    if (subagentCardBlocksParent(card)) {
       setSubagentCardState(card, "stopped");
     }
   }
@@ -18996,7 +19852,8 @@ function settleDelegatedChildrenOf(run) {
 
 function stopGeneration() {
   const run = activeSessionRun();
-  if (!run || (run.state !== "running" && !run.orchestrationHold)) return;
+  // Same condition that puts the composer into stop mode (see updateSendBtn).
+  if (!run || !isChatSessionRunning(run.sessionId)) return;
   run.stopRequested = true;
   markChatSessionStoppedByOperator(run);
   dismissComposerQuestionsForStop(run);
@@ -19044,6 +19901,10 @@ function isChatSessionStoppedByOperator(sessionId = "") {
 }
 
 function abortActiveChatRun(run) {
+  if (run.taskId || run.session?.taskId) {
+    window.api.agentCancelTask?.({ workspace: run.workspace || rootPath, sessionId: run.session?.parentMemorySessionId || run.memorySessionId || run.session?.memorySessionId || run.sessionId, taskId: run.taskId || run.session.taskId, scope: "task" })?.catch?.(reportChatHistoryWarning);
+    return;
+  }
   const ids = chatStopIdsForRun(run);
   if (!ids.length) {
     window.api.abortChat?.({});
@@ -19077,10 +19938,7 @@ function dropAutoContinuationsForSession(sessionId = "") {
   ));
 }
 
-sendBtn.addEventListener("click", () => {
-  submitChatComposer();
-});
-bindPromptQueue();
+bindLiveInputComposer({ sendButton: sendBtn, onSend: submitChatComposer });
 
 btnTopTerminal?.addEventListener("click", () => {
   setTerminalCollapsed(!terminalCollapsed);
@@ -19160,6 +20018,7 @@ function ensureDelegatedChildRun(payload = {}) {
     activeChatRuns.set(childSessionId, run);
   }
   run.delegated = true;
+  if (payload.taskId) { run.taskId = payload.taskId; run.session.taskId = payload.taskId; }
   const task = String(payload.task || run.session.orchestratorPrompt || "").trim();
   if (task) {
     run.session.orchestratorPrompt = task;
@@ -19231,8 +20090,7 @@ function childAssistant(run) {
       run.assistant.ensureThinkingFold = function delegatedEnsureThinkingFold() {
         if (run.thinkingFoldEl && run.thinkingFoldEl.dataset.final !== "true") {
           if (!streamingNodeLive(run.thinkingFoldEl)) {
-            const work = this.ensureWorkFold();
-            const host = workFoldBody(work) || this.conversationMount();
+            const host = this.activityBody() || this.conversationMount();
             if (host) appendChatStreamNode(host, run.thinkingFoldEl);
           }
           this.thinkingFoldEl = run.thinkingFoldEl;
@@ -19247,6 +20105,7 @@ function childAssistant(run) {
       };
       run.assistant.appendThinking = function delegatedAppendThinking(token) {
         const value = String(token || "");
+        this.beginModelBlock();
         this.noteModelOutput();
         this.showPrivateReasoning();
         const fold = this.ensureThinkingFold();
@@ -19298,6 +20157,8 @@ function handleDelegatedChildEvent(payload = {}) {
   if (type === "subagent_queued" || type === "subagent_started") {
     const run = ensureDelegatedChildRun(payload);
     if (run) {
+      run.state = "running";
+      run.lifecycleStatus = "running";
       run.model = String(payload.model || run.model || "");
       run.session.selectedModel = run.model;
       childAssistant(run)?.setLiveState({ kind: "working", detail: type === "subagent_queued" ? "Queued…" : summarizeSubagentActivity(payload) });
@@ -19341,10 +20202,23 @@ function handleDelegatedChildEvent(payload = {}) {
     return;
   }
 
+  if (type === "subagent_waiting") {
+    if (run) {
+      run.state = "running";
+      run.lifecycleStatus = "waiting";
+      assistant?.setLiveState?.({ kind: "waiting", detail: "Waiting for another task or a checkpoint" });
+      syncChatRunSession(run);
+    }
+    handleParentSubagentLifecycle(payload);
+    updateSendBtn();
+    return;
+  }
+
   if (type === "subagent_completed" || type === "subagent_stopped" || type === "subagent_failed") {
     dismissOrchestratorEscalatedForChild(childSessionId);
     const stopped = type === "subagent_stopped";
     if (assistant) {
+      assistant.finalOutcome = stopped ? "stopped" : type === "subagent_failed" ? "error" : "complete";
       if (stopped) {
         assistant.finishLiveState("stopped");
       } else {
@@ -19364,6 +20238,7 @@ function handleDelegatedChildEvent(payload = {}) {
         } else if (finalText) message.content = finalText;
       }
       run.state = "complete";
+      run.lifecycleStatus = stopped ? "stopped" : type === "subagent_failed" ? "failed" : "completed";
       run.delegated = false;
       if (run.assistant) run.assistant.turn.setAttribute("aria-busy", "false");
       syncChatRunSession(run);
@@ -19400,6 +20275,8 @@ function persistedSubagentRowForSession(session, payload = {}) {
     row = {
       childInvocationId: String(payload.childInvocationId || ""),
       childSessionId: String(payload.childSessionId || ""),
+      independent: Boolean(payload.independent),
+      taskId: String(payload.taskId || ""),
       parentSessionId: String(payload.parentSessionId || session.id),
       model: String(payload.model || ""),
       status: String(payload.status || (payload.type === "subagent_queued" ? "queued" : "working")),
@@ -19408,10 +20285,13 @@ function persistedSubagentRowForSession(session, payload = {}) {
     rows.push(row);
     message.subagents = rows;
   }
+  if (payload.independent) row.independent = true;
+  if (payload.taskId) row.taskId = String(payload.taskId);
   if (payload.model) row.model = String(payload.model);
   if (payload.status) row.status = String(payload.status);
   if (payload.type === "subagent_queued") row.status = "queued";
   if (payload.type === "subagent_started") row.status = "working";
+  if (payload.type === "subagent_waiting") row.status = "waiting";
   if (payload.type === "subagent_completed") row.status = "completed";
   if (payload.type === "subagent_stopped") row.status = "stopped";
   if (payload.type === "subagent_failed") row.status = "failed";
@@ -19445,6 +20325,7 @@ function updateRenderedSubagentCard(payload = {}, root = messages) {
   const type = String(payload.type || "");
   if (type === "subagent_queued") setSubagentCardState(card, "queued");
   else if (type === "subagent_started") setSubagentCardState(card, "working");
+  else if (type === "subagent_waiting") setSubagentCardState(card, "waiting");
   else if (type === "subagent_completed") setSubagentCardState(card, "completed");
   else if (type === "subagent_stopped") setSubagentCardState(card, "stopped");
   else if (type === "subagent_failed") setSubagentCardState(card, "failed");
@@ -19519,6 +20400,7 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
     assistant.setStatus(phase);
   } else if (type === "tool_call") {
     const tools = Array.isArray(payload.tools) ? payload.tools : [];
+    assistant.beginModelBlock();
     if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteModelOutput();
     for (const tool of tools) {
       if (isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) continue;
@@ -19542,6 +20424,8 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
       if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
       else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
     }
+  } else if (type === "chat_reference_import") {
+    applyChatReferenceImportUi(run, payload);
   } else if (type === "context_checkpoint") {
     applyCheckpointToSession(run.session, payload);
     applyContextCheckpointUi(run, payload);
@@ -19638,6 +20522,7 @@ function enqueueDelegatedChildEvent(childSessionId, handler) {
   next.finally(() => {
     if (childEventLanes.get(key) === next) childEventLanes.delete(key);
   });
+  return next;
 }
 
 function scheduleDelegatedLiveSnapshot(run) {
@@ -19742,6 +20627,8 @@ async function renderParentContinuationEvent(payload = {}) {
     if (payload.text && !isSilentToolRoutingActivity(payload.text)) assistant.noteTaskActivity(payload.text, payload.kind || "info");
   } else if (type === "output_continuation") {
     assistant.setStatus("Continuing the response…");
+  } else if (type === "chat_reference_import") {
+    applyChatReferenceImportUi(run, payload);
   } else if (type === "context_checkpoint") {
     applyCheckpointToSession(run.session, payload);
     applyContextCheckpointUi(run, payload);
@@ -19764,6 +20651,7 @@ async function renderParentContinuationEvent(payload = {}) {
   } else if (type === "tool_call") {
     assistant.finalizeThinking();
     const tools = Array.isArray(payload.tools) ? payload.tools : [];
+    assistant.beginModelBlock();
     if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteModelOutput();
     for (const tool of tools) {
       if (isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) continue;
@@ -19787,6 +20675,7 @@ async function renderParentContinuationEvent(payload = {}) {
       const uiResult = toolUiResult(payload.result);
       if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
       else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
+      if (toolActionName(payload.tool) === "browser_action" && [payload.result.code, payload.result.error?.code].includes("SCOPE_NOT_CONFIGURED")) showScopeRequiredNotice(assistant.contentEl);
     }
   } else if (type === "parent_continuation_complete") {
     const result = payload.result && typeof payload.result === "object" ? payload.result : {};
@@ -19826,6 +20715,18 @@ async function renderParentContinuationEvent(payload = {}) {
   if (visible) scrollMessages();
 }
 
+function showScopeRequiredNotice(anchor) {
+  const turn = anchor?.parentElement;
+  if (!turn || turn.querySelector(".browser-scope-notice")) return;
+  const notice = document.createElement("div");
+  notice.className = "browser-scope-notice";
+  notice.innerHTML = '<span>Set a project scope before the agent can browse assessment targets.</span><button type="button" class="browser-scope-notice-action" data-open-project-settings="true">Open project settings</button>';
+  anchor.after(notice);
+}
+document.addEventListener("click", (event) => {
+  if (event.target.closest?.("[data-open-project-settings]")) openAppSettings("project");
+});
+
 function releaseOrchestratorHold(sessionId = "", { hold = false } = {}) {
   const ids = new Set([String(sessionId || ""), chatSessionIdForRuntimeId(sessionId)].filter(Boolean));
   for (const [id, active] of activeChatRuns) {
@@ -19842,7 +20743,7 @@ function releaseOrchestratorHold(sessionId = "", { hold = false } = {}) {
   if (hold) return;
   messages?.querySelectorAll(".subagent-orchestration-wait").forEach((status) => {
     const host = status.parentElement;
-    const stillWorking = [...(host?.querySelectorAll(":scope > .subagent-run-card") || [])].some(subagentCardIsActive);
+    const stillWorking = [...(host?.querySelectorAll(":scope > .subagent-run-card") || [])].some(subagentCardBlocksParent);
     if (!stillWorking) status.remove();
   });
 }
@@ -19880,6 +20781,28 @@ function handleHiddenBackgroundRuntimeEvent(payload = {}) {
 // events (sessionId=childSessionId) never reach it.
 window.api?.onAgentEvent?.((payload) => {
   const type = String(payload?.type || "");
+  const owner = chatSessions.find((session) => session.memorySessionId === payload?.sessionId || session.id === payload?.sessionId);
+  if (type.startsWith("input_") && owner) {
+    for (const session of chatSessions.filter((item) => item === owner || item.parentMemorySessionId === payload.sessionId)) liveInputController.acceptEvent(session, payload);
+    return;
+  }
+  if (type === "task_started") {
+    const session = chatSessions.find((item) => item.taskId === payload.taskId) || owner;
+    if (session) { session.taskId = payload.taskId; session.memoryBlockId = payload.blockId || session.memoryBlockId; session.memorySessionId = payload.memorySessionId || session.memorySessionId; }
+    const run = session && activeChatRuns.get(session.id);
+    if (run) {
+      run.taskId = payload.taskId;
+      run.memorySessionId = session.memorySessionId;
+      const prompt = session.history?.find((message) => message.id === run.initialInputId || message.source_message_id === run.initialInputId);
+      if (prompt) prompt.task_id = payload.taskId;
+      const host = run.viewHost || (activeChatSessionId === session.id ? messages : null);
+      const userTurn = [...(host?.querySelectorAll(".chat-turn.user") || [])].find((turn) => turn.dataset.sourceMessageId === run.initialInputId);
+      if (userTurn) userTurn.dataset.taskId = payload.taskId;
+    }
+    if (run?.initialInputId) liveInputController.acceptEvent(session, { type: "input_received", messageId: run.initialInputId, taskId: payload.taskId });
+    schedulePersistChatSessions();
+    return;
+  }
   if (type === "parent_continuation_started") {
     noteParentContinuationStarted(payload);
     return;
@@ -19938,26 +20861,14 @@ window.api?.onAgentEvent?.((payload) => {
 // Queue events while any chat is already running so nothing is dropped.
 window.api?.onAgentEvent?.((payload) => {
   const type = String(payload?.type || "");
-  if (!["subagent_complete", "terminal_complete", "subagent_checkpoint", "terminal_checkpoint", "agent_command_output"].includes(type)) {
+  if (!["subagent_complete", "terminal_complete", "subagent_checkpoint", "terminal_checkpoint"].includes(type)) {
     return;
   }
-  // UI settlement is independent from the follow-up agent turn. A command
-  // that exits while the agent is still working must stop its timer now;
-  // only the transcript continuation waits for the active turn to finish.
+  // A command that exits stops its timer here. Its output reaches the agent
+  // through the task inbox in the main process.
   if (type === "terminal_complete") {
     finalizeCommandTimeline(payload, payload?.status, payload?.exitCode);
-    if (absorbModelRunCommandResult(payload)) return;
-    return;
-  }
-  if (type === "agent_command_output") {
-    if (!payload.deliverToSession) return;
-    if (absorbModelRunCommandResult(payload)) return;
-    const sessionId = chatSessionIdForRuntimeId(payload.sessionId || "") || String(payload.sessionId || "");
-    if (isChatSessionRunning(sessionId) || subagentCompletionPending) {
-      pendingBackgroundWaitEvents.push({ payload, kind: "terminal", phase: "command_output" });
-      return;
-    }
-    deliverAgentCommandOutput(payload);
+    absorbModelRunCommandResult(payload);
     return;
   }
   const phase = type.endsWith("_checkpoint") ? "checkpoint" : "complete";
@@ -19987,10 +20898,6 @@ function drainPendingBackgroundWaitEvents() {
   if (anyChatSessionRunning() || subagentCompletionPending) return;
   const next = pendingBackgroundWaitEvents.shift();
   if (!next) return;
-  if (next.phase === "command_output") {
-    deliverAgentCommandOutput(next.payload);
-    return;
-  }
   handleBackgroundWaitEvent(next.payload, next.kind, next.phase);
 }
 
@@ -20002,30 +20909,13 @@ function formatCommandWaitClock(ms) {
   return `${hours}h ${minutes}m ${seconds}s`;
 }
 
-function takePendingCommandOutputs(processIds) {
-  const ids = processIds instanceof Set ? processIds : new Set(processIds);
-  const kept = [];
-  const matched = [];
-  for (const item of pendingBackgroundWaitEvents) {
-    const id = String(item?.payload?.processId || "");
-    if (item?.phase === "command_output" && ids.has(id)) matched.push(item.payload);
-    else kept.push(item);
-  }
-  pendingBackgroundWaitEvents = kept;
-  return matched;
-}
-
 function beginModelRunCommandWait(run, assistant, payload = {}) {
   if (!run) return;
   const commands = Array.isArray(payload.commands) ? payload.commands : [];
   run.commandWait = true;
-  run.commandWaitIds = new Set(commands.map((item) => String(item.processId || "")).filter(Boolean));
-  run.commandWaitResults = run.commandWaitResults || new Map();
+  run.commandWaitIds = new Set(commands.map((item) => String(item.processId || "")).filter((id) => id && !completedAgentProcessIds.has(id)));
   run.commandWaitStartedAt = Number(payload.startedAt) || Date.now();
-  for (const queued of takePendingCommandOutputs(run.commandWaitIds)) {
-    absorbModelRunCommandResult(queued);
-  }
-  if (!run.commandWait) return;
+  if (!run.commandWaitIds.size) return;
   const host = assistant?.toolWorkMount?.();
   if (!host) return;
   let line = host.querySelector(":scope > .command-run-wait");
@@ -20035,6 +20925,7 @@ function beginModelRunCommandWait(run, assistant, payload = {}) {
     line.innerHTML = `<div class="command-run-wait-title">Running command</div><div class="command-run-wait-clock"></div>`;
     host.appendChild(line);
   }
+  run.commandWaitLine = line;
   const tick = () => {
     const clock = line.querySelector(".command-run-wait-clock");
     if (!clock) return;
@@ -20054,62 +20945,24 @@ function commandWaitRunForProcess(processId) {
   return null;
 }
 
+// The agent reads command output from its inbox in the main process. Here the
+// wait line only goes away once every command it was waiting for has exited;
+// the run stays open until the agent's next round settles it.
 function absorbModelRunCommandResult(payload = {}) {
   const processId = String(payload.processId || "");
+  if (processId) completedAgentProcessIds.add(processId);
   const run = commandWaitRunForProcess(processId);
   if (!run) return false;
-  run.commandWaitResults.set(processId, payload);
-  if (run.commandWaitResults.size < run.commandWaitIds.size) return true;
-  const commands = [...run.commandWaitIds].map((id) => {
-    const item = run.commandWaitResults.get(id) || {};
-    return {
-      command: String(item.command || ""),
-      context: String(item.context || ""),
-      processId: id,
-      status: String(item.status || "complete"),
-      exitCode: item.exitCode ?? null,
-      stdout: String(item.stdout || ""),
-      stderr: String(item.stderr || ""),
-    };
-  });
-  run.commandWait = false;
-  run.commandWaitIds = null;
+  run.commandWaitIds.delete(processId);
+  if (run.commandWaitIds.size) return true;
   const host = run.assistant?.toolWorkMount?.();
-  const line = host?.querySelector?.(":scope > .command-run-wait");
+  const line = run.commandWaitLine?.isConnected
+    ? run.commandWaitLine
+    : host?.querySelector?.(":scope > .command-run-wait");
   if (line?._timer) clearInterval(line._timer);
   line?.remove();
-  const sessionId = run.sessionId;
-  void sendMessageWithAgentRuntime({
-    internal: true,
-    sessionId,
-    text: JSON.stringify({ commands }, null, 2),
-    skipContextFiles: true,
-    continuation: { kind: "command_wait" },
-  });
+  run.commandWaitLine = null;
   return true;
-}
-
-function deliverAgentCommandOutput(payload = {}) {
-  const sessionId = chatSessionIdForRuntimeId(payload.sessionId || "") || String(payload.sessionId || activeChatSessionId || "");
-  if (!sessionId || isChatSessionStoppedByOperator(sessionId)) return;
-  const body = {
-    commands: [{
-      command: String(payload.command || ""),
-      context: String(payload.context || ""),
-      processId: String(payload.processId || ""),
-      status: String(payload.status || "complete"),
-      exitCode: payload.exitCode ?? null,
-      stdout: String(payload.stdout || ""),
-      stderr: String(payload.stderr || ""),
-    }],
-  };
-  void sendMessageWithAgentRuntime({
-    internal: true,
-    sessionId,
-    text: JSON.stringify(body, null, 2),
-    skipContextFiles: true,
-    continuation: { kind: "command_output" },
-  });
 }
 
 async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "complete") {
@@ -20134,49 +20987,29 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
       finalizeSubagentWaitingCard(waitId, status, elapsedLabel);
       if (kind === "terminal") finalizeCommandTimeline(payload, status, payload.exitCode);
     }
+    // Command status reaches the agent through its inbox in the main process.
+    if (kind === "terminal") return;
     const transcript = String(payload.stdout || "").trim();
     const stderr = String(payload.stderr || "").trim();
-    const command = String(payload.command || "");
     const target = String(payload.target || "");
     const terminalId = String(payload.terminalId || "");
-    const health = payload.health || payload.metrics || {};
-    const healthSummary = kind === "terminal" && phase === "checkpoint"
-      ? `Health: ${String(health.state || "unknown")}; CPU ${Number(health.cpuPercent || 0).toFixed(1)}%; RAM ${(Number(health.rssBytes || 0) / 1_048_576).toFixed(1)} MB; process tree ${Number(health.processCount || 0)} PID(s). ${health.note || ""}`.trim()
-      : "";
     const clipped = transcript.length > 8000 ? `${transcript.slice(-8000)}\n…(truncated)` : transcript;
     const errClipped = stderr.length > 2000 ? `${stderr.slice(-2000)}\n…(truncated)` : stderr;
     const message = phase === "checkpoint"
-      ? (kind === "subagent"
-        ? [
+      ? [
           `Harness checkpoint: traffsucker subagent ${waitId || ""} has been waiting ${elapsedLabel}${target ? ` for ${target}` : ""} and is still running.`,
           terminalId ? `Terminal: ${terminalId}` : "",
           clipped ? `Current terminal log:\n\`\`\`\n${clipped}\n\`\`\`` : "No terminal transcript was captured yet.",
           errClipped ? `stderr:\n\`\`\`\n${errClipped}\n\`\`\`` : "",
           "Decide whether the run looks healthy. Leave it running, stop it with stop_process, or take another action. The harness will resume you again when it exits.",
-        ]
-        : [
-          `Harness checkpoint: terminal ${terminalId || waitId || "session"} has been waiting ${elapsedLabel}${command ? ` for \`${command}\`` : ""} and is still running.`,
-          waitId ? `Process ID: ${waitId}` : "",
-          healthSummary,
-          clipped ? `Current terminal log:\n\`\`\`\n${clipped}\n\`\`\`` : "No terminal transcript was captured yet.",
-          errClipped ? `stderr:\n\`\`\`\n${errClipped}\n\`\`\`` : "",
-          "Decide whether the command looks healthy. This command still holds a queue slot. Leave it running, or stop it with exec_command operation=stop using the process ID above. The harness reports this live status again every 15 minutes while it is running, and resumes you when it exits.",
-        ]).filter(Boolean).join("\n\n")
-      : (kind === "subagent"
-        ? [
+        ].filter(Boolean).join("\n\n")
+      : [
           `Harness waited ${elapsedLabel}: traffsucker subagent ${waitId ? `${waitId} ` : ""}finished with status "${status}"${target ? ` for ${target}` : ""}.`,
           terminalId ? `Terminal: ${terminalId}` : "",
           clipped ? `Terminal transcript:\n\`\`\`\n${clipped}\n\`\`\`` : "No terminal transcript was captured.",
           errClipped ? `stderr:\n\`\`\`\n${errClipped}\n\`\`\`` : "",
           "Review the captured traffic/artifacts and summarize results for the operator.",
-        ]
-        : [
-          `Harness waited ${elapsedLabel}: terminal ${terminalId || waitId || "session"} finished with status "${status}"${command ? ` for \`${command}\`` : ""}.`,
-          typeof payload.exitCode === "number" ? `Exit code: ${payload.exitCode}` : "",
-          clipped ? `Terminal transcript:\n\`\`\`\n${clipped}\n\`\`\`` : "No terminal transcript was captured.",
-          errClipped ? `stderr:\n\`\`\`\n${errClipped}\n\`\`\`` : "",
-          "Continue from this terminal output.",
-        ]).filter(Boolean).join("\n\n");
+        ].filter(Boolean).join("\n\n");
     const targetSessionId = chatSessionIdForRuntimeId(payload.sessionId || payload.parentSessionId || "") || activeChatSessionId;
     if (isChatSessionStoppedByOperator(targetSessionId) || isChatSessionStoppedByOperator(payload.sessionId) || isChatSessionStoppedByOperator(payload.parentSessionId)) {
       return;
@@ -20338,6 +21171,15 @@ chatHeader?.addEventListener("click", (e) => {
   if (button.id === "btn-chat-delete") deleteActiveChatSession();
 });
 chatInput.addEventListener("keydown", (e) => {
+  if (handleFileTagKeydown(e)) {
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "Escape" && isRunningChatActive() && !effectiveChatInputValue().trim()) {
+    e.preventDefault();
+    stopGeneration();
+    return;
+  }
   if (e.key === "Backspace" && isChatInputCaretAtArgumentStart()) {
     e.preventDefault();
     clearSelectedSlashCommand();
@@ -20362,11 +21204,7 @@ chatInput.addEventListener("keydown", (e) => {
   if (!slashCommandSuggestions?.hidden && e.key === "Escape") {
     e.preventDefault(); closeSlashSuggestions(); return;
   }
-  if (e.key === "Escape" && isEditingPromptQueue()) {
-    e.preventDefault();
-    cancelPromptQueueEdit();
-    return;
-  }
+
   if (e.key === "Enter" && !e.shiftKey) {
     if (e.repeat || e.isComposing) return;
     e.preventDefault();
@@ -20444,7 +21282,8 @@ document.addEventListener("keydown", async (e) => {
   }
 
   if (!mod || e.altKey) return;
-  if (!e.shiftKey && (key === "=" || key === "+")) {
+  // "+" needs Shift on most layouts (Ctrl+Shift+=), so accept it either way.
+  if (key === "+" || (!e.shiftKey && key === "=")) {
     e.preventDefault();
     setUiZoom(uiZoom + 0.1);
     return;
@@ -20491,303 +21330,194 @@ document.addEventListener("keydown", async (e) => {
   }
 }, true);
 
-function isDelegatedChildRunLocked(sessionId = activeChatSessionId) {
-  const run = activeChatRuns.get(String(sessionId || ""));
-  return Boolean(run && run.state === "running" && run.delegated === true);
+async function migrateLegacyChatInputs(session) {
+  if (!session?.promptQueue || queueMigrationInFlight.has(session.id)) return;
+  queueMigrationInFlight.add(session.id);
+  try {
+    const result = await liveInputController.migrateQueue({ session, workspace: rootPath });
+    if (!result.ok) addErrorMessage("Saved prompts could not be sent. They are retained and will retry when this chat is opened.");
+  } finally { queueMigrationInFlight.delete(session.id); schedulePersistChatSessions(); }
 }
 
-function isEditingPromptQueue() {
-  return Boolean(promptQueueEdit && promptQueueEdit.sessionId === activeChatSessionId);
-}
-
-function promptQueueMoreLabel(count) {
-  if (count >= 9) return "9+ more queue";
-  return `${count} more queue`;
-}
-
-function remapPromptQueueEdit(from, to) {
-  if (!promptQueueEdit) return;
-  const index = promptQueueEdit.index;
-  if (index === from) promptQueueEdit.index = to;
-  else if (from < to && index > from && index <= to) promptQueueEdit.index -= 1;
-  else if (from > to && index >= to && index < from) promptQueueEdit.index += 1;
-}
-
-function renderPromptQueue() {
-  const host = $("prompt-queue");
-  if (!host) return;
-  const session = activeChatSession();
-  const entries = promptQueueEntries(session?.promptQueue);
-  if (!session || !entries.length) {
-    host.hidden = true;
-    host.replaceChildren();
-    promptQueueExpanded = false;
-    return;
+async function submitLiveChatInput(session, text) {
+  if (!session || !text.trim()) return;
+  const record = liveInputController.prepare(session, text);
+  if (activeChatSessionId === session.id) addUserMessage(text, record.id);
+  const receipt = await liveInputController.send({ session, workspace: rootPath, text,
+    sessionId: session.parentMemorySessionId || session.memorySessionId || session.id,
+    targetTaskId: session.kind === "subagent" ? session.taskId : undefined, messageId: record.id,
+    deferStart: chatSendInFlight.has(session.id) && !session.taskId });
+  if (!receipt.ok) {
+    addErrorMessage("Message was not saved. Your draft is retained. Press Send to retry.");
+    return receipt;
   }
-  host.hidden = false;
-  if (entries.length <= 1) promptQueueExpanded = false;
-  const expanded = promptQueueExpanded && entries.length > 1;
-  const visible = entries.length === 1 || expanded ? (expanded ? entries : entries.slice(0, 1)) : [];
-  const list = document.createElement("div");
-  list.className = "prompt-queue-list";
-  if (entries.length > 1) {
-    const more = document.createElement("div");
-    more.className = "prompt-queue-more";
-    more.dataset.promptQueueMore = expanded ? "collapse" : "expand";
-    const caret = expanded ? "codicon-chevron-down" : "codicon-chevron-up";
-    more.innerHTML = `<span class="codicon ${caret} prompt-queue-more-caret" aria-hidden="true"></span><span>${promptQueueMoreLabel(entries.length)}</span>`;
-    list.appendChild(more);
-  }
-  const rows = document.createElement("div");
-  rows.className = "prompt-queue-rows";
-  rows.classList.toggle("is-scroll", expanded && entries.length > 5);
-  visible.forEach((entry) => {
-    const editing = promptQueueEdit?.sessionId === session.id && promptQueueEdit.index === entry.index;
-    const row = document.createElement("div");
-    row.className = `prompt-queue-row${entry.index === 1 ? " is-next" : ""}${editing ? " is-editing" : ""}`;
-    row.dataset.queueIndex = String(entry.index);
-    row.draggable = true;
-    const text = document.createElement("p");
-    text.className = "prompt-queue-text";
-    text.textContent = entry.user_prompt;
-    text.title = entry.user_prompt;
-    const actions = document.createElement("div");
-    actions.className = "prompt-queue-actions";
-    actions.innerHTML = `<button type="button" class="prompt-queue-edit" title="Edit" aria-label="Edit queued prompt"><span class="codicon codicon-edit" aria-hidden="true"></span></button><button type="button" class="prompt-queue-delete" title="Delete" aria-label="Delete queued prompt"><span class="codicon codicon-trash" aria-hidden="true"></span></button>`;
-    row.append(text, actions);
-    rows.appendChild(row);
-  });
-  if (visible.length) list.appendChild(rows);
-  host.replaceChildren(list);
-  placePromptQueue();
-}
-
-function placePromptQueue() {
-  const host = $("prompt-queue");
-  const row = composerEl?.querySelector(".composer-input-row");
-  if (!host || !row) return;
-  if (host.hidden) {
-    host.style.top = "";
-    return;
-  }
-  const height = row.getBoundingClientRect().height;
-  const lowered = height / 4;
-  host.style.setProperty("--queue-line", "28px");
-  host.style.top = `${row.offsetTop - host.offsetHeight + lowered}px`;
-}
-
-function beginPromptQueueEdit(index) {
-  const session = activeChatSession();
-  const entry = promptQueueEntries(session?.promptQueue).find((item) => item.index === Number(index));
-  if (!session || !entry || !chatInput) return;
-  const priorDraft = promptQueueEdit?.sessionId === session.id
-    ? promptQueueEdit.priorDraft
-    : String(session.draftText || effectiveChatInputValue() || "");
-  promptQueueEdit = { sessionId: session.id, index: entry.index, priorDraft };
-  chatInput.value = entry.user_prompt;
-  onChatInputChange();
-  chatInput.focus();
-  renderPromptQueue();
-}
-
-function cancelPromptQueueEdit() {
-  const edit = promptQueueEdit;
-  promptQueueEdit = null;
-  const session = activeChatSession();
-  if (edit && session && chatInput && edit.sessionId === session.id) {
-    chatInput.value = edit.priorDraft || "";
-    session.draftText = edit.priorDraft || "";
-    onChatInputChange();
-  }
-  renderPromptQueue();
-  if (session && !isChatSessionRunning(session.id)) queueMicrotask(() => drainPromptQueue(session.id));
-}
-
-function commitPromptQueueEdit() {
-  const edit = promptQueueEdit;
-  const session = activeChatSession();
-  if (!edit || !session || edit.sessionId !== session.id) return;
-  const text = effectiveChatInputValue().trim();
-  if (text) session.promptQueue = updatePromptAt(session.promptQueue, edit.index, text);
-  promptQueueEdit = null;
-  const restored = edit.priorDraft || "";
-  if (chatInput) chatInput.value = restored;
-  session.draftText = restored;
-  onChatInputChange();
-  renderPromptQueue();
-  if (!isChatSessionRunning(session.id) && !chatSendInFlight.has(session.id)) {
-    queueMicrotask(() => drainPromptQueue(session.id));
-  }
-}
-
-function deletePromptQueueItem(index) {
-  const session = activeChatSession();
-  if (!session) return;
-  const numeric = Number(index);
-  session.promptQueue = removePromptAt(session.promptQueue, numeric);
-  if (promptQueueEdit?.sessionId === session.id) {
-    if (promptQueueEdit.index === numeric) {
-      const prior = promptQueueEdit.priorDraft || "";
-      promptQueueEdit = null;
-      if (chatInput) chatInput.value = prior;
-      session.draftText = prior;
-      onChatInputChange();
-    } else if (promptQueueEdit.index > numeric) promptQueueEdit.index -= 1;
-  }
-  if (promptQueueEntries(session.promptQueue).length <= 1) promptQueueExpanded = false;
-  renderPromptQueue();
-}
-
-function queueComposerPrompt() {
-  const text = effectiveChatInputValue().trim();
-  const session = activeChatSession();
-  if (!text || !session) return;
-  session.promptQueue = enqueuePrompt(session.promptQueue, text);
-  if (chatInput) chatInput.value = "";
-  session.draftText = "";
-  session.draftSlashCommand = "";
-  resetChatInput();
-  closeSlashSuggestions();
-  renderPromptQueue();
+  if (!session.history.some((item) => item.id === record.id)) session.history.push({ role: "user", content: text, id: record.id, source_message_id: record.id, task_id: record.taskId, createdAt: new Date().toISOString() });
+  if (activeChatSessionId === session.id && effectiveChatInputValue() === text) { chatInput.value = ""; session.draftText = ""; resetChatInput(); }
+  else if (session.draftText === text) session.draftText = "";
+  schedulePersistChatSessions();
   updateSendBtn();
-}
-
-function drainPromptQueue(sessionId) {
-  const id = String(sessionId || "");
-  if (!id || id !== String(activeChatSessionId || "")) return;
-  if (promptQueueEdit?.sessionId === id) return;
-  if (isChatSessionRunning(id) || chatSendInFlight.has(id)) return;
-  const session = chatSessions.find((item) => item.id === id);
-  if (!session?.promptQueueArmed) return;
-  session.promptQueueArmed = false;
-  const shifted = shiftPromptQueue(session.promptQueue);
-  session.promptQueue = shifted.queue;
-  if (promptQueueEntries(session.promptQueue).length <= 1) promptQueueExpanded = false;
-  renderPromptQueue();
-  if (!String(shifted.prompt || "").trim()) return;
-  void sendMessageWithAgentRuntime({ text: shifted.prompt, sessionId: id, fromQueue: true });
+  return receipt;
 }
 
 function submitChatComposer() {
-  if (isEditingPromptQueue()) {
-    commitPromptQueueEdit();
-    return;
-  }
-  if (isRunningChatActive()) {
-    stopGeneration();
-    return;
-  }
+  if (sendBtn.classList.contains("stop")) { stopGeneration(); return; }
   sendMessageWithAgentRuntime();
 }
-
-function submitChatComposerFromInput() {
-  if (isEditingPromptQueue()) {
-    commitPromptQueueEdit();
-    return;
-  }
-  const sessionId = activeChatSessionId;
-  if (isChatSessionRunning(sessionId) || chatSendInFlight.has(sessionId)) {
-    queueComposerPrompt();
-    return;
-  }
-  sendMessageWithAgentRuntime();
-}
-
-function bindPromptQueue() {
-  const host = $("prompt-queue");
-  if (!host || host.dataset.bound === "true") return;
-  host.dataset.bound = "true";
-  document.addEventListener("click", (event) => {
-    if (!promptQueueExpanded) return;
-    if (host.contains(event.target)) return;
-    if (event.target.closest?.("[data-prompt-queue-more], .prompt-queue-list")) return;
-    promptQueueExpanded = false;
-    renderPromptQueue();
-  });
-  host.addEventListener("wheel", (event) => {
-    const list = event.target.closest?.(".prompt-queue-rows");
-    if (!list || list.scrollHeight <= list.clientHeight) return;
-    event.stopPropagation();
-  });
-  host.addEventListener("click", (event) => {
-    const more = event.target.closest("[data-prompt-queue-more]");
-    if (more) {
-      promptQueueExpanded = more.dataset.promptQueueMore === "expand";
-      renderPromptQueue();
-      return;
-    }
-    const row = event.target.closest(".prompt-queue-row");
-    if (!row) return;
-    const index = Number(row.dataset.queueIndex);
-    if (event.target.closest(".prompt-queue-edit")) beginPromptQueueEdit(index);
-    else if (event.target.closest(".prompt-queue-delete")) deletePromptQueueItem(index);
-  });
-  host.addEventListener("dragstart", (event) => {
-    const row = event.target.closest?.(".prompt-queue-row");
-    if (!row || event.target.closest?.(".prompt-queue-actions")) {
-      event.preventDefault();
-      return;
-    }
-    event.dataTransfer.setData("text/plain", row.dataset.queueIndex || "");
-    event.dataTransfer.effectAllowed = "move";
-    row.classList.add("is-dragging");
-    const ghost = row.cloneNode(true);
-    ghost.classList.add("is-drag-ghost");
-    ghost.style.width = `${row.offsetWidth}px`;
-    document.body.appendChild(ghost);
-    const rect = row.getBoundingClientRect();
-    event.dataTransfer.setDragImage(ghost, event.clientX - rect.left, event.clientY - rect.top);
-    requestAnimationFrame(() => ghost.remove());
-  });
-  host.addEventListener("dragend", () => {
-    host.querySelectorAll(".prompt-queue-row.is-dragging").forEach((row) => row.classList.remove("is-dragging"));
-  });
-  host.addEventListener("dragover", (event) => {
-    if (!event.target.closest(".prompt-queue-row")) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-  });
-  host.addEventListener("drop", (event) => {
-    const row = event.target.closest(".prompt-queue-row");
-    if (!row) return;
-    event.preventDefault();
-    const from = Number(event.dataTransfer.getData("text/plain"));
-    const to = Number(row.dataset.queueIndex);
-    const session = activeChatSession();
-    if (!session || !from || !to || from === to) return;
-    session.promptQueue = movePrompt(session.promptQueue, from, to);
-    if (promptQueueEdit?.sessionId === session.id) remapPromptQueueEdit(from, to);
-    renderPromptQueue();
-  });
-}
+function submitChatComposerFromInput() { submitChatComposer(); }
 
 function updateSendBtn() {
-  const editingQueue = isEditingPromptQueue();
-  const activeRunning = isRunningChatActive() && !editingQueue;
-  const delegatedLocked = isDelegatedChildRunLocked();
-  sendBtn.classList.toggle("stop", activeRunning);
-  sendBtn.title = editingQueue
-    ? "Save queued prompt"
-    : activeRunning
-      ? "Stop generation"
-      : "Send message";
-  sendBtn.disabled = editingQueue
-    ? !effectiveChatInputValue().trim()
-    : !activeRunning && (
-      delegatedLocked
-      || !effectiveChatInputValue().trim()
-      || (contextCheckpointing && contextCheckpointingSessionId === activeChatSessionId)
-    );
+  const icon = sendBtn.querySelector(".codicon");
+  const hasText = Boolean(effectiveChatInputValue().trim());
+  // While a run is active with an empty composer, the control stops the agent.
+  // With text to send (steering) or when idle, it sends. Images alone can
+  // start a new message but never steer a running one.
+  const running = isRunningChatActive();
+  const stopMode = running && !hasText;
+  const canSend = hasText || (!running && composerImages.length > 0);
+  sendBtn.classList.toggle("stop", stopMode);
+  sendBtn.title = stopMode ? "Stop" : "Send message";
+  sendBtn.setAttribute("aria-label", stopMode ? "Stop the agent" : "Send message");
+  sendBtn.disabled = stopMode ? false : !canSend;
+  if (icon) icon.className = `codicon ${stopMode ? "codicon-primitive-square" : "codicon-arrow-up"}`;
 }
+
+// ── Image attachments (clip button) ───────────────────────────────────────
+
+function renderComposerAttachments() {
+  if (!composerAttachmentsEl) return;
+  composerAttachmentsEl.replaceChildren();
+  composerAttachmentsEl.hidden = !composerImages.length;
+  for (const image of composerImages) {
+    const item = document.createElement("div");
+    item.className = "composer-attachment";
+    item.title = image.name;
+    const img = document.createElement("img");
+    img.src = image.thumbUrl;
+    img.alt = image.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "composer-attachment-remove";
+    remove.title = "Remove image";
+    remove.setAttribute("aria-label", `Remove ${image.name}`);
+    remove.innerHTML = '<span class="codicon codicon-close" aria-hidden="true"></span>';
+    remove.addEventListener("click", () => {
+      composerImages = composerImages.filter((item) => item.id !== image.id);
+      renderComposerAttachments();
+      updateSendBtn();
+    });
+    item.append(img, remove);
+    composerAttachmentsEl.appendChild(item);
+  }
+  if (attachImageBtn) attachImageBtn.disabled = composerImages.length >= MAX_CHAT_IMAGES;
+}
+
+// Files past the tenth image, unsupported types and unreadable images are
+// skipped silently.
+async function addComposerImageFiles(files = []) {
+  const room = Math.max(0, MAX_CHAT_IMAGES - composerImages.length);
+  const prepared = [];
+  for (const file of [...files].filter(isSupportedImageFile).slice(0, room)) {
+    try { prepared.push(await prepareImageAttachment(file)); } catch { /* skipped */ }
+  }
+  composerImages = mergeImageAttachments(composerImages, prepared).list;
+  renderComposerAttachments();
+  updateSendBtn();
+  chatInput?.focus();
+}
+
+// Full-resolution copies of images sent in this window, keyed by their saved
+// preview, so the zoomed view is sharp until the chat is reloaded.
+const sentImageOriginals = new Map();
+
+function rememberSentImageOriginals(images = []) {
+  for (const image of images) sentImageOriginals.set(image.thumbUrl, image.dataUrl);
+  while (sentImageOriginals.size > 100) sentImageOriginals.delete(sentImageOriginals.keys().next().value);
+}
+
+function takeComposerImages() {
+  const taken = composerImages;
+  composerImages = [];
+  renderComposerAttachments();
+  rememberSentImageOriginals(taken);
+  return taken;
+}
+
+messages?.addEventListener("click", (event) => {
+  const img = event.target.closest?.(".user-prompt-images img");
+  if (!img) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const src = img.getAttribute("src");
+  const original = sentImageOriginals.get(src);
+  const view = openImageLightbox(original || src, { alt: img.alt || "Attached image" });
+  // After a restart only the preview is in the transcript; the full-quality
+  // original is stored encrypted with the chat and replaces it once read.
+  const imageId = img.dataset.imageId;
+  const session = activeChatSession();
+  if (original || !imageId || !view || !window.api?.chatImageRead) return;
+  window.api.chatImageRead({ workspace: rootPath, sessionId: session?.memorySessionId || "", imageId })
+    .then((result) => {
+      const dataUrl = result?.dataUrl || result?.value?.dataUrl;
+      if (!dataUrl) return;
+      sentImageOriginals.set(src, dataUrl);
+      view.setSource(dataUrl);
+    })
+    .catch(() => { /* the preview stays */ });
+}, true);
+
+attachImageBtn?.addEventListener("click", () => attachImageInput?.click());
+
+// Pasted or dropped image files attach like the clip button. Text pastes and
+// in-app drags (file tree rows) carry no image files and are left alone.
+function imageFilesFrom(dataTransfer) {
+  return [...(dataTransfer?.files || [])].filter(isSupportedImageFile);
+}
+
+chatInput?.addEventListener("paste", (event) => {
+  const images = imageFilesFrom(event.clipboardData);
+  if (!images.length) return;
+  if (!event.clipboardData.getData("text/plain")) event.preventDefault();
+  void addComposerImageFiles(images);
+});
+
+const hasDraggedFiles = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+composerEl?.addEventListener("dragover", (event) => {
+  if (!hasDraggedFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+  composerEl.classList.add("is-image-drop");
+});
+composerEl?.addEventListener("dragleave", (event) => {
+  if (!composerEl.contains(event.relatedTarget)) composerEl.classList.remove("is-image-drop");
+});
+composerEl?.addEventListener("drop", (event) => {
+  composerEl.classList.remove("is-image-drop");
+  if (!hasDraggedFiles(event)) return;
+  event.preventDefault();
+  void addComposerImageFiles([...(event.dataTransfer.files || [])]);
+});
+attachImageInput?.addEventListener("change", () => {
+  const files = [...(attachImageInput.files || [])];
+  attachImageInput.value = "";
+  void addComposerImageFiles(files);
+});
 
 function onChatInputChange() {
   reconcileSelectedSlashCommandAfterEdit();
   resizeChatInput();
   updateSendBtn();
   renderSlashSuggestions();
+  renderFileTagSuggestions();
 }
 
 chatInput.addEventListener("input", onChatInputChange);
+chatInput.addEventListener("blur", closeFileTagSuggestions);
+document.addEventListener("selectionchange", () => {
+  if (document.activeElement === chatInput) {
+    renderSlashSuggestions();
+    renderFileTagSuggestions();
+  }
+});
 chatInput.addEventListener("paste", () => requestAnimationFrame(onChatInputChange));
 chatInput.addEventListener("cut", () => requestAnimationFrame(onChatInputChange));
 window.addEventListener("beforeunload", (event) => {
@@ -20806,7 +21536,6 @@ if (chatPane && typeof ResizeObserver !== "undefined") {
     resizeChatInput();
     refreshUserPromptDisclosures();
     syncChatStickyMask();
-    placePromptQueue();
   }).observe(chatPane);
 }
 
@@ -20877,6 +21606,8 @@ document.addEventListener("click", (e) => {
 
 messages?.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
+  // Attached images open the image view instead of selecting prompt text.
+  if (e.target.closest(".user-prompt-images")) return;
   const promptBox = e.target.closest(".chat-turn.user .chat-box");
   if (!promptBox) return;
   activateUserPromptSelection(promptBox, e.clientX, e.clientY);
@@ -20955,7 +21686,7 @@ messages.addEventListener("click", (e) => {
     return;
   }
 
-  const workFoldToggle = e.target.closest(".agent-work-fold > .agent-status-line, .agent-explored-toggle, .agent-thinking-toggle");
+  const workFoldToggle = e.target.closest(".agent-work-fold > .agent-status-line, .agent-explored-toggle, .agent-thinking-toggle, .agent-question-toggle");
   if (workFoldToggle) {
     toggleCollapsibleFold(workFoldToggle.parentElement);
     return;
@@ -20963,11 +21694,10 @@ messages.addEventListener("click", (e) => {
 
   const fileRow = e.target.closest(".agent-file-row");
   if (fileRow) {
-    const rel = String(fileRow.dataset.path || fileRow.dataset.file || "").trim();
-    if (rel && rel !== "workspace" && rel !== "." && !/^[a-z]+:\/\//i.test(rel)) {
+    if (toolRowOpensFile(fileRow)) {
       e.preventDefault();
-      const name = rel.split(/[/\\]/).pop();
-      openFile(joinWorkspacePath(rel), name, { focusEditor: true });
+      const rel = String(fileRow.dataset.path || "").trim();
+      openFile(joinWorkspacePath(rel), rel.split(/[/\\]/).pop(), { focusEditor: true });
     }
     return;
   }

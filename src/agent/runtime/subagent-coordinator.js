@@ -5,6 +5,7 @@
 // owns only admission, lifecycle, and the FIFO result hand-off contract.
 
 const Tunables = require("./tunables.js");
+const crypto = require("node:crypto");
 const DEFAULT_MAX_ACTIVE_CHILDREN = Math.max(1, Number(Tunables.MAX_ACTIVE_CHILDREN) || 8);
 const MAX_SPAWN_BATCH = 5;
 
@@ -85,7 +86,14 @@ function createSubagentCoordinator({
     parent.announcedResultId = result.resultId;
     let accepted = false;
     try {
-      accepted = parent.onResultReady(result, parent) !== false;
+      const outcome = parent.onResultReady(result, parent);
+      if (outcome && typeof outcome.then === "function") {
+        Promise.resolve(outcome).then((value) => {
+          if (value === false && parent.announcedResultId === result.resultId) parent.announcedResultId = "";
+        }, () => { if (parent.announcedResultId === result.resultId) parent.announcedResultId = ""; });
+        return true;
+      }
+      accepted = outcome !== false;
     } catch {
       accepted = false;
     }
@@ -128,18 +136,23 @@ function createSubagentCoordinator({
         continue;
       }
       child.status = "working";
-      child.generation = Number(child.generation || 0) + 1;
+      if (child.resumeGeneration) delete child.resumeGeneration;
+      else child.generation = Number(child.generation || 0) + 1;
       parent.activeCount += 1;
       children.set(child.childInvocationId, child);
       lifecycle(parent, child, "working");
       Promise.resolve()
-        .then(() => child.start(child))
-        .then((outcome) => completeChild(child.childInvocationId, outcome))
-        .catch((error) => completeChild(child.childInvocationId, {
+        .then(() => {
+          if (children.get(child.childInvocationId) !== child) return null;
+          if (child.cancelled || child.controller?.signal?.aborted) return { status: "stopped", output: { text: "", summary: "Stopped before the child started." } };
+          return child.start(child);
+        })
+        .then((outcome) => children.get(child.childInvocationId) === child ? completeChild(child.childInvocationId, outcome) : null)
+        .catch((error) => children.get(child.childInvocationId) === child ? completeChild(child.childInvocationId, {
           status: "failed",
           output: { text: "", format: "text", summary: "" },
           metadata: { error: boundedText(error?.message || "Child agent failed.") },
-        }));
+        }) : null);
     }
   }
 
@@ -324,6 +337,7 @@ function createSubagentCoordinator({
     if (controller) child.controller = controller;
     if (typeof onCancel === "function") child.onCancel = onCancel;
     child.cancelled = false;
+    child.steeringClosed = false;
     child.status = "queued";
     const parent = parents.get(child.parentKey);
     attachChildToWave(parent, child);
@@ -340,6 +354,21 @@ function createSubagentCoordinator({
     };
   }
 
+  function resumeRestoredChild({ childInvocationId, parentKey, start, controller, onCancel = null } = {}) {
+    const child = getChild(childInvocationId, parentKey);
+    if (!child || child.status !== "interrupted" || typeof start !== "function") return { ok: false, code: "CHILD_RECOVERY_INVALID", error: "Only a saved interrupted child can be resumed." };
+    child.start = start;
+    child.controller = controller;
+    child.onCancel = onCancel;
+    child.resumeGeneration = true;
+    child.steeringClosed = false;
+    child.status = "queued";
+    const parent = parents.get(child.parentKey);
+    parent.spawnQueue.push(child);
+    startNext(parent);
+    return { ok: true, childInvocationId, childSessionId: child.childSessionId, generation: child.generation };
+  }
+
   function beginParentTurn(parentKey, { continuation = false } = {}) {
     if (closed) return { ok: false, code: "SUBAGENT_COORDINATOR_CLOSED", error: "The sub-agent coordinator is shutting down." };
     const parent = parentFor(parentKey);
@@ -352,16 +381,48 @@ function createSubagentCoordinator({
     return { ok: true, state: "BUSY", queueLength: parent.resultQueue.length };
   }
 
-  function finishParentTurn(parentKey, { resultId = "", stopped = false } = {}) {
+  function resetParentForTask(parentKey) {
+    if (closed) return { ok: false, code: "SUBAGENT_COORDINATOR_CLOSED", error: "The sub-agent coordinator is shutting down." };
     const parent = parentFor(parentKey);
+    const owned = [...children.values()].filter((child) => child.parentKey === parent.parentKey);
+    const questionRequestIds = parent.questionQueue.filter((question) => !question.resolved).map((question) => question.questionRequestId);
+    for (const child of owned) children.delete(child.childInvocationId);
+    parent.activeCount = 0;
+    parent.spawnQueue = [];
+    parent.resultQueue = [];
+    parent.questionQueue = [];
+    parent.escalatedRequestId = "";
+    parent.announcedResultId = "";
+    parent.processingResultId = "";
+    parent.pausedResultId = "";
+    parent.wave = null;
+    let cancelled = 0;
+    for (const child of owned) {
+      const open = ["queued", "working", "interrupted"].includes(child.status);
+      const wasWorking = child.status === "working";
+      child.cancelled = true;
+      child.steeringClosed = true;
+      child.status = "stopped";
+      if (open) {
+        cancelled += 1;
+        try { child.controller?.abort?.("PARENT_TASK_REPLACED"); } catch { /* The detached child cannot publish into the new task. */ }
+        if (!wasWorking) { try { child.onCancel?.(child); } catch { /* The caller owns remaining cancellation cleanup. */ } }
+      }
+    }
+    return { ok: true, state: parent.parentBusy ? "BUSY" : "IDLE", cancelled, removed: owned.length, questionRequestIds };
+  }
+
+  function finishParentTurn(parentKey, { resultId = "", stopped = false, accepted = true } = {}) {
+    const parent = parentFor(parentKey);
+    const paused = stopped || Boolean(resultId && !accepted);
     if (resultId) {
-      if (parent.resultQueue[0]?.resultId === resultId && !stopped) parent.resultQueue.shift();
+      if (parent.resultQueue[0]?.resultId === resultId && !paused) parent.resultQueue.shift();
       parent.processingResultId = "";
       if (parent.announcedResultId === resultId) parent.announcedResultId = "";
     }
-    if (stopped) parent.pausedResultId = resultId || "OPERATOR_STOPPED";
+    if (paused) parent.pausedResultId = resultId || "OPERATOR_STOPPED";
     parent.parentBusy = false;
-    if (!stopped) notifyResult(parent);
+    if (!paused) notifyResult(parent);
     return { ok: true, state: parent.parentBusy ? "BUSY" : parent.processingResultId ? "PROCESSING_RESULT" : "IDLE", queueLength: parent.resultQueue.length };
   }
 
@@ -414,20 +475,20 @@ function createSubagentCoordinator({
     const key = String(parentKey || "");
     return [...children.values()].filter((child) => (
       child.parentKey === key
-      && (child.status === "queued" || child.status === "working")
+      && (child.status === "queued" || child.status === "working" || child.status === "interrupted")
     )).length;
   }
 
   function validateSpawnAdmission(parentKey, batchSize = 1) {
     const size = Math.max(0, Number(batchSize) || 0);
-    const open = openChildCount(parentKey);
-    if (open > 0 || hasUnconsumedResults(parentKey)) {
+    // A new child joins the open wave, so a separate request that arrives while
+    // children work can still be delegated. Only a finished wave the parent has
+    // not reviewed yet blocks another spawn.
+    if (waveAdmissionBlocked(parents.get(String(parentKey || "")))) {
       return {
         ok: false,
         code: "SPAWN_WHILE_CHILDREN_ACTIVE",
-        error: open > 0
-          ? "A delegated spawn is already in progress. Wait until every child is completed, stopped, or failed."
-          : "Wait until the current wave has been synthesized before spawning again.",
+        error: "Wait until the current wave has been synthesized before spawning again.",
       };
     }
     if (size < 1 || size > MAX_SPAWN_BATCH) {
@@ -448,7 +509,7 @@ function createSubagentCoordinator({
     const key = String(parentKey || "");
     return [...children.values()].some((child) => (
       child.parentKey === key
-      && (child.status === "queued" || child.status === "working")
+      && (child.status === "queued" || child.status === "working" || child.status === "interrupted")
     ));
   }
 
@@ -573,28 +634,62 @@ function createSubagentCoordinator({
     };
   }
 
-  function enqueueSteer({ parentKey, childInvocationId, instruction = "" } = {}) {
+  function enqueueSteer({ parentKey, childInvocationId, instruction = "", contextText = "", messageId: suppliedMessageId = "", intentScope = null } = {}) {
     if (closed) return { ok: false, code: "SUBAGENT_COORDINATOR_CLOSED", error: "The sub-agent coordinator is shutting down." };
     const child = getChild(childInvocationId, parentKey);
     if (!child) return { ok: false, code: "UNKNOWN_SUBAGENT", error: "The delegated child no longer exists." };
-    if (child.status !== "queued" && child.status !== "working") {
+    if (child.steeringClosed || (child.status !== "queued" && child.status !== "working")) {
       return { ok: false, code: "SUBAGENT_NOT_ACTIVE", error: "Steer is only allowed for queued or working children." };
     }
-    const text = String(instruction || "").trim();
-    if (!text) return { ok: false, code: "INVALID_STEER", error: "Steer instruction is required." };
+    const text = String(instruction || "");
+    if (!text.trim()) return { ok: false, code: "INVALID_STEER", error: "Steer instruction is required." };
+    if (text.length > 100_000) return { ok: false, code: "STEER_TOO_LARGE", error: "Steer instruction exceeds 100000 characters." };
+    const messageId = suppliedMessageId || `steer:${crypto.randomUUID()}`;
+    if (!/^[a-zA-Z0-9:_./-]{1,240}$/.test(messageId)) return { ok: false, code: "INVALID_STEER_ID", error: "A stable valid message ID is required." };
+    const existing = child.steerQueue.find((entry) => entry.id === messageId);
+    if (intentScope && (!Array.isArray(intentScope) || !intentScope.length || intentScope.some((scope) => scope.messageId !== messageId || !Number.isSafeInteger(scope.start) || !Number.isSafeInteger(scope.end) || scope.start < 0 || scope.end <= scope.start || scope.end > text.length))) return { ok: false, code: "INVALID_STEER_SCOPE", error: "Steering scope must name exact spans of its original message." };
+    if (typeof contextText !== "string" || contextText.length > 1_000_000) return { ok: false, code: "INVALID_STEER_CONTEXT", error: "The referenced chat context is invalid." };
+    if (existing) return existing.instruction === text && (existing.contextText || "") === contextText && JSON.stringify(existing.intentScope || null) === JSON.stringify(intentScope) ? { ok: true, duplicate: true, messageId, childInvocationId, childSessionId: child.childSessionId, status: child.status } : { ok: false, code: "STEER_ID_CONFLICT", error: "The steering identity already has different text or scope." };
     child.steerQueue.push({
+      id: messageId,
       enqueuedAt: new Date(now()).toISOString(),
-      instruction: boundedText(text, 12_000),
+      instruction: text,
+      ...(contextText ? { contextText } : {}),
+      ...(intentScope ? { intentScope: JSON.parse(JSON.stringify(intentScope)) } : {}),
       operation: "steer",
     });
     child.updatedAt = new Date(now()).toISOString();
     return {
       ok: true,
+      messageId,
       childInvocationId: child.childInvocationId,
       childSessionId: child.childSessionId,
       status: child.status,
       steerQueueLength: child.steerQueue.length,
     };
+  }
+
+  function peekSteerQueue(childInvocationId, parentKey = "") {
+    const child = getChild(childInvocationId, parentKey);
+    return child ? child.steerQueue.map((item) => ({ ...item })) : [];
+  }
+
+  function acknowledgeSteers(childInvocationId, parentKey = "", messageIds = []) {
+    const child = getChild(childInvocationId, parentKey);
+    if (!child) return { ok: false, code: "UNKNOWN_SUBAGENT" };
+    const acknowledged = new Set(messageIds);
+    const before = child.steerQueue.length;
+    child.steerQueue = child.steerQueue.filter((item) => !acknowledged.has(item.id));
+    if (child.steerQueue.length !== before) child.updatedAt = new Date(now()).toISOString();
+    return { ok: true, acknowledged: before - child.steerQueue.length };
+  }
+
+  function sealSteering(childInvocationId, parentKey = "") {
+    const child = getChild(childInvocationId, parentKey);
+    if (!child) return { ok: false, code: "UNKNOWN_SUBAGENT" };
+    if (child.steerQueue.length) return { ok: true, completed: false, reason: "PENDING_INPUT" };
+    child.steeringClosed = true;
+    return { ok: true, completed: true };
   }
 
   function drainSteerQueue(childInvocationId, parentKey = "") {
@@ -630,7 +725,7 @@ function createSubagentCoordinator({
     dequeueOwnedQuestionsForChild(child, "cancelled");
     const shutdown = String(reason || "") === "APP_SHUTDOWN";
     const stopError = shutdown ? "Application shutdown" : "Stopped by operator";
-    if (child.status === "queued") {
+    if (child.status === "queued" || child.status === "interrupted") {
       child.cancelled = true;
       const parent = parents.get(child.parentKey);
       parent.spawnQueue = parent.spawnQueue.filter((item) => item !== child);
@@ -661,7 +756,7 @@ function createSubagentCoordinator({
     if (!parent) return { ok: true, cancelled: 0 };
     const open = [...children.values()].filter((child) => (
       child.parentKey === parent.parentKey
-      && (child.status === "queued" || child.status === "working")
+      && (child.status === "queued" || child.status === "working" || child.status === "interrupted")
     ));
     for (const child of open) cancelChild(child.childInvocationId, parent.parentKey, reason);
     cancelPendingQuestionsForParent(parent.parentKey, "cancelled");
@@ -682,7 +777,7 @@ function createSubagentCoordinator({
   async function shutdown({ timeoutMs = 5_000, reason = "APP_SHUTDOWN" } = {}) {
     closed = true;
     for (const child of [...children.values()]) {
-      if (child.status === "queued" || child.status === "working") {
+      if (child.status === "queued" || child.status === "working" || child.status === "interrupted") {
         cancelChild(child.childInvocationId, child.parentKey, reason);
       }
     }
@@ -733,7 +828,7 @@ function createSubagentCoordinator({
     return parent.questionQueue.filter((item) => !item.resolved).length;
   }
 
-  function exportWave(parentKey) {
+  function exportWave(parentKey, { acceptedResultId = "" } = {}) {
     const parent = parents.get(String(parentKey || ""));
     if (!parent) return null;
     return {
@@ -755,15 +850,21 @@ function createSubagentCoordinator({
         summary: child.summary,
         model: child.model,
         generation: child.generation,
+        engineRef: child.engineRef ? { ...child.engineRef } : null,
+        steerQueue: child.steerQueue.map((item) => ({ ...item })),
+        steeringClosed: Boolean(child.steeringClosed),
         waveId: child.waveId || "",
         output: child.output || null,
         metadata: child.metadata && typeof child.metadata === "object" ? { error: child.metadata.error || "" } : {},
       })),
-      resultQueue: parent.resultQueue.map((result) => ({
+      resultQueue: parent.resultQueue.filter((result) => !acceptedResultId || result.resultId !== acceptedResultId).map((result) => ({
         ...result,
-        children: Array.isArray(result.children) ? result.children.map((child) => ({ ...child })) : undefined,
+        metadata: result.metadata ? Object.fromEntries(Object.entries(result.metadata).filter(([key]) => !["appendedMessages", "history", "rawOutput"].includes(key))) : undefined,
+        children: Array.isArray(result.children) ? result.children.map((child) => ({ ...child,
+          metadata: child.metadata ? Object.fromEntries(Object.entries(child.metadata).filter(([key]) => !["appendedMessages", "history", "rawOutput"].includes(key))) : undefined,
+        })) : undefined,
       })),
-      processingResultId: parent.processingResultId || "",
+      processingResultId: parent.processingResultId === acceptedResultId ? "" : parent.processingResultId || "",
     };
   }
 
@@ -778,7 +879,13 @@ function createSubagentCoordinator({
     for (const record of Array.isArray(snapshot.children) ? snapshot.children : []) {
       const id = String(record.childInvocationId || "");
       if (!id || children.has(id)) continue;
-      const open = pending.has(id) || record.status === "queued" || record.status === "working";
+      const open = pending.has(id) || record.status === "queued" || record.status === "working" || record.status === "interrupted" || record.engineRef?.pendingCompletion === true;
+      const recoverable = open && record.engineRef?.version === 1;
+      const steers = (Array.isArray(record.steerQueue) ? record.steerQueue : []).map((item) => {
+        if (typeof item.id !== "string" || !item.id || typeof item.instruction !== "string" || item.instruction.length > 100_000
+          || (item.contextText !== undefined && (typeof item.contextText !== "string" || item.contextText.length > 1_000_000))) throw Object.assign(new Error("The saved child steering message is invalid."), { code: "INVALID_SAVED_STEER" });
+        return { ...item };
+      });
       const child = {
         childInvocationId: id,
         childSessionId: String(record.childSessionId || ""),
@@ -792,11 +899,13 @@ function createSubagentCoordinator({
         metadata: open ? { error: "Interrupted by restart." } : (record.metadata || {}),
         start: async () => ({ status: "failed", output: { text: "", summary: "Interrupted by restart." } }),
         generation: Number(record.generation) || 0,
-        status: open ? "failed" : (record.status || "failed"),
+        status: recoverable ? "interrupted" : open ? "failed" : (record.status || "failed"),
         cancelled: false,
         controller: null,
         onCancel: null,
-        steerQueue: [],
+        steerQueue: steers,
+        engineRef: record.engineRef ? JSON.parse(JSON.stringify(record.engineRef)) : null,
+        steeringClosed: open ? false : Boolean(record.steeringClosed),
         pendingQuestionRequestId: "",
         startInstructionSnapshot: "",
         waveId: String(record.waveId || snapshot.wave?.waveId || ""),
@@ -822,7 +931,13 @@ function createSubagentCoordinator({
     }
     const queued = Array.isArray(snapshot.resultQueue) ? snapshot.resultQueue : [];
     const waveSealed = Boolean(snapshot.wave?.sealed);
-    if (queued.length && !parent.resultQueue.length) {
+    const recoverable = restored.filter((child) => child.status === "interrupted");
+    if (recoverable.length) {
+      parent.wave = { waveId: snapshot.wave?.waveId || "wave_restored", childIds: restored.map((child) => child.childInvocationId),
+        pendingIds: new Set(recoverable.map((child) => child.childInvocationId)),
+        results: restored.filter((child) => child.status !== "interrupted").map((child) => ({ childInvocationId: child.childInvocationId,
+          childSessionId: child.childSessionId, generation: child.generation, status: child.status, output: child.output, metadata: child.metadata })), sealed: false };
+    } else if (queued.length && !parent.resultQueue.length) {
       parent.resultQueue = queued.map((result) => ({ ...result }));
       parent.wave = {
         waveId: snapshot.wave?.waveId || "wave_restored",
@@ -886,9 +1001,12 @@ function createSubagentCoordinator({
     registerParent,
     submitChild,
     submitFollowUp,
+    resumeRestoredChild,
+    recoverableChildren: (parentKey) => [...children.values()].filter((child) => child.parentKey === String(parentKey) && child.status === "interrupted"),
     completeChild,
     getChild,
     beginParentTurn,
+    resetParentForTask,
     finishParentTurn,
     claimResult,
     cancelChild,
@@ -903,6 +1021,9 @@ function createSubagentCoordinator({
     peekQuestionHead,
     resolveQuestion,
     enqueueSteer,
+    peekSteerQueue,
+    acknowledgeSteers,
+    sealSteering,
     drainSteerQueue,
     hasActiveChildren,
     hasUnconsumedResults,

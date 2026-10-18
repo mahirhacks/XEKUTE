@@ -56,15 +56,8 @@ export function LayoutProvider({ children }) {
     };
   }, []);
 
-  useEffect(() => {
-    const onResize = () => {
-      if (!chatCollapsed) {
-        setChatWidth((w) => clampChat(w));
-      }
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [chatCollapsed, clampChat]);
+  // No resize clamp: CSS shrinks the panels to fit (layout-revamp.css,
+  // "Responsive split"), so the chosen widths survive a small window or zoom.
 
   const value = useMemo(
     () => ({

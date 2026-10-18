@@ -125,6 +125,7 @@ function defaultProjectProfile(root, path, now = () => new Date()) {
       classification: "confidential",
       deletionProcedure: "",
     },
+    browser: { uploads: "allowed", downloads: "allowed", maxDownloadMiB: 12 },
     runtime: {
       listener: { enabled: false, bindAddress: "127.0.0.1", port: 8080, invisibleProxying: false, supportHttp2: true },
       interception: { enabled: false, interceptRequests: true, interceptResponses: false, onlyInScope: true, automaticallyUpdateContentLength: true, automaticallyFixNewlines: true, excludedExtensions: ["gif", "jpg", "jpeg", "png", "css", "js", "ico", "svg"], rules: [] },
@@ -162,6 +163,7 @@ function normalizeProjectProfile(input, root, path, now = () => new Date(), prev
   const rules = source.rulesOfEngagement || {};
   const review = source.review || {};
   const dataHandling = source.dataHandling || {};
+  const browser = source.browser || {};
   const runtime = source.runtime || {};
   const context = source.context || {};
   const authenticationSelection = engagement.authenticationSelection && typeof engagement.authenticationSelection === "object" && !Array.isArray(engagement.authenticationSelection)
@@ -255,6 +257,11 @@ function normalizeProjectProfile(input, root, path, now = () => new Date(), prev
       retentionDays: number(dataHandling.retentionDays, defaults.dataHandling.retentionDays, 0, 3_650),
       classification: ["public", "internal", "confidential", "restricted"].includes(dataHandling.classification) ? dataHandling.classification : defaults.dataHandling.classification,
       deletionProcedure: text(dataHandling.deletionProcedure),
+    },
+    browser: {
+      uploads: browser.uploads === "blocked" ? "blocked" : "allowed",
+      downloads: browser.downloads === "blocked" ? "blocked" : "allowed",
+      maxDownloadMiB: number(browser.maxDownloadMiB, defaults.browser.maxDownloadMiB, 1, 12),
     },
     runtime: {
       listener: {
