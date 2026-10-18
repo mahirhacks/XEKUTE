@@ -62,6 +62,38 @@ function truncateText(value, maximum) {
   return `${text.slice(0, Math.max(0, maximum - 40))}\n[deterministically truncated]`;
 }
 
+// A read-only block view over the flat Active Conversation ledger. One block is
+// one turn: it opens at a `user` message and runs through the assistant/tool
+// messages that answer it. Messages before the first user turn form block 0.
+// The ledger itself stays a flat array; this is a derived index that later
+// phases (selective eviction, recall) build on. `blockId` is turn-stable so the
+// same turn keeps its identity across reassembly; `index` is positional until a
+// later phase persists it.
+function blocksFromActive(messages, estimate = approximateTokens) {
+  const source = (Array.isArray(messages) ? messages : []).filter(Boolean);
+  const measure = typeof estimate === "function" ? estimate : approximateTokens;
+  const blocks = [];
+  for (let position = 0; position < source.length; position += 1) {
+    const message = source[position];
+    if (blocks.length === 0 || String(message?.role || "") === "user") {
+      blocks.push({ index: blocks.length, start: position, messages: [] });
+    }
+    blocks[blocks.length - 1].messages.push(message);
+  }
+  return blocks.map((block) => {
+    const opener = block.messages.find((message) => String(message?.role || "") === "user") || block.messages[0] || {};
+    const sourceId = String(opener.source_message_id || opener.id || "").trim();
+    const blockId = sourceId || `block_${canonicalKeyHash({ role: opener.role || "", content: opener.content || "", start: block.start }).slice(0, 32)}`;
+    return {
+      index: block.index,
+      blockId,
+      start: block.start,
+      messages: block.messages,
+      tokenEstimate: block.messages.reduce((sum, message) => sum + Math.max(0, Number(measure(message)) || 0), 0),
+    };
+  });
+}
+
 function createTier1ContextCoordinator({
   sensitiveStore = null,
   schemaRegistry = null,
@@ -812,6 +844,10 @@ function createTier1ContextCoordinator({
     const value = hydrateSession(projectId, sessionId);
     return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) };
   }
+  function activeBlocks(projectId, sessionId) {
+    const value = hydrateSession(projectId, sessionId);
+    return blocksFromActive(value.active, (message) => count(message).tokens);
+  }
   function clear(projectId, sessionId) { sessions.delete(sessionKey(projectId, sessionId)); return { ok: true }; }
   function clearProject(projectId) {
     const prefix = `${String(projectId)}|`;
@@ -820,7 +856,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, clear, clearProject });
 }
 
-module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, METER_ROWS });
+module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, METER_ROWS });

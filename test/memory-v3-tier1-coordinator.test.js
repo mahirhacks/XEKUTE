@@ -317,3 +317,57 @@ test("checkpoint keeps captured cookies when secrets are retained and redacts th
   assert.equal(hidden.ok, true);
   assert.equal(JSON.stringify(hidden.checkpoint).includes("traefik-session=3d2d022e-081d-40b1-b3a6-66384b890109"), false);
 });
+
+test("active blocks split the flat ledger at each user turn", () => {
+  const { blocksFromActive } = require("../src/app/services/memory/tier1-context-coordinator.js");
+  const blocks = blocksFromActive([
+    { role: "assistant", content: "orphan lead-in" },
+    { role: "user", content: "Scan the host.", source_message_id: "event_a" },
+    { role: "assistant", content: "", tool_calls: [{ id: "call-1" }] },
+    { role: "tool", tool_call_id: "call-1", content: "open: 22" },
+    { role: "assistant", content: "Port 22 is open." },
+    { role: "user", content: "Now enumerate it." },
+    { role: "assistant", content: "Enumerating." },
+  ], () => 10);
+
+  assert.deepEqual(blocks.map((block) => [block.index, block.start, block.messages.length, block.tokenEstimate]), [
+    [0, 0, 1, 10],
+    [1, 1, 4, 40],
+    [2, 5, 2, 20],
+  ]);
+  assert.equal(blocks[1].blockId, "event_a");
+  assert.match(blocks[2].blockId, /^block_[0-9a-f]{32}$/);
+});
+
+test("active block ids stay stable when earlier turns are unchanged", () => {
+  const { blocksFromActive } = require("../src/app/services/memory/tier1-context-coordinator.js");
+  const turn = [{ role: "user", content: "Scan the host." }, { role: "assistant", content: "Done." }];
+  const first = blocksFromActive(turn);
+  const grown = blocksFromActive([...turn, { role: "user", content: "Next." }]);
+  assert.equal(grown[0].blockId, first[0].blockId);
+  assert.equal(grown.length, 2);
+  assert.deepEqual(blocksFromActive([]), []);
+});
+
+test("activeBlocks is a read-only view that leaves the meter and ledger untouched", () => {
+  const coordinator = createTier1ContextCoordinator();
+  const messages = [
+    { role: "user", content: "Inspect the target." },
+    { role: "assistant", content: "Starting." },
+    { role: "user", content: "Continue." },
+  ];
+  const before = coordinator.assemble({
+    project_id: projectId,
+    session_id: sessionId,
+    system_prompt: "system",
+    active_conversation: messages,
+    effective_context_limit: 100_000,
+  });
+  const blocks = coordinator.activeBlocks(projectId, sessionId);
+  const after = coordinator.assemble({ project_id: projectId, session_id: sessionId, system_prompt: "system", effective_context_limit: 100_000 });
+
+  assert.equal(blocks.length, 2);
+  assert.deepEqual(coordinator.state(projectId, sessionId).active, messages);
+  assert.equal(after.rows["Active Conversation"], before.rows["Active Conversation"]);
+  assert.equal(after.total_tokens, before.total_tokens);
+});
