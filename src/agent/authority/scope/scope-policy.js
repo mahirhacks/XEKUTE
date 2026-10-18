@@ -2,7 +2,7 @@
 
 const net = require("node:net");
 const { validateWorkspacePaths, isInside, pathCandidates } = require("./workspace-scope");
-const { loadScopePolicy, targetFromArgs, evaluateNetworkTarget, evaluateRedirectTarget } = require("./network-scope");
+const { loadScopePolicy, targetFromArgs, evaluateNetworkTarget, evaluateRedirectTarget, authenticationDependencyMatches } = require("./network-scope");
 const { inspectExecCommand } = require("./command-intent");
 const { canonicalTarget, resolveTargetAddresses } = require("../../../domain/scope/scope-engine");
 
@@ -76,7 +76,9 @@ function evaluateToolScope({ workspace, toolName, args = {}, normalizedTargets =
   return { ok: true, code: "SCOPE_NOT_REQUIRED", workspaceRoot: policy.workspaceRoot };
 }
 
-async function evaluateToolScopeAsync({ workspace, toolName, args = {}, normalizedTargets = [], projectProfile = null, toolMetadata = null, resolveAddresses = resolveTargetAddresses, browserTarget = "" } = {}) {
+async function evaluateToolScopeAsync({ workspace, toolName, args = {}, normalizedTargets = [], projectProfile = null, toolMetadata = null, resolveAddresses = resolveTargetAddresses, browserTarget = "", browserPolicy = null } = {}) {
+  // Native browser tabs are judged on their live address by the browser policy.
+  if (toolName === "browser_action" && browserPolicy) return { ...browserPolicy, workspaceRoot: loadScopePolicy(workspace, projectProfile).workspaceRoot };
   const action = args && typeof args === "object" ? args : {};
   const isBrowserFollowUp = toolName === "browser_action" && action.action !== "navigate" && !targetsFromArgsWithMetadata(action, toolMetadata).length && browserTarget;
   const scopedArgs = isBrowserFollowUp ? { ...action, url: browserTarget } : action;
@@ -138,22 +140,6 @@ async function evaluateRedirectScopeAsync(initialTarget, redirectTarget, { works
     };
   }
   return { ...decision, workspaceRoot: policy.workspaceRoot, resolvedAddresses: resolution.addresses || [] };
-}
-
-function authenticationDependencyMatches(target, dependency) {
-  const raw = String(dependency || "").trim();
-  if (!raw) return false;
-  try {
-    const parsed = new URL(target);
-    const explicit = raw.includes("://") ? new URL(raw) : null;
-    const wildcard = raw.startsWith("*.");
-    const hostRule = (explicit ? explicit.hostname : raw.replace(/^\*\./, "")).toLowerCase();
-    const host = parsed.hostname.toLowerCase();
-    if (wildcard ? !(host === hostRule || host.endsWith(`.${hostRule}`)) : host !== hostRule) return false;
-    if (explicit && explicit.protocol !== parsed.protocol) return false;
-    if (explicit && explicit.pathname !== "/" && !parsed.pathname.startsWith(explicit.pathname)) return false;
-    return true;
-  } catch { return false; }
 }
 
 function evaluateLoginNavigation(target, projectProfile = null, workspace = "") {

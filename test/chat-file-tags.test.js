@@ -65,6 +65,8 @@ test("markers render as chips that keep the full marker as text", async () => {
   const chips = [...box.querySelectorAll(".file-tag-chip")];
   assert.deepEqual(chips.map((chip) => [chip.dataset.label, chip.dataset.path, chip.getAttribute("contenteditable")]),
     [["bootstrap.js", "src/ui/bootstrap.js", "false"], ["README.md", "README.md", "false"]]);
+  assert.deepEqual(chips.map((chip) => chip.dataset.icon), ["\ue051", "\ue04d"]);
+  assert.deepEqual(chips.map((chip) => chip.style.getPropertyValue("--file-tag-icon-color")), ["#cbcb41", "#519aba"]);
   assert.equal(box.textContent, text);
 });
 

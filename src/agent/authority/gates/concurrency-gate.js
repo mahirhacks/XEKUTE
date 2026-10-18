@@ -2,8 +2,20 @@
 
 const { allow, gate } = require("./gate-utils.js");
 
-function resourceClaims({ context, toolName, args = {}, state } = {}) {
+// A native browser action locks its own tab, shares its identity with other
+// tabs (identity edits take it exclusively), and takes a project traffic slot
+// only when it can send requests to the target.
+function browserClaims(workspace, browser) {
+  const claims = [];
+  if (browser.tabId) claims.push({ key: `browser-tab:${workspace}:${String(browser.tabId).toLowerCase()}`, mode: "write" });
+  if (browser.identityId) claims.push({ key: `identity:${workspace}:${String(browser.identityId).toLowerCase()}`, mode: "read" });
+  if (browser.traffic) claims.push({ key: `browser-traffic:${workspace}`, mode: "slot", capacity: Math.max(1, Number(browser.slots) || 1) });
+  return claims.sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function resourceClaims({ context, toolName, args = {}, state, browser = null } = {}) {
   const workspace = String(context?.workspace?.root || "").toLowerCase();
+  if (toolName === "browser_action" && browser) return browserClaims(workspace, browser);
   const operation = String(args.operation || args.action || "").toLowerCase();
   if (toolName === "exec_command" && ["status", "list"].includes(operation)) return [];
   const mutating = Boolean(state?.risk?.dimensions?.some((item) => item.id === "mutation"));
@@ -31,6 +43,7 @@ function createConcurrencyCoordinator({ pollMs = 25 } = {}) {
   function canAcquire(claims, invocationId) {
     return claims.every((claim) => {
       const current = stateFor(claim.key);
+      if (claim.mode === "slot") return !current.writer && (current.readers.has(invocationId) || current.readers.size < claim.capacity);
       if (claim.mode === "read") return !current.writer || current.writer.invocationId === invocationId;
       return (!current.writer || current.writer.invocationId === invocationId)
         && [...current.readers.keys()].every((owner) => owner === invocationId);
@@ -74,8 +87,8 @@ function createConcurrencyCoordinator({ pollMs = 25 } = {}) {
 }
 
 function createConcurrencyGate() {
-  return gate("concurrency_gate", ({ context, toolName, args, state }) => {
-    state.concurrencyClaims = resourceClaims({ context, toolName, args, state });
+  return gate("concurrency_gate", ({ context, toolName, args, state, runtime }) => {
+    state.concurrencyClaims = resourceClaims({ context, toolName, args, state, browser: runtime?.browserAdmission || null });
     return allow("concurrency_gate", state.concurrencyClaims.length ? "Reader/writer leases will serialize conflicting resources." : "This invocation does not require an exclusive resource lease.", { claims: state.concurrencyClaims });
   });
 }

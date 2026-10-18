@@ -37,13 +37,14 @@ function setup(t) {
   return { ...fixture, terminals, catalog, add };
 }
 
-test("labels use ten Unicode characters from the command's first line", () => {
-  assert.equal(commandLabel("PowerShell.exe", "Get-Content evidence.txt\nsecond line"), "powershell : Get-Conten...");
+test("labels keep the whole first line so the picker and chip can fill their own width", () => {
+  assert.equal(commandLabel("PowerShell.exe", "Get-Content evidence.txt\nsecond line"), "powershell : Get-Content evidence.txt");
   assert.equal(commandLabel("pwsh", "cls"), "powershell : cls");
-  assert.equal(commandLabel("pwsh", "1234567890"), "powershell : 1234567890");
   assert.equal(commandLabel("pwsh", "short\nlonger second line"), "powershell : short");
   assert.equal(commandLabel("pwsh", "😀😀"), "powershell : 😀😀");
-  assert.equal(commandLabel("bash", "😀😀😀😀😀😀😀😀😀😀x"), "bash : 😀😀😀😀😀😀😀😀😀😀...");
+  // A very long first line is bounded so the stored label and marker stay small.
+  assert.equal(commandLabel("bash", "x".repeat(260)), `bash : ${"x".repeat(200)}…`);
+  assert.equal(commandLabel("bash", "😀".repeat(260)), `bash : ${"😀".repeat(200)}…`);
 });
 
 test("a cold picker reads saved project commands from open, closed and archived chats without a separate pool", async t => {
@@ -56,7 +57,7 @@ test("a cold picker reads saved project commands from open, closed and archived 
   assert.equal(entries.length, 3);
   assert.ok(entries.every(item => item.origin === "agent" && item.running === false));
   const first = entries.find(item => item.command === "Get-Content prior.txt");
-  assert.equal(first.name, "powershell : Get-Conten...");
+  assert.equal(first.name, "powershell : Get-Content prior.txt");
   assert.equal(cold.capture({ workspace: fixture.workspace, id: first.id }).output, "Saved command output");
   assert.deepEqual(cold.list({ workspace: "G:/foreign" }), []);
   assert.throws(() => cold.capture({ workspace: "G:/foreign", id: first.id }), { code: "TERMINAL_REFERENCE_UNAVAILABLE" });
@@ -157,7 +158,7 @@ test("admitted command snapshots survive encrypted resume without recapture or c
   const admitted = await runtime.admit({ ...location, runId: "terminal", userMessage: text, inputId: "terminal-prompt" });
   assert.equal(admitted.ok, true, admitted.error);
   const packet = fixture.store.readControl(fixture.workspace, fixture.sessionId).control.inputs[0].contextText;
-  assert.equal(unpackChatReferences(packet)[0].title, "powershell : Get-Conten...");
+  assert.equal(unpackChatReferences(packet)[0].title, "powershell : Get-Content evidence.txt");
   fixture.terminals.clear();
   const reopened = fixture.open();
   const cold = createAgentSessionRuntime({ store: reopened.store, resolveChatReferences: createChatReferenceResolver({ store: reopened.store,

@@ -1,6 +1,9 @@
 /* Structured chat timeline matching chat.json: two-lane Cursor-style events
  * (prose vs activity). Capture still walks the live DOM; normalize is the persist shape. */
 
+import { QUESTION_ANSWER_CLASS, questionAnswerEvent, questionAnswerFromEvent, readQuestionAnswerCard } from "./question-answers.js";
+import { validPromptImages } from "./image-attachments.js";
+
 export const CHAT_TRANSCRIPT_VERSION = 2;
 const MAX_RUNS = 200;
 const MAX_EVENTS = 400;
@@ -91,17 +94,21 @@ function normalizeTool(item = {}) {
   const args = item.args && typeof item.args === "object" && !Array.isArray(item.args)
     ? { ...item.args }
     : {};
+  const name = clip(item.name || item.toolName || item.action || "", MAX_NAME);
   const target = clip(item.target || item.path || args.path || args.file || "", MAX_PATH);
-  if (target && !args.path) args.path = target;
+  // Older saves used the tool name as the target of non-file rows; it is not a path.
+  const pathTarget = target === name ? "" : target;
+  if (pathTarget && !args.path) args.path = pathTarget;
   const verb = clip(item.verb || "", 40);
   return compact({
     type: "tool",
     lane: eventLane("tool", item),
     verb: verb || undefined,
-    name: clip(item.name || item.toolName || item.action || "", MAX_NAME),
+    name,
     target,
-    path: clip(item.path || target, MAX_PATH),
+    path: clip(item.path === name ? "" : item.path || pathTarget, MAX_PATH),
     args,
+    label: clip(item.label || "", 240) || undefined,
     status: String(item.status || "ok").toLowerCase() === "error" ? "error" : "ok",
   });
 }
@@ -143,6 +150,7 @@ function normalizeChatEvent(event = {}) {
     lane: eventLane("chat", event),
     created_at: toIso(event.created_at || event.createdAt),
     verdict: event.verdict === true ? true : undefined,
+    answered: event.answered === true ? true : undefined,
     text: clip(event.text || event.content || "", MAX_CHAT_TEXT),
   });
 }
@@ -185,6 +193,7 @@ function normalizeEvent(event) {
   if (type === "command") return normalizeCommand(event);
   if (type === "tool_group") return normalizeToolGroup(event);
   if (type === "subagent") return normalizeSubagent(event);
+  if (type === "questions") return questionAnswerEvent(questionAnswerFromEvent(event));
   return null;
 }
 
@@ -219,10 +228,12 @@ function normalizeRun(run = {}, index = 0) {
       if (item.type === "user") {
         const message = clip(item.message || item.text || "", MAX_CHAT_TEXT);
         if (!message) return null;
+        const images = validPromptImages(item.images);
         return compact({
           type: "user",
           created_at: toIso(item.created_at || item.createdAt),
           message,
+          images: images.length ? images : undefined,
           source_message_id: clip(item.source_message_id || item.sourceMessageId, 240) || undefined,
           task_id: clip(item.task_id || item.taskId, 240) || undefined,
         });
@@ -385,9 +396,12 @@ function captureSubagentItem(card) {
 function captureToolItem(card) {
   if (!card || card.hidden) return null;
   const name = clip(dataset(card).toolAction || "", MAX_NAME);
-  const path = clip(dataset(card).path || dataset(card).file || "", MAX_PATH);
+  // A row's file is only its real path; display names such as a browser
+  // action's are not paths.
+  const path = clip(dataset(card).path || "", MAX_PATH);
+  const file = dataset(card).file === name ? "" : dataset(card).file;
   const target = clip(
-    dataset(card).file || path.split(/[/\\]/).filter(Boolean).at(-1) || "",
+    file || path.split(/[/\\]/).filter(Boolean).at(-1) || "",
     MAX_PATH,
   );
   if (!name && !target && !path) return null;
@@ -398,7 +412,8 @@ function captureToolItem(card) {
     name,
     target: target.split(/[/\\]/).filter(Boolean).at(-1) || target,
     path: path || target,
-    args: path || target ? { path: path || target } : {},
+    args: path ? { path } : {},
+    label: clip(String(card.querySelector?.(".tool-card-file")?.textContent || "").trim(), 240) || undefined,
     status: dataset(card).state === "error" ? "error" : "ok",
   });
 }
@@ -489,12 +504,18 @@ function captureNode(node, events, { verdict = false } = {}) {
       lane: "prose",
       created_at: toIso(dataset(node).createdAt),
       verdict: verdict || isVerdictReply(node) ? true : undefined,
+      answered: dataset(node).answered === "true" ? true : undefined,
       text: clip(replyText(node), MAX_CHAT_TEXT),
     }));
     return;
   }
   if (classListContains(node, "agent-thinking-fold")) {
     events.push(captureThinkingEvent(node));
+    return;
+  }
+  if (classListContains(node, QUESTION_ANSWER_CLASS)) {
+    const event = questionAnswerEvent(readQuestionAnswerCard(node));
+    if (event) events.push(event);
     return;
   }
   if (classListContains(node, "agent-file-stack")) {
@@ -575,10 +596,13 @@ function captureExchangeRun(exchange, index) {
   for (const child of childList(body)) {
     if (classListContains(child, "chat-turn") && classListContains(child, "user")) {
       const message = userMessageText(child);
+      const images = validPromptImages([...(child.querySelectorAll?.(".user-prompt-images img") || [])]
+        .map((img) => ({ thumb: img.getAttribute("src"), id: img.dataset?.imageId || "" })));
       if (message) timeline.push({
         type: "user",
         created_at: toIso(dataset(child).createdAt),
         message,
+        images: images.length ? images : undefined,
         source_message_id: dataset(child).sourceMessageId || undefined,
         task_id: dataset(child).taskId || undefined,
       });

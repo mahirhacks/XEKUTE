@@ -1587,11 +1587,13 @@ test("aborting an agent run does not execute remaining queued commands", async (
 
 test("a silent model round continues until end_turn status stop", async () => {
   const rounds = [];
+  const modelRounds = [];
   const result = await runAgentTurn({
     workspace: "",
     mode: "agent",
     userMessage: "Keep going until the work is done.",
     tools: [{ type: "function", function: { name: "exec_command", description: "run", parameters: {} } }],
+    sendEvent(event) { if (event.type === "model_round") modelRounds.push(event); },
     async runModelRound(payload) {
       rounds.push(payload.messages.at(-1));
       if (rounds.length === 1) return { ok: true, fullText: "Working.", toolCalls: [], finishReason: "stop" };
@@ -1603,6 +1605,10 @@ test("a silent model round continues until end_turn status stop", async () => {
   assert.equal(result.runState.status, "completed");
   assert.equal(rounds.length, 2);
   assert.equal(result.finalText, "Finished.");
+  // The no-tool answer round is completion-grade; the round that closed with
+  // end_turn is not, so the UI prefers the earlier answer over any recap.
+  assert.equal(modelRounds[0].answerOnly, true);
+  assert.equal(modelRounds[1].answerOnly, false);
 });
 
 test("end_turn status stop keeps the assistant conclusion as finalText", async () => {

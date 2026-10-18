@@ -1,12 +1,10 @@
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import mermaid from "mermaid";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 
 globalThis.marked = marked;
 globalThis.DOMPurify = DOMPurify;
-globalThis.mermaid = mermaid;
 globalThis.Terminal = Terminal;
 globalThis.FitAddon = FitAddon;
 

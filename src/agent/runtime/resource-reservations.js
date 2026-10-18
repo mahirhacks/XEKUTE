@@ -8,6 +8,9 @@ const path = require("node:path");
 const CONCURRENT_TOOLS = new Set([
   "read_file", "list_directory", "search_files", "search_workspace", "find_files", "view_active_terminal", "get_project_profile", "read_artifact",
   "exec_command", "ask_questions", "end_turn", "delegate_agent", "web_research",
+  // Browser actions never write workspace files; the native browser service
+  // already orders actions per tab.
+  "browser_action",
 ]);
 function concurrent(call) {
   return CONCURRENT_TOOLS.has(call?.function?.name || call?.toolName);

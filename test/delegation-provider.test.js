@@ -155,14 +155,12 @@ test("child runs inherit tool metadata, browser scope, and checkpoints", async (
     tools: PARENT_TOOLS,
     intelligence: { status: () => ({ ok: true }) },
     toolMetadataForName: (name, sessionId) => ({ name, sessionId }),
-    getBrowserTarget: (workspace, sessionId) => `${workspace}/${sessionId}`,
     checkpointRun: (_patch, context) => { checkpointContexts.push(context); },
     runAgentTurn: async (payload) => {
       received.payload = payload;
       assert.equal(payload.nested, true);
       assert.equal(payload.mode, "agent");
       assert.deepEqual(payload.toolMetadataForName("read_file"), { name: "read_file", sessionId: payload.sessionId });
-      assert.equal(payload.getBrowserTarget("G:/ws", payload.sessionId), `G:/ws/${payload.sessionId}`);
       await payload.executeToolCall({
         workspace: "G:/ws",
         toolCall: { function: { name: "read_file", arguments: {} } },

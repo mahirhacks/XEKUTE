@@ -26,6 +26,22 @@ async function fixture(api, changes = []) {
  let id = 0;
  return { session: { id: "chat", memorySessionId: "mem-chat", history: [], draftText: "" }, controller: createLiveInputController({ api, makeId: () => `input:${++id}`, onChange: (_session, record) => changes.push({ ...record }) }) };
 }
+test("input names the visible chat as browser owner only for that chat's own session", async () => {
+ const calls = [];
+ const { session, controller } = await fixture({ agentSubmitInput: async (payload) => { calls.push(payload); return receipt(payload.messageId); } });
+ await controller.send({ session, text: "scroll down" });
+ await controller.send({ session, sessionId: "mem-parent", targetTaskId: "child-task", text: "for the parent" });
+ assert.equal(calls[0].sessionId, "mem-chat"); assert.equal(calls[0].chatSessionId, "chat");
+ assert.equal(calls[1].sessionId, "mem-parent"); assert.equal(calls[1].chatSessionId, undefined);
+});
+test("agent runs carry the UI chat id, and main uses it as the browser tab owner", () => {
+ const main = fs.readFileSync(path.join(__dirname, "../src/app/electron/main.js"), "utf8");
+ const runs = source.split("window.api.agentRun({").slice(1).map((body) => body.slice(0, body.indexOf("});")));
+ assert.equal(runs.length, 2);
+ for (const body of runs) assert.match(body, /chatSessionId: runSession\??\.id/);
+ assert.equal(main.match(/browserSessionId: payload\.chatSessionId \|\| sessionId,/g)?.length, 2);
+ assert.doesNotMatch(main, /browserSessionId: sessionId,/);
+});
 test("Send delivers concurrent receipts while an earlier request remains in flight", async () => {
  const calls = []; const a = deferred(); const b = deferred();
  const { session, controller } = await fixture({ agentSubmitInput: (payload) => { calls.push(payload); return calls.length === 1 ? a.promise : b.promise; } });
@@ -259,10 +275,14 @@ test("actual UI does not clear a new draft when an earlier receipt arrives", asy
  gate.resolve(receipt("input:1")); await operation;
  assert.equal(ui.input.value, "new draft"); assert.equal(session.draftText, "new draft");
 });
-test("actual composer Send/Enter callbacks never invoke Stop", () => {
- let sent = 0; let stopped = 0; const context = { sendMessageWithAgentRuntime: () => sent++, stopGeneration: () => stopped++ };
+test("actual composer Send/Enter send unless the control is showing Stop", () => {
+ let sent = 0; let stopped = 0; let stopMode = false;
+ const context = { sendMessageWithAgentRuntime: () => sent++, stopGeneration: () => stopped++, sendBtn: { classList: { contains: (name) => name === "stop" && stopMode } } };
  vm.createContext(context); vm.runInContext(definition('function submitChatComposer()', '\nfunction updateSendBtn()'), context);
  context.submitChatComposer(); context.submitChatComposerFromInput(); assert.equal(sent, 2); assert.equal(stopped, 0);
+ // A running chat with an empty composer shows Stop; Send and Enter then stop it.
+ stopMode = true;
+ context.submitChatComposer(); context.submitChatComposerFromInput(); assert.equal(sent, 2); assert.equal(stopped, 2);
 });
 test("shells keep one Send action without decision settings, Stop or queue UI", () => {
  for (const file of ["src/ui/index.legacy.html", "src/ui/react/AppShell.jsx"]) {
@@ -293,6 +313,15 @@ test("stopping the parent settles every delegated child UI of that parent only",
  const context = { activeChatRuns: runs, chatStopIdsForRun: () => ["parent"], chatSessionIdForRuntimeId: (id) => id, settleStoppedRun: (run) => settled.push(run.sessionId) };
  vm.createContext(context); vm.runInContext(definition('function settleDelegatedChildrenOf(', '\nfunction stopGeneration()'), context);
  context.settleDelegatedChildrenOf({ sessionId: "parent" }); assert.deepEqual(settled, ["dependent"]); assert.equal(runs.has("other"), true);
+});
+test("Stop aborts a run that is waiting on sub-agents or an end turn, not only a streaming one", () => {
+ for (const waiting of [{ pendingEndTurn: true }, { awaitingParentContinuation: true }, { commandWait: true }]) {
+  const run = { sessionId: "chat", state: "complete", ...waiting }; const aborted = []; const settled = [];
+  const context = { activeSessionRun: () => run, isChatSessionRunning: (id) => id === "chat" && !run.stopRequested, markChatSessionStoppedByOperator() {}, dismissComposerQuestionsForStop() {}, dropAutoContinuationsForSession() {}, syncAssistantDraftToHistory() {}, persistChatHistorySnapshot: async () => {}, settleDelegatedChildrenOf() {}, settleStoppedRun: (r) => settled.push(r), setAgentStatus() {}, modeLabel: () => "Agent", abortActiveChatRun: (r) => aborted.push(r), updateSendBtn() {}, updateContextUsage() {}, chatInput: null, activeChatSessionId: "chat", activeChatPersistenceScope: null, activeStreamContent: "" };
+  vm.createContext(context); vm.runInContext(definition('function stopGeneration()', '\nfunction chatStopIdsForRun('), context);
+  context.stopGeneration();
+  assert.equal(run.stopRequested, true); assert.deepEqual(aborted, [run]); assert.deepEqual(settled, [run]);
+ }
 });
 test("durable received event settles a lost IPC acknowledgment without a duplicate retry", async () => {
  const gate = deferred(); const { session, controller } = await fixture({ agentSubmitInput: () => gate.promise });

@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 // Sandboxed Electron preload scripts may only require a small allowlist of
 // built-in modules. Keep the result envelope helpers self-contained so a
@@ -47,6 +47,7 @@ const api = {
   unarchiveChatSession: (payload) => ipcRenderer.invoke("chat-history:unarchive", payload),
   flushChatHistory: () => ipcRenderer.invoke("chat-history:flush"),
   saveChatHistoryBeforeClose: (payload) => ipcRenderer.sendSync("chat-history:save-before-close", payload),
+  chatImageRead: (payload) => ipcRenderer.invoke("chat-images:read", payload),
   deleteChatSession: (payload) => ipcRenderer.invoke("chat-history:delete", payload),
   watchWorkspace: (workspace) => ipcRenderer.invoke("workspace:watch", workspace),
   unwatchWorkspace: () => ipcRenderer.invoke("workspace:unwatch"),
@@ -108,6 +109,16 @@ const api = {
   proxyDrop: (payload) => ipcRenderer.invoke("proxy:drop", payload),
   proxyShowCa: () => ipcRenderer.invoke("proxy:showCa"),
   proxyBrowserLaunch: (payload = {}) => ipcRenderer.invoke("proxy:browserLaunch", payload),
+  browserOpen: (payload) => ipcRenderer.invoke("browser:open", payload),
+  browserList: (payload) => ipcRenderer.invoke("browser:list", payload),
+  browserCommand: (payload) => ipcRenderer.invoke("browser:command", payload),
+  browserLayout: (payload) => ipcRenderer.invoke("browser:layout", payload),
+  browserHide: () => ipcRenderer.invoke("browser:hide", {}),
+  onBrowserEvent: (cb) => {
+    const listener = (_event, payload) => cb(payload ?? {});
+    ipcRenderer.on("browser:event", listener);
+    return () => ipcRenderer.removeListener("browser:event", listener);
+  },
   proxyBrowserStatus: (payload = {}) => ipcRenderer.invoke("proxy:browserStatus", payload),
     certificateSettings: () => ipcRenderer.invoke("settings:certificatesGet"),
   chooseCertificateDirectory: (payload = {}) => ipcRenderer.invoke("settings:certificatesChoose", payload),
@@ -221,6 +232,11 @@ const api = {
       return () => ipcRenderer.removeListener("identity:persistence", listener);
     },
     removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
+
+    // Page zoom (Ctrl +/-). Chromium zoom shrinks the CSS viewport, so layout,
+    // media queries and pointer coordinates stay consistent at every level.
+    setUiZoom: (factor) => webFrame.setZoomFactor(Math.max(0.5, Math.min(2, Number(factor) || 1))),
+    getUiZoom: () => webFrame.getZoomFactor(),
 
     // In-app updates
     updatesCheck: (payload = {}) => ipcRenderer.invoke("updates:check", payload),

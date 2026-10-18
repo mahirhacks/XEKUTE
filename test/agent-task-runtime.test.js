@@ -179,6 +179,14 @@ test("workspace edits serialize, commands start after them, and reads and other 
   assert.deepEqual(order, ["first", "read", "other"]); finish.resolve(); await Promise.all([first, second, command]);
   assert.deepEqual(order, ["first", "read", "other", "first-done", "second", "command"]);
 });
+test("a browser wait does not hold the workspace for file edits", async () => {
+  const reservations = createResourceReservations(); const order = []; const waiting = deferred();
+  const wait = reservations.execute({ workspace: "G:/one", runId: "main", toolCall: { function: { name: "browser_action", arguments: { action: "wait", waitMs: 10000 } } } },
+    async () => { order.push("browser-wait"); await waiting.promise; order.push("browser-done"); });
+  await reservations.execute({ workspace: "G:/one", runId: "child", toolCall: { function: { name: "apply_patch" } } }, async () => order.push("edit"));
+  assert.deepEqual(order, ["browser-wait", "edit"]);
+  waiting.resolve(); await wait;
+});
 test("a long command does not hold the workspace for other commands", async () => {
   const reservations = createResourceReservations({ listProcesses: async () => [{ status: "running", runId: "main" }] });
   const sleeping = deferred(); const order = [];

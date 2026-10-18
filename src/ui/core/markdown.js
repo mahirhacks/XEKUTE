@@ -15,7 +15,7 @@
   const highlightedCode = new Map();
   let streamingRender = false;
   let hljsRef = null;
-  let mermaidReady = false;
+  let mermaidLoad = null;
   let mermaidSeq = 0;
 
   function escapeHtml(str) {
@@ -47,19 +47,23 @@
     return String(lang || "").trim().toLowerCase().split(/\s+/)[0] === "mermaid";
   }
 
-  function initMermaid() {
-    const mermaid = globalThis.mermaid;
-    if (!mermaid) return null;
-    if (!mermaidReady) {
-      mermaid.initialize({
-        startOnLoad: false,
-        securityLevel: "strict",
-        theme: "dark",
-        fontFamily: "Consolas, 'Cascadia Code', monospace",
+  // Mermaid is large, so it loads with the first diagram instead of at startup.
+  function loadMermaid() {
+    mermaidLoad ||= (globalThis.mermaid ? Promise.resolve(globalThis.mermaid) : import("mermaid").then((module) => module.default))
+      .then((mermaid) => {
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: "dark",
+          fontFamily: "Consolas, 'Cascadia Code', monospace",
+        });
+        return mermaid;
+      })
+      .catch(() => {
+        mermaidLoad = null;
+        return null;
       });
-      mermaidReady = true;
-    }
-    return mermaid;
+    return mermaidLoad;
   }
 
   function normalizeMermaidSource(source) {
@@ -94,8 +98,9 @@
   }
 
   async function renderMermaidBlocks(root) {
-    const mermaid = initMermaid();
     const blocks = [...root.querySelectorAll(".md-mermaid[data-mermaid-source]")];
+    if (!blocks.length) return;
+    const mermaid = await loadMermaid();
     for (const block of blocks) {
       const source = decodeURIComponent(block.dataset.mermaidSource || "");
       if (!source.trim()) continue;
@@ -160,18 +165,40 @@
 
   marked.setOptions({ gfm: true, breaks: true });
 
+  const SANITIZE_OPTIONS = {
+    ADD_TAGS: ["button"],
+    ADD_ATTR: ["class", "data-code", "data-mermaid-source", "title", "type"],
+  };
+  // Sanitized HTML per top-level block. A streamed reply re-renders every
+  // frame, but only its last block changes; sanitizing the whole reply each
+  // frame made streaming cost grow with the square of its length.
+  const renderedBlockHtml = new Map();
+  const RENDERED_BLOCK_LIMIT = 1000;
+
   function render(md, { streaming = false } = {}) {
-    let html;
     streamingRender = streaming;
     try {
-      html = marked.parse(md ?? "");
+      const tokens = marked.lexer(md ?? "");
+      const context = `${streaming ? 1 : 0}${hljsRef ? 1 : 0}${JSON.stringify(tokens.links || {})}\u0000`;
+      let html = "";
+      for (let index = 0; index < tokens.length; index += 1) {
+        // The parser merges consecutive top-level text tokens into one paragraph.
+        const group = [tokens[index]];
+        while (tokens[index].type === "text" && tokens[index + 1]?.type === "text") group.push(tokens[index += 1]);
+        const key = context + group.map((token) => token.raw).join("");
+        let block = renderedBlockHtml.get(key);
+        if (block === undefined) {
+          group.links = tokens.links;
+          block = DOMPurify.sanitize(marked.parser(group), SANITIZE_OPTIONS);
+          if (renderedBlockHtml.size >= RENDERED_BLOCK_LIMIT) renderedBlockHtml.delete(renderedBlockHtml.keys().next().value);
+          renderedBlockHtml.set(key, block);
+        }
+        html += block;
+      }
+      return html;
     } finally {
       streamingRender = false;
     }
-    return DOMPurify.sanitize(html, {
-      ADD_TAGS: ["button"],
-      ADD_ATTR: ["class", "data-code", "data-mermaid-source", "title", "type"],
-    });
   }
 
   function patchChildren(parent, incoming, { streaming = false } = {}) {

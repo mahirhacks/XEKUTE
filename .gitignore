@@ -116,3 +116,6 @@ DIAGRAM_P.md
 
 # Private Cursor-agent CLI (local only; not part of the product)
 /.agent-cli/
+
+# Visual Studio workspace state
+/.vs/

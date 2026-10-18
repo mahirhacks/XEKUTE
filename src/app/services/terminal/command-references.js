@@ -9,8 +9,11 @@ function shellName(value = "") {
 }
 function commandLabel(shell, command) {
   const firstLine = String(command).split(/\r\n|\r|\n/, 1)[0];
+  // Keep the whole first line (bounded). The picker row and the chip each clip
+  // it to their own width with a CSS ellipsis, so the label fills the space it
+  // has instead of a fixed character count.
   const characters = [...firstLine];
-  return `${shellName(shell)} : ${characters.slice(0, 10).join("")}${characters.length > 10 ? "..." : ""}`;
+  return `${shellName(shell)} : ${characters.slice(0, 200).join("")}${characters.length > 200 ? "…" : ""}`;
 }
 function parseObject(value) {
   if (value && typeof value === "object") return value;

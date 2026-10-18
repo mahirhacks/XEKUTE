@@ -84,8 +84,16 @@ function createProjectIdentityStore({
     return { schema_version: REGISTRY_SCHEMA_VERSION, updated_at: String(source.updated_at || source.updatedAt || fallbackTime), projects };
   }
 
+  // Every chat-history event resolves its project. Reuse the parsed registry
+  // while the file's identity, size and mtime are unchanged instead of re-reading it.
+  let registryCache = null;
+  function registryStamp() {
+    try { const stat = fs.statSync(registryFile); return `${stat.ino}:${stat.size}:${stat.mtimeMs}`; } catch { return ""; }
+  }
   function readRegistry() {
-    const loaded = readJsonWithBackup({ fs }, registryFile);
+    const stamp = registryStamp();
+    const loaded = stamp && registryCache?.stamp === stamp ? registryCache.loaded : readJsonWithBackup({ fs }, registryFile);
+    registryCache = stamp && loaded.ok && !loaded.recovered ? { stamp, loaded } : null;
     if (!loaded.ok) return { ok: false, ...operationFailure("MEMORY_PROJECT_REGISTRY_CORRUPT", `The project registry could not be read: ${loaded.error?.message || "invalid JSON"}.`, { path: registryFile }) };
     const registry = normalizeRegistry(loaded.value || defaultRegistry());
     return { ok: true, registry, exists: loaded.exists, recovered: Boolean(loaded.recovered), warning: loaded.warning || "", path: registryFile };

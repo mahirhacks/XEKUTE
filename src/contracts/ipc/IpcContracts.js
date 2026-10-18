@@ -1,5 +1,7 @@
 "use strict";
 
+const { validateBrowserIpcRequest } = require("../browser/browser-ipc.js");
+
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const LARGE_MAX_BYTES = 16 * 1024 * 1024;
 const IDENTITY_MAX_BYTES = 4 * 1024 * 1024;
@@ -94,6 +96,8 @@ function validateIpcRequest(channel, args = []) {
   if (state.bytes > maxBytes) return error(`IPC payload exceeds ${maxBytes} bytes`, "IPC_PAYLOAD_TOO_LARGE");
 
   const payload = args[0];
+  const browserIssue = validateBrowserIpcRequest(channel, args);
+  if (browserIssue) return browserIssue;
   if (channel === "terminal:resize") {
     const cols = Number(payload?.cols);
     const rows = Number(payload?.rows);

@@ -72,6 +72,7 @@ function openDatabase(indexPath = ":memory:") {
       run_id TEXT NOT NULL, evidence_id TEXT NOT NULL, step_id TEXT NOT NULL DEFAULT '',
       PRIMARY KEY(run_id, evidence_id)
     );
+    CREATE TABLE IF NOT EXISTS search_rows (record_id TEXT PRIMARY KEY, row INTEGER NOT NULL);
     CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
       record_id UNINDEXED, domain, record_type, title, body
     );
@@ -98,19 +99,37 @@ function transaction(db, callback) {
   }
 }
 
+// Prepared once per database; indexing runs these for every record.
+const preparedStatements = new WeakMap();
+function statement(db, sql) {
+  if (!preparedStatements.has(db)) preparedStatements.set(db, new Map());
+  const cache = preparedStatements.get(db);
+  if (!cache.has(sql)) cache.set(sql, db.prepare(sql));
+  return cache.get(sql);
+}
+
+// FTS5 cannot index record_id, so deleting by it scanned the whole index on
+// every upsert and made indexing quadratic. search_rows maps each record to
+// its FTS rowid, which deletes by key.
+function replaceSearchRow(db, recordId, recordType, title, body) {
+  const previous = statement(db, "SELECT row FROM search_rows WHERE record_id=?").get(recordId);
+  if (previous) statement(db, "DELETE FROM search_index WHERE rowid=?").run(previous.row);
+  const inserted = statement(db, "INSERT INTO search_index(record_id,domain,record_type,title,body) VALUES(?,?,?,?,?)").run(recordId, "engagement", recordType, title, body);
+  statement(db, "INSERT INTO search_rows(record_id,row) VALUES(?,?) ON CONFLICT(record_id) DO UPDATE SET row=excluded.row").run(recordId, inserted.lastInsertRowid);
+}
+
 function upsertEntity(db, item, timestamp, increment = true) {
-  db.prepare(`INSERT INTO entities(id,type,entity_key,label,summary,data_json,first_seen,last_seen,observation_count)
+  statement(db, `INSERT INTO entities(id,type,entity_key,label,summary,data_json,first_seen,last_seen,observation_count)
     VALUES(?,?,?,?,?,?,?,?,1)
     ON CONFLICT(id) DO UPDATE SET label=excluded.label, summary=excluded.summary,
       data_json=excluded.data_json, last_seen=excluded.last_seen, observation_count=entities.observation_count+${increment ? 1 : 0}`).run(
     item.id, item.type, item.key, item.label, item.summary, json(item.data), timestamp, timestamp,
   );
-  db.prepare("DELETE FROM search_index WHERE record_id=?").run(item.id);
-  db.prepare("INSERT INTO search_index(record_id,domain,record_type,title,body) VALUES(?,?,?,?,?)").run(item.id, "engagement", item.type, item.label, `${item.summary} ${json(item.data)}`);
+  replaceSearchRow(db, item.id, item.type, item.label, `${item.summary} ${json(item.data)}`);
 }
 
 function upsertEvidence(db, item) {
-  db.prepare(`INSERT INTO evidence(id,type,source_path,source_offset,source_length,source_hash,summary,sanitized_json,produced_run_id,plan_id,created_at)
+  statement(db, `INSERT INTO evidence(id,type,source_path,source_offset,source_length,source_hash,summary,sanitized_json,produced_run_id,plan_id,created_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET source_hash=excluded.source_hash, summary=excluded.summary,
       sanitized_json=excluded.sanitized_json, produced_run_id=excluded.produced_run_id,
@@ -118,38 +137,36 @@ function upsertEvidence(db, item) {
     item.id, item.type, item.sourcePath, item.sourceOffset, item.sourceLength, item.sourceHash,
     item.summary, json(item.sanitized), item.producedRunId || "", item.planId || "", item.createdAt || now(),
   );
-  db.prepare("DELETE FROM search_index WHERE record_id=?").run(item.id);
-  db.prepare("INSERT INTO search_index(record_id,domain,record_type,title,body) VALUES(?,?,?,?,?)").run(item.id, "engagement", "evidence", item.type, `${item.summary} ${json(item.sanitized)}`);
+  replaceSearchRow(db, item.id, "evidence", item.type, `${item.summary} ${json(item.sanitized)}`);
 }
 
 function upsertObservation(db, item, timestamp, increment = true) {
-  const existing = db.prepare("SELECT id FROM observations WHERE observation_key=?").get(item.key);
+  const existing = statement(db, "SELECT id FROM observations WHERE observation_key=?").get(item.key);
   const id = existing?.id || item.id;
-  db.prepare(`INSERT INTO observations(id,observation_key,summary,data_json,first_seen,last_seen,count)
+  statement(db, `INSERT INTO observations(id,observation_key,summary,data_json,first_seen,last_seen,count)
     VALUES(?,?,?,?,?,?,1)
     ON CONFLICT(observation_key) DO UPDATE SET summary=excluded.summary, data_json=excluded.data_json,
       last_seen=excluded.last_seen, count=observations.count+${increment ? 1 : 0}`).run(
     id, item.key, item.summary, json(item.data), timestamp, timestamp,
   );
-  db.prepare("DELETE FROM search_index WHERE record_id=?").run(id);
-  db.prepare("INSERT INTO search_index(record_id,domain,record_type,title,body) VALUES(?,?,?,?,?)").run(id, "engagement", "observation", "Observation", `${item.summary} ${json(item.data)}`);
+  replaceSearchRow(db, id, "observation", "Observation", `${item.summary} ${json(item.data)}`);
 }
 
 function insertNormalized(db, normalized) {
   const timestamp = normalized.evidence?.createdAt || now();
-  const evidenceExisted = Boolean(normalized.evidence?.id && db.prepare("SELECT 1 AS found FROM evidence WHERE id=?").get(normalized.evidence.id)?.found);
+  const evidenceExisted = Boolean(normalized.evidence?.id && statement(db, "SELECT 1 AS found FROM evidence WHERE id=?").get(normalized.evidence.id)?.found);
   for (const item of normalized.entities || []) upsertEntity(db, item, timestamp, !evidenceExisted);
   if (normalized.evidence) upsertEvidence(db, normalized.evidence);
   for (const item of normalized.entities || []) {
     if (item.type !== "response-cluster") continue;
-    db.prepare(`INSERT INTO response_clusters(id,signature,count,representative_evidence_id,data_json)
+    statement(db, `INSERT INTO response_clusters(id,signature,count,representative_evidence_id,data_json)
       VALUES(?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET count=response_clusters.count+${evidenceExisted ? 0 : 1},
       representative_evidence_id=CASE WHEN response_clusters.representative_evidence_id='' THEN excluded.representative_evidence_id ELSE response_clusters.representative_evidence_id END,
       data_json=excluded.data_json`).run(item.id, item.key, normalized.evidence?.id || "", json(item.data));
   }
   for (const item of normalized.observations || []) upsertObservation(db, item, timestamp, !evidenceExisted);
   for (const relation of normalized.relationships || []) {
-    db.prepare(`INSERT INTO relationships(source_id,target_id,relationship_type,confidence,data_json)
+    statement(db, `INSERT INTO relationships(source_id,target_id,relationship_type,confidence,data_json)
       VALUES(?,?,?,?,?) ON CONFLICT(source_id,target_id,relationship_type)
       DO UPDATE SET confidence=MAX(relationships.confidence, excluded.confidence)`).run(
       relation.sourceId, relation.targetId, relation.type, Number(relation.confidence) || 0, json(relation.data),
@@ -158,12 +175,12 @@ function insertNormalized(db, normalized) {
   const entityIds = (normalized.entities || []).map((item) => item.id);
   for (const entityId of entityIds) {
     if (!normalized.evidence?.id) continue;
-    db.prepare("INSERT OR IGNORE INTO entity_evidence(entity_id,evidence_id,role,rank) VALUES(?,?,?,?)").run(entityId, normalized.evidence.id, "observed", 0);
+    statement(db, "INSERT OR IGNORE INTO entity_evidence(entity_id,evidence_id,role,rank) VALUES(?,?,?,?)").run(entityId, normalized.evidence.id, "observed", 0);
   }
 }
 
 function setSource(db, source) {
-  db.prepare(`INSERT INTO sources(path,kind,fingerprint,size,mtime,cursor,status,error,updated_at)
+  statement(db, `INSERT INTO sources(path,kind,fingerprint,size,mtime,cursor,status,error,updated_at)
     VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET kind=excluded.kind,
       fingerprint=excluded.fingerprint,size=excluded.size,mtime=excluded.mtime,
       cursor=excluded.cursor,status=excluded.status,error=excluded.error,updated_at=excluded.updated_at`).run(

@@ -97,8 +97,14 @@ assert.equal(packageJson.dependencies["@vscode/codicons"], "0.0.45");
 assert.equal(packageJson.productName, "XEKUTE");
 assert.match(packageJson.scripts.make, /prepare:update-config/);
 assert.ok(exists("scripts/prepare-update-config.js"));
-assert.match(forgeConfig, /temp_test/);
-assert.match(forgeConfig, /graphify-out/);
+// Packaging is an allowlist: development folders stay out of the installer.
+const { isIgnoredPackagePath } = require(path.join(root, "forge.config.js"));
+for (const devOnly of ["/temp_test/x.js", "/graphify-out/graph.json", "/test/x.test.js", "/scripts/browser-dev/host.cjs", "/tmp/x", "/.vs/x", "/.env", "/src/ui/react/App.jsx"]) {
+  assert.equal(isIgnoredPackagePath(devOnly), true, `${devOnly} must not be packaged`);
+}
+for (const runtime of ["/package.json", "/src/app/electron/main.js", "/src/ui/dist/index.html", "/node_modules/node-pty/lib/index.js", "/resources/memory-v3/x"]) {
+  assert.equal(isIgnoredPackagePath(runtime), false, `${runtime} must be packaged`);
+}
 assert.match(forgeConfig, /node_modules\/node-pty/);
 assert.doesNotMatch(forgeConfig, /maker-squirrel|electron-winstaller|Squirrel\.Windows/);
 const builderConfig = read("electron-builder.config.js");
@@ -107,7 +113,8 @@ assert.match(builderConfig, /allowToChangeInstallationDirectory:\s*true/);
 assert.match(builderConfig, /artifactName:\s*["']XEKUTESetup\.exe["']/);
 assert.match(builderConfig, /include:\s*["']build\/installer\.nsh["']/);
 assert.match(read("src/app/electron/lifecycle.js"), /function setAllowImmediateQuit/);
-assert.match(read("src/app/electron/main.js"), /onInstallReady:\s*\(\)\s*=>\s*setAllowImmediateQuit\(true\)/);
+// Durable state is flushed and closed before the installer replaces files.
+assert.match(read("src/app/electron/main.js"), /prepareInstall:\s*async\s*\(\)\s*=>\s*\{\s*await prepareForUpdateInstall\(\);\s*setAllowImmediateQuit\(true\);/);
 assert.match(read("src/app/services/updates/update-service.js"), /quitAndInstall\(true,\s*true\)/);
 assert.match(main, /!app\.isPackaged\s*\?\s*createDisabledUpdateBackend\(\)/);
 assert.match(main, /updatedLaunch:\s*process\.argv\.includes\(["']--updated["']\)/);
@@ -381,7 +388,8 @@ assert.deepEqual(
   ["approve_for_me", "ask_for_approval", "full_authority"],
   "exactly three production authority profiles must be active",
 );
-assert.equal(authorityComposition.registry.profile("full_authority").modulePipeline.includes("approval_gate"), false);
+// Every profile runs the approval gate; full_authority decides approvals inside it.
+assert.equal(authorityComposition.registry.profile("full_authority").modulePipeline.includes("approval_gate"), true);
 for (const profile of authorityComposition.registry.profiles()) {
   assert.equal(profile.modulePipeline[0], "role_access_gate");
   assert.equal(profile.modulePipeline.includes("authority_profile_resolver"), false);

@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="styles/chat.css" />
   <link rel="stylesheet" href="styles/settings.css" />
   <link rel="stylesheet" href="styles/layout-revamp.css" />
+  <link rel="stylesheet" href="styles/settings-system.css" />
 </head>
 <body>
   <div id="app-shell">
@@ -83,6 +84,12 @@
     <div id="notification-panel" class="notification-panel" role="dialog" aria-label="Notifications" hidden>
       <header><div class="notification-panel-heading"><span class="codicon codicon-bell" aria-hidden="true"></span><strong>Notifications</strong></div><button type="button" id="notification-clear" class="icon-btn" title="Clear notifications" aria-label="Clear notifications"><span class="codicon codicon-clear-all"></span></button></header>
       <div id="notification-list" class="notification-list"><div class="notification-empty">No notifications</div></div>
+    </div>
+    <div id="security-proxy-browser-wrap" class="security-proxy-browser-wrap">
+      <button type="button" id="security-proxy-browser" class="topbar-icon browser-topbar-icon" aria-label="Open browser" title="Open browser. Right-click to open a tab with an identity." aria-haspopup="menu" aria-expanded="false">
+        <span class="codicon codicon-globe" aria-hidden="true"></span>
+      </button>
+      <div id="security-proxy-browser-menu" class="security-proxy-browser-menu" role="menu" hidden></div>
     </div>
     <button type="button" id="btn-top-terminal" class="topbar-icon active" title="Toggle terminal">
       <img class="chrome-icon" src="assets/icons/terminal_collapse_expand_icon.svg" alt="" aria-hidden="true">
@@ -432,6 +439,14 @@
                     </div>
                   </div>
                   <div class="project-settings-card">
+                    <h3>Browser transfers</h3>
+                    <div class="project-field-grid compact">
+                      <label>Agent uploads <small>Files from this project only</small><select data-project-field="browser.uploads"><option value="allowed">Allowed</option><option value="blocked">Blocked</option></select></label>
+                      <label>Downloads in agent tabs<select data-project-field="browser.downloads"><option value="allowed">Allowed</option><option value="blocked">Blocked</option></select></label>
+                      <label>Download size limit (MiB)<input type="number" min="1" max="12" data-project-field="browser.maxDownloadMiB" data-project-kind="number" /></label>
+                    </div>
+                  </div>
+                  <div class="project-settings-card">
                     <h3>Technique boundaries</h3>
                     <div class="project-field-grid">
                       <label>Allowed technique IDs <small>One adapter or technique ID per line</small><textarea data-project-field="rulesOfEngagement.allowedTechniques" data-project-kind="array" rows="6" placeholder="httpx&#10;nmap&#10;T1595"></textarea></label>
@@ -683,13 +698,6 @@
               </div>
             </div>
             <div id="security-workspace-tools" class="security-workspace-tools">
-              <div id="security-proxy-browser-wrap" class="security-proxy-browser-wrap">
-                <button type="button" id="security-proxy-browser" class="security-proxy-browser" aria-label="Open browser through XEKUTE proxy" title="Open browser through XEKUTE proxy" aria-haspopup="menu" aria-expanded="false">
-                  <span class="codicon codicon-globe" aria-hidden="true"></span>
-                  <span>Browser</span>
-                </button>
-                <div id="security-proxy-browser-menu" class="security-proxy-browser-menu" role="menu" hidden></div>
-              </div>
               <button type="button" id="security-history-toggle" class="security-history-toggle" aria-pressed="false" title="Show Traffic/Raw history">
                 <span class="codicon codicon-history" aria-hidden="true"></span>
                 <span>History</span>

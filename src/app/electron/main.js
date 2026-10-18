@@ -11,6 +11,7 @@ const { createShellCommandTracker } = require("../services/terminal/shell-comman
 const { sameTerminalOwner, findLiveTerminal } = require("../services/terminal/terminal-ownership.js");
 const { appendTerminalOutput } = require("../services/terminal/active-terminal-catalog.js");
 const { createTerminalOutputBatcher } = require("../services/terminal/terminal-output-batcher.js");
+const { normalizeUserImages, attachUserImages } = require("../services/chat/user-images.js");
 const { HIDDEN_COMMAND_REVEAL_MS, createHiddenCommandReveal } = require("../services/terminal/agent-terminal-reveal.js");
 const { createAgentTerminalHost } = require("../services/terminal/agent-terminal-host.js");
 const { createCommandReferences } = require("../services/terminal/command-references.js");
@@ -38,10 +39,12 @@ const { computeOrchestrationHold } = require("../../agent/runtime/orchestration-
 const { createSubagentCoordinator, DEFAULT_MAX_ACTIVE_CHILDREN } = require("../../agent/runtime/subagent-coordinator.js");
 const { normalizeProfile } = require("../../agent/modes/mode-registry.js");
 const { evaluateToolScopeAsync } = require("../../agent/authority/scope/scope-policy.js");
+const { evaluateBrowserPolicyAsync, browserScopeStanding, browserPolicyStillHolds } = require("../../agent/authority/scope/browser-scope.js");
 const AgentVerifier = require("../../agent/runtime/verifier.js");
 const { captureOllamaStream } = require("../../agent/llm/ollama/ollama-stream.js");
 const { captureOpenRouterStream, normalizeOpenRouterMessages, openRouterHeaders, openRouterTools } = require("../../agent/llm/openrouter/openrouter-stream.js");
 const { DEFAULT_OPENROUTER_BASE_URL, normalizeProvider, normalizeBaseUrl, buildChatRequest } = require("../../agent/llm/openrouter/providers.js");
+const { prepareBrowserImageMessages, validateBrowserVisionModel, estimateBrowserImageTokens } = require("../../agent/llm/openrouter/browser-images.js");
 const ContextBudget = require("../../agent/runtime/context-budget.js");
 const { estimateTokenCount } = ContextBudget;
 const { createWorkspaceFiles } = require("../services/workspace/workspace-files.js");
@@ -49,6 +52,7 @@ const { createProjectProfileStore } = require("../storage/project-profile-store.
 const { validateIpcRequest } = require("../../contracts/ipc/IpcContracts");
 const { registerIpcHandler } = require("../ipc/register");
 const { registerProjectIpc } = require("../ipc/project.js");
+const { registerBrowserIpc } = require("../ipc/browser.js");
 const { parseCommand } = require("../commands/command-parser.js");
 const { ingest: ingestAssessmentRecords, listDatasets, datasetExists, RESOURCE_SPECS } = require("../services/assessment/assessment-ingest.js");
 const { buildContext } = require("../services/assessment/parse-context.js");
@@ -63,7 +67,8 @@ const {
   writeGuidanceFile,
 } = require("../services/guidance/custom-guidance.js");
 const { createContainer } = require("../../infrastructure/di/container");
-const { registerLifecycle, setAllowImmediateQuit } = require("./lifecycle.js");
+const { registerLifecycle, setAllowImmediateQuit, prepareForUpdateInstall, APP_USER_MODEL_ID } = require("./lifecycle.js");
+const { createMainLog } = require("./main-log.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { isMemoryId } = require("../../contracts/memory/index.js");
@@ -75,38 +80,23 @@ function toolCatalogFromRegistry(registry) {
 }
 
 // Execute a normalized tool call against the registry-backed adapters.
-const browserTargets = new Map();
-function browserWorkspaceKey(workspace) {
-  try { return encodeURIComponent(path.resolve(String(workspace || ".")).toLowerCase()); }
-  catch { return encodeURIComponent(String(workspace || "").toLowerCase()); }
+// Approved browser scope exceptions, keyed by tab, ownership generation and
+// origin. A takeover bumps the generation, so it revokes every grant.
+const browserScopeGrants = new Set();
+function ownedBrowserTab(workspace, args, owner) {
+  const id = args.tabId || args.pageId;
+  const tab = id ? container?.nativeBrowserTab?.(workspace, id) : null;
+  if (tab) return tab.owner.kind === "chat" && tab.owner.sessionId === owner ? tab : null;
+  if (id) return null;
+  const owned = container?.nativeBrowserTabs?.(workspace, owner) || [];
+  return owned.length === 1 ? owned[0] : null;
 }
-function browserKeyPart(value) { return encodeURIComponent(String(value || "")); }
-function browserTargetKey(workspace, sessionId, identityId = "", pageId = "main") {
-  return [browserWorkspaceKey(workspace), browserKeyPart(sessionId), browserKeyPart(identityId), browserKeyPart(pageId || "main")].join("::");
-}
-function getBrowserTarget(workspace, sessionId, identityId = "", pageId = "main") {
-  const remembered = browserTargets.get(browserTargetKey(workspace, sessionId, identityId, pageId)) || "";
-  if (remembered) return remembered;
-  // A human can navigate the dedicated proxied browser before the agent acts.
-  // Use its current main-page URL solely as the follow-up scope target; the
-  // live BrowserContext itself remains private to the browser provider.
-  return container?.proxyBrowser?.getAgentPageTarget?.(workspace, identityId, pageId) || "";
-}
-function clearBrowserTarget(workspace, sessionId, identityId = "", pageId = "main") {
-  browserTargets.delete(browserTargetKey(workspace, sessionId, identityId, pageId));
-}
-function clearBrowserSessionTargets(workspace, sessionId) {
-  const prefix = `${browserWorkspaceKey(workspace)}::${browserKeyPart(sessionId)}::`;
-  for (const key of [...browserTargets.keys()]) if (key.startsWith(prefix)) browserTargets.delete(key);
-}
-function clearBrowserIdentityTargets(workspace, identityId) {
-  const prefix = `${browserWorkspaceKey(workspace)}::`;
-  const expectedIdentity = browserKeyPart(identityId);
-  for (const key of [...browserTargets.keys()]) {
-    const parts = key.split("::");
-    if (key.startsWith(prefix) && parts[2] === expectedIdentity) browserTargets.delete(key);
-  }
-}
+const BROWSER_STANDING_NOTE = {
+  restricted: "Reading is allowed here; interacting needs the user's approval.",
+  off_scope: "The next browser action on this page needs the user's approval.",
+  denied: "Browser actions on this page are denied.",
+  unconfigured: "Browser actions are denied until a project scope is set.",
+};
 
 function displayExecCommand(executable, args = []) {
   const quote = (value) => {
@@ -116,7 +106,7 @@ function displayExecCommand(executable, args = []) {
   return [quote(executable), ...(Array.isArray(args) ? args.map(quote) : [])].join(" ").trim();
 }
 
-async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", blockId = "", mode = "agent", processManager = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", operationId = "", delegationProvider = null, specialSkill = null, tier1Memory = false, artifactProvenance = null, ownerId = "" }) {
+async function executeToolCall({ workspace, toolCall, signal = null, sessionId = "", browserSessionId = "", model = "", provider = "", blockId = "", mode = "agent", processManager = null, nested = false, authorityProfile = "approve_for_me", approvalProvider = null, questionProvider = null, durableRunId = "", operationId = "", delegationProvider = null, specialSkill = null, tier1Memory = false, artifactProvenance = null, ownerId = "" }) {
   const name = toolCall?.function?.name || toolCall?.toolName || "";
   const args = toolCall?.function?.arguments || {};
   const specialEntry = createSpecialSkillToolEntry(specialSkill, name);
@@ -134,6 +124,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     : null;
   let context;
   try {
+    const browserOwner = browserSessionId || controlSessionOwners.get(sessionId) || sessionId;
     context = createExecutionContext({
       invocationId: `agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       toolName: name,
@@ -141,6 +132,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
       authority: normalizeAuthorityProfile(authorityProfile),
       workspace: { root: workspace },
       sessionId,
+      ...(browserOwner ? { browserSessionId: browserOwner } : {}),
       mode,
       requestMetadata: {
         actorId: "local-user",
@@ -183,8 +175,35 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     inputSchema: dynamicEntry?.inputSchema || dynamicEntry?.parameters || dynamicEntry?.schema || { type: "object", properties: {} },
     metadata: dynamicEntry || {},
   };
+  const elementTarget = args.target || args.from;
+  const describeElement = (tab) => (tab && elementTarget ? container.describeBrowserTarget?.(tab.id, elementTarget) : null);
+  const decideBrowser = (profile, tab) => evaluateBrowserPolicyAsync({
+    workspace, projectProfile: profile, input: args, tab, element: describeElement(tab),
+    profileId: normalizeAuthorityProfile(authorityProfile), granted: (key) => browserScopeGrants.has(key),
+  });
+  const browserTab = name === "browser_action" ? ownedBrowserTab(workspace, args, context.browserSessionId) : null;
+  const browserPolicy = name === "browser_action" ? await decideBrowser(projectProfile, browserTab) : null;
+  // Set when the action queued for a lease or waited on the user; only then
+  // can scope or the page have changed before dispatch.
+  let browserWaited = false;
+  const runtimeApproval = name === "browser_action" && typeof approvalProvider === "function" ? async (proposal) => {
+    browserWaited = true;
+    const element = describeElement(browserTab);
+    const hint = `${args.selector || ""} ${args.target?.selector || ""} ${element?.name || ""}`;
+    const secretInput = args.action === "insert_text" || (args.action === "type" && (Boolean(element?.secret) || /pass(word|code)?|secret|token|\botp\b|\bpin\b/i.test(hint)));
+    const answer = await approvalProvider({ ...proposal, secretInput });
+    const policy = browserPolicy?.browserPolicy;
+    if (answer?.approved && policy?.scopeException && policy.grantKey) browserScopeGrants.add(policy.grantKey);
+    return answer;
+  } : approvalProvider;
   const executeRaw = async (monitorRuntime) => {
     const rawContext = projectExecutionContext(context);
+    if (name === "browser_action" && browserWaited) {
+      const current = await decideBrowser(readProjectProfile(workspace)?.profile || null, ownedBrowserTab(workspace, args, context.browserSessionId));
+      if (!browserPolicyStillHolds(browserPolicy, current)) {
+        return { ok: false, error: { code: "BROWSER_POLICY_CHANGED", message: `The browser policy changed while this action waited. ${current.reason || ""}`.trim(), retryable: false } };
+      }
+    }
     const commandRuntime = name === "exec_command" || name === "view_active_terminal"
       ? {
         ...monitorRuntime,
@@ -220,29 +239,19 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
           ...monitorRuntime,
           ...(name === "delegate_agent" && typeof delegationProvider === "function" ? { delegationProvider } : {}),
           ...(name === "ask_questions" && typeof questionProvider === "function" ? { questionProvider } : {}),
+          ...(name === "browser_action" ? {
+            assertVision: () => assertBrowserVision({ model, provider, signal: monitorRuntime.signal }),
+            expectedTab: browserTab ? { id: browserTab.id, controlGeneration: browserTab.controlGeneration, url: browserTab.url } : null,
+          } : {}),
         });
-    }
-    if (name === "browser_action" && !result?.ok && result?.error?.code === "BROWSER_ACTION_STOPPED") {
-      // Cancellation closes the active page in the browser provider. Do not
-      // leave its old URL available as a follow-up scope target.
-      clearBrowserTarget(workspace, sessionId, args.identityId, args.pageId || "main");
     }
     if (name === "browser_action" && result?.ok) {
-      const observedUrl = result?.value?.evidence?.url || result?.value?.url || result?.evidence?.url || "";
-      if (observedUrl && /^https?:\/\//i.test(String(observedUrl))) {
-        const observedScope = await evaluateToolScopeAsync({
-          workspace,
-          toolName: "browser_action",
-          args: { action: "navigate", url: String(observedUrl) },
-          projectProfile,
-        });
-        if (!observedScope.ok) {
-          clearBrowserTarget(workspace, sessionId, args.identityId, args.pageId || "main");
-          return { ok: false, error: observedScope.reason, code: observedScope.code, scope: observedScope, retryable: false };
-        }
-        browserTargets.set(browserTargetKey(workspace, sessionId, args.identityId, args.pageId || "main"), String(observedUrl));
+      const landed = result.value?.evidence?.tab;
+      if (landed?.url && /^https?:/i.test(landed.url)) {
+        const standing = browserScopeStanding(landed.url, { workspace, projectProfile, purpose: landed.purpose });
+        const granted = ["restricted", "off_scope"].includes(standing.standing) && browserScopeGrants.has(`${landed.id}:${landed.controlGeneration}:${standing.origin}`);
+        if (BROWSER_STANDING_NOTE[standing.standing] && !granted) result.value.scope = { standing: standing.standing, reason: `${standing.reason} ${BROWSER_STANDING_NOTE[standing.standing]}` };
       }
-      if (result?.ok && args.action === "close_page") clearBrowserTarget(workspace, sessionId, args.identityId, args.pageId || "main");
     }
     return result;
   };
@@ -262,21 +271,30 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
         evaluateScope: evaluateToolScopeAsync,
         projectProfile,
         authorityRules: projectProfile?.authorityRules || projectProfile?.rulesOfEngagement?.authorityRules || {},
-        browserTarget: name === "browser_action" ? getBrowserTarget(workspace, sessionId, args.identityId, args.pageId || "main") : "",
+        browserPolicy,
+        browserAdmission: name === "browser_action" ? {
+          tabId: browserTab?.id || "",
+          identityId: browserTab ? browserTab.identityId || "" : args.action === "open_page" && args.purpose !== "research" ? args.identityId || "" : "",
+          traffic: ["interact", "sensitive"].includes(browserPolicy?.browserPolicy?.actionClass),
+          slots: context.resourceLimits?.maximumConcurrency,
+        } : null,
         identityExists: (identityId) => Boolean(container.identityVault?.().metadataFor?.(workspace, identityId)),
         resourceUsage: async () => {
           const listed = await container.durableProcessManager?.list?.(workspace, {});
           const processes = Array.isArray(listed?.value?.processes) ? listed.value.processes : [];
           return { processCount: processes.filter((record) => record.alive || record.status === "running").length };
         },
-        approvalProvider,
+        approvalProvider: runtimeApproval,
         audit: container.toolAuditStore,
-        checkpoint: (patch) => container.longHorizonRunStore.checkpoint(workspace, durableRunId || sessionId, { checkpoint: { invocationId: context.invocationId, toolName: name, ...patch } }).catch(() => {}),
-        onEvent: (eventPayload) => processManager?.sendLifecycleEvent?.(eventPayload),
+        checkpoint: (patch) => container.longHorizonRunStore.checkpoint(workspace, durableRunId || sessionId, { checkpoint: { invocationId: context.invocationId, toolName: name, ...patch } }).catch(mainLog.ignored("run.checkpoint")),
+        onEvent: (eventPayload) => {
+          if (eventPayload?.stage === "concurrency_queued") browserWaited = true;
+          processManager?.sendLifecycleEvent?.(eventPayload);
+        },
       },
     });
     const materialAssessmentTool = ["replay_request", "browser_action", "manage_identity"].includes(name);
-    if (materialAssessmentTool) container.assessmentIntelligence.refresh(workspace).catch(() => {});
+    if (materialAssessmentTool) container.assessmentIntelligence.refresh(workspace).catch(mainLog.ignored("intelligence.refresh"));
     return result;
   } catch (error) {
     return { ok: false, error: error.message, code: "TOOL_EXECUTION_FAILED", retryable: false };
@@ -287,14 +305,27 @@ const APP_ROOT = path.join(__dirname, "..", "..", "..");
 const IS_DEV = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
 const UI_DIST_PATH = path.join(__dirname, "..", "..", "ui", "dist", "index.html");
 const UI_LEGACY_PATH = path.join(__dirname, "..", "..", "ui", "index.legacy.html");
-const APP_INDEX_PATH = fs.existsSync(UI_DIST_PATH) ? UI_DIST_PATH : UI_LEGACY_PATH;
+// The legacy shell is a development fallback only; a package without the
+// compiled UI must fail visibly instead of loading stale markup.
+const APP_INDEX_PATH = app.isPackaged || fs.existsSync(UI_DIST_PATH) ? UI_DIST_PATH : UI_LEGACY_PATH;
 const APP_INDEX_URL = pathToFileURL(APP_INDEX_PATH).href;
 
 function loadRenderer(mainWindow) {
   mainWindow.loadFile(APP_INDEX_PATH).catch((error) => {
     console.error("Failed to load renderer:", APP_INDEX_PATH, error);
+    if (app.isPackaged) {
+      dialog.showErrorBox("XEKUTE could not start", `The application interface is missing or damaged (${APP_INDEX_PATH}). Reinstall XEKUTE from the latest XEKUTESetup.exe; your projects and settings are kept.`);
+    }
   });
 }
+
+const mainLog = createMainLog({ directory: () => path.join(app.getPath("userData"), "logs") });
+process.on("unhandledRejection", (reason) => mainLog.write("unhandledRejection", reason));
+process.on("uncaughtException", (error) => {
+  mainLog.write("uncaughtException", error);
+  // Keep the visible report that Electron shows when no handler is installed.
+  dialog.showErrorBox("A JavaScript error occurred in the main process", String(error?.stack || error));
+});
 
 let mainWindow;
 // DI container owns the state maps so dispose() cleans up exactly the live
@@ -303,6 +334,7 @@ const container = createContainer({
   app,
   safeStorage,
   getMainWindow: () => mainWindow,
+  browserRuntimeSettings: effectiveOperatorRuntimeSettings,
   verifyFindingCandidate,
 });
 const terminals = container.terminals;
@@ -656,6 +688,7 @@ function abortPendingOperatorQuestions({ senderId, sessionId = "" } = {}) {
   }
 }
 function abortAgentSession(senderId, sessionId = "") {
+  void Promise.resolve().then(() => container.cancelNativeBrowserChat(sessionId)).catch(error => console.warn("Browser cancellation failed:", error.message));
   const abortMatching = (map) => {
     for (const [key, controller] of map.entries()) {
       if (!matchesAgentRunKey(key, senderId, sessionId)) continue;
@@ -699,6 +732,7 @@ function abortAgentSession(senderId, sessionId = "") {
   }
 }
 async function shutdownAgentRuntime() {
+  await container.shutdownNativeBrowser().catch(error => console.warn("Browser shutdown failed:", error.message));
   for (const controller of agentRunControllers.values()) {
     try { controller.abort("APP_SHUTDOWN"); } catch { /* best effort */ }
   }
@@ -711,7 +745,7 @@ async function shutdownAgentRuntime() {
     }
   }
   const result = await subagentCoordinator.shutdown({ reason: "APP_SHUTDOWN", timeoutMs: 5_000 });
-  await container.longHorizonRunStore?.flush?.().catch(() => {});
+  await container.longHorizonRunStore?.flush?.().catch(mainLog.ignored("run.flush"));
   parentContinuationTasks.clear();
   parentRunDescriptors.clear();
   parentContinuationOutbox.clear();
@@ -1105,7 +1139,7 @@ function createWindow() {
     },
   });
 
-  mainWindow.setAppDetails?.({ appId: "com.pointer.securityworkspace", appIconPath: process.execPath });
+  mainWindow.setAppDetails?.({ appId: APP_USER_MODEL_ID, appIconPath: process.execPath });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (targetUrl !== APP_INDEX_URL) event.preventDefault();
@@ -1129,7 +1163,10 @@ function createWindow() {
   const senderId = mainWindow.webContents.id;
   mainWindow.webContents.on("destroyed", () => {
     stopWorkspaceWatch(senderId);
+    void Promise.resolve(container.closeNativeBrowserProject()).catch(error => console.warn("Browser cleanup failed:", error.message));
   });
+  mainWindow.on("blur", () => container.hideNativeBrowser());
+  mainWindow.on("minimize", () => container.hideNativeBrowser());
 }
 
 function stopWorkspaceWatch(senderId) {
@@ -1230,10 +1267,12 @@ function ensureWebClonePreviewServer() {
 function normalizeWebClonePreviewBounds(bounds = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return null;
   const content = mainWindow.getContentBounds();
-  const x = Math.max(0, Math.round(Number(bounds.x) || 0));
-  const y = Math.max(0, Math.round(Number(bounds.y) || 0));
-  const width = Math.max(1, Math.min(Math.round(Number(bounds.width) || 1), Math.max(1, content.width - x)));
-  const height = Math.max(1, Math.min(Math.round(Number(bounds.height) || 1), Math.max(1, content.height - y)));
+  // The renderer measures in CSS pixels; views are placed in window pixels.
+  const zoom = mainWindow.webContents.getZoomFactor() || 1;
+  const x = Math.max(0, Math.round((Number(bounds.x) || 0) * zoom));
+  const y = Math.max(0, Math.round((Number(bounds.y) || 0) * zoom));
+  const width = Math.max(1, Math.min(Math.round((Number(bounds.width) || 1) * zoom), Math.max(1, content.width - x)));
+  const height = Math.max(1, Math.min(Math.round((Number(bounds.height) || 1) * zoom), Math.max(1, content.height - y)));
   return { x, y, width, height };
 }
 
@@ -1279,7 +1318,6 @@ registerLifecycle({
   BrowserWindow,
   session,
   container,
-  applicationId: "com.pointer.securityworkspace",
   shutdown: shutdownAgentRuntime,
   createApplicationMenu,
   createWindow: () => {
@@ -1293,10 +1331,15 @@ registerLifecycle({
 
 // ── Tools IPC ─────────────────────────────────────────────────────────────────
 
+registerBrowserIpc({ ipcMain, container, getMainWindow: () => mainWindow });
+
 registerProjectIpc({
   ipcMain,
   app,
-  dialog,
+  dialog: {
+    showOpenDialog: async (...args) => { container.hideNativeBrowser(); return dialog.showOpenDialog(...args); },
+    showSaveDialog: async (...args) => { container.hideNativeBrowser(); return dialog.showSaveDialog(...args); },
+  },
   shell,
   container,
   getMainWindow: () => mainWindow,
@@ -1348,9 +1391,6 @@ registerProjectIpc({
   listGuidanceEntries,
   normalizeGuidanceKind,
   readGuidanceEntry,
-  clearBrowserTarget,
-  clearBrowserSessionTargets,
-  clearBrowserIdentityTargets,
 });
 
 ipcMain.handle("window:minimize", () => {
@@ -2219,16 +2259,17 @@ function parseOpenRouterModelSlug(modelId) {
   return { author: raw.slice(0, idx), slug: raw.slice(idx + 1) };
 }
 
-async function fetchOpenRouterModelRecord(modelId) {
+async function fetchOpenRouterModelRecord(modelId, { signal = AbortSignal.timeout(5_000) } = {}) {
   const slug = parseOpenRouterModelSlug(modelId);
   if (!slug) return null;
   const path = `/models/${encodeURIComponent(slug.author)}/${encodeURIComponent(slug.slug)}`;
   let response = null;
   try {
-    response = getOpenRouterApiKey() ? await openRouterFetch(path) : await fetch(`${getOpenRouterBaseUrl()}${path}`);
+    response = getOpenRouterApiKey() ? await openRouterFetch(path, { signal }) : await fetch(`${getOpenRouterBaseUrl()}${path}`, { signal });
   } catch {
     try {
-      response = await fetch(`${getOpenRouterBaseUrl()}${path}`);
+      if (signal.aborted) return null;
+      response = await fetch(`${getOpenRouterBaseUrl()}${path}`, { signal });
     } catch {
       return null;
     }
@@ -2240,6 +2281,35 @@ async function fetchOpenRouterModelRecord(modelId) {
   } catch {
     return null;
   }
+}
+
+async function refreshBrowserModelMetadata(model, { signal } = {}) {
+  const record = await fetchOpenRouterModelRecord(model, { ...(signal ? { signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]) } : {}) });
+  if (!record) return null;
+  const metadata = { ...record, id: model, provider: "openrouter", inputModalities: record.architecture?.input_modalities,
+    supportedParameters: record.supported_parameters, source: "detail", fetchedAt: new Date().toISOString() };
+  if (!openRouterModelsCache) openRouterModelsCache = { modelMeta: {} };
+  openRouterModelsCache.modelMeta[model] = metadata;
+  return metadata;
+}
+
+async function assertBrowserVision({ model, provider, signal } = {}) {
+  if (signal?.aborted) throw Object.assign(new Error("Browser action stopped."), { code: "BROWSER_ACTION_STOPPED" });
+  const selectedProvider = provider || getActiveProvider();
+  const selectedModel = model || (selectedProvider === "openrouter" ? llmPreferences().openrouter?.model : "");
+  const metadata = await validateBrowserVisionModel({ provider: selectedProvider, model: selectedModel,
+    metadata: openRouterModelsCache?.modelMeta?.[selectedModel], refreshMetadata: model => refreshBrowserModelMetadata(model, { signal }) });
+  if (signal?.aborted) throw Object.assign(new Error("Browser action stopped."), { code: "BROWSER_ACTION_STOPPED" });
+  return metadata;
+}
+
+async function browserMessagesForRequest({ messages, model, workspace = "", signal }) {
+  const selectedModel = model || llmPreferences().openrouter?.model;
+  const prepared = await prepareBrowserImageMessages({ messages, provider: "openrouter", model: selectedModel,
+    metadata: openRouterModelsCache?.modelMeta?.[selectedModel], refreshMetadata: model => refreshBrowserModelMetadata(model, { signal }),
+    artifactStore: container.browserArtifacts(),
+    projectId: workspace ? container.identityVault().projectIdFor(workspace) : container.nativeBrowserProjectId() });
+  return normalizeOpenRouterMessages(prepared.messages);
 }
 
 async function getOpenRouterModelContexts(modelId) {
@@ -2283,6 +2353,8 @@ async function getOpenRouterModelContexts(modelId) {
         maxCompletionTokens: Number(record.top_provider?.max_completion_tokens || record.max_output_length) || null,
         topProviderContextLength: Number(record.top_provider?.context_length) || null,
         supportedParameters: Array.isArray(record.supported_parameters) ? record.supported_parameters : [],
+        architecture: record.architecture && typeof record.architecture === "object" ? { ...record.architecture } : {},
+        inputModalities: Array.isArray(record.architecture?.input_modalities) ? [...record.architecture.input_modalities] : [],
         expirationDate: String(record.expiration_date || ""),
         available: record.available !== false && record.status !== "unavailable",
         pricing: record.pricing && typeof record.pricing === "object" ? record.pricing : {},
@@ -2321,7 +2393,7 @@ async function getOpenRouterModelContexts(modelId) {
     modelMeta: catalogMeta ? ContextBudget.normalizeModelMetadata(catalogMeta, model) : null,
   };
 }
-async function runOpenRouterChat(event, { messages, model, reasoningEffort, tools, contextPlan, maxCompletionTokens, signal = null, idleTimeoutMs, totalTimeoutMs } = {}, hooks = {}, controllerKey = event.sender.id) {
+async function runOpenRouterChat(event, { messages, model, workspace, reasoningEffort, tools, contextPlan, maxCompletionTokens, signal = null, idleTimeoutMs, totalTimeoutMs } = {}, hooks = {}, controllerKey = event.sender.id) {
   const senderId = event.sender.id; const previous = llmControllers.get(controllerKey); if (previous) previous.abort(); const controller = new AbortController(); llmControllers.set(controllerKey, controller); let fullText = "", toolCalls = [];
   const abortBridge = () => { if (!controller.signal.aborted) controller.abort(signal?.reason || "AGENT_RUN_ABORTED"); };
   if (signal?.aborted) abortBridge();
@@ -2337,7 +2409,7 @@ async function runOpenRouterChat(event, { messages, model, reasoningEffort, tool
       baseUrl: getOpenRouterBaseUrl(),
       apiKey: getOpenRouterApiKey(),
       model: model || llmPreferences().openrouter?.model,
-      messages: normalizeOpenRouterMessages(messages),
+      messages: await browserMessagesForRequest({ messages, model, workspace, signal: controller.signal }),
       tools: openRouterTools(tools),
       stream: true,
       // Do not turn the compiler's context reserve into a per-call output cap.
@@ -2393,12 +2465,12 @@ async function runOpenRouterAgentRound(senderId, payload, hooks = {}, controller
     totalTimeoutMs: payload?.totalTimeoutMs ?? 0,
   }, hooks, controllerKey);
 }
-async function runOpenRouterJson({ model, messages, temperature = 0, maxCompletionTokens, reasoningEffort, contextPlan, timeoutMs = 0, responseFormat = { type: "json_object" } }) {
+async function runOpenRouterJson({ model, messages, workspace, temperature = 0, maxCompletionTokens, reasoningEffort, contextPlan, timeoutMs = 0, responseFormat = { type: "json_object" } }) {
   const request = buildChatRequest({
     baseUrl: getOpenRouterBaseUrl(),
     apiKey: getOpenRouterApiKey(),
     model: model || llmPreferences().openrouter?.model,
-    messages: normalizeOpenRouterMessages(messages),
+    messages: await browserMessagesForRequest({ messages, model, workspace }),
     stream: false,
     temperature,
     maxCompletionTokens: maxCompletionTokens || contextPlan?.responseReserveTokens || undefined,
@@ -2548,7 +2620,7 @@ ipcMain.handle("ollama:runtime", async (_event, { model } = {}) => {
 });
 
 ipcMain.handle("ollama:countTokens", async (_event, { model, messages = [], tools = [] } = {}) => {
-  if (getActiveProvider() === "openrouter") return { ok: true, count: estimateTokenCount(JSON.stringify({ messages, tools })), source: "estimate" };
+  if (getActiveProvider() === "openrouter") return { ok: true, count: estimateTokenCount(JSON.stringify({ messages, tools })) + estimateBrowserImageTokens(messages), source: "estimate" };
   const prompt = serializeTokenPayload(messages, tools);
   const fallback = estimateTokenCount(prompt) + (Array.isArray(messages) ? messages.length * 4 : 0);
 
@@ -2677,13 +2749,13 @@ async function resumeInterruptedRuns(event, sessionIds = [], requestedWorkspace 
           started.push(task.runId); resumeInFlight.add(task.runId);
           setImmediate(() => handleAgentRun(event, { ...task.binding, workspace, sessionId: chat.id, userMessage: task.objective,
             runId: task.runId, taskId: task.id, blockId: task.blockId, backgroundRuntime: true }, { automaticContinuation: true, liveInputContinuation: true })
-            .catch(() => {}).finally(() => resumeInFlight.delete(task.runId)));
+            .catch(mainLog.ignored("run.resumeTask")).finally(() => resumeInFlight.delete(task.runId)));
         }
       }
     }
   }
   for (const workspace of workspaces) {
-    await store.reconcile(workspace, { staleAfterMs: Tunables.LONG_HORIZON_STALE_RUN_MS }).catch(() => {});
+    await store.reconcile(workspace, { staleAfterMs: Tunables.LONG_HORIZON_STALE_RUN_MS }).catch(mainLog.ignored("run.reconcile"));
     for (const run of store.listResumeEligible(workspace, sessionIds)) {
       if (!run?.sessionId || liveRunForSession(run.sessionId) || resumeInFlight.has(run.runId)) continue;
       const resumed = await store.resume(workspace, run.runId).catch(() => null);
@@ -2704,7 +2776,7 @@ async function resumeInterruptedRuns(event, sessionIds = [], requestedWorkspace 
       resumeInFlight.add(run.runId);
       setImmediate(() => {
         handleAgentRun(event, payload, { automaticContinuation: true })
-          .catch(() => {})
+          .catch(mainLog.ignored("run.resumeInterrupted"))
           .finally(() => resumeInFlight.delete(run.runId));
       });
     }
@@ -3129,20 +3201,32 @@ function requestOperatorQuestions(sender, proposal) {
 
 const { formatCommandForApproval } = require("../services/approval/command-approval.js");
 
+function formatBrowserActionForApproval(args = {}, { secret = false } = {}) {
+  const target = args.url || args.target?.selector || args.selector || (args.target?.ref ? `element ${args.target.ref}` : args.target?.kind === "point" ? `point ${args.target.x},${args.target.y}` : "");
+  const text = typeof args.text !== "string" ? ""
+    : secret ? ` (${args.text.length} characters, hidden)`
+      : ` "${args.text.length > 80 ? `${args.text.slice(0, 80)}…` : args.text}"`;
+  const key = args.key ? ` ${args.key}` : "";
+  const paths = Array.isArray(args.paths) ? ` ${args.paths.join(", ")}` : "";
+  return `${args.action || "browser action"}${key}${text}${target ? ` → ${target}` : ""}${paths}`;
+}
+
 async function requestToolApproval(sender, proposal = {}) {
   const requestId = `approval-${String(proposal.invocationId || Date.now())}`;
-  if (proposal.toolName !== "exec_command") {
-    return { id: requestId, approved: false, reason: "Interactive approval is available only for exec_command." };
+  if (!["exec_command", "browser_action"].includes(proposal.toolName)) {
+    return { id: requestId, approved: false, reason: "Interactive approval is available only for commands and browser actions." };
   }
+  const browser = proposal.toolName === "browser_action";
   const response = await requestOperatorQuestions(sender, {
     requestId,
     sessionId: String(proposal.sessionId || ""),
-    reason: `${proposal.toolName || "Tool"} requires approval under ${String(proposal.profile || "the selected authority profile").replace(/_/g, " ")}. Risk: ${proposal.risk?.level || "unknown"}.`,
+    reason: browser ? String(proposal.reason || "This browser action requires approval.") : `${proposal.toolName || "Tool"} requires approval under ${String(proposal.profile || "the selected authority profile").replace(/_/g, " ")}. Risk: ${proposal.risk?.level || "unknown"}.`,
     topic: "tool-approval",
     expiresInMs: 0,
     approval: {
       kind: "command",
-      command: formatCommandForApproval(proposal.args),
+      command: browser ? `${String(proposal.reason || "")}\n${formatBrowserActionForApproval(proposal.args, { secret: Boolean(proposal.secretInput) })}`.trim() : formatCommandForApproval(proposal.args),
+      ...(browser ? { title: "Allow this browser action?" } : {}),
     },
     questions: [{
       id: "approval",
@@ -3319,6 +3403,8 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
 
 async function handleAgentRun(event, payload = {}, options = {}) {
   const sender = event.sender;
+  const userImages = normalizeUserImages(payload.userImages);
+  if (!userImages.ok) return { ok: false, error: userImages.error, code: "USER_IMAGES_INVALID" };
   const sessionId = String(payload.sessionId || payload.memorySessionId || "");
   const foregroundRunKey = sessionRunKey(sessionId);
   const backgroundRuntime = Boolean(payload.backgroundRuntime || options.automaticContinuation);
@@ -3351,6 +3437,14 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     if (artifactWorkspace) {
       const artifactsReady = container.projectArtifacts.bootstrap(payload.workspace);
       if (!artifactsReady?.ok) return { ok: false, code: artifactsReady?.code || "ARTIFACT_BOOTSTRAP_FAILED", error: artifactsReady?.error || "Canonical project artifacts could not be initialized.", retryable: false, validation: artifactsReady?.validation || null };
+    }
+  }
+  // Keep the sent originals with the chat so a reopened chat can show them at
+  // full quality. Saving is best effort; the run never depends on it.
+  if (tier1ProjectId && userImages.images.length) {
+    for (const image of userImages.images) {
+      try { container.tier1SensitiveStore?.writeChatImage?.(tier1ProjectId, tier1SessionId, image); }
+      catch (error) { mainLog.write("chatImage.save", error); }
     }
   }
   const continuationResultId = String(payload.continuation?.resultId || "");
@@ -3401,10 +3495,10 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     : null;
   const sendAgentEvent = (data) => {
     if (data?.type === "agent_command_output") {
-      if (data.deliverToSession) deliverCommandReport(data).catch(() => {});
+      if (data.deliverToSession) deliverCommandReport(data).catch(mainLog.ignored("command.report"));
       return;
     }
-    if (data?.type === "terminal_checkpoint") deliverCommandReport(data, { checkpoint: true }).catch(() => {});
+    if (data?.type === "terminal_checkpoint") deliverCommandReport(data, { checkpoint: true }).catch(mainLog.ignored("command.checkpoint"));
     const target = senderForSession(sessionId, sender);
     if (target && !target.isDestroyed()) {
       const routedSessionId = String(data?.sessionId || sessionId);
@@ -3523,10 +3617,11 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       return { ...receipt, ...receipt.value };
     },
     runAgentTurn,
-    runModelRound: (senderId, roundPayload, hooks, controllerKey) => runOllamaAgentRound(senderId, roundPayload, hooks, controllerKey),
+    runModelRound: (senderId, roundPayload, hooks, controllerKey) => runOllamaAgentRound(senderId, { ...roundPayload, workspace: payload.workspace }, hooks, controllerKey),
     executeToolCall: (request) => taskResources.execute({ workspace: payload.workspace || "", runId: request.durableRunId, toolCall: request.toolCall, signal: request.signal }, () => executeToolCall({
       ...request,
       ownerId: event.sender.id,
+      browserSessionId: request.sessionId,
       blockId: request?.blockId || "",
       tier1Memory: Boolean(tier1ProjectId),
       processManager: agentTerminalHost,
@@ -3617,7 +3712,6 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       sessionId: childSessionId,
       mode: requestedProfile.key,
     }) || null,
-    getBrowserTarget,
     onResultReady: async (readyResult) => {
       const snapshot = subagentCoordinator.exportWave(coordinationKey);
       const descriptor = parentRunDescriptors.get(coordinationKey);
@@ -3625,7 +3719,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       if (descriptor?.payload?.workspace && descriptor.durableRunId && snapshot) {
         container.longHorizonRunStore.checkpoint(descriptor.payload.workspace, descriptor.durableRunId, {
           checkpoint: { orchestrationWave: snapshot },
-        }).catch(() => {});
+        }).catch(mainLog.ignored("wave.checkpoint"));
       }
       if (agentSessionRuntime) {
         const receipt = await container.v3SessionStore.transactSession(payload.workspace, tier1SessionId, (document) => {
@@ -3741,7 +3835,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       objective: continuationResultId ? buildSubagentResultPrompt(claimedContinuation.result) : payload.userMessage || "",
       mode: requestedProfile.key,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
-    }).catch(() => {});
+    }).catch(mainLog.ignored("run.begin"));
   }
   const workingReferences = Array.isArray(payload.workingReferences) ? [...payload.workingReferences] : [];
   let result;
@@ -3835,17 +3929,28 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     signal: runController.signal,
     globalGuidanceRoot: globalGuidanceRoot(),
     sendEvent: sendAgentEvent,
-    runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, { ...roundPayload, provider: payload.provider }, {
+    runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, {
+      ...roundPayload,
+      // Attached images go to the model on every round of this run only.
+      messages: attachUserImages(roundPayload.messages, {
+        text: payload.userMessage,
+        images: userImages.images,
+        provider: payload.provider || roundPayload.contextPlan?.provider || getActiveProvider(),
+      }),
+      provider: payload.provider,
+      workspace: payload.workspace,
+    }, {
       onThinking: roundPayload.onThinking,
       onToken: roundPayload.onToken,
       onToolCalls: roundPayload.onToolCalls,
       onStreamEvent: roundPayload.onStreamEvent,
       onHeartbeat: () => payload.workspace
-        ? container.longHorizonRunStore.heartbeat(payload.workspace, durableRunId, { phase: "stream" }).catch(() => {})
+        ? container.longHorizonRunStore.heartbeat(payload.workspace, durableRunId, { phase: "stream" }).catch(mainLog.ignored("run.heartbeat"))
         : null,
     }, runKey),
     executeToolCall: (request) => (supervisedRun ? supervisedRun.execute(request, (owned) => taskResources.execute({ workspace: payload.workspace, runId: durableRunId, toolCall: owned.toolCall, signal: owned.signal }, () => executeToolCall({
       ...owned,
+      browserSessionId: payload.chatSessionId || sessionId, model: payload.model, provider: payload.provider || getActiveProvider(),
       ownerId: event.sender.id, blockId: owned.blockId || replyBlockId, tier1Memory: Boolean(tier1ProjectId),
       processManager: agentTerminalHost, specialSkill: activeSpecialSkill,
       authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
@@ -3854,6 +3959,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       durableRunId, delegationProvider,
     }))) : executeToolCall({
       ...request,
+      browserSessionId: payload.chatSessionId || sessionId, model: payload.model, provider: payload.provider || getActiveProvider(),
       ownerId: event.sender.id,
       blockId: request?.blockId || payload.blockId || replyBlockId,
       tier1Memory: Boolean(tier1ProjectId),
@@ -3867,11 +3973,11 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     })),
     listRunningCommands,
     checkpointRun: (patch) => payload.workspace
-      ? container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(() => {})
+      ? container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(mainLog.ignored("run.checkpoint"))
       : Promise.resolve(),
     persistTurnProgress: async (patch = {}) => {
       if (payload.workspace) {
-        await container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(() => {});
+        await container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, patch).catch(mainLog.ignored("run.checkpoint"));
       }
       if (!tier1ProjectId || !container.v3SessionStore?.record) return;
       const transcriptPrompt = continuationResultId
@@ -3892,9 +3998,8 @@ async function handleAgentRun(event, payload = {}, options = {}) {
           model: String(payload.model || "").slice(0, 240),
           provider: String(payload.provider || getActiveProvider() || "ollama").slice(0, 120),
         },
-      }).catch(() => {});
+      }).catch(mainLog.ignored("chatHistory.outcome"));
     },
-    getBrowserTarget,
     toolMetadataForName: (name) => container.mcpRuntime?.metadata?.(name, { workspace: payload.workspace, sessionId, mode: requestedProfile.key }) || null,
     requestQuestions: (proposal) => requestOperatorQuestions(event.sender, { ...proposal, sessionId }),
     findWorkspaceFiles,
@@ -3997,7 +4102,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     await container.longHorizonRunStore.finish(payload.workspace, durableRunId, status, {
       evidenceIds: result?.evidenceIds || [],
       error: result?.error ? String(result.error).slice(0, 2000) : "",
-    }).catch(() => {});
+    }).catch(mainLog.ignored("run.finish"));
   }
   const acceptContinuationResult = Boolean(result?.ok && !result?.aborted
     && !["failed", "stopped", "inconclusive", "artifact_sync_failed"].includes(result?.runState?.status));
@@ -4008,7 +4113,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   if (payload.workspace && parentDescriptor?.durableRunId && waveSnapshot) {
     await container.longHorizonRunStore.checkpoint(payload.workspace, parentDescriptor.durableRunId, {
       checkpoint: { orchestrationWave: waveSnapshot },
-    }).catch(() => {});
+    }).catch(mainLog.ignored("wave.checkpoint"));
   }
   continuationResultAccepted = acceptContinuationResult;
   releaseParentTurn(result?.aborted);
@@ -4074,11 +4179,11 @@ ipcMain.handle("agent:submitInput", async (event, payload = {}) => {
   if (!descriptor && !payload.deferStart && agentSessionRuntime.supervisor) {
     const snapshot = agentSessionRuntime.supervisor.snapshot({ workspace, sessionId: memorySessionId });
     const prior = [...(snapshot.control?.tasks || [])].reverse().find((task) => task.kind === "primary");
-    if (prior) descriptor = rememberParentRunDescriptor(key, event, { ...prior.binding, workspace, sessionId, userMessage: prior.objective,
+    if (prior) descriptor = rememberParentRunDescriptor(key, event, { ...prior.binding, workspace, sessionId, chatSessionId: payload.chatSessionId, userMessage: prior.objective,
       memorySessionId, runId: prior.runId, taskId: prior.id, blockId: prior.blockId }, true);
     else if (container.v3SessionStore?.load) {
       const chat = container.v3SessionStore.load(workspace).sessions?.find((session) => session.id === memorySessionId);
-      descriptor = rememberParentRunDescriptor(key, event, { workspace, sessionId, memorySessionId, userMessage: "", provider: getActiveProvider(),
+      descriptor = rememberParentRunDescriptor(key, event, { workspace, sessionId, chatSessionId: payload.chatSessionId, memorySessionId, userMessage: "", provider: getActiveProvider(),
         model: payload.model || chat?.selectedModel || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" }, false);
     }
   }
@@ -4219,7 +4324,11 @@ const updateService = createUpdateService({
   backend: updateBackend,
   settingsStore: updateSettingsStore,
   updatedLaunch: process.argv.includes("--updated"),
-  onInstallReady: () => setAllowImmediateQuit(true),
+  isBusy: () => agentRunControllers.size > 0,
+  prepareInstall: async () => {
+    await prepareForUpdateInstall();
+    setAllowImmediateQuit(true);
+  },
   sendEvent: (payload) => {
     try { mainWindow?.webContents.send("updates:event", payload); } catch { /* window gone */ }
   },

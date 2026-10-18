@@ -27,8 +27,8 @@ test("workspace files open in the Monaco-powered center editor", () => {
   assert.match(renderer, /path: INTERCEPTOR_TAB_PATH[\s\S]*?special: "interceptor"/);
   assert.doesNotMatch(renderer, /APPLICATION_GRAPH_TAB_PATH|special: "application-graph"/);
   assert.match(renderer, /function showSecurityWorkspace\(tool = ""\) \{\s*openInterceptorTab\(tool\);/);
-  assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
-  assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
+  assert.match(renderer, /if \(!activeTab \|\| isSettingsTab\(activeTab\) \|\| isInterceptorTab\(activeTab\) \|\| isBrowserTab\(activeTab\)\) \{[\s\S]*?editorPathBar\.hidden = true;/);
+  assert.match(renderer, /const specialWorkspaceTab = isSettingsTab\(tab\) \|\| isInterceptorTab\(tab\) \|\| isBrowserTab\(tab\);[\s\S]*?el\.title = specialWorkspaceTab[\s\S]*?\? tab\.name/);
   assert.match(renderer, /if \(specialWorkspaceTab\) el\.classList\.add\("special-workspace-tab"\)/);
   assert.match(renderer, /isSettingsTab\(tab\)[\s\S]*?codicon-settings-gear[\s\S]*?isInterceptorTab\(tab\)[\s\S]*?codicon-debug-disconnect/);
   assert.doesNotMatch(renderer, /isApplicationGraphTab/);

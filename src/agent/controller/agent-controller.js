@@ -29,6 +29,7 @@ const { completeExchanges, coherentTail } = require("../runtime/tool-protocol.js
 const { runModelAttempt } = require("../runtime/model-attempt.js");
 const { CONTEXT_START, prepareChatReferenceContext, referenceIds } = require("../runtime/chat-references.js");
 const { approximateTokens } = require("../../app/services/memory/tier1-context-coordinator.js");
+const { estimateBrowserImageTokens, retainBrowserScreenshotExchanges } = require("../llm/openrouter/browser-images.js");
 
 // Delivery state of every detached tool result in this process, keyed by its
 // inbox id. A task resumed by a later run finds the call in its saved
@@ -177,12 +178,13 @@ function toolCallSignature(tool = {}) {
   return name + ":" + JSON.stringify(args);
 }
 
-function estimateMessagesTokens(messages = []) {
-  return (Array.isArray(messages) ? messages : []).reduce((total, message) => {
+function estimateMessagesTokens(messages = [], { provider = "openrouter", metadata } = {}) {
+  const textTokens = (Array.isArray(messages) ? messages : []).reduce((total, message) => {
     let count = ToolMap.estimateTokenCount(message?.content || "") + 4;
     if (message?.tool_calls) count += ToolMap.estimateTokenCount(JSON.stringify(message.tool_calls));
     return total + count;
   }, 0);
+  return textTokens + (provider === "openrouter" ? estimateBrowserImageTokens(messages, { metadata }) : 0);
 }
 
 function tier1UsageSections(assembly) {
@@ -213,7 +215,8 @@ function partitionProviderTools(tools = []) {
 
 const CONTINUE_NUDGE_CONTENT = [
   "No end_turn(status=stop) was called.",
-  "Continue the objective with tools, or write a clear answer and call end_turn with status stop if the work is complete.",
+  "If the work is complete, call end_turn with status stop now and write no new prose; your previous message is the final answer.",
+  "Only continue with tools if real work remains.",
 ].join(" ");
 
 function createContinueNudgeMessage() {
@@ -245,7 +248,7 @@ function keepNativeAndRecentTools(tools = [], recentNames = []) {
   return [...native, ...keptMcp];
 }
 
-function fitMessagesToContext({ baseMessages = [], history = [], tools = [], promptBudget = 8192 } = {}) {
+function fitMessagesToContext({ baseMessages = [], history = [], tools = [], promptBudget = 8192, provider = "openrouter", metadata } = {}) {
   // Tier 1 owns the complete active conversation.  The controller may fail
   // closed when the exact ledger cannot fit, but it must never select a
   // partial tail or inject a second summary representation.
@@ -254,7 +257,7 @@ function fitMessagesToContext({ baseMessages = [], history = [], tools = [], pro
   const toolTokens = Array.isArray(tools) && tools.length
     ? ToolMap.estimateTokenCount(JSON.stringify(tools))
     : 0;
-  const usedTokens = estimateMessagesTokens(fixed) + estimateMessagesTokens(exactHistory) + toolTokens;
+  const usedTokens = estimateMessagesTokens([...fixed, ...exactHistory], { provider, metadata }) + toolTokens;
   const budget = Number(promptBudget) || 8192;
   return {
     ok: usedTokens <= budget,
@@ -586,7 +589,6 @@ async function runAgentTurn({
   executeToolCall = EMPTY_EXECUTE_TOOL,
   listRunningCommands = async () => [],
   toolMetadataForName = () => null,
-  getBrowserTarget = () => "",
   checkpointRun: suppliedCheckpointRun = () => Promise.resolve(),
   persistTurnProgress = () => Promise.resolve(),
   nested = false,
@@ -940,11 +942,15 @@ async function runAgentTurn({
     }
     return next;
   };
+  const browserImageTokens = (messages) => (contextPlan?.provider === "openrouter" ? estimateBrowserImageTokens(messages, { metadata: contextPlan?.metadata }) : 0);
   const currentTier1Usage = ({ completionTokens = null } = {}) => {
     if (!useTier1 || !tier1Assembly) return null;
     const sections = tier1UsageSections(tier1Assembly);
+    const imageTokens = browserImageTokens(tier1Active);
+    const activeSection = sections.find((section) => section.key === "active_conversation");
+    if (activeSection) activeSection.tokens += imageTokens;
     const sectionTotal = sections.reduce((sum, section) => sum + section.tokens, 0);
-    const promptTokens = Math.max(0, Number(tier1Assembly.total_tokens) || sectionTotal);
+    const promptTokens = Math.max(0, Number(tier1Assembly.total_tokens) ? Number(tier1Assembly.total_tokens) + imageTokens : sectionTotal);
     const provider = contextPlan?.provider || "ollama";
     return {
       source: "estimate",
@@ -968,13 +974,14 @@ async function runAgentTurn({
         localPromptTokens: promptTokens,
         sectionLocalTotal: sectionTotal,
         sectionReconciledTotal: sectionTotal,
+        imageTokens,
       },
       tier1: {
         effectiveContextLimit: tier1Assembly.effective_context_limit,
         threshold: tier1Assembly.checkpoint_threshold,
-        totalTokens: tier1Assembly.total_tokens,
-        conservativePromptUpperBound: tier1Assembly.conservative_prompt_upper_bound,
-        shouldCheckpoint: tier1Assembly.should_checkpoint,
+        totalTokens: promptTokens,
+        conservativePromptUpperBound: Number(tier1Assembly.conservative_prompt_upper_bound || 0) + imageTokens,
+        shouldCheckpoint: tier1Assembly.should_checkpoint || promptTokens >= Number(tier1Assembly.checkpoint_threshold),
         estimated: tier1Assembly.estimated,
         rows: tier1Assembly.rows,
         prefixHash: tier1Assembly.prefix_hash,
@@ -1007,7 +1014,8 @@ async function runAgentTurn({
     const base = tier1Context.pressure({ assembled, effective_context_limit: effectiveContextLimit });
     const protectedLocalTokens = (Array.isArray(assembled?.blocks?.A?.components) ? assembled.blocks.A.components : [])
       .reduce((sum, component) => sum + Math.max(0, Number(component?.tokens) || 0), 0);
-    const totalTokens = Math.max(0, Number(assembled?.total_tokens) || Number(base.totalTokens) || 0);
+    const imageTokens = browserImageTokens(tier1Active);
+    const totalTokens = Math.max(0, Number(assembled?.total_tokens) || Number(base.totalTokens) || 0) + imageTokens;
     return {
       ...base,
       totalTokens,
@@ -1056,9 +1064,12 @@ async function runAgentTurn({
         allow_model: typeof tier1Model === "function",
       });
       if (checkpoint?.ok) {
+        const screenshotExchanges = browserImageTokens(tier1Active) > 0
+          ? retainBrowserScreenshotExchanges(tier1Active).map((message) => ({ ...message })) : [];
         tier1Active.splice(0, tier1Active.length);
         if (liveInput) tier1Active.push(...inputMessages.map((message) => ({ ...message })));
-        if (liveInput) tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1Active);
+        tier1Active.push(...screenshotExchanges);
+        if (liveInput || screenshotExchanges.length) tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1Active);
         tier1ToolEvents.splice(0, tier1ToolEvents.length);
         currentWorkflow = checkpoint.currentWorkflow || null;
         const refreshed = refreshTier1Prompt();
@@ -1113,7 +1124,11 @@ async function runAgentTurn({
       ? input.source_message_id === message.source_message_id
       : message.role === "user" && message.content === input.content);
     const tail = new Set(coherentTail(history, tailSize));
-    const retained = exchanges.filter((exchange) => exchange.some(protectedMessage) || exchange.some((message) => tail.has(message))).flat();
+    const screenshotMessages = browserImageTokens(history) > 0 ? retainBrowserScreenshotExchanges(history) : [];
+    const screenshots = new Set(screenshotMessages);
+    const screenshotState = new Map(screenshotMessages.filter(message => message.role === "tool" && message.browserImagesConsumed).map(message => [message.tool_call_id, message]));
+    const retained = exchanges.filter((exchange) => exchange.some(protectedMessage) || exchange.some((message) => tail.has(message) || screenshots.has(message))).flat()
+      .map(message => message.role === "tool" && screenshotState.has(message.tool_call_id) ? screenshotState.get(message.tool_call_id) : message);
     const missing = inputMessages.filter((input) => !retained.some((message) => input.source_message_id
       ? input.source_message_id === message.source_message_id
       : message.role === "user" && message.content === input.content));
@@ -1153,6 +1168,8 @@ async function runAgentTurn({
       history: workingHistory,
       tools: availableTools,
       promptBudget,
+      provider: contextPlan?.provider || "ollama",
+      metadata: contextPlan?.metadata,
     });
     if (!fitted.ok && workingHistory.length > 2) {
       replaceProviderHistory(protectedHistory(workingHistory));
@@ -1161,6 +1178,8 @@ async function runAgentTurn({
         history: workingHistory,
         tools: availableTools,
         promptBudget,
+        provider: contextPlan?.provider || "ollama",
+        metadata: contextPlan?.metadata,
       });
       noteLimitation("Oldest live conversation was compacted so the turn can continue.");
     }
@@ -1191,7 +1210,7 @@ async function runAgentTurn({
     const estimate = (value) => Tier1TokenAccounting.calibratedPromptTokens(approximateTokens(value), { provider: contextPlan?.provider || "ollama", model });
     const destinationTokens = () => {
       if (useTier1) { refreshTier1Prompt({ resetHistory: false }); return Number(currentTier1Usage()?.promptTokens) || 0; }
-      return estimateMessagesTokens([...prompt.base, ...workingHistory]) + ToolMap.estimateTokenCount(JSON.stringify(availableTools));
+      return estimateMessagesTokens([...prompt.base, ...workingHistory], { provider: contextPlan?.provider || "ollama", metadata: contextPlan?.metadata }) + ToolMap.estimateTokenCount(JSON.stringify(availableTools));
     };
     for (const message of pending) {
       const prepared = await prepareChatReferenceContext({ contextText: referencePreparations.get(message.source_message_id),
@@ -1246,7 +1265,7 @@ async function runAgentTurn({
       }
     }
     let requestTools = [...availableTools];
-    const fit = () => fitMessagesToContext({ baseMessages: prompt.base, history: workingHistory, tools: requestTools, promptBudget });
+    const fit = () => fitMessagesToContext({ baseMessages: prompt.base, history: workingHistory, tools: requestTools, promptBudget, provider: contextPlan?.provider || "ollama", metadata: contextPlan?.metadata });
     let fitted = fit();
     if (!fitted.ok) {
       await compactForNextRound({ reason: "before_model_call" });
@@ -1268,7 +1287,7 @@ async function runAgentTurn({
     for (const exchange of pendingProtocolFeedback) {
       if (!messages.some((message) => message.role === "tool" && message.tool_call_id === exchange[1].tool_call_id)) messages.push(...exchange);
     }
-    if (estimateMessagesTokens(messages) + (requestTools.length ? ToolMap.estimateTokenCount(JSON.stringify(requestTools)) : 0) > promptBudget) return { ok: false, code: pendingProtocolFeedback.length ? "PROTOCOL_FEEDBACK_CONTEXT_OVERFLOW" : "MANDATORY_CONTEXT_LIMIT", error: "The required provider messages exceed the model context window." };
+    if (estimateMessagesTokens(messages, { provider, metadata: contextPlan?.metadata }) + (requestTools.length ? ToolMap.estimateTokenCount(JSON.stringify(requestTools)) : 0) > promptBudget) return { ok: false, code: pendingProtocolFeedback.length ? "PROTOCOL_FEEDBACK_CONTEXT_OVERFLOW" : "MANDATORY_CONTEXT_LIMIT", error: "The required provider messages exceed the model context window." };
     const contextUsage = currentTier1Usage() || Tier1TokenAccounting.reconcileUsage({
       source: "estimate", provider, model, promptTokens: preflightPromptTokens, estimatedTokens: preflightPromptTokens,
       localPromptTokens: fitted.usedTokens, sections: [], toolNames: requestTools.map((tool) => tool.function?.name),
@@ -1599,6 +1618,10 @@ async function runAgentTurn({
       type: "model_round",
       finishReason,
       stop: isStopModelRound(result, rawCalls.length > 0),
+      // A full text answer with no tool call is completion-grade: the model
+      // considered the work done, which is exactly what the continue-nudge
+      // then asks it to confirm. The UI prefers this over a later weak recap.
+      answerOnly: !rawCalls.length && Boolean(rawText) && !reachedOutputBoundary(result),
     });
     if (!rawCalls.length) {
       if (orchestrationControlOnly) {

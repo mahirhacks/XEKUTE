@@ -24,7 +24,7 @@ export function createLiveInputController({ api, onChange = () => {}, makeId = (
     const record = prepare(session, String(text), messageId);
     if (inFlight.has(record.id)) return inFlight.get(record.id);
     update(session, record, "sending");
-    const operation = Promise.resolve().then(() => api.agentSubmitInput({ sessionId, workspace, messageId: record.id, text: record.text, deferStart, ...(model ? { model } : {}), ...(targetTaskId ? { targetTaskId } : {}) }))
+    const operation = Promise.resolve().then(() => api.agentSubmitInput({ sessionId, ...(sessionId === (session.memorySessionId || session.id) ? { chatSessionId: session.id } : {}), workspace, messageId: record.id, text: record.text, deferStart, ...(model ? { model } : {}), ...(targetTaskId ? { targetTaskId } : {}) }))
       .then((receipt) => {
         if (!receipt?.ok || receipt.durable !== true || receipt.encrypted !== true || receipt.messageId !== record.id) {
           if ((STATUS_ORDER[record.status] || 0) >= STATUS_ORDER.received) return { ok: true, durable: true, encrypted: true, messageId: record.id, status: record.status, record };

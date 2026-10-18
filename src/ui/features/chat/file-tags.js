@@ -4,6 +4,8 @@
  * file name. The chip's name is generated content and its marker text is
  * invisible, so innerText of the composer is exactly the prompt text. */
 
+import "../project/seti-icon-theme.js";
+
 const MARKER = /\[(file|chat|terminal): ([^\]\n]+)\]/g;
 
 function promptText(text) {
@@ -100,6 +102,11 @@ export function createFileTagChip(document, path) {
   chip.dataset.path = path;
   chip.dataset.label = fileTagName(path);
   chip.title = path;
+  if (path) {
+    const icon = globalThis.XekuteSetiIconTheme.iconForFile(path);
+    chip.dataset.icon = icon.glyph;
+    chip.style.setProperty("--file-tag-icon-color", icon.color);
+  }
   const marker = document.createElement("span");
   marker.className = "file-tag-marker";
   marker.textContent = fileTagMarker(path);

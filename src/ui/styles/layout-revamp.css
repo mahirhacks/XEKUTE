@@ -72,9 +72,17 @@ body,
 
 #app-topbar > .topbar-icon,
 #app-topbar > .notification-panel,
+#app-topbar > .security-proxy-browser-wrap,
 #app-topbar > .window-control {
   order: 5;
 }
+
+/* The proxied-browser button lives in the title bar as an icon, with its
+   identity menu still anchored to it. */
+#app-topbar > .security-proxy-browser-wrap { align-self: stretch; -webkit-app-region: no-drag; }
+#app-topbar > .security-proxy-browser-wrap > .browser-topbar-icon { width: 32px; height: 100%; }
+.browser-topbar-icon.active { color: #75beff; }
+.browser-topbar-icon:disabled { color: var(--fg-muted); cursor: wait; }
 
 #app-topbar > #btn-top-filetree {
   order: 3;
@@ -706,6 +714,27 @@ body,
   background: #2b2b2b !important;
   color: #707070 !important;
   opacity: 1;
+}
+
+/* Stop state: the send control turns into a stop button while the agent runs.
+   The square is drawn in CSS; the codicon glyph renders small and off-center. */
+.send-btn.stop,
+.send-btn.stop:not(:disabled) {
+  background: #d6d6d6 !important;
+  color: #1b1b1b !important;
+  opacity: 1;
+}
+.send-btn.stop:hover:not(:disabled) {
+  background: #f1f1f1 !important;
+  color: #111 !important;
+}
+.send-btn.stop .codicon { display: none; }
+.send-btn.stop::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
 }
 
 #statusbar {
@@ -1994,24 +2023,54 @@ body,
 }
 
 .app-settings-content #app-settings-certificates-panel .certificate-location-row {
-  margin-bottom: 12px;
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 10px;
 }
 
 .app-settings-content #app-settings-certificates-panel .certificate-location-row input {
-  min-height: 38px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 12px;
   border: 1px solid #343434 !important;
   border-radius: 7px;
   background: #151515;
   color: #c7c7c7;
+  font: 12px/32px var(--font-mono, ui-monospace, Consolas, monospace);
+  text-overflow: ellipsis;
+}
+
+.app-settings-content #app-settings-certificates-panel .certificate-location-row input:focus {
+  border-color: #4a4a4a !important;
+  outline: none;
+}
+
+.app-settings-content #app-settings-certificates-panel .certificate-setting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .app-settings-content #app-settings-certificates-panel .certificate-location-row button,
 .app-settings-content #app-settings-certificates-panel .certificate-setting-actions button {
-  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 12px;
   border: 0 !important;
   border-radius: 7px;
   background: #282828;
   color: #c7c7c7;
+  font: 500 12px/1 var(--font-ui);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.app-settings-content #app-settings-certificates-panel :is(.certificate-location-row, .certificate-setting-actions) button .codicon {
+  font-size: 14px;
 }
 
 .app-settings-content #app-settings-certificates-panel .certificate-location-row button:hover,
@@ -3061,4 +3120,75 @@ body,
   #btn-top-terminal {
     display: none;
   }
+}
+
+/* ── Responsive split ──────────────────────────────────────────────
+   Window resizing and Ctrl +/- (native page zoom) both change the CSS
+   viewport. LayoutSync.jsx (fit-panels.mjs) sets the rendered side-panel
+   widths for the space available, so CSS minimums must not fight it. */
+#sidebar,
+#chat-pane {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+#center-panel {
+  min-width: 0;
+}
+
+/* Narrow editors: tabs give up width (label ellipsis) before they slide under
+   the sticky Markdown view switch; extra tabs still scroll. */
+#editor-tab-bar .editor-tab {
+  flex-shrink: 1;
+  min-width: 96px;
+}
+
+@media (max-width: 900px) {
+  .editor-tab-actions {
+    padding-right: 8px;
+  }
+
+  .editor-tab-actions::before {
+    left: -24px;
+    width: 24px;
+  }
+}
+
+/* Settings in a narrow editor: each row stacks its control under the text
+   instead of squeezing the text to one word a line. */
+@container app-settings (max-width: 520px) {
+  .app-settings-content {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  #app-settings-general-panel .general-settings-list {
+    padding: 0 14px;
+  }
+
+  .general-settings-row,
+  #app-settings-general-panel .general-settings-row {
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    padding: 14px 0;
+    min-height: 0;
+  }
+
+  .general-settings-row > div:first-child {
+    flex: 1 1 160px;
+    min-width: 0;
+  }
+}
+
+/* Security workbench toolbar: buttons keep their labels on one line and the
+   row wraps when the editor is narrow. */
+.security-workbench-toolbar {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.security-intercept-toggle,
+.security-run-button,
+.security-drop-button {
+  white-space: nowrap;
 }

@@ -1,0 +1,101 @@
+.browser-workspace {
+  --browser-bg: #141414;
+  --browser-chrome: #1a1a1a;
+  --browser-field: #111111;
+  --browser-border: #2a2a2a;
+  --browser-border-strong: #383838;
+  --browser-text: #e6e6e6;
+  --browser-muted: #8f8f96;
+  --browser-hover: #ffffff0d;
+  --browser-agent: #b79aff;
+  --browser-warn: #e5b45b;
+  --browser-danger: #e88c8c;
+  display:flex; flex:1; flex-direction:column; min-width:0; min-height:0;
+  background:var(--browser-bg); color:var(--browser-text); font-size:12px;
+}
+.browser-workspace[hidden], .browser-workspace [hidden] { display:none !important; }
+.browser-workspace button, .browser-workspace input, .browser-workspace select { font:inherit; color:inherit; }
+.browser-workspace button { border:1px solid transparent; background:transparent; border-radius:6px; cursor:pointer; }
+.browser-workspace button:disabled { opacity:.35; cursor:default; }
+.browser-workspace :focus-visible { outline:1px solid #7f95cf; outline-offset:-1px; }
+
+.browser-icon-button { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:28px; height:28px; padding:0; color:#c9c9ce; }
+.browser-icon-button:hover:not(:disabled) { background:var(--browser-hover); color:var(--browser-text); }
+
+/* Tab strip */
+.browser-tabbar { display:flex; align-items:flex-end; flex-shrink:0; gap:2px; min-height:36px; padding:5px 8px 0; background:var(--browser-bg); }
+.browser-web-tabs { display:flex; align-items:flex-end; gap:2px; min-width:0; overflow-x:auto; scrollbar-width:none; }
+.browser-web-tabs::-webkit-scrollbar { display:none; }
+.browser-new-toggle { margin:0 0 4px 2px; width:26px; height:26px; }
+.browser-web-tab { position:relative; display:flex; align-items:center; flex-shrink:0; width:200px; min-width:110px; height:31px; border-radius:8px 8px 0 0; color:var(--browser-muted); }
+.browser-web-tab:hover { background:#ffffff08; color:#cfcfd4; }
+.browser-web-tab.is-active { background:var(--browser-chrome); color:var(--browser-text); }
+.browser-web-tab.is-agent::after { content:""; position:absolute; left:10px; right:10px; top:0; height:2px; border-radius:0 0 2px 2px; background:var(--browser-agent); }
+.browser-web-tab > [role="tab"] { display:flex; align-items:center; gap:8px; flex:1; min-width:0; height:100%; padding:0 4px 0 11px; border:0; border-radius:8px 8px 0 0; text-align:left; }
+.browser-web-tab > [role="tab"] > .codicon { flex-shrink:0; font-size:13px; color:#9a9aa1; }
+.browser-web-tab.is-agent > [role="tab"] > .codicon { color:var(--browser-agent); }
+.browser-web-tab > [role="tab"] > span:last-child { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.browser-web-tab-close { display:flex; align-items:center; justify-content:center; flex-shrink:0; width:20px; height:20px; margin-right:6px; padding:0; color:#9a9aa1; opacity:0; }
+.browser-web-tab:hover .browser-web-tab-close, .browser-web-tab.is-active .browser-web-tab-close, .browser-web-tab-close:focus-visible { opacity:1; }
+.browser-web-tab-close:hover { background:#ffffff14; color:var(--browser-text); }
+.browser-web-tab-close .codicon { font-size:12px; }
+
+/* Toolbar */
+.browser-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; flex-shrink:0; padding:6px 10px; background:var(--browser-chrome); border-bottom:1px solid var(--browser-border); }
+.browser-navigation { display:flex; align-items:center; gap:2px; flex:1 1 340px; min-width:0; }
+.browser-omnibox { display:flex; align-items:center; gap:7px; flex:1; min-width:0; height:30px; margin-left:6px; padding:0 4px 0 10px; border:1px solid var(--browser-border); border-radius:15px; background:var(--browser-field); transition:border-color .12s ease, background .12s ease; }
+.browser-omnibox:hover { border-color:var(--browser-border-strong); }
+.browser-omnibox:focus-within { border-color:#5d73ad; background:#0d0d0d; }
+.browser-security { flex-shrink:0; font-size:13px; color:var(--browser-muted); }
+.browser-workspace[data-protocol="https"] .browser-security { color:#9fc79f; }
+.browser-workspace[data-protocol="http"] .browser-security { color:var(--browser-warn); }
+.browser-omnibox .browser-address { flex:1; min-width:0; height:100%; padding:0; border:0; outline:0; background:transparent; font-size:12.5px; }
+.browser-omnibox .browser-address::placeholder { color:#6f6f76; }
+.browser-omnibox .browser-address:disabled { color:var(--browser-muted); }
+.browser-go { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:24px; height:24px; padding:0; border-radius:12px !important; color:var(--browser-muted); }
+.browser-go:hover:not(:disabled) { background:var(--browser-hover); color:var(--browser-text); }
+
+.browser-controls { display:flex; align-items:center; gap:12px; flex:0 1 auto; min-width:0; margin-left:auto; }
+/* Purpose at a glance: shield for assessment, globe for public research. */
+.browser-context { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; color:#c9c9ce; }
+.browser-context-icon { font-size:17px; }
+
+/* Who controls the page. The knob sits left (off) while you control the tab and
+   slides right (on), carrying the agent mark, while a chat controls it. */
+.browser-control-toggle { position:relative; flex-shrink:0; width:48px; height:26px; padding:0; border:1px solid var(--browser-border) !important; border-radius:13px !important; background:var(--browser-field) !important; }
+.browser-control-toggle:hover:not(:disabled) { border-color:var(--browser-border-strong) !important; }
+.browser-control-knob { position:absolute; top:2px; left:2px; display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:#3d3d42; transition:transform .16s ease, background-color .16s ease; }
+.browser-control-knob .codicon { font-size:12px; color:#1b1124; opacity:0; transition:opacity .16s ease; }
+.browser-workspace:is([data-control="agent"], [data-control="other"]) .browser-control-knob { transform:translateX(22px); }
+.browser-workspace:is([data-control="agent"], [data-control="other"]) .browser-control-knob .codicon { opacity:1; }
+.browser-workspace[data-control="agent"] .browser-control-knob { background:var(--browser-agent); animation:browser-agent-pulse 1.6s ease-in-out infinite; }
+.browser-workspace[data-control="other"] .browser-control-knob { background:var(--browser-warn); }
+.browser-workspace[data-control="pending"] .browser-control-knob { background:#7f95cf; transform:translateX(11px); }
+@keyframes browser-agent-pulse { 50% { box-shadow:0 0 0 3px #b79aff2e; } }
+@media (prefers-reduced-motion: reduce) { .browser-control-knob { transition:none; } .browser-workspace[data-control="agent"] .browser-control-knob { animation:none; } }
+
+/* New tab panel */
+.browser-new-page { display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px 14px; flex-shrink:0; padding:12px 14px; background:var(--browser-chrome); border-bottom:1px solid var(--browser-border); }
+.browser-new-title { flex-basis:100%; color:var(--browser-text); font-size:12px; font-weight:600; }
+.browser-new-page label { display:flex; flex-direction:column; gap:5px; color:var(--browser-muted); font-size:11px; }
+.browser-new-page select { min-width:170px; height:28px; padding:0 8px; border:1px solid var(--browser-border-strong); border-radius:6px; background:var(--browser-field); font-size:12px; }
+.browser-new-page select:disabled { opacity:.5; }
+.browser-new-actions { display:flex; gap:8px; margin-left:auto; }
+.browser-workspace .browser-primary, .browser-workspace .browser-secondary { height:28px; padding:0 14px; font-size:12px; }
+.browser-workspace .browser-primary { background:#e6e6e6 !important; color:#141414; font-weight:600; }
+.browser-workspace .browser-primary:hover:not(:disabled) { background:#ffffff !important; }
+.browser-workspace .browser-secondary { border-color:var(--browser-border-strong) !important; color:#cfcfd4; }
+.browser-workspace .browser-secondary:hover:not(:disabled) { background:var(--browser-hover); }
+
+/* Status and viewport */
+.browser-status { display:flex; align-items:center; gap:8px; flex-shrink:0; padding:7px 14px; background:#1d1d20; border-bottom:1px solid var(--browser-border); color:#b5b5bc; font-size:12px; }
+.browser-status::before { content:"\ea74"; font:13px/1 codicon; color:#7f95cf; }
+.browser-status.error { background:#2a1c1c; color:#f0b4b4; }
+.browser-status.error::before { content:"\ea87"; color:var(--browser-danger); }
+.browser-viewport { position:relative; flex:1; min-height:0; min-width:0; overflow:hidden; background:var(--browser-bg); }
+.browser-workspace[data-control="agent"] .browser-viewport { box-shadow:inset 0 2px 0 var(--browser-agent); }
+.browser-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; width:100%; height:100%; padding:24px; text-align:center; color:var(--browser-muted); font-size:12.5px; }
+.browser-empty strong { color:var(--browser-text); font-size:14px; font-weight:600; }
+.browser-empty > span:not(.codicon) { max-width:320px; line-height:1.5; }
+.browser-empty-icon { margin-bottom:4px; font-size:34px !important; color:#4d4d55; }
+.browser-empty .browser-primary { margin-top:8px; }

@@ -1,12 +1,17 @@
 {
   "name": "xekute-app",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
   "main": "src/app/electron/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "node scripts/dev.mjs",
+    "dev:browser": "node scripts/browser-dev.mjs",
+    "verify:browser-phase1": "node scripts/verify-browser-phase1.mjs",
+    "verify:browser-phase2": "node scripts/verify-browser-phase2.mjs",
+    "verify:browser-workspace": "npm run build:ui && node scripts/verify-browser-workspace.mjs",
+    "verify:browser-agent": "node scripts/verify-browser-agent.mjs",
     "dev:electron": "npm run build:ui && electronmon --inspect=5858 . --dev",
     "dev:ui": "vite --config src/ui/vite.config.mjs",
     "build:ui": "vite build --config src/ui/vite.config.mjs && node scripts/copy-ui-assets.mjs",

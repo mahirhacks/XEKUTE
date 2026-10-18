@@ -26,11 +26,23 @@ test("command approval renders durable process operations", () => {
 });
 
 test("exec_command approval sends a command-specific unselected decision card", () => {
-  assert.match(mainSource, /if \(proposal\.toolName !== "exec_command"\)/);
-  assert.match(mainSource, /Interactive approval is available only for exec_command/);
-  assert.match(mainSource, /kind: "command",\s*command: formatCommandForApproval\(proposal\.args\)/);
+  assert.match(mainSource, /if \(!\["exec_command", "browser_action"\]\.includes\(proposal\.toolName\)\)/);
+  assert.match(mainSource, /Interactive approval is available only for commands and browser actions/);
+  assert.match(mainSource, /kind: "command",\s*command: browser \? .+ : formatCommandForApproval\(proposal\.args\)/);
+  assert.match(mainSource, /title: "Allow this browser action\?"/);
   assert.match(mainSource, /Allow the below command to be executed\?/);
   assert.match(mainSource, /id: "approve", label: "Approve", recommended: false/);
   assert.match(mainSource, /id: "deny", label: "Deny", recommended: false/);
   assert.doesNotMatch(mainSource, /Allow \$\{proposal\.toolName/);
+});
+
+test("browser approval cards hide typed secrets but show ordinary text", () => {
+  const vm = require("node:vm");
+  const start = mainSource.indexOf("function formatBrowserActionForApproval(");
+  const end = mainSource.indexOf("\nasync function requestToolApproval(", start);
+  const context = {};
+  vm.runInNewContext(`${mainSource.slice(start, end)}\nthis.format = formatBrowserActionForApproval;`, context);
+  const typed = { action: "type", target: { kind: "element", observationId: "o", ref: "frame-0-e4" }, text: "S3cr3t!" };
+  assert.equal(context.format(typed, { secret: true }), "type (7 characters, hidden) → element frame-0-e4");
+  assert.equal(context.format(typed), 'type "S3cr3t!" → element frame-0-e4');
 });

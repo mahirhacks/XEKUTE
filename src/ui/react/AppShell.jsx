@@ -88,6 +88,12 @@ export default memo(function AppShell() {
           <header><div className="notification-panel-heading"><span className="codicon codicon-bell" aria-hidden="true"></span><strong>Notifications</strong></div><button type="button" id="notification-clear" className="icon-btn" title="Clear notifications" aria-label="Clear notifications"><span className="codicon codicon-clear-all"></span></button></header>
           <div id="notification-list" className="notification-list"><div className="notification-empty">No notifications</div></div>
         </div>
+        <div id="security-proxy-browser-wrap" className="security-proxy-browser-wrap">
+          <button type="button" id="security-proxy-browser" className="topbar-icon browser-topbar-icon" aria-label="Open browser" title="Open browser. Right-click to open a tab with an identity." aria-haspopup="menu" aria-expanded="false">
+            <span className="codicon codicon-globe" aria-hidden="true"></span>
+          </button>
+          <div id="security-proxy-browser-menu" className="security-proxy-browser-menu" role="menu" hidden></div>
+        </div>
         <button type="button" id="btn-top-terminal" className="topbar-icon active" title="Toggle terminal">
           <img className="chrome-icon" src="assets/icons/terminal_collapse_expand_icon.svg" alt="" aria-hidden="true" />
         </button>
@@ -436,6 +442,14 @@ export default memo(function AppShell() {
                         </div>
                       </div>
                       <div className="project-settings-card">
+                        <h3>Browser transfers</h3>
+                        <div className="project-field-grid compact">
+                          <label>Agent uploads <small>Files from this project only</small><select data-project-field="browser.uploads"><option value="allowed">Allowed</option><option value="blocked">Blocked</option></select></label>
+                          <label>Downloads in agent tabs<select data-project-field="browser.downloads"><option value="allowed">Allowed</option><option value="blocked">Blocked</option></select></label>
+                          <label>Download size limit (MiB)<input type="number" min="1" max="12" data-project-field="browser.maxDownloadMiB" data-project-kind="number" /></label>
+                        </div>
+                      </div>
+                      <div className="project-settings-card">
                         <h3>Technique boundaries</h3>
                         <div className="project-field-grid">
                           <label>Allowed technique IDs <small>One adapter or technique ID per line</small><textarea data-project-field="rulesOfEngagement.allowedTechniques" data-project-kind="array" rows="6" placeholder="httpx&#10;nmap&#10;T1595"></textarea></label>
@@ -676,13 +690,6 @@ export default memo(function AppShell() {
                   </div>
                 </div>
                 <div id="security-workspace-tools" className="security-workspace-tools">
-                  <div id="security-proxy-browser-wrap" className="security-proxy-browser-wrap">
-                    <button type="button" id="security-proxy-browser" className="security-proxy-browser" aria-label="Open browser through XEKUTE proxy" title="Open browser through XEKUTE proxy" aria-haspopup="menu" aria-expanded="false">
-                      <span className="codicon codicon-globe" aria-hidden="true"></span>
-                      <span>Browser</span>
-                    </button>
-                    <div id="security-proxy-browser-menu" className="security-proxy-browser-menu" role="menu" hidden></div>
-                  </div>
                   <button type="button" id="security-history-toggle" className="security-history-toggle" aria-pressed="false" title="Show Traffic/Raw history">
                     <span className="codicon codicon-history" aria-hidden="true"></span>
                     <span>History</span>
@@ -1044,6 +1051,7 @@ export default memo(function AppShell() {
             </div>
             <div className="composer">
               <div id="slash-command-suggestions" className="slash-command-suggestions" role="listbox" aria-label="Available slash commands" hidden></div>
+              <div id="composer-attachments" className="composer-attachments" aria-label="Attached images" hidden></div>
               <div className="composer-input-row">
                 <div id="chat-input" contentEditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Chat message" data-placeholder="Ask, investigate, run, or search" className="chat-input-empty"><span id="selected-slash-command" className="selected-slash-command" hidden></span></div>
               </div>
@@ -1074,6 +1082,10 @@ export default memo(function AppShell() {
                       <circle id="context-ring-fill" className="context-ring-fill" cx="10" cy="10" r="8"></circle>
                     </svg>
                   </button>
+                  <button type="button" id="attach-image-btn" className="composer-attach-btn" title="Attach images (up to 10)" aria-label="Attach images">
+                    <img className="composer-attach-icon" src="assets/icons/clip_icon.svg" alt="" aria-hidden="true" />
+                  </button>
+                  <input type="file" id="attach-image-input" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" multiple hidden />
                   <button type="button" id="send-btn" className="send-btn" title="Send message" aria-label="Send message" disabled={true}>
                     <span className="codicon codicon-arrow-up"></span>
                   </button>

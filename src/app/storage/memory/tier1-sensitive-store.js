@@ -18,6 +18,13 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   const root = path.resolve(String(baseDir));
   const schemas = schemaRegistry || getDefaultMemorySchemaRegistry();
   const ephemeral = new Map();
+  // Last durable transcript per file, reused while the file's identity, size and mtime
+  // are unchanged. Chat history writes on every event; re-reading, decrypting
+  // and validating the whole session each time grew with chat length.
+  const transcripts = new Map();
+  function fileStamp(file) {
+    try { const stat = fs.statSync(file); return `${stat.ino}:${stat.size}:${stat.mtimeMs}`; } catch { return ""; }
+  }
 
   function available() {
     try {
@@ -156,10 +163,17 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     } catch (error) {
       return operationFailure(error.code || "MEMORY_TIER1_INPUT_INVALID", error.message, {}, false);
     }
-    const loaded = readFile(transcriptFile(project, session));
+    const file = transcriptFile(project, session);
+    const cached = transcripts.get(key(file));
+    const stamp = cached && !ephemeral.has(key(file)) ? fileStamp(file) : "";
+    if (stamp && cached.stamp === stamp) return { ok: true, exists: true, encrypted: true, durable: true, ephemeral: false, value: clone(cached.value), path: file };
+    transcripts.delete(key(file));
+    const loaded = readFile(file);
     if (!loaded.ok || !loaded.exists) return loaded;
     const checked = validateTranscriptValue(loaded.value, project, session);
-    return checked.ok ? { ...loaded, value: checked.value } : checked;
+    if (!checked.ok) return checked;
+    if (loaded.durable) transcripts.set(key(file), { stamp: fileStamp(file), value: clone(checked.value) });
+    return { ...loaded, value: checked.value };
   }
   function writeTranscript(projectId, sessionId, transcript, options = {}) {
     let project;
@@ -170,12 +184,13 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     } catch (error) {
       return operationFailure(error.code || "MEMORY_TIER1_INPUT_INVALID", error.message, {}, false);
     }
+    const copy = clone(transcript || {});
     const candidate = {
-      ...clone(transcript || {}),
+      ...copy,
       schema_version: 3,
       project_id: project,
       session_id: session,
-      blocks: Array.isArray(transcript?.blocks) ? clone(transcript.blocks) : [],
+      blocks: Array.isArray(copy.blocks) ? copy.blocks : [],
     };
     const checked = validateTranscriptValue(candidate, project, session);
     if (!checked.ok) return checked;
@@ -184,7 +199,11 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
         return operationFailure("MEMORY_TRANSCRIPT_BLOCK_INVALID", "The encrypted Tier 1 transcript contains an invalid block ID.", { project_id: project, session_id: session }, false);
       }
     }
-    return writeFile(transcriptFile(project, session), candidate, options);
+    const file = transcriptFile(project, session);
+    transcripts.delete(key(file));
+    const written = writeFile(file, candidate, options);
+    if (written.ok && written.durable) transcripts.set(key(file), { stamp: fileStamp(file), value: candidate });
+    return written;
   }
   function listSessionIds(projectId) {
     let directory;
@@ -318,6 +337,38 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     if (!checked.ok) return checked;
     return writeFile(activeFile(project, session), candidate);
   }
+  // Images attached to chat messages are kept at full sent quality, encrypted
+  // like the transcript and inside its session directory, so deleting the
+  // session deletes them. The id is the SHA-256 of the base64 image data.
+  const CHAT_IMAGE_ID = /^[a-f0-9]{64}$/;
+  const CHAT_IMAGE_TYPE = /^image\/(?:png|jpeg|webp)$/;
+  function chatImageFile(projectId, sessionId, imageId) {
+    if (!CHAT_IMAGE_ID.test(String(imageId))) throw new TypeError("Invalid chat image identity.");
+    return path.join(sessionDir(projectId, sessionId), "images", `${imageId}.enc.json`);
+  }
+  function chatImageId(data) { return crypto.createHash("sha256").update(String(data)).digest("hex"); }
+  function writeChatImage(projectId, sessionId, { mediaType, data } = {}) {
+    if (!CHAT_IMAGE_TYPE.test(String(mediaType)) || typeof data !== "string" || !data) {
+      return operationFailure("MEMORY_CHAT_IMAGE_INVALID", "The chat image must be PNG, JPEG or WebP data.", {}, false);
+    }
+    const imageId = chatImageId(data);
+    let file;
+    try { file = chatImageFile(projectId, sessionId, imageId); } catch (error) { return operationFailure(error.code || "MEMORY_SESSION_ID_INVALID", error.message, {}, false); }
+    try { if (fs.existsSync(file)) return { ok: true, changed: false, imageId, path: file }; } catch { /* write below */ }
+    return { ...writeFile(file, { schema_version: 1, media_type: mediaType, data }), imageId };
+  }
+  function readChatImage(projectId, sessionId, imageId) {
+    let file;
+    try { file = chatImageFile(projectId, sessionId, imageId); } catch (error) { return operationFailure(error.code || "MEMORY_CHAT_IMAGE_ID_INVALID", error.message, {}, false); }
+    const read = readFile(file);
+    if (!read.ok || !read.exists) return { ...read, imageId };
+    const value = read.value || {};
+    if (!CHAT_IMAGE_TYPE.test(String(value.media_type)) || typeof value.data !== "string" || chatImageId(value.data) !== imageId) {
+      return operationFailure("MEMORY_CHAT_IMAGE_INVALID", "The stored chat image is invalid.", { path: file }, false);
+    }
+    return { ok: true, exists: true, durable: read.durable, imageId, mediaType: value.media_type, data: value.data };
+  }
+
   function deleteSession(projectId, sessionId) {
     let directory;
     try { directory = sessionDir(projectId, sessionId); } catch (error) { return operationFailure(error.code || "MEMORY_SESSION_ID_INVALID", error.message, {}, false); }
@@ -380,7 +431,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   }
   function clearEphemeral() { ephemeral.clear(); }
 
-  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, readActive, writeActive, writeChatReferenceSnapshot, readChatReferenceSnapshot, deleteSession, status, flush, resetProject, clearEphemeral });
+  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, readActive, writeActive, writeChatReferenceSnapshot, readChatReferenceSnapshot, writeChatImage, readChatImage, deleteSession, status, flush, resetProject, clearEphemeral });
 }
 
 module.exports = Object.freeze({ createTier1SensitiveStore });

@@ -64,6 +64,22 @@ function evaluateNetworkTarget(target, policy) {
   return { ok: true, code: "TARGET_IN_SCOPE", target: decision.target };
 }
 
+function authenticationDependencyMatches(target, dependency) {
+  const raw = String(dependency || "").trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(target);
+    const explicit = raw.includes("://") ? new URL(raw) : null;
+    const wildcard = raw.startsWith("*.");
+    const hostRule = (explicit ? explicit.hostname : raw.replace(/^\*\./, "")).toLowerCase();
+    const host = parsed.hostname.toLowerCase();
+    if (wildcard ? !(host === hostRule || host.endsWith(`.${hostRule}`)) : host !== hostRule) return false;
+    if (explicit && explicit.protocol !== parsed.protocol) return false;
+    if (explicit && explicit.pathname !== "/" && !parsed.pathname.startsWith(explicit.pathname)) return false;
+    return true;
+  } catch { return false; }
+}
+
 function evaluateRedirectTarget(initialTarget, redirectTarget, policy) {
   const initial = ScopeEngine.evaluateTarget(initialTarget, policy);
   if (!initial.allowed) {
@@ -105,4 +121,4 @@ function evaluateRedirectTarget(initialTarget, redirectTarget, policy) {
   return { ok: true, code: "REDIRECT_INHERITED", initialTarget, redirectTarget, target: inherited.target };
 }
 
-module.exports = { loadScopePolicy, targetFromArgs, evaluateNetworkTarget, evaluateRedirectTarget };
+module.exports = { loadScopePolicy, targetFromArgs, evaluateNetworkTarget, evaluateRedirectTarget, authenticationDependencyMatches };

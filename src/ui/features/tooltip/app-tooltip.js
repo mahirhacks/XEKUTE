@@ -87,16 +87,33 @@ export function initializeAppTooltips() {
     }
     const box = tooltip.getBoundingClientRect();
     const margin = 8;
-    const below = anchor.bottom + margin;
-    const above = anchor.top - box.height - margin;
-    const preferredTop = below + box.height <= viewportHeight - margin ? below : above;
-    tooltip.style.left = `${Math.max(margin, Math.min(
-      anchor.left + (anchor.width - box.width) / 2,
-      viewportWidth - box.width - margin,
-    ))}px`;
-    tooltip.style.top = `${Math.max(margin, Math.min(
-      preferredTop, viewportHeight - box.height - margin,
-    ))}px`;
+    const clampLeft = (left) => Math.max(margin, Math.min(left, viewportWidth - box.width - margin));
+    const clampTop = (top) => Math.max(margin, Math.min(top, viewportHeight - box.height - margin));
+    const centeredLeft = anchor.left + (anchor.width - box.width) / 2;
+    const middleTop = anchor.top + (anchor.height - box.height) / 2;
+    const candidates = [
+      { left: centeredLeft, top: anchor.bottom + margin },
+      { left: centeredLeft, top: anchor.top - box.height - margin },
+      { left: anchor.right + margin, top: middleTop },
+      { left: anchor.left - box.width - margin, top: middleTop },
+    ];
+    // Native views such as the browser page draw above every DOM layer, so a
+    // tooltip placed over one is hidden whatever its z-index.
+    const surfaces = [...document.querySelectorAll("[data-native-surface]")]
+      .map((element) => element.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    const fits = ({ left, top }) => left >= margin && top >= margin
+      && left + box.width <= viewportWidth - margin && top + box.height <= viewportHeight - margin;
+    const covered = ({ left, top }) => surfaces.some((rect) => left < rect.right && left + box.width > rect.left
+      && top < rect.bottom && top + box.height > rect.top);
+    const vertical = candidates[0].top + box.height <= viewportHeight - margin ? candidates[0] : candidates[1];
+    const chosen = surfaces.length
+      ? candidates.find((place) => fits(place) && !covered(place))
+        || candidates.map((place) => ({ left: clampLeft(place.left), top: clampTop(place.top) })).find((place) => !covered(place))
+        || vertical
+      : vertical;
+    tooltip.style.left = `${clampLeft(chosen.left)}px`;
+    tooltip.style.top = `${clampTop(chosen.top)}px`;
   }
 
   function show() {

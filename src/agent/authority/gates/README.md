@@ -6,7 +6,8 @@ fixed stages in `pipeline-manifest.js`. Raw tool adapters remain policy-free.
 
 No profile can add a tool to a mode, widen workspace or network scope, cross an
 identity boundary, or alter an immutable approved-plan snapshot. Full
-Authorization skips only interactive approval; validation, hard scope, explicit
+Authorization skips only interactive approval, except that a browser scope
+exception (a drifted tab or a related subdomain) still asks; validation, hard scope, explicit
 deny rules, identity checks, resource controls, monitoring, output control,
 verification, recovery, rollback, and audit stay active.
 

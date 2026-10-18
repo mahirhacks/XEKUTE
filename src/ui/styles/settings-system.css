@@ -1,0 +1,246 @@
+/* Settings design system. Loaded after every other stylesheet so all settings
+   pages share one type scale, one palette, and one control style. Earlier
+   layers (settings.css, layout-revamp.css) still provide page structure. */
+.app-settings-workspace {
+  --st-bg: #141414;
+  --st-surface: #1a1a1a;
+  --st-surface-2: #202020;
+  --st-field: #111111;
+  --st-border: #2a2a2a;
+  --st-border-strong: #383838;
+  --st-divider: #242424;
+  --st-text: #e4e4e4;
+  --st-text-2: #bdbdbd;
+  --st-muted: #8a8a8a;
+  --st-faint: #6a6a6a;
+  --st-accent: #4f7ccf;
+  --st-hover: #ffffff0a;
+  --st-radius: 8px;
+  --st-radius-sm: 6px;
+  --st-control: 30px;
+  background: var(--st-bg) !important;
+  color: var(--st-text);
+  font-family: var(--font-ui);
+}
+
+/* Sidebar */
+#app-settings-workspace .app-settings-sidebar { padding: 28px 12px 16px !important; background: var(--st-bg) !important; border-right: 1px solid var(--st-divider) !important; }
+#app-settings-workspace .app-settings-search { height: var(--st-control); margin-bottom: 14px !important; padding: 0 10px !important; border: 1px solid var(--st-border) !important; border-radius: var(--st-radius-sm) !important; background: var(--st-field) !important; }
+#app-settings-workspace .app-settings-search input { font: 13px var(--font-ui) !important; color: var(--st-text) !important; }
+#app-settings-workspace .app-settings-search input::placeholder { color: var(--st-faint); }
+#app-settings-workspace .app-settings-search .codicon { font-size: 14px !important; color: var(--st-faint) !important; }
+#app-settings-workspace .app-settings-tabs button { min-height: 30px !important; height: 30px; gap: 10px !important; padding: 0 10px !important; border-radius: var(--st-radius-sm) !important; color: var(--st-text-2) !important; font: 13px/1 var(--font-ui) !important; background: transparent !important; }
+#app-settings-workspace .app-settings-tabs button:hover { background: var(--st-hover) !important; color: var(--st-text) !important; }
+#app-settings-workspace .app-settings-tabs button.active,
+#app-settings-workspace .app-settings-tabs button[aria-pressed="true"] { background: var(--st-surface-2) !important; color: var(--st-text) !important; }
+#app-settings-workspace .app-settings-tabs :is(.codicon, .settings-nav-icon) { width: 15px !important; height: 15px !important; font-size: 15px !important; opacity: .8; }
+#app-settings-workspace .app-settings-nav-divider { margin: 8px 6px !important; background: var(--st-divider) !important; }
+#app-settings-workspace .app-settings-nav-group { gap: 2px !important; }
+
+/* Page header */
+#app-settings-workspace .app-settings-workspace-header { min-height: 0 !important; padding-top: 28px !important; padding-bottom: 0 !important; margin-bottom: 18px !important; }
+#app-settings-workspace #app-settings-page-title { color: var(--st-text) !important; font: 600 20px/28px var(--font-ui) !important; letter-spacing: -.01em; }
+#app-settings-workspace #app-settings-page-subtitle { color: var(--st-muted) !important; font: 12px/18px var(--font-ui) !important; }
+
+/* Section headings: one size everywhere, never uppercase. */
+#app-settings-workspace .app-settings-content :is(.general-settings-section-title, .settings-redesign-section-heading h3, .guidance-page-heading h3, .guidance-page-header h3, .project-settings-section > h3, .project-settings-card > h3, .models-catalog-section h3, .certificate-settings-content h3) {
+  margin: 24px 0 8px !important;
+  color: var(--st-text) !important;
+  font: 600 13px/20px var(--font-ui) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+#app-settings-workspace .app-settings-content :is(.general-settings-canvas, .certificate-settings-content, .project-settings-form) > :first-child,
+#app-settings-workspace .app-settings-content .project-settings-card > h3:first-child { margin-top: 0 !important; }
+#app-settings-workspace .app-settings-content :is(.settings-redesign-section-heading p, .guidance-page-heading p, .guidance-page-header p, .project-settings-section > p) {
+  margin: 2px 0 0 !important;
+  color: var(--st-muted) !important;
+  font: 12px/18px var(--font-ui) !important;
+}
+#app-settings-workspace .app-settings-content .project-settings-section > header h2 { margin: 0 !important; color: var(--st-text) !important; font: 600 15px/22px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content .project-settings-section > header p { margin: 2px 0 0 !important; color: var(--st-muted) !important; font: 12px/18px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content .project-settings-section > header { margin: 20px 0 14px !important; }
+#app-settings-workspace .app-settings-content .project-settings-section > header .codicon { font-size: 16px !important; color: var(--st-muted) !important; }
+
+/* A heading box controls its own spacing; its heading adds none. */
+#app-settings-workspace .app-settings-content .settings-redesign-section-heading { margin: 0 0 12px !important; }
+#app-settings-workspace .app-settings-content .settings-redesign-section-heading h3 { margin: 0 !important; }
+
+/* Cards and rows */
+#app-settings-workspace .app-settings-content :is(.general-settings-card, .project-settings-card, .certificate-settings-card, .models-settings-list, .guidance-category-list, .models-api-provider-block, .mcp-connection-editor, .agent-subagent-settings) {
+  border: 1px solid var(--st-border) !important;
+  border-radius: var(--st-radius) !important;
+  background: var(--st-surface) !important;
+  box-shadow: none !important;
+}
+#app-settings-workspace .app-settings-content :is(.general-settings-card, .certificate-settings-card, .project-settings-card) { padding: 14px 16px !important; }
+#app-settings-workspace .app-settings-content .general-settings-card { padding: 0 !important; }
+#app-settings-workspace .app-settings-content .general-settings-row { min-height: 52px; padding: 12px 16px !important; gap: 24px !important; align-items: center !important; }
+#app-settings-workspace .app-settings-content .general-settings-divider { height: 1px; margin: 0 16px !important; background: var(--st-divider) !important; }
+#app-settings-workspace .app-settings-content :is(.general-settings-row strong, .certificate-setting-heading strong, .models-api-row strong) {
+  color: var(--st-text) !important;
+  font: 500 13px/18px var(--font-ui) !important;
+}
+#app-settings-workspace .app-settings-content :is(.general-settings-row p, .certificate-setting-heading small, .models-api-row small, .models-api-row p) {
+  margin: 2px 0 0 !important;
+  color: var(--st-muted) !important;
+  font: 12px/17px var(--font-ui) !important;
+}
+#app-settings-workspace .app-settings-content :is(.models-settings-list, .guidance-category-list) > * + * { border-top: 1px solid var(--st-divider) !important; }
+
+/* Form fields */
+#app-settings-workspace .app-settings-content :is(.project-field-grid, .models-api-fields) > label {
+  gap: 6px !important;
+  color: var(--st-text-2) !important;
+  font: 500 12px/16px var(--font-ui) !important;
+}
+#app-settings-workspace .app-settings-content :is(.project-field-grid, .models-api-fields) > label small { color: var(--st-faint) !important; font: 11px/15px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content :is(input[type="text"], input[type="search"], input[type="number"], input[type="url"], input[type="password"], input:not([type]), select, textarea) {
+  min-height: var(--st-control) !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--st-border) !important;
+  border-radius: var(--st-radius-sm) !important;
+  background: var(--st-field) !important;
+  color: var(--st-text) !important;
+  font: 13px/28px var(--font-ui) !important;
+  box-shadow: none !important;
+}
+/* :is() with an attribute selector matches the base field rule's specificity, so these later overrides win. */
+#app-settings-workspace .app-settings-content :is(textarea[rows], textarea) { padding: 7px 10px !important; line-height: 18px !important; }
+#app-settings-workspace .app-settings-content :is(input, select, textarea)::placeholder { color: var(--st-faint) !important; }
+#app-settings-workspace .app-settings-content :is(input, select, textarea):focus { border-color: var(--st-accent) !important; outline: none !important; }
+#app-settings-workspace .app-settings-content :is(select[id], select) { padding-right: 28px !important; }
+
+/* Buttons */
+#app-settings-workspace .app-settings-content :is(.secondary-button, .primary-button, .models-refresh-btn, .models-view-all) {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--st-control);
+  min-height: var(--st-control) !important;
+  padding: 0 12px !important;
+  border-radius: var(--st-radius-sm) !important;
+  font: 500 12px/1 var(--font-ui) !important;
+  white-space: nowrap;
+  cursor: pointer;
+}
+#app-settings-workspace .app-settings-content .secondary-button { border: 1px solid var(--st-border-strong) !important; background: var(--st-surface-2) !important; color: var(--st-text-2) !important; }
+#app-settings-workspace .app-settings-content .secondary-button:hover:not(:disabled) { background: #2a2a2a !important; color: var(--st-text) !important; }
+#app-settings-workspace .app-settings-content .primary-button { border: 0 !important; background: #e6e6e6 !important; color: #111 !important; }
+#app-settings-workspace .app-settings-content .primary-button:hover:not(:disabled) { background: #fff !important; }
+#app-settings-workspace .app-settings-content :is(.secondary-button, .primary-button) .codicon { font-size: 14px !important; }
+
+/* Segmented tabs (Project sections, Rules/Tools scope) */
+#app-settings-workspace .app-settings-content .guidance-scope-tabs {
+  display: inline-flex !important;
+  flex-wrap: wrap;
+  width: fit-content !important;
+  max-width: 100%;
+  gap: 2px !important;
+  padding: 2px !important;
+  border: 1px solid var(--st-border) !important;
+  border-radius: var(--st-radius) !important;
+  background: var(--st-field) !important;
+}
+#app-settings-workspace .app-settings-content .guidance-scope-tabs button {
+  height: 26px;
+  min-height: 26px !important;
+  padding: 0 10px !important;
+  border: 0 !important;
+  border-radius: var(--st-radius-sm) !important;
+  background: transparent !important;
+  color: var(--st-muted) !important;
+  font: 500 12px/1 var(--font-ui) !important;
+}
+#app-settings-workspace .app-settings-content .guidance-scope-tabs button:hover { color: var(--st-text) !important; }
+#app-settings-workspace .app-settings-content .guidance-scope-tabs button:is(.active, [aria-selected="true"], [aria-pressed="true"]) {
+  background: var(--st-surface-2) !important;
+  color: var(--st-text) !important;
+}
+
+/* Project section strip: keeps its sticky horizontal scroll. */
+#app-settings-workspace .app-settings-content .project-settings-nav { gap: 2px !important; margin-bottom: 18px !important; padding-bottom: 8px !important; border-bottom: 1px solid var(--st-divider) !important; background: transparent !important; }
+#app-settings-workspace .app-settings-content .project-settings-nav > button {
+  flex: 0 0 auto;
+  min-height: 28px !important;
+  padding: 0 10px !important;
+  border: 0 !important;
+  border-radius: var(--st-radius-sm) !important;
+  background: transparent !important;
+  color: var(--st-muted) !important;
+  font: 500 12px/1 var(--font-ui) !important;
+}
+#app-settings-workspace .app-settings-content .project-settings-nav > button:hover { background: var(--st-hover) !important; color: var(--st-text) !important; }
+#app-settings-workspace .app-settings-content .project-settings-nav > button.active { background: var(--st-surface-2) !important; color: var(--st-text) !important; }
+
+/* Rules, Skills, Subagents and Tools: category header above its own card. */
+#app-settings-workspace .app-settings-content .guidance-settings-list { gap: 0 !important; }
+#app-settings-workspace .app-settings-content .guidance-category { margin: 24px 0 0 !important; }
+#app-settings-workspace .app-settings-content .guidance-category:first-child { margin-top: 16px !important; }
+#app-settings-workspace .app-settings-content .guidance-category-header { align-items: flex-end !important; margin: 0 0 8px !important; padding: 0 !important; }
+#app-settings-workspace .app-settings-content :is(.guidance-category-header, .mcp-connection-editor > header) h3 { margin: 0 !important; color: var(--st-text) !important; font: 600 13px/20px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content :is(.guidance-category-header, .mcp-connection-editor > header) p { margin: 2px 0 0 !important; color: var(--st-muted) !important; font: 12px/17px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content .guidance-category-list { padding: 0 !important; overflow: hidden; }
+#app-settings-workspace .app-settings-content .guidance-category-empty { padding: 14px 16px !important; color: var(--st-faint) !important; font: 12px/17px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content .guidance-new-button { display: inline-flex !important; align-items: center; gap: 4px; height: 26px; padding: 0 8px !important; border: 0 !important; border-radius: var(--st-radius-sm) !important; background: transparent !important; color: var(--st-text-2) !important; font: 500 12px/1 var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content .guidance-new-button:hover { background: var(--st-hover) !important; color: var(--st-text) !important; }
+#app-settings-workspace .app-settings-content :is(.guidance-entry, .mcp-add-row) { padding: 11px 16px !important; font: 13px/18px var(--font-ui) !important; color: var(--st-text) !important; }
+#app-settings-workspace .app-settings-content :is(.guidance-entry, .mcp-add-row):hover { background: var(--st-hover) !important; }
+#app-settings-workspace .app-settings-content :is(.guidance-entry-meta, .mcp-add-copy small) { color: var(--st-muted) !important; font: 12px/17px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content .mcp-connection-editor { margin-top: 22px !important; padding: 14px 16px !important; }
+#app-settings-workspace .app-settings-content .kali-access-switch { font: 500 12px/1 var(--font-ui) !important; color: var(--st-text-2) !important; }
+#app-settings-workspace .app-settings-content .kali-access-switch strong { font: 500 12px/1 var(--font-ui) !important; }
+
+/* Models */
+#app-settings-workspace .app-settings-content .models-api-keys-summary strong { color: var(--st-text) !important; font: 600 13px/20px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content .models-api-keys-summary small { color: var(--st-muted) !important; font: 12px/17px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content .models-api-keys { margin-top: 26px !important; }
+#app-settings-workspace .app-settings-content .models-settings-row { min-height: 44px; padding: 0 16px !important; }
+#app-settings-workspace .app-settings-content .models-settings-name { color: var(--st-text) !important; font: 13px/18px var(--font-ui) !important; }
+#app-settings-workspace .app-settings-content :is(.models-secret-status, .models-api-status, .models-api-status-grid, .models-api-status-grid strong) { color: var(--st-muted) !important; font-size: 12px !important; }
+#app-settings-workspace .app-settings-content .models-api-status-grid code { color: var(--st-text-2) !important; font: 12px var(--font-mono) !important; }
+#app-settings-workspace .app-settings-content .models-view-all { margin: 8px auto 0 !important; border: 0 !important; background: transparent !important; color: var(--st-muted) !important; }
+
+#app-settings-workspace .app-settings-content .models-api-row-toggle { flex-direction: row !important; align-items: center !important; justify-content: space-between !important; gap: 24px !important; }
+#app-settings-workspace .app-settings-content .models-api-row-toggle > div { flex: 1 1 auto; min-width: 0; }
+
+/* Agents */
+#app-settings-workspace .app-settings-content .agent-subagent-settings { display: flex !important; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; padding: 10px 16px !important; }
+#app-settings-workspace .app-settings-content .agent-subagent-settings h2 { margin: 0 !important; color: var(--st-text) !important; font: 500 13px/18px var(--font-ui) !important; }
+
+/* Browser & Network: the folder button stays beside the path at every width. */
+#app-settings-workspace .app-settings-content .certificate-location-row { grid-template-columns: minmax(0, 1fr) auto !important; }
+
+/* Badges */
+#app-settings-workspace .app-settings-content :is(.certificate-location-badge, .models-location-badge, .project-settings-badge) {
+  padding: 2px 8px !important;
+  border: 1px solid var(--st-border-strong) !important;
+  border-radius: 999px !important;
+  background: var(--st-surface-2) !important;
+  color: var(--st-muted) !important;
+  font: 500 11px/16px var(--font-ui) !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+/* Sidebar: no fill of its own, so it shares the page background. It is either
+   fully expanded at a fixed width or, when the settings page is narrow, the
+   icon rail; its contents always fit, so it never scrolls sideways. */
+#app-settings-workspace.app-settings-workspace,
+#app-settings-workspace .app-settings-sidebar { background: transparent !important; }
+#app-settings-workspace .app-settings-sidebar { box-sizing: border-box; width: 244px; max-width: 244px; overflow: hidden; }
+#app-settings-workspace .app-settings-search { box-sizing: border-box; width: 100% !important; margin-right: 0 !important; margin-left: 0 !important; }
+#app-settings-workspace .app-settings-tabs { box-sizing: border-box; width: 100% !important; margin: 0 !important; overflow-x: hidden !important; }
+#app-settings-workspace .app-settings-tabs button { box-sizing: border-box; width: 100%; min-width: 0; }
+#app-settings-workspace .app-settings-tabs button > span:not(.codicon) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container app-settings (max-width: 700px) {
+  #app-settings-workspace .app-settings-sidebar { width: 72px; max-width: 72px; padding: 28px 0 16px !important; }
+  #app-settings-workspace .app-settings-tabs { padding: 0 0 12px !important; align-items: center; }
+  #app-settings-workspace .app-settings-tabs button { width: 44px; height: 40px; min-height: 40px !important; margin: 0 auto; padding: 0 !important; justify-content: center; gap: 0 !important; }
+}
+
+/* Cards carry no outline; the fill alone separates them from the page. */
+#app-settings-workspace .app-settings-content :is(.general-settings-card, .project-settings-card, .certificate-settings-card, .models-settings-list, .guidance-category-list, .models-api-provider-block, .mcp-connection-editor, .agent-subagent-settings) {
+  border: 0 !important;
+}

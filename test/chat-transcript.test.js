@@ -156,3 +156,24 @@ test("steering prompts and assistant output keep their chronological order in sa
   assert.deepEqual(restored.filter((item) => item.type === "user").map((item) => item.message), ["run three sleeps", "also run echo"]);
   assert.deepEqual(restored.filter((item) => item.type === "assistant").map((item) => item.events[0].text), ["Started the sleep commands", "Running echo now"]);
 });
+
+test("browser and other action rows save their label but never a file path", async () => {
+  const { captureChatTranscript, normalizeUiTranscript } = await load();
+  const dom = new JSDOM(`
+    <div id="messages"><div class="chat-exchange"><div class="chat-exchange-body">
+      <div class="chat-turn user"><div class="chat-box-content">browse it</div></div>
+      <div class="agent-response-host"><div class="agent-run-chunk"><div class="chat-turn assistant">
+        <button class="agent-file-row tool-card" data-tool-action="browser_action" data-file="browser_action" data-state="success"><span class="tool-card-file">Browsed list pages</span></button>
+        <button class="agent-file-row tool-card" data-tool-action="read_file" data-file="NOTES.md" data-path="docs/NOTES.md" data-state="success"><span class="tool-card-file">Read NOTES.md</span></button>
+      </div></div></div>
+    </div></div></div>`);
+  const restored = normalizeUiTranscript(captureChatTranscript(dom.window.document.querySelector("#messages")));
+  const events = restored.runs[0].timeline.find((item) => item.type === "assistant").events;
+  const browser = events.find((event) => event.name === "browser_action");
+  assert.equal(browser.label, "Browsed list pages");
+  assert.equal(browser.path || "", "");
+  assert.deepEqual(browser.args, {});
+  const read = events.find((event) => event.name === "read_file");
+  assert.equal(read.path, "docs/NOTES.md");
+  assert.equal(read.label, "Read NOTES.md");
+});

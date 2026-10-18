@@ -70,6 +70,12 @@
     return Math.max(1, Math.ceil(cjk + (pieces.length - cjk) * 1.05 + symbols + lines));
   }
 
+  function estimateImageTokens(width, height) {
+    const w = positiveInteger(width) || 2048;
+    const h = positiveInteger(height) || 2048;
+    return 768 + Math.ceil(w / 512) * Math.ceil(h / 512) * 768;
+  }
+
   function contextKey(provider, model) {
     return `${String(provider || "ollama").toLowerCase()}:${String(model || "").trim()}`;
   }
@@ -159,6 +165,11 @@
         ? [...new Set(source.supportedParameters.map(String))]
         : Array.isArray(source.supported_parameters)
           ? [...new Set(source.supported_parameters.map(String))]
+          : [],
+      inputModalities: Array.isArray(source.inputModalities)
+        ? [...new Set(source.inputModalities.map(String))]
+        : Array.isArray(source.architecture?.input_modalities)
+          ? [...new Set(source.architecture.input_modalities.map(String))]
           : [],
       reasoning: normalizeReasoningMetadata(source),
       source: String(source.source || (contextWindowTokens ? "catalog" : "fallback")),
@@ -323,6 +334,7 @@
     contextOptions,
     pickerContextOptions,
     estimateTokenCount,
+    estimateImageTokens,
     legacyContextLabelToTokens,
     normalizeModelMetadata,
     normalizeReasoningEffort,

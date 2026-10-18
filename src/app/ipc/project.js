@@ -61,9 +61,6 @@ function registerProjectIpc({
   listGuidanceEntries,
   normalizeGuidanceKind,
   readGuidanceEntry,
-  clearBrowserTarget = () => {},
-  clearBrowserSessionTargets = () => {},
-  clearBrowserIdentityTargets = () => {},
 }) {
   if (!ipcMain || typeof ipcMain.handle !== "function") throw new TypeError("registerProjectIpc requires ipcMain");
   if (typeof getMainWindow !== "function") throw new TypeError("registerProjectIpc requires getMainWindow");
@@ -288,6 +285,15 @@ ipcMain.handle("chat-history:begin", async (_event, { workspace, sessionId, titl
   });
 });
 
+// Full-quality original of an image attached to a sent chat message.
+ipcMain.handle("chat-images:read", async (_event, { workspace, sessionId, imageId } = {}) => {
+  const identity = workspace ? container.memoryProjectIdentityStore?.resolveV3Project?.(workspace, { persist: false }) : null;
+  if (!identity?.ok || !identity.projectId) return { ok: false, code: "CHAT_IMAGE_PROJECT_UNAVAILABLE" };
+  const read = container.tier1SensitiveStore?.readChatImage?.(identity.projectId, String(sessionId || ""), String(imageId || ""));
+  if (!read?.ok || !read.exists) return { ok: false, code: read?.code || "CHAT_IMAGE_NOT_FOUND" };
+  return { ok: true, dataUrl: `data:${read.mediaType};base64,${read.data}` };
+});
+
 ipcMain.handle("chat-history:event", async (_event, { workspace, ...event } = {}) => {
   return container.v3SessionStore.record(workspace, event);
 });
@@ -297,12 +303,12 @@ ipcMain.handle("chat-history:update", async (_event, { workspace, sessionId, ses
 });
 
 ipcMain.handle("chat-history:close", async (_event, { workspace, sessionId } = {}) => {
+  await container.cancelNativeBrowserChat?.(sessionId);
   const result = container.v3SessionStore.close(workspace, sessionId);
   await container.browserSessionManager?.closeSession?.(workspace, sessionId);
   const sensitive = await cleanupV3SessionState(workspace, sessionId);
   if (sensitive?.ok === false) return sensitive;
   container.mcpRuntime?.clearSession?.(sessionId, workspace);
-  clearBrowserSessionTargets(workspace, sessionId);
   return result;
 });
 
@@ -311,6 +317,7 @@ ipcMain.handle("chat-history:reopen", async (_event, { workspace, sessionId } = 
 });
 
 ipcMain.handle("chat-history:archive", async (_event, { workspace, sessionId } = {}) => {
+  await container.cancelNativeBrowserChat?.(sessionId);
   return container.v3SessionStore.record(workspace, { type: "archive", sessionId });
 });
 
@@ -323,12 +330,12 @@ ipcMain.handle("chat-history:flush", async () => {
 });
 
 ipcMain.handle("chat-history:delete", async (_event, { workspace, sessionId } = {}) => {
+  await container.cancelNativeBrowserChat?.(sessionId);
   const loaded = container.v3SessionStore.load(workspace);
   const sessions = [...(loaded.sessions || []), ...(loaded.closedSessions || []), ...(loaded.archivedSessions || [])];
   const session = sessions.find((item) => String(item.id) === String(sessionId));
   container.mcpRuntime?.clearSession?.(sessionId, workspace);
   await container.browserSessionManager?.closeSession?.(workspace, sessionId);
-  clearBrowserSessionTargets(workspace, sessionId);
   const cleaned = await cleanupV3SessionState(workspace, sessionId, { deleteCheckpoint: true });
   if (cleaned?.ok === false) return cleaned;
   return container.v3SessionStore.remove(workspace, sessionId);
@@ -685,13 +692,19 @@ ipcMain.handle("security:buildIntruder", async (_event, payload = {}) => {
 });
 
 ipcMain.handle("proxy:configure", async (_event, { assessmentPath } = {}) => {
+  const previousProxy = proxyListener.getStatus();
+  const nextSettings = assessmentPath ? effectiveOperatorRuntimeSettings(assessmentPath) : null;
+  const listenerChanged = previousProxy.running && (previousProxy.host !== nextSettings?.listener?.bindAddress || previousProxy.port !== Number(nextSettings?.listener?.port));
+  if (!nextSettings?.listener?.enabled || listenerChanged || (previousProxy.assessmentPath && (!assessmentPath || path.resolve(previousProxy.assessmentPath) !== path.resolve(assessmentPath)))) {
+    await container.closeNativeBrowserProject?.();
+  }
   const browserStatus = container.proxyBrowser.status();
   if (browserStatus.running && (!assessmentPath || path.resolve(browserStatus.workspace) !== path.resolve(assessmentPath))) {
     await container.proxyBrowser.close(browserStatus.workspace);
   }
   const project = readProjectProfile(assessmentPath);
   const result = await proxyListener.configure(assessmentPath, {
-    settings: assessmentPath ? effectiveOperatorRuntimeSettings(assessmentPath) : null,
+    settings: nextSettings,
     targets: project?.profile?.scope?.inScopeTargets || null,
   });
   if (!result?.running && assessmentPath) {
@@ -712,6 +725,7 @@ ipcMain.handle("proxy:browserLaunch", async (_event, { assessmentPath = "", iden
   const sameProject = proxyStatus.running && proxyStatus.assessmentPath && path.resolve(proxyStatus.assessmentPath) === resolvedProject;
   if (sameProject && proxyStatus.error) proxyStatus = proxyListener.clearError();
   if (!sameProject) {
+    await container.closeNativeBrowserProject?.();
     const settings = JSON.parse(JSON.stringify(effectiveOperatorRuntimeSettings(assessmentPath) || {}));
     settings.listener = { ...(settings.listener || {}), enabled: true };
     const project = readProjectProfile(assessmentPath);
@@ -787,6 +801,7 @@ ipcMain.handle("settings:certificatesChoose", async (_event, { assessmentPath = 
   const preferences = readApplicationPreferences();
   preferences.certificates = { ...(preferences.certificates || {}), caDirectory: selected };
   writeApplicationPreferences(preferences);
+  await container.closeNativeBrowserProject?.();
   await proxyListener.stop();
   if (assessmentPath) {
     const project = readProjectProfile(assessmentPath);
@@ -802,6 +817,7 @@ ipcMain.handle("settings:certificatesReset", async (_event, { assessmentPath = "
   const preferences = readApplicationPreferences();
   preferences.certificates = { ...(preferences.certificates || {}), caDirectory: "" };
   writeApplicationPreferences(preferences);
+  await container.closeNativeBrowserProject?.();
   await proxyListener.stop();
   if (assessmentPath) {
     const project = readProjectProfile(assessmentPath);
@@ -901,9 +917,9 @@ ipcMain.handle("settings:identityUpdate", async (_event, { workspace = "", ident
   return result;
 });
 ipcMain.handle("settings:identityDelete", async (_event, { workspace = "", identityId = "" } = {}) => {
+  await container.closeNativeBrowserIdentity?.(workspace, identityId);
   await container.browserSessionManager?.closeIdentity?.(workspace, identityId);
   await container.proxyBrowser?.close?.(workspace, identityId);
-  clearBrowserIdentityTargets(workspace, identityId);
   const result = container.identityVault?.().remove(workspace, identityId) || { ok: false, error: "Identity vault is unavailable.", code: "IDENTITY_VAULT_UNAVAILABLE" };
   if (result.ok) emitIdentityStatus(workspace);
   return result;
@@ -915,10 +931,7 @@ ipcMain.handle("settings:identityLoginStart", async (_event, { workspace = "", i
 });
 ipcMain.handle("settings:identityLoginSave", async (_event, { workspace = "", identityId = "" } = {}) => {
   const result = await container.browserSessionManager?.saveLogin?.({ workspace, identityId });
-  if (result?.ok) {
-    clearBrowserIdentityTargets(workspace, identityId);
-    emitIdentityStatus(workspace);
-  }
+  if (result?.ok) emitIdentityStatus(workspace);
   return result || { ok: false, error: "Browser session manager is unavailable.", code: "BROWSER_MANAGER_UNAVAILABLE" };
 });
 ipcMain.handle("settings:identityLoginCancel", async (_event, { workspace = "", identityId = "" } = {}) => {
@@ -944,9 +957,7 @@ ipcMain.handle("settings:identityImport", async (_event, { workspace = "", ident
     // without persisting before replacing the vault record, otherwise its
     // final state can overwrite a successful import.
     await container.browserSessionManager?.closeIdentity?.(workspace, identityId, { persist: false });
-    // The closed context can no longer service follow-up browser actions,
-    // regardless of whether secure storage accepts the replacement.
-    clearBrowserIdentityTargets(workspace, identityId);
+    await container.closeNativeBrowserIdentity?.(workspace, identityId);
     const vault = container.identityVault?.();
     const result = await (vault?.saveSecretAsync?.(workspace, identityId, secret) || Promise.resolve(vault?.saveSecret?.(workspace, identityId, secret))) || { ok: false, error: "Identity vault is unavailable.", code: "IDENTITY_VAULT_UNAVAILABLE" };
     if (result.ok) {
@@ -1071,36 +1082,5 @@ ipcMain.handle("workspace:unwatch", async (event) => {
 
 module.exports = Object.freeze({
   MAX_EDITABLE_FILE_BYTES,
-  channels: Object.freeze([
-    "fs:openFolder", "fs:openFile", "fs:readdir", "fs:readFile", "fs:writeFile", "fs:mkdir",
-    "fs:deletePath", "fs:copyPath", "fs:movePath", "fs:showItemInFolder", "project:create", "project-profile:get",
-    "project-profile:save", "workspace:watch", "workspace:unwatch", "workspace:changed",
-    "guidance:entries", "guidance:read", "guidance:context", "guidance:save", "guidance:import",
-    "guidance:delete", "mcp:read", "mcp:ensure",
-    "kali-access:get", "kali-access:save", "kali-access:test", "kali-access:pickIdentity", "clipboard:writeText",
-    "assessment:create", "assessment:open", "assessment:verify", "assessment:repair",
-    "assessment:trafficLog", "assessment:trafficHistory", "assessment:trafficRecords", "assessment:evidence",
-    "assessment:appendEvidence", "assessment:createRun",
-    "assessment:updateRun", "assessment:generateReport", "assessment:runHistory",
-    "assessment:deleteTrafficRecords", "assessment:settings",
-    "assessment:intelligenceStatus", "assessment:intelligenceStart", "assessment:intelligencePause",
-    "assessment:intelligenceResume", "assessment:intelligenceRebuild", "assessment:intelligenceQuery",
-    "assessment:intelligenceExpand", "assessment:intelligence",
-    "assessment:writeSettings", "assessment:customEntries", "assessment:createEntry",
-    "assessment:deleteEntries", "assessment:buildContext",
-    "chat-history:load", "chat-history:begin", "chat-history:event", "chat-history:update",
-    "chat-history:close", "chat-history:reopen", "chat-history:archive", "chat-history:unarchive",
-    "chat-history:flush", "chat-history:save-before-close", "chat-history:delete",
-    "security:httpRequest", "security:buildIntruder", "proxy:configure", "proxy:status",
-    "proxy:forward", "proxy:drop", "proxy:showCa", "proxy:browserLaunch", "proxy:browserStatus", "webclone:build", "webclone:manifest",
-    "webclone:readFile", "webclone:previewDocument", "webclone:previewBounds", "webclone:hidePreview",
-    "settings:certificatesGet", "settings:certificatesChoose", "settings:certificatesReset",
-    "settings:certificatesShow", "settings:llmGet", "settings:llmSet", "settings:llmTest",
-    "settings:ollamaGet", "settings:ollamaSet", "settings:ollamaTest",
-    "settings:identitiesGet", "settings:identityCreate", "settings:identityUpdate",
-    "settings:identityDelete", "settings:identityLoginStart", "settings:identityLoginSave",
-    "settings:identityLoginCancel", "settings:identityImport", "settings:identityRuntime",
-    "settings:identityStatus", "settings:credentialsGet", "settings:credentialCreate", "settings:credentialSave", "settings:credentialDelete",
-  ]),
   registerProjectIpc,
 });

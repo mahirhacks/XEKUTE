@@ -230,16 +230,25 @@ test("project workspace exposes a plain folder flow and professional project set
     html.indexOf('class="chat-session-controls"'),
     html.indexOf('<div id="messages"', html.indexOf('class="chat-session-controls"')),
   );
-  assert.match(securityToolsMarkup, /id="security-proxy-browser"/);
-  assert.ok(securityToolsMarkup.indexOf('id="security-proxy-browser"') < securityToolsMarkup.indexOf('id="security-history-toggle"'));
+  const topbarMarkup = html.slice(html.indexOf('id="app-topbar"'), html.indexOf('id="layout"'));
+  assert.match(topbarMarkup, /id="security-proxy-browser"/);
+  assert.ok(topbarMarkup.indexOf('id="security-proxy-browser"') < topbarMarkup.indexOf('id="btn-top-terminal"'),
+    "the browser button sits in the title bar before the terminal toggle");
+  assert.doesNotMatch(securityToolsMarkup, /id="security-proxy-browser"/);
   assert.doesNotMatch(chatControlsMarkup, /id="security-proxy-browser"/);
+  const browserButton = html.slice(html.indexOf('id="security-proxy-browser"'), html.indexOf("</button>", html.indexOf('id="security-proxy-browser"')));
+  assert.match(browserButton, /class="topbar-icon browser-topbar-icon"/);
+  assert.doesNotMatch(browserButton, />\s*Browser\s*</, "the title-bar button shows only the icon, no label");
+  assert.match(browserButton, /codicon-globe/);
   assert.match(baseStyles, /\.security-workspace-tools\s*\{[^}]*display:\s*flex;[^}]*gap:\s*6px;/);
   assert.match(baseStyles, /\.security-history-toggle\s*\{[^}]*margin-right:\s*0;/);
-  assert.match(baseStyles, /\.security-proxy-browser\s*\{[^}]*margin-right:\s*0;/);
-  assert.match(renderer, /proxyBrowserLaunch\(\{ assessmentPath, identityId:/);
-  assert.match(renderer, /setSecurityHistoryVisible\(true\)/);
+  assert.match(layoutRevampStyles, /\.browser-topbar-icon\.active\s*\{[^}]*#75beff/);
+  assert.match(renderer, /function openBrowserTab\(\)[\s\S]*?special: "browser"/);
+  assert.match(renderer, /closest\("#security-proxy-browser"\)\) \{\s*event\.stopPropagation\(\);\s*closeProxyBrowserMenu\(\);\s*openBrowserTab\(\);\s*\}/, "the title-bar button opens the Browser workspace without creating a page");
+  assert.match(renderer, /openBrowserTab\(\);\s*await browserWorkspace\?\.open\(\{ identityId:/, "choosing an identity opens a page with it");
+  assert.match(renderer, /function showBrowserWorkspaceContent\(\)[\s\S]*?browserWorkspace\?\.setVisible\(true\)/);
   assert.match(renderer, /nextSettings\.listener\.enabled = true/);
-  assert.match(renderer, /chooseProxyBrowserIdentity\(\{ menuOnly: true \}\)/);
+  assert.match(renderer, /contextmenu[\s\S]{0,200}chooseProxyBrowserIdentity\(\);/);
   const engagementMarkup = html.slice(html.indexOf('id="project-settings-engagement"'), html.indexOf('id="project-settings-authorization"'));
   const certificateMarkup = html.slice(html.indexOf('id="app-settings-certificates-panel"'));
   assert.match(engagementMarkup, /id="engagement-account-list"/);
@@ -756,12 +765,11 @@ test("traffic history delete removes selected exchanges from Traffic Raw", () =>
   fs.rmSync(parent, { recursive: true, force: true });
 });
 
-test("interceptor Browser click launches immediately and keeps the proxy listener up", () => {
+test("interceptor Browser click opens immediately and keeps the proxy listener up", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
   const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
-  assert.match(renderer, /if \(!menuOnly\) return launchProxyBrowser\(""\)/);
-  assert.match(renderer, /chooseProxyBrowserIdentity\(\{ menuOnly: true \}\)/);
+  assert.match(renderer, /contextmenu[\s\S]{0,200}chooseProxyBrowserIdentity\(\);/);
   assert.match(renderer, /nextSettings\.listener\.enabled = true/);
   assert.match(main, /if \(settings\.interception\?\.enabled\) \{\s*settings\.listener = \{ \.\.\.settings\.listener, enabled: true \};/s);
   assert.match(projectIpc, /if \(!settings\?\.interception\?\.enabled\) await container\.proxyBrowser\.close\(assessmentPath\)/);

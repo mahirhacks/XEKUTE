@@ -222,7 +222,6 @@ function createRuntimeDelegationProvider({
   loadChatReferenceSnapshot = null,
   workingReferences = [],
   toolMetadataForName = () => null,
-  getBrowserTarget = () => "",
   checkpointRun = () => Promise.resolve(),
   checkpointChild = null,
   loadChild = null,
@@ -484,6 +483,8 @@ function createRuntimeDelegationProvider({
         toolResult = await executeToolCall({
           ...request,
           sessionId: childSessionId,
+          model: childModel,
+          provider: engine.contextPlan.provider,
           blockId,
           nested: true,
           authorityProfile: engine.binding.authorityProfile,
@@ -601,7 +602,6 @@ function createRuntimeDelegationProvider({
             executeToolCall: executeChildToolCall,
             listRunningCommands,
             toolMetadataForName: (name) => toolMetadataForName(name, childSessionId),
-            getBrowserTarget,
             checkpointRun: async (patch) => {
               await checkpointRun(patch, { childSessionId, childInvocationId, generation, operation });
               if (patch.checkpoint?.engineSnapshot) engine.snapshot = patch.checkpoint.engineSnapshot;

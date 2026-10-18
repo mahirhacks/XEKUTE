@@ -11,10 +11,11 @@ const WORK_NODE_CLASSES = [
   "agent-command-event",
   "subagent-run-card",
   "tool-card",
+  "agent-question-answer",
 ];
 
 const WORK_NODE_SELECTOR = ".agent-thinking-fold, .agent-explored-fold, .agent-file-stack,"
-  + " .agent-file-row, .agent-command-event, .subagent-run-card, .tool-card:not([hidden])";
+  + " .agent-file-row, .agent-command-event, .subagent-run-card, .tool-card:not([hidden]), .agent-question-answer";
 
 const FOLD_CARET_SRC = "assets/icons/chat_fold_caret.svg";
 
@@ -221,15 +222,27 @@ function isStopRoundReply(node) {
 // The visible answer is the last pre-stop reply with no later tool work.
 // Text from the stop round itself stays inside Worked for when an earlier
 // answer already exists.
+function isCompletionAnswer(node) {
+  return node?.dataset?.answered === "true";
+}
+
 export function promoteFinalAnswer(turn) {
   const fold = turnWorkFold(turn);
   const body = workFoldBody(fold);
   if (!body) return null;
-  const promoted = children(turn).find((child) => isReplyNode(child) && !isEmptyReply(child));
+  const substantive = (child) => isReplyNode(child) && !isEmptyReply(child);
+  // A completion-grade answer (a full reply from a no-tool round) is the
+  // intended final answer, even when later work closed the run with a weaker
+  // recap that would otherwise be promoted. The recap stays inside the fold.
+  const answered = [...children(turn), ...children(body)].filter((child) => substantive(child) && isCompletionAnswer(child));
+  if (answered.length) {
+    const answer = answered[answered.length - 1];
+    if (answer.parentElement !== turn) fold.after(answer);
+    return answer;
+  }
+  const promoted = children(turn).find(substantive);
   if (promoted) return promoted;
-  const eligible = children(body).filter((child) => (
-    isReplyNode(child) && !isEmptyReply(child) && !replyHasFollowingWork(child)
-  ));
+  const eligible = children(body).filter((child) => substantive(child) && !replyHasFollowingWork(child));
   const answer = eligible.findLast((child) => !isStopRoundReply(child))
     || eligible.findLast(isStopRoundReply)
     || null;

@@ -17,7 +17,7 @@
   padding: 7px 10px;
   overflow: auto;
   font-family: var(--font-ui);
-  font-size: calc(12px * var(--ui-zoom, 1));
+  font-size: 12px;
   line-height: 1.4;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

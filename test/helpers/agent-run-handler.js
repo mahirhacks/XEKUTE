@@ -9,6 +9,7 @@ const { computeOrchestrationHold } = require("../../src/agent/runtime/orchestrat
 const { isMemoryId } = require("../../src/contracts/memory/index.js");
 const { createAgentSessionRuntime, assignTaskWave } = require("../../src/agent/runtime/agent-session-runtime.js");
 const { createChatReferenceResolver } = require("../../src/agent/runtime/chat-references.js");
+const { normalizeUserImages, attachUserImages } = require("../../src/app/services/chat/user-images.js");
 
 const mainSource = fs.readFileSync(path.join(__dirname, "../../src/app/electron/main.js"), "utf8");
 
@@ -41,6 +42,7 @@ function createAgentRunHandlerFixture() {
     crypto,
     path,
     fs: { existsSync: () => false },
+    mainLog: { write() {}, ignored: () => () => {} },
     AbortController,
     ipcMain: { handle: (channel, handler) => ipcHandlers.set(channel, handler) },
     setImmediate,
@@ -54,6 +56,8 @@ function createAgentRunHandlerFixture() {
     delegatedChildren: { checkpointChild() {}, loadChild() {} },
     createAgentSessionRuntime,
     createChatReferenceResolver,
+    normalizeUserImages,
+    attachUserImages,
     assignTaskWave,
     llmPreferences: () => ({}),
     getOpenRouterBaseUrl: () => "",
@@ -90,7 +94,6 @@ function createAgentRunHandlerFixture() {
     registerChildRun() {},
     unregisterChildRun() {},
     getActiveProvider: () => "ollama",
-    getBrowserTarget: () => "",
     registerDelegatedQuestion() {},
     parentContinuationInFlight: () => false,
     scheduleParentContinuation: () => false,

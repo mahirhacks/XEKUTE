@@ -26,7 +26,6 @@
   --editor-fs:      14px;
   --sash-size:      4px;
   --sash-hit-size:  12px;
-  --ui-zoom:        1;
 }
 
 html, body {
@@ -55,7 +54,6 @@ html, body {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
-  zoom: var(--ui-zoom);
 }
 
 #app-topbar {
@@ -6436,3 +6434,30 @@ html.panel-resizing iframe {
 .credential-create-row input:focus { border-color:#666; }
 .credential-create-row button { white-space:nowrap; }
 @media (max-width:980px) { .authentication-source-row { grid-template-columns:1fr; }.credential-create-row { grid-template-columns:repeat(2,minmax(0,1fr)); }.credential-create-row button { grid-column:span 2; justify-self:start; } }
+
+/* XEKUTE's agent mark. Every agent icon in the app is this one SVG, drawn in
+   the surrounding text color, so mode switches, menus and terminal sessions
+   that ask for the agent glyph all show it. */
+.codicon.codicon-copilot::before {
+  content:"";
+  display:inline-block;
+  width:.875em;
+  height:.875em;
+  vertical-align:-.05em;
+  background-color:currentColor;
+  -webkit-mask:url("../assets/icons/agents_icon.svg") center/contain no-repeat;
+  mask:url("../assets/icons/agents_icon.svg") center/contain no-repeat;
+}
+
+/* Every shield in the app (authority, protection notes, assessment tabs) is
+   XEKUTE's shield SVG, drawn in the surrounding text color. */
+.codicon.codicon-shield::before {
+  content:"";
+  display:inline-block;
+  width:.875em;
+  height:1em;
+  vertical-align:-.125em;
+  background-color:currentColor;
+  -webkit-mask:url("../assets/icons/shield_icon.svg") center/contain no-repeat;
+  mask:url("../assets/icons/shield_icon.svg") center/contain no-repeat;
+}

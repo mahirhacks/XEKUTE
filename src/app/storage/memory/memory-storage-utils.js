@@ -41,6 +41,17 @@ function uniqueTemporaryPath(pathImpl, target, cryptoImpl = nodeCrypto, suffix =
   return `${target}.${process.pid}.${Date.now()}.${random}.${suffix}`;
 }
 
+// Directories this process has already created and secured. Writes skip the
+// mkdir/chmod pair for them and redo it only if the directory has gone.
+const ensuredDirectories = new WeakMap();
+function ensureDirectoryOnce(fsImpl, pathImpl, directory) {
+  if (!ensuredDirectories.has(fsImpl)) ensuredDirectories.set(fsImpl, new Set());
+  const known = ensuredDirectories.get(fsImpl);
+  if (known.has(directory)) return;
+  ensureDirectory(fsImpl, pathImpl, directory);
+  known.add(directory);
+}
+
 function ensureDirectory(fsImpl = nodeFs, pathImpl = nodePath, directory) {
   fsImpl.mkdirSync(directory, { recursive: true, mode: DEFAULT_DIRECTORY_MODE });
   try { fsImpl.chmodSync(directory, DEFAULT_DIRECTORY_MODE); } catch { /* Windows ACLs protect the workspace. */ }
@@ -66,13 +77,18 @@ function atomicWriteText({ fs: fsImpl = nodeFs, path: pathImpl = nodePath, crypt
   const text = String(content == null ? "" : content);
   if (typeof validate === "function") validate(text);
 
-  ensureDirectory(fsImpl, pathImpl, pathImpl.dirname(file));
+  const directory = pathImpl.dirname(file);
+  ensureDirectoryOnce(fsImpl, pathImpl, directory);
   const temporary = uniqueTemporaryPath(pathImpl, file, cryptoImpl, "tmp");
   const backupPath = `${file}.bak`;
   const backupTemporary = uniqueTemporaryPath(pathImpl, backupPath, cryptoImpl, "tmp");
   let descriptor = null;
   try {
-    descriptor = fsImpl.openSync(temporary, "wx", mode);
+    try { descriptor = fsImpl.openSync(temporary, "wx", mode); } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      ensureDirectory(fsImpl, pathImpl, directory);
+      descriptor = fsImpl.openSync(temporary, "wx", mode);
+    }
     fsImpl.writeFileSync(descriptor, text, "utf8");
     if (strictAtomic) fsImpl.fsyncSync(descriptor);
     else {

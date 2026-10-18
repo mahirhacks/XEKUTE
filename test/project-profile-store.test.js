@@ -87,3 +87,12 @@ test("project profiles clear authentication selections without a reference id", 
   });
   assert.equal(invalidExecutionModel.profile.engagement.executionModel, "operator_choice");
 });
+
+test("browser transfer settings default open, clamp the size limit, and reject unknown values", () => {
+  const { normalizeProjectProfile } = require("../src/app/storage/project-profile-store.js");
+  const path = require("node:path");
+  const root = path.resolve("fixture-project");
+  assert.deepEqual(normalizeProjectProfile({}, root, path).browser, { uploads: "allowed", downloads: "allowed", maxDownloadMiB: 12 });
+  assert.deepEqual(normalizeProjectProfile({ browser: { uploads: "blocked", downloads: "blocked", maxDownloadMiB: 500 } }, root, path).browser, { uploads: "blocked", downloads: "blocked", maxDownloadMiB: 12 });
+  assert.deepEqual(normalizeProjectProfile({ browser: { uploads: "sometimes", maxDownloadMiB: 0 } }, root, path).browser, { uploads: "allowed", downloads: "allowed", maxDownloadMiB: 1 });
+});

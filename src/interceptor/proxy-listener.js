@@ -61,16 +61,26 @@ function isConnectionProxyError(ctx, error, kind) {
 }
 
 function defaultProxyAdapter() {
-  const { Proxy } = require("http-mitm-proxy");
   let instance = null;
   return {
     create() {
+      const { Proxy } = require("http-mitm-proxy");
       instance = new Proxy();
       return instance;
     },
     listen(options) {
       return new Promise((resolve) => {
-        instance.listen(options, (error) => resolve({ error: error ? error.message || String(error) : "" }));
+        let settled = false;
+        const finish = error => {
+          if (settled) return;
+          settled = true;
+          resolve({ error: error ? error.message || String(error) : "" });
+        };
+        // http-mitm-proxy reports a bind failure through onError, without
+        // invoking its listen callback. Browser admission must still settle.
+        instance.onError((ctx, error) => { if (!ctx) finish(error); });
+        try { instance.listen(options, finish); }
+        catch (error) { finish(error); }
       });
     },
     close() {
