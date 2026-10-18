@@ -39,6 +39,7 @@ const { estimateBrowserImageTokens, retainBrowserScreenshotExchanges } = require
 const detachedDeliveries = new Map();
 const { END_TURN_TOOL_NAME, isEndTurnStop, executeEndTurn } = require("../tools/process/end-turn.js");
 const { pressureTriggersRelease, selectBlocksToRelease } = require("../runtime/context-release-policy.js");
+const { loadScopePolicy, evaluateNetworkTarget } = require("../authority/scope/network-scope.js");
 const { RELEASE_BLOCKS_TOOL_NAME, RECALL_BLOCK_TOOL_NAME, normalizeReleaseRequest, describeBlocks, sameMessages, renderReleasedBlock } = require("../tools/process/context-blocks.js");
 const { consumesCommandSlot } = require("../tools/process/command-queue.js");
 const { shouldReadLiveCommandState } = require("../runtime/operator-surface.js");
@@ -1051,6 +1052,14 @@ async function runAgentTurn({
   // `midTask` marks a checkpoint that fires while the task is still running, as
   // opposed to one at a real boundary (end of turn). It is reported so the timing
   // of checkpoints can be measured before any new trigger is built.
+  // A lead that names a host the operator never mentioned is only kept as work to
+  // do when the project's scope covers it. No configured scope means no exception.
+  const tier1ScopeCheck = () => {
+    try {
+      const policy = loadScopePolicy(workspace, projectProfile);
+      return policy.configured ? (entity) => evaluateNetworkTarget(entity, policy).ok === true : null;
+    } catch { return null; }
+  };
   const checkpointTier1IfNeeded = async ({ force = false, reason = "iteration", midTask = false } = {}) => {
     if (!useTier1 || tier1CheckpointInFlight) return tier1CheckpointInFlight || { ok: true, checkpointed: false, skipped: true };
     // Reassemble immediately before measuring pressure.  Tool results and
@@ -1081,6 +1090,7 @@ async function runAgentTurn({
         model: typeof tier1Model === "function" ? tier1Model : null,
         allow_model: typeof tier1Model === "function",
         reason,
+        scope_check: tier1ScopeCheck(),
       });
       if (checkpoint?.ok) {
         const screenshotExchanges = browserImageTokens(tier1Active) > 0
@@ -1478,6 +1488,12 @@ async function runAgentTurn({
       inputMessages.push(message);
       appliedInputIds.add(delivery.id);
       appendTier1Messages(message);
+      // Steering from the operator is kept as a directive the moment it arrives; a
+      // late tool result arrives the same way and is not one.
+      if (useTier1 && !/^(?:result|execution):/.test(delivery.id)) {
+        try { tier1Context.recordDirective?.(tier1ProjectId, resolvedTier1SessionId, { text: scopedContent(message), sourceMessageId: delivery.id, revision: delivery.revision, retainSecrets: projectProfile?.dataHandling?.redactSecrets === false }); }
+        catch { /* the message stays in the ledger either way */ }
+      }
     }
     revision = response.revision;
     cancellationEpoch = response.cancellationEpoch ?? cancellationEpoch;

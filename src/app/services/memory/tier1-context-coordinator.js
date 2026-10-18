@@ -97,7 +97,12 @@ function freshRecords({ reduction, constraints, decisions, workflow } = {}) {
   const facts = [];
   for (const message of list(reduction?.messages)) {
     if (message.tombstone && message.content) facts.push(`Released work: ${truncateText(message.content, 1_900)}`);
-    else if (message.role === "user" && message.content) facts.push(`User request: ${truncateText(message.content, 1_900)}`);
+    else if (message.role === "user" && message.content) {
+      // A late tool result and an internal notice are user-role messages too; they
+      // must not be recorded as something the operator asked for.
+      const label = message.origin === "tool_delivery" ? "Late tool result" : message.origin === "runtime" ? "Runtime note" : "User request";
+      facts.push(`${label}: ${truncateText(message.content, 1_900)}`);
+    }
   }
   const attempts = list(reduction?.attempts);
   for (const attempt of attempts) facts.push(attemptFact(attempt));
@@ -184,6 +189,58 @@ function extractBlockFindings(messages, { retainSecrets = false } = {}) {
   return sections.join("; ").slice(0, FINDINGS_MAX);
 }
 
+// Who wrote a ledger message. Operator input is a user message that carries a real
+// source id from the session supervisor. Late tool results (`result:`), tombstones,
+// internal runtime notices and unstamped user messages (a referenced terminal
+// capture is one) can all contain target-controlled text, so none of them is
+// operator input.
+const NON_OPERATOR_ID = /^(?:result|execution):/;
+function isOperatorInput(message) {
+  return Boolean(message) && message.role === "user" && message.block_tombstone !== true && message.__xekuteInternalRuntimeInput !== true
+    && typeof message.source_message_id === "string" && message.source_message_id.trim() !== "" && !NON_OPERATOR_ID.test(message.source_message_id);
+}
+// The words the operator typed, without the chat context the app appends to them.
+function operatorText(message) {
+  if (typeof message?.source_text === "string" && message.source_text) return message.source_text;
+  const content = typeof message?.content === "string" ? message.content : "";
+  const cut = content.indexOf("<referenced_chat_context>");
+  return (cut >= 0 ? content.slice(0, cut) : content).trimEnd();
+}
+
+const FILE_EXTENSIONS = new Set(["js", "mjs", "cjs", "json", "txt", "md", "py", "sh", "log", "yml", "yaml", "xml", "html", "htm", "css", "ts", "tsx", "jsx", "conf", "cfg", "ini", "env", "csv", "pdf", "png", "jpg", "jpeg", "gif", "svg", "ico", "zip", "gz", "tar", "bak", "sql", "exe", "dll", "so", "c", "h", "cpp", "java", "rb", "go", "rs", "php", "asp", "aspx", "jsp", "lock", "map", "woff", "ttf", "mp4", "mp3"]);
+const CIDR_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}\b/g;
+const HOSTNAME_PATTERN = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/gi;
+// Hosts, addresses and ranges a piece of text names. Used to tell a lead that
+// points at something the operator never mentioned from one that does.
+function ipv4ToNumber(value) {
+  const parts = String(value).split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return ((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256 + parts[3];
+}
+function ipv4InRange(address, range) {
+  const [base, bits] = String(range).split("/");
+  const value = ipv4ToNumber(address);
+  const start = ipv4ToNumber(base);
+  const width = Number(bits);
+  if (value === null || start === null || !Number.isInteger(width) || width < 0 || width > 32) return false;
+  const size = 2 ** (32 - width);
+  return Math.floor(value / size) === Math.floor(start / size);
+}
+function networkEntities(text) {
+  const value = String(text == null ? "" : text);
+  const entities = new Set();
+  for (const ip of value.match(IPV4_PATTERN) || []) entities.add(ip);
+  for (const cidr of value.match(CIDR_PATTERN) || []) entities.add(cidr);
+  for (const url of value.match(URL_PATTERN) || []) {
+    try { entities.add(new URL(url).hostname.toLowerCase()); } catch { /* not a URL after all */ }
+  }
+  for (const host of value.match(HOSTNAME_PATTERN) || []) {
+    const name = host.toLowerCase();
+    if (!FILE_EXTENSIONS.has(name.split(".").pop())) entities.add(name);
+  }
+  return entities;
+}
+
 // Active Conversation stays one flat chronological ledger. A block is one turn:
 // it opens at a `user` message (or at the first message) and runs through the
 // assistant and tool messages that answer it. Each opener carries a stable
@@ -264,7 +321,7 @@ function createTier1ContextCoordinator({
   function sessionKey(projectId, sessionId) { return `${String(projectId)}|${String(sessionId)}`; }
   function stateFor(projectId, sessionId) {
     const key = sessionKey(projectId, sessionId);
-    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false, nextBlockIndex: 0, released: new Map(), pinned: new Set() });
+    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false, nextBlockIndex: 0, released: new Map(), pinned: new Set(), directives: [] });
     return sessions.get(key);
   }
   function hydrateActive(projectId, sessionId, state) {
@@ -277,6 +334,7 @@ function createTier1ContextCoordinator({
         state.active = loaded.value.active.filter(Boolean).map(clone);
         state.nextBlockIndex = stampBlocks([], state.active, Number(loaded.value.next_block_index));
         state.pinned = new Set((Array.isArray(loaded.value.pinned_blocks) ? loaded.value.pinned_blocks : []).filter((index) => Number.isSafeInteger(index) && index >= 0));
+        state.directives = (Array.isArray(loaded.value.operator_directives) ? loaded.value.operator_directives : []).filter((entry) => entry && typeof entry.text === "string" && entry.text && typeof entry.source_message_id === "string" && entry.source_message_id).slice(-50).map((entry) => ({ text: entry.text, source_message_id: entry.source_message_id, revision: Number(entry.revision) || 0 }));
       }
     } catch { /* keep the in-memory ledger empty rather than injecting unsafe data */ }
     return state;
@@ -285,7 +343,7 @@ function createTier1ContextCoordinator({
     if (!sensitiveStore?.writeActive) return;
     const state = stateFor(projectId, sessionId);
     prunePins(state);
-    try { sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned] }); } catch { /* in-memory ledger remains authoritative */ }
+    try { sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned], operatorDirectives: state.directives }); } catch { /* in-memory ledger remains authoritative */ }
   }
   // A pin only means something while its block is in the ledger; a checkpoint or
   // a front trim removes the block and the pin goes with it.
@@ -532,7 +590,12 @@ function createTier1ContextCoordinator({
     for (const message of source) {
       const role = String(message?.role || "unknown");
       const content = redactText(message?.content || "", 4_000, retainSecrets);
-      normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80), ...(message?.block_tombstone === true ? { tombstone: true } : {}) });
+      // Where a user-role message came from decides how it may be described later.
+      const origin = role !== "user" || message?.block_tombstone === true ? ""
+        : message?.__xekuteInternalRuntimeInput === true ? "runtime"
+          : NON_OPERATOR_ID.test(String(message?.source_message_id || "")) ? "tool_delivery"
+            : isOperatorInput(message) ? "operator" : "";
+      normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80), ...(message?.block_tombstone === true ? { tombstone: true } : {}), ...(origin ? { origin } : {}) });
     }
     const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || "").slice(0, 120), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [], call_id: String(event?.call_id || "").slice(0, 200) }));
     // Commands live in the assistant tool calls, which the normalized messages do
@@ -707,7 +770,7 @@ function createTier1ContextCoordinator({
   // returning a schema-valid string.  Keep values that have meaningful
   // lexical support in the deterministic source reduction; route unsupported
   // values to the explicitly non-authoritative unverified_claims field.
-  function semanticCorpus(context) {
+  function corpusFrom(sources) {
     const values = [];
     const add = (value) => {
       if (value == null) return;
@@ -715,22 +778,46 @@ function createTier1ContextCoordinator({
       if (Array.isArray(value)) { for (const item of value) add(item); return; }
       if (typeof value === "object") { for (const child of Object.values(value)) add(child); }
     };
-    add(context?.objective);
-    add(context?.constraints);
-    add(context?.decisions);
-    add(context?.currentPrompt);
-    add(context?.previous?.objective);
-    add(context?.previous?.decisions);
-    add(context?.previous?.constraints);
-    add(context?.previous?.grounded_facts);
-    add(context?.previous?.significant_events);
-    add(context?.reduction?.messages);
-    add(context?.reduction?.tool_events);
-    add(context?.reduction?.attempts);
-    add(context?.workflow);
+    for (const source of sources) add(source);
     const text = values.join(" ");
     const words = new Set((text.match(/[a-z0-9][a-z0-9._:/-]{2,}/gi) || []).map((word) => word.toLowerCase()));
-    return { values, words };
+    return { values, words, entities: networkEntities(text) };
+  }
+
+  // What may vouch for a value depends on what the value is for. Fields that
+  // steer the next action are grounded only in what the operator said and in
+  // runtime state (`trusted`). A lead may also rest on the assistant's own
+  // words (`assistant`), but see the entity rule. Facts and events may rest on
+  // anything seen, tool output included (`full`). Text that only a tool or the
+  // assistant vouches for can therefore describe the engagement but never
+  // direct it.
+  function semanticCorpora(context) {
+    const messages = Array.isArray(context?.reduction?.messages) ? context.reduction.messages : [];
+    const trustedSources = [
+      context?.objective, context?.constraints, context?.decisions, context?.currentPrompt,
+      context?.previous?.objective, context?.previous?.constraints, context?.previous?.decisions, context?.previous?.unresolved_work,
+      context?.workflow, context?.operatorTexts,
+    ];
+    const assistantSources = [...trustedSources, messages.filter((message) => message.role === "assistant" && !message.tombstone).map((message) => message.content)];
+    return {
+      trusted: corpusFrom(trustedSources),
+      assistant: corpusFrom(assistantSources),
+      full: corpusFrom([...assistantSources, messages, context?.reduction?.tool_events, context?.reduction?.attempts, context?.previous?.grounded_facts, context?.previous?.significant_events]),
+    };
+  }
+
+  // A lead that names a host, address or range the operator never mentioned is
+  // not kept as work to do unless the project's scope covers it.
+  function entitiesAllowed(value, check) {
+    if (!check) return true;
+    for (const entity of networkEntities(value)) {
+      if (check.trusted.has(entity)) continue;
+      if (ipv4ToNumber(entity) !== null && [...check.trusted].some((known) => known.includes("/") && ipv4InRange(entity, known))) continue;
+      let inScope = false;
+      try { inScope = typeof check.scopeCheck === "function" && check.scopeCheck(entity) === true; } catch { inScope = false; }
+      if (!inScope) return false;
+    }
+    return true;
   }
 
   function semanticValueIsGrounded(value, corpus) {
@@ -749,13 +836,13 @@ function createTier1ContextCoordinator({
 
   // Returns the model's values that have enough lexical support in the source
   // reduction, and routes the rest to the non-authoritative unverified list.
-  function normalizeSemanticField(values, corpus, { allowUnsupported = false, retainSecrets = false } = {}) {
+  function normalizeSemanticField(values, corpus, { allowUnsupported = false, retainSecrets = false, entityCheck = null } = {}) {
     const safe = [];
     const unsupported = [];
     for (const raw of Array.isArray(values) ? values : []) {
       const value = redactText(raw, 2_000, retainSecrets);
       if (!value) continue;
-      if (allowUnsupported || semanticValueIsGrounded(value, corpus)) safe.push(value);
+      if (allowUnsupported || (semanticValueIsGrounded(value, corpus) && entitiesAllowed(value, entityCheck))) safe.push(value);
       else unsupported.push(value);
     }
     return { values: [...new Set(safe)], unsupported: keepNewest(unsupported, 200) };
@@ -768,7 +855,7 @@ function createTier1ContextCoordinator({
     // field has instead of the default 100 that would cut the newest entries.
     const safeRaw = sanitizeValue(raw, "", 0, new WeakSet(), context?.retainSecrets === true, 300) || {};
     const candidate = { ...fallback, ...safeRaw, schema_version: 3, project_id: context.projectId, session_id: context.sessionId, generated_by: generatedBy };
-    const corpus = semanticCorpus(context);
+    const corpora = semanticCorpora(context);
     const retainSecrets = context?.retainSecrets === true;
     const fresh = freshRecords(context);
     const earlier = (field) => (Array.isArray(context.previous?.[field]) ? context.previous[field] : []);
@@ -779,11 +866,11 @@ function createTier1ContextCoordinator({
       const known = new Set([...clean(earlier(field)), ...clean(freshValues)]);
       return keepNewest([...clean(earlier(field)), ...modelValues.filter((value) => !known.has(value)), ...clean(freshValues)], maximum);
     };
-    const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpus, { retainSecrets });
-    const constraints = normalizeSemanticField(candidate.constraints, corpus, { retainSecrets });
-    const decisions = normalizeSemanticField(candidate.decisions, corpus, { retainSecrets });
-    const significantEvents = normalizeSemanticField(candidate.significant_events, corpus, { retainSecrets });
-    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpus, { retainSecrets });
+    const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpora.full, { retainSecrets });
+    const constraints = normalizeSemanticField(candidate.constraints, corpora.trusted, { retainSecrets });
+    const decisions = normalizeSemanticField(candidate.decisions, corpora.trusted, { retainSecrets });
+    const significantEvents = normalizeSemanticField(candidate.significant_events, corpora.full, { retainSecrets });
+    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpora.assistant, { retainSecrets, entityCheck: { trusted: corpora.trusted.entities, scopeCheck: context?.scopeCheck } });
     candidate.grounded_facts = merge("grounded_facts", groundedFacts.values, fresh.facts, 300);
     candidate.constraints = merge("constraints", constraints.values, fresh.constraints, 200);
     candidate.decisions = merge("decisions", decisions.values, fresh.decisions, 200);
@@ -935,6 +1022,11 @@ function createTier1ContextCoordinator({
       : active;
     const retainSecrets = input.retain_secrets === true || input.retainSecrets === true;
     const reduction = reduceConversation(reductionMessages, input.tool_events || input.toolEvents || [], retainSecrets);
+    const operatorTexts = reductionMessages.filter(isOperatorInput).map((message) => redactText(operatorText(message), 4_000, retainSecrets)).filter(Boolean);
+    // Steering recorded as it arrived. It survives the block it arrived in being
+    // released, which the ledger alone would not.
+    const consumedDirectives = state.directives.map((entry) => entry.source_message_id);
+    const directiveConstraints = state.directives.map((entry) => `Operator: ${entry.text.slice(0, 300)}`);
     let previous = state.summary;
     if (!previous && sensitiveStore?.readCheckpoint) {
       // A checkpoint can race with a secure-store restart while the session
@@ -968,7 +1060,9 @@ function createTier1ContextCoordinator({
       active,
       currentPrompt,
       objective,
-      constraints: (Array.isArray(rawConstraints) ? rawConstraints : [rawConstraints]).map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean).slice(0, 200),
+      constraints: keepNewest([...(Array.isArray(rawConstraints) ? rawConstraints : [rawConstraints]).map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean), ...directiveConstraints], 200),
+      operatorTexts,
+      scopeCheck: typeof input.scope_check === "function" ? input.scope_check : null,
       decisions: (Array.isArray(input.decisions) ? input.decisions : [input.decisions]).map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean).slice(0, 200),
       // Checkpoint references are identifiers, not arbitrary caller-provided
       // strings. Invalid values are replaced with deterministic opaque handles
@@ -1009,12 +1103,28 @@ function createTier1ContextCoordinator({
     if (!stored.ok) return { ...stored, checkpointed: false, activePreserved: true };
     state.summary = checkpointValue;
     state.checkpointRevision += 1;
+    state.directives = state.directives.filter((entry) => !consumedDirectives.includes(entry.source_message_id));
     state.active = [];
     state.currentPrompt = "";
     // The workflow visible in Tier 1 changes only at this checkpoint boundary.
     state.workflow = checkpointValue.workflow_continuity?.state === "completed" ? null : clone(checkpointValue.workflow_continuity);
     syncMeter(projectId, sessionId, ["Summarized Conversation", "Active Conversation", "Current Workflow"]);
     return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", trimmed: context.trimStats };
+  }
+
+  // Operator steering is recorded when it arrives and folded into the
+  // checkpoint's constraints at the next checkpoint. Only the operator's own words
+  // belong here, so a late tool result is refused.
+  function recordDirective(projectId, sessionId, { text = "", sourceMessageId = "", revision = 0, retainSecrets = false } = {}) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "A directive needs opaque project and session IDs.");
+    const id = String(sourceMessageId || "").trim().slice(0, 240);
+    if (!id || NON_OPERATOR_ID.test(id)) return operationFailure("MEMORY_DIRECTIVE_NOT_OPERATOR", "Only operator messages can be recorded as directives.");
+    const clean = redactText(text, 600, retainSecrets);
+    if (!clean) return operationFailure("MEMORY_DIRECTIVE_EMPTY", "A directive needs text.");
+    const state = hydrateSession(projectId, sessionId);
+    state.directives = [...state.directives.filter((entry) => entry.source_message_id !== id), { text: clean, source_message_id: id, revision: Number(revision) || 0 }].slice(-50);
+    persistActive(projectId, sessionId);
+    return { ok: true, count: state.directives.length };
   }
 
   function appendConversation(projectId, sessionId, messages) {
@@ -1055,6 +1165,7 @@ function createTier1ContextCoordinator({
     dest.activeHydrated = true;
     dest.nextBlockIndex = source.nextBlockIndex;
     dest.pinned = new Set(source.pinned);
+    dest.directives = clone(source.directives);
     dest.released = new Map();
     for (const message of dest.active) {
       if (message.block_tombstone !== true || !Number.isSafeInteger(message.block_index)) continue;
@@ -1072,7 +1183,7 @@ function createTier1ContextCoordinator({
   }
   function state(projectId, sessionId) {
     const value = hydrateSession(projectId, sessionId);
-    return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) };
+    return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly), directives: clone(value.directives) };
   }
   function tokenCount(message) { return count(message).tokens; }
   function tombstoneText(block, reason, retainSecrets) {
@@ -1193,7 +1304,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, evictBlocks, recallBlock, pinBlock, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, evictBlocks, recallBlock, pinBlock, recordDirective, clear, clearProject });
 }
 
-module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, keepNewest, METER_ROWS });
+module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, isOperatorInput, keepNewest, networkEntities, operatorText, METER_ROWS });

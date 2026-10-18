@@ -318,7 +318,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     const checked = validateActiveValue(loaded.value, project, session);
     return checked.ok ? { ...loaded, value: checked.value } : checked;
   }
-  function writeActive(projectId, sessionId, messages, { nextBlockIndex = null, pinnedBlocks = null } = {}) {
+  function writeActive(projectId, sessionId, messages, { nextBlockIndex = null, pinnedBlocks = null, operatorDirectives = null } = {}) {
     let project;
     let session;
     try {
@@ -334,6 +334,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
       active: (Array.isArray(messages) ? messages : []).slice(0, 2_000).map(clone),
       ...(Number.isSafeInteger(nextBlockIndex) && nextBlockIndex >= 0 ? { next_block_index: nextBlockIndex } : {}),
       ...(Array.isArray(pinnedBlocks) ? { pinned_blocks: pinnedBlocks.filter((index) => Number.isSafeInteger(index) && index >= 0) } : {}),
+      ...(Array.isArray(operatorDirectives) ? { operator_directives: operatorDirectives.slice(-50).map((entry) => ({ text: String(entry?.text || "").slice(0, 600), source_message_id: String(entry?.source_message_id || "").slice(0, 240), revision: Number(entry?.revision) || 0 })) } : {}),
     };
     const checked = validateActiveValue(candidate, project, session);
     if (!checked.ok) return checked;
