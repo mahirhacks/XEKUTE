@@ -24,6 +24,7 @@ const EXPECTED_TOOLS = [
   "exec_command", "view_active_terminal", "read_file", "search_workspace", "apply_patch",
   "manage_identity", "replay_request",
   "browser_action", "delegate_agent", "web_research",
+  "release_blocks", "recall_block",
 ];
 
 function restrictedContext(root, toolName) {

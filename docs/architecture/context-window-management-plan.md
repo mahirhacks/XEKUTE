@@ -92,16 +92,44 @@ Order matters: eviction before checkpoint (cheap before expensive), delegation b
 - `src/agent/runtime/context-budget.js` owns token estimation and the limit math. No change needed; eviction reuses `estimateTokenCount`.
 - `src/ui/bootstrap.js` renders the meter rows. The Active Conversation row needs to show evicted/tombstoned blocks greyed out, and expose a pin control.
 
-## Phasing
+## Status
 
-1. **Block-index the active ledger** in the coordinator. Done as a derived, read-only view: `blocksFromActive` and `coordinator.activeBlocks(projectId, sessionId)` return `{ index, blockId, start, messages, tokenEstimate }`, one block per user turn. The ledger stays a flat array, so `assemble`, `capActive`, `checkpoint` and the persisted format are unchanged. `state`, `pinned` and `tombstone` are not stored yet. They need a persisted block layer, which phase 2 adds together with `release_blocks`. Index is positional until then.
-2. **`release_blocks` + `recall_block` tools** and the model-driven path. Measurable reclaim with zero heuristics.
-3. **Heuristic eviction pass** at the eviction band, batched, reference-aware.
-4. **Findings ledger** pinned section, written by eviction.
-5. **Delegation archetypes + spill-to-disk** for skill/MCP-heavy work, so Block A stays lean.
-6. **UI**: greyed evicted blocks, pin control.
+All six phases are implemented and covered by tests. The plan above is the original design. This section records what was built and where it differs.
 
-Measure tokens-saved against cache-miss cost after each phase before adding the next. Do not add the heuristic classifier unless phases 2 and 3 leave reclaim on the table.
+| Phase | What shipped | Where |
+|---|---|---|
+| 1 | Block view over the flat ledger | `blocksFromActive`, `activeBlocks` in the Tier 1 coordinator |
+| 2 | Stable persisted block indexes, `evictBlocks`, `recallBlock`, encrypted per-block storage, `release_blocks` and `recall_block` tools | coordinator, `tier1-sensitive-store.js`, `tools/process/context-blocks.js`, controller |
+| 3 | Pressure-triggered batch release before checkpointing | `runtime/context-release-policy.js`, `maybeAutoReleaseContext` in the controller |
+| 4 | Deterministic findings in every tombstone, carried through a checkpoint as "Released work" facts | `extractBlockFindings` in the coordinator |
+| 5 | Oversized child reports saved under `.xekute/delegated/`, `recon` and `analyst` child roles | `runtime/child-report-spill.js`, `runtime/child-archetypes.js`, `delegation-provider.js` |
+| 6 | Block list in the context meter with greyed released blocks and a pin control, release notice in the chat | `ui/features/chat/context-blocks-view.js`, `bootstrap.js`, `context:pinBlock` IPC |
+
+### How it behaves
+
+- A block is one user turn. Each block opener carries a `block_index` that is stamped once and never reused, so index 7 stays 7 after block 3 is released. A counter is persisted with the active ledger.
+- Releasing replaces the whole block with one tombstone that keeps its index. The full messages are written to the encrypted session store first. If that write fails the block stays in context.
+- The model learns block numbers from tombstones and from `release_blocks` with `operation: "list"`. Blocks are not labelled in the prompt, because rewriting an old message would break the prompt cache for everything after it.
+- `recall_block` returns the old messages as a tool result of the current turn. Nothing is spliced back into the middle of history.
+- Only blocks from before the task in progress can be released. The live task, its steering messages and any open tool exchange are protected.
+- Automatic release starts at 60% of the context window and releases the oldest finished blocks until usage is near 45%. It keeps the two newest finished blocks, skips pinned blocks and blocks under 600 tokens, and never runs in preview mode or when the coordinator has no block support. Checkpoint summarization still runs at 90%.
+- Pins are a set of block indexes stored with the active ledger, not a flag on messages, so they survive the controller re-sending its own copy of the ledger.
+
+### Where the build differs from the plan
+
+- **No separate findings ledger.** Facts live in each tombstone, in the position the block occupied. A pinned section in the early prompt would have invalidated the cache on every update. Checkpointing carries tombstones forward as facts.
+- **No block labels and no model-facing "context map".** See above.
+- **Pins live in the coordinator, not on messages.**
+- **Archetypes narrow tools and add role guidance. They are not a cache feature.** The cache benefit was not measured against a real provider.
+- **Reports go to `.xekute/delegated/`.** A full child transcript was already persisted in the encrypted child session store; the saved file is the part the parent can open with `read_file`.
+- **A redaction bug was fixed on the way.** `redactText` left the token in `Authorization: Bearer <token>`.
+
+### Not done
+
+- Making the orchestrator hold no MCP schemas and delegate MCP work to children. It changes which agent can call which tool and needs a product decision.
+- Capping and saving a single huge tool output inside one running turn. Block release cannot touch the turn that is still running.
+- A model-based relevance classifier. The model-driven tool and the size and age policy came first; add a classifier only if they leave reclaim unused.
+- Measuring the real prompt-cache cost of a release against a live provider.
 
 ## Gotchas
 

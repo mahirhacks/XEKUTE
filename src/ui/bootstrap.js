@@ -9597,6 +9597,7 @@ function getContextBreakdown() {
     route: contextPreviewRoute(""),
     tools: [],
     messages: [],
+    blocks: storedIsTier1 ? (storedUsage.blocks || []) : [],
     authoritative: storedIsTier1,
   };
 }
@@ -9824,6 +9825,7 @@ function normalizeContextUsageSnapshot(value) {
     cachedTokens: Number.isFinite(Number(value.cachedTokens)) ? Math.max(0, Number(value.cachedTokens)) : null,
     cost: Number.isFinite(Number(value.cost)) ? Math.max(0, Number(value.cost)) : null,
     sections,
+    blocks: globalThis.XekuteContextBlocksView?.normalizeContextBlocks(value.blocks) || [],
     toolNames: (Array.isArray(value.toolNames) ? value.toolNames : []).slice(0, 64).map((name) => String(name).slice(0, 100)),
     route: value.route && typeof value.route === "object" ? {
       kind: String(value.route.kind || "conversation").slice(0, 40),
@@ -9978,7 +9980,8 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
           </div>
         `;
       });
-    contextUsageBreakdown.innerHTML = rows.join("");
+    const blocksHtml = globalThis.XekuteContextBlocksView?.renderContextBlocksHtml(breakdown.blocks, { escapeHtml, formatTokenCount }) || "";
+    contextUsageBreakdown.innerHTML = rows.join("") + (blocksHtml ? `<div class="context-blocks">${blocksHtml}</div>` : "");
   }
   setContextCheckpointUi(contextCheckpointing);
   if (contextUsagePopover && !contextUsagePopover.hidden) {
@@ -10051,6 +10054,53 @@ async function refreshTier1ContextPreview(signature) {
 function updateContextUsage() {
   renderContextUsage(getContextUsage());
   scheduleTier1ContextPreview();
+}
+
+// Pinning is stored by the main process; the meter only mirrors the answer.
+async function pinContextBlock(index, pinned) {
+  const session = activeChatSession();
+  if (!session || typeof window.api?.contextPinBlock !== "function") return;
+  try {
+    const response = await window.api.contextPinBlock({ workspace: rootPath || "", memorySessionId: session.memorySessionId || "", index, pinned });
+    if (!response?.ok) return;
+    const block = (session.lastContextUsage?.blocks || []).find((entry) => entry.index === index);
+    if (block) block.pinned = response.pinned === true;
+    renderContextUsage(getContextUsage());
+    scheduleTier1ContextPreview({ force: true });
+  } catch { /* the meter keeps showing the last pin state */ }
+}
+
+contextUsageBreakdown?.addEventListener("click", (event) => {
+  const button = event.target?.closest?.("[data-block-pin]");
+  if (!button) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const index = Number(button.getAttribute("data-block-pin"));
+  if (Number.isSafeInteger(index)) void pinContextBlock(index, button.getAttribute("aria-pressed") !== "true");
+});
+
+// Released blocks are shown in the chat the same way a checkpoint is, so the
+// operator can see why earlier turns left the model's context.
+function applyContextReleaseUi(run, payload = {}) {
+  if (String(payload.status || "").toLowerCase() !== "completed") return;
+  const count = Array.isArray(payload.indices) ? payload.indices.length : 0;
+  if (!count) return;
+  const freed = Math.max(0, Number(payload.tokensFreed) || 0);
+  const host = checkpointNoticeHost(chatRunContainer(run));
+  if (host) {
+    const notice = document.createElement("div");
+    notice.className = "context-checkpoint-notice";
+    notice.dataset.state = "complete";
+    notice.dataset.contextRelease = "true";
+    notice.setAttribute("role", "status");
+    const label = document.createElement("span");
+    label.className = "context-checkpoint-text";
+    label.textContent = `Released ${count} earlier ${count === 1 ? "turn" : "turns"} from context${freed ? ` · ${formatTokenCount(freed)} freed` : ""}`;
+    notice.append(label);
+    host.appendChild(notice);
+  }
+  const session = run?.session;
+  if (session && activeChatSessionId === session.id && !run?.viewHost) updateContextUsage();
 }
 
 function positionContextPopover() {
@@ -19362,6 +19412,10 @@ async function sendMessageWithAgentRuntime(options = {}) {
 
     if (payload.type === "chat_reference_import") {
       applyChatReferenceImportUi(run, payload);
+      return;
+    }
+    if (payload.type === "context_release") {
+      applyContextReleaseUi(run, payload);
       return;
     }
     if (payload.type === "context_checkpoint") {

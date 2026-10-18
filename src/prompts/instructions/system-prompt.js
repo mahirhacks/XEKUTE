@@ -48,6 +48,7 @@
         "Understand the objective, inspect the available context, form a testable hypothesis when useful, choose the smallest next action, observe the result, verify material claims, and report the next step.",
         "Read current data before changing it. Process one result before selecting the next action.",
         "Skipped work and exhausted budgets are limitations, not evidence of completion.",
+        "Earlier finished turns are numbered blocks. When the conversation grows long, put what you still need from old blocks in your notes or reply, then free their space with release_blocks. Use recall_block to read a released block again.",
         "When the work is finished or cannot continue, write a clear answer to the user's question, then call end_turn with status stop. Do not assume that an answer without tools ends the run.",
       ].join("\n"),
       failure: [

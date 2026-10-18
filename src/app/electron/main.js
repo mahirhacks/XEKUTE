@@ -4281,6 +4281,27 @@ ipcMain.handle("context:forkTier1Session", async (_event, payload = {}) => {
   return { ok: true, projectId: identity.projectId, sessionId: destSessionId, activeCount: copied.activeCount || 0 };
 });
 
+// Pinning keeps a conversation block out of automatic and model-requested
+// release. It only edits the pin set for that block index, never the ledger.
+ipcMain.handle("context:pinBlock", async (_event, payload = {}) => {
+  const workspace = String(payload.workspace || "");
+  const sessionId = String(payload.memorySessionId || payload.sessionId || "");
+  const index = Number(payload.index);
+  if (!workspace || !isMemoryId(sessionId, "session") || !Number.isSafeInteger(index) || index < 0) {
+    return { ok: false, reason: "invalid_pin_request" };
+  }
+  const requestedProjectId = String(payload.projectId || payload.memoryProjectId || "").trim();
+  const identity = container.memoryProjectIdentityStore?.resolveV3Project?.(workspace, {
+    persist: true,
+    projectId: isMemoryId(requestedProjectId, "proj") ? requestedProjectId : "",
+  }) || null;
+  if (!identity?.ok || !isMemoryId(identity.projectId, "proj")) return { ok: false, reason: "no_project_identity" };
+  const coordinator = container.memoryTier1Coordinator;
+  if (typeof coordinator?.pinBlock !== "function") return { ok: false, reason: "pinning_unavailable" };
+  const pinned = coordinator.pinBlock(identity.projectId, sessionId, index, payload.pinned !== false);
+  return pinned?.ok ? { ok: true, index: pinned.index, pinned: pinned.pinned } : { ok: false, reason: pinned?.code || "pin_failed" };
+});
+
 // ── In-app updates (electron-updater / NSIS) ─────────────────────────────────
 // Detects new GitHub releases, surfaces them to the renderer, and applies
 // the downloaded update by closing + relaunching the app.

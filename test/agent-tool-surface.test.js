@@ -11,7 +11,7 @@ test("agent tool surface is always available and the mode skill names canonical 
   const askTools = Surface.providerTools("ask");
   const agentTools = Surface.providerTools("agent");
   assert.notDeepEqual(askTools, agentTools);
-  assert.equal(agentTools.length, 12);
+  assert.equal(agentTools.length, 14);
   assert.equal(askTools.includes("end_turn"), true);
   assert.equal(agentTools.includes("end_turn"), true);
   assert.equal(askTools.includes("view_active_terminal"), true);

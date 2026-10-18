@@ -201,6 +201,7 @@ const api = {
   agentCancelTask: (payload) => ipcRenderer.invoke("agent:cancelTask", payload),
   contextTier1Usage: (payload = {}) => ipcRenderer.invoke("context:tier1Usage", payload),
   forkTier1Session: (payload = {}) => ipcRenderer.invoke("context:forkTier1Session", payload),
+  contextPinBlock: (payload = {}) => ipcRenderer.invoke("context:pinBlock", payload),
   pendingSubagentResults: (payload = {}) => ipcRenderer.invoke("agent:pendingSubagentResults", payload),
   pendingParentContinuations: (payload = {}) => ipcRenderer.invoke("agent:pendingParentContinuations", payload),
   ackParentContinuation: (payload = {}) => ipcRenderer.invoke("agent:ackParentContinuation", payload),

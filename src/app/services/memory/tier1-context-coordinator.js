@@ -17,7 +17,7 @@ const SEMANTIC_STOPWORDS = new Set([
   "the", "and", "that", "this", "with", "from", "for", "was", "were", "has", "have",
   "into", "then", "when", "will", "must", "should", "could", "would", "user", "agent",
 ]);
-const SECRET_TEXT = /(?:bearer\s+|basic\s+|(?:cookie|set-cookie|authorization|proxy-authorization)\s*:\s*|(?:password|passwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*|-----BEGIN [^-]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)[^\s,;]*/gi;
+const SECRET_TEXT = /(?:bearer\s+|basic\s+|(?:cookie|set-cookie|authorization|proxy-authorization)\s*:\s*(?:(?:bearer|basic)\s+)?|(?:password|passwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*|-----BEGIN [^-]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)[^\s,;]*/gi;
 
 function redactText(value, maximum = 8_000, retainSecrets = false) {
   const text = String(value == null ? "" : value);
@@ -62,34 +62,136 @@ function truncateText(value, maximum) {
   return `${text.slice(0, Math.max(0, maximum - 40))}\n[deterministically truncated]`;
 }
 
-// A read-only block view over the flat Active Conversation ledger. One block is
-// one turn: it opens at a `user` message and runs through the assistant/tool
-// messages that answer it. Messages before the first user turn form block 0.
-// The ledger itself stays a flat array; this is a derived index that later
-// phases (selective eviction, recall) build on. `blockId` is turn-stable so the
-// same turn keeps its identity across reassembly; `index` is positional until a
-// later phase persists it.
-function blocksFromActive(messages, estimate = approximateTokens) {
-  const source = (Array.isArray(messages) ? messages : []).filter(Boolean);
-  const measure = typeof estimate === "function" ? estimate : approximateTokens;
-  const blocks = [];
-  for (let position = 0; position < source.length; position += 1) {
-    const message = source[position];
-    if (blocks.length === 0 || String(message?.role || "") === "user") {
-      blocks.push({ index: blocks.length, start: position, messages: [] });
+const IPV4_PATTERN = /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g;
+const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>`\\)\]}]+/gi;
+const PORT_PATTERN = /\b(\d{1,5})\/(tcp|udp)\b/gi;
+const CVE_PATTERN = /\bCVE-\d{4}-\d{4,7}\b/gi;
+const FINDING_LIST_MAX = 6;
+const FINDINGS_MAX = 700;
+
+function messageText(message) {
+  const parts = [];
+  const content = message?.content;
+  if (typeof content === "string") parts.push(content);
+  else if (Array.isArray(content)) for (const part of content) parts.push(typeof part === "string" ? part : String(part?.text || ""));
+  if (Array.isArray(message?.tool_calls)) {
+    for (const call of message.tool_calls) {
+      const args = call?.function?.arguments;
+      parts.push(typeof args === "string" ? args : JSON.stringify(args ?? {}));
     }
-    blocks[blocks.length - 1].messages.push(message);
   }
-  return blocks.map((block) => {
-    const opener = block.messages.find((message) => String(message?.role || "") === "user") || block.messages[0] || {};
+  return parts.join("\n");
+}
+
+function touchedPaths(messages) {
+  const paths = [];
+  const visit = (value, key = "", depth = 0) => {
+    if (depth > 4 || value == null) return;
+    if (typeof value === "string") { if (/^(?:path|file|paths|files)$/i.test(key) && value.trim()) paths.push(value.trim()); return; }
+    if (Array.isArray(value)) { for (const entry of value) visit(entry, key, depth + 1); return; }
+    if (typeof value === "object") for (const [name, entry] of Object.entries(value)) visit(entry, name, depth + 1);
+  };
+  for (const message of messages) {
+    if (message?.role !== "assistant" || !Array.isArray(message.tool_calls)) continue;
+    for (const call of message.tool_calls) {
+      let args = call?.function?.arguments;
+      if (typeof args === "string") { try { args = JSON.parse(args); } catch { args = null; } }
+      visit(args);
+    }
+  }
+  return paths;
+}
+
+function uniqueMatches(text, pattern, normalize = (value) => value) {
+  return [...new Set((text.match(pattern) || []).map(normalize).filter(Boolean))];
+}
+
+// Durable engagement facts pulled from a block with plain pattern matching, so a
+// block released without a model-written note still leaves its hosts, ports,
+// URLs, CVEs and touched files behind. Credential-like values are only counted.
+function extractBlockFindings(messages, { retainSecrets = false } = {}) {
+  const list = (Array.isArray(messages) ? messages : []).filter(Boolean);
+  const text = list.map(messageText).join("\n");
+  const capped = (values) => values.slice(0, FINDING_LIST_MAX).join(", ") + (values.length > FINDING_LIST_MAX ? `, +${values.length - FINDING_LIST_MAX} more` : "");
+  const sections = [];
+  const hosts = uniqueMatches(text, IPV4_PATTERN);
+  const urls = uniqueMatches(text, URL_PATTERN, (url) => redactText(url.split(/[?#]/)[0].replace(/[.,;:!]+$/, ""), 160, retainSecrets));
+  const ports = uniqueMatches(text, PORT_PATTERN, (port) => port.toLowerCase());
+  const cves = uniqueMatches(text, CVE_PATTERN, (cve) => cve.toUpperCase());
+  const files = [...new Set(touchedPaths(list).map((file) => redactText(file, 160, retainSecrets)))];
+  if (hosts.length) sections.push(`hosts: ${capped(hosts)}`);
+  if (ports.length) sections.push(`ports: ${capped(ports)}`);
+  if (urls.length) sections.push(`urls: ${capped(urls)}`);
+  if (cves.length) sections.push(`cves: ${capped(cves)}`);
+  if (files.length) sections.push(`files: ${capped(files)}`);
+  const failed = list.filter((message) => message.role === "tool" && /"ok"\s*:\s*false/.test(messageText(message))).length;
+  if (failed) sections.push(`${failed} failed tool result${failed === 1 ? "" : "s"}`);
+  const secrets = retainSecrets ? 0 : (text.match(SECRET_TEXT) || []).filter((match) => !/\[REDACTED\]/.test(match)).length;
+  if (secrets) sections.push(`${secrets} credential-like value${secrets === 1 ? "" : "s"} not shown`);
+  return sections.join("; ").slice(0, FINDINGS_MAX);
+}
+
+// Active Conversation stays one flat chronological ledger. A block is one turn:
+// it opens at a `user` message (or at the first message) and runs through the
+// assistant and tool messages that answer it. Each opener carries a stable
+// `block_index` stamped once and never reused, so index 7 stays 7 after block 3
+// is released. Unstamped ledgers (previews, legacy files) fall back to
+// positional order until the coordinator stamps them.
+function ledgerOf(messages) { return (Array.isArray(messages) ? messages : []).filter(Boolean); }
+function isBlockOpener(message, position) { return position === 0 || String(message?.role || "") === "user"; }
+function blockOpeners(messages) { return ledgerOf(messages).filter((message, position) => isBlockOpener(message, position)); }
+function openerKey(message) {
+  const sourceId = String(message?.source_message_id || "").trim();
+  return sourceId || `content_${canonicalKeyHash({ role: message?.role || "", content: message?.content || "" })}`;
+}
+
+// Stamps `block_index` in place on every unstamped opener in `incoming` and
+// returns the next free index. Callers re-send whole ledgers whose objects are
+// not guaranteed to carry stamps yet, so an unstamped opener first re-adopts the
+// index of the matching opener in `previous` (same message, in order) before a
+// new one is issued.
+function stampBlocks(previousMessages, incomingMessages, nextIndex = 0) {
+  const previous = blockOpeners(previousMessages).filter((message) => Number.isSafeInteger(message.block_index));
+  let next = Number.isSafeInteger(nextIndex) && nextIndex >= 0 ? nextIndex : 0;
+  let cursor = 0;
+  for (const opener of blockOpeners(incomingMessages)) {
+    if (Number.isSafeInteger(opener.block_index)) {
+      next = Math.max(next, opener.block_index + 1);
+      const at = previous.findIndex((entry, position) => position >= cursor && entry.block_index === opener.block_index);
+      if (at >= 0) cursor = at + 1;
+      continue;
+    }
+    const key = openerKey(opener);
+    const at = previous.findIndex((entry, position) => position >= cursor && openerKey(entry) === key);
+    const assigned = at >= 0 ? previous[at].block_index : next;
+    if (at >= 0) cursor = at + 1;
+    if (!Object.isFrozen(opener)) opener.block_index = assigned;
+    next = Math.max(next, assigned + 1);
+  }
+  return next;
+}
+
+function blocksFromActive(messages, estimate = approximateTokens) {
+  const source = ledgerOf(messages);
+  const measure = typeof estimate === "function" ? estimate : approximateTokens;
+  const groups = [];
+  for (let position = 0; position < source.length; position += 1) {
+    if (isBlockOpener(source[position], position)) groups.push({ start: position, messages: [] });
+    groups[groups.length - 1].messages.push(source[position]);
+  }
+  return groups.map((group, ordinal) => {
+    const opener = group.messages[0];
+    const stamped = Number.isSafeInteger(opener.block_index);
+    const index = stamped ? opener.block_index : ordinal;
     const sourceId = String(opener.source_message_id || opener.id || "").trim();
-    const blockId = sourceId || `block_${canonicalKeyHash({ role: opener.role || "", content: opener.content || "", start: block.start }).slice(0, 32)}`;
+    const blockId = sourceId || (stamped ? `block_${index}` : `block_${canonicalKeyHash({ role: opener.role || "", content: opener.content || "" }).slice(0, 32)}`);
     return {
-      index: block.index,
+      index,
       blockId,
-      start: block.start,
-      messages: block.messages,
-      tokenEstimate: block.messages.reduce((sum, message) => sum + Math.max(0, Number(measure(message)) || 0), 0),
+      state: opener.block_tombstone === true ? "evicted" : "active",
+      start: group.start,
+      messages: group.messages,
+      tokenEstimate: group.messages.reduce((sum, message) => sum + Math.max(0, Number(measure(message)) || 0), 0),
     };
   });
 }
@@ -109,7 +211,7 @@ function createTier1ContextCoordinator({
   function sessionKey(projectId, sessionId) { return `${String(projectId)}|${String(sessionId)}`; }
   function stateFor(projectId, sessionId) {
     const key = sessionKey(projectId, sessionId);
-    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false });
+    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false, nextBlockIndex: 0, released: new Map(), pinned: new Set() });
     return sessions.get(key);
   }
   function hydrateActive(projectId, sessionId, state) {
@@ -120,6 +222,8 @@ function createTier1ContextCoordinator({
       const loaded = sensitiveStore.readActive(projectId, sessionId);
       if (loaded?.ok && loaded.exists && Array.isArray(loaded.value?.active)) {
         state.active = loaded.value.active.filter(Boolean).map(clone);
+        state.nextBlockIndex = stampBlocks([], state.active, Number(loaded.value.next_block_index));
+        state.pinned = new Set((Array.isArray(loaded.value.pinned_blocks) ? loaded.value.pinned_blocks : []).filter((index) => Number.isSafeInteger(index) && index >= 0));
       }
     } catch { /* keep the in-memory ledger empty rather than injecting unsafe data */ }
     return state;
@@ -127,11 +231,26 @@ function createTier1ContextCoordinator({
   function persistActive(projectId, sessionId) {
     if (!sensitiveStore?.writeActive) return;
     const state = stateFor(projectId, sessionId);
-    try { sensitiveStore.writeActive(projectId, sessionId, state.active); } catch { /* in-memory ledger remains authoritative */ }
+    prunePins(state);
+    try { sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned] }); } catch { /* in-memory ledger remains authoritative */ }
+  }
+  // A pin only means something while its block is in the ledger; a checkpoint or
+  // a front trim removes the block and the pin goes with it.
+  function prunePins(state) {
+    if (!state.pinned.size) return;
+    const present = new Set(blockOpeners(state.active).map((opener) => opener.block_index));
+    for (const index of [...state.pinned]) if (!present.has(index)) state.pinned.delete(index);
   }
   function capActive(messages) {
     const source = (Array.isArray(messages) ? messages : []).filter(Boolean).map(clone);
     return source.length > ACTIVE_MAX ? source.slice(-ACTIVE_MAX) : source;
+  }
+  // Stamp block indexes in place on the caller's objects before cloning them, so
+  // a controller that keeps re-sending its own ledger keeps the same indexes.
+  function ingestActive(state, messages) {
+    const incoming = Array.isArray(messages) ? messages : [];
+    state.nextBlockIndex = stampBlocks(state.active, incoming, state.nextBlockIndex);
+    return capActive(incoming);
   }
   function emitChange(projectId, sessionId, changed, assembly) {
     if (typeof onChange !== "function" || !assembly || assembly.ok === false) return;
@@ -293,7 +412,7 @@ function createTier1ContextCoordinator({
     const preview = input.preview === true;
     const summary = input.summary === undefined ? state.summary : input.summary;
     if (input.active_conversation !== undefined && !preview) {
-      state.active = capActive(Array.isArray(input.active_conversation) ? input.active_conversation : []);
+      state.active = ingestActive(state, input.active_conversation);
     }
     const active = preview && input.active_conversation !== undefined
       ? capActive(Array.isArray(input.active_conversation) ? input.active_conversation : [])
@@ -360,7 +479,7 @@ function createTier1ContextCoordinator({
     for (const message of source) {
       const role = String(message?.role || "unknown");
       const content = redactText(message?.content || "", 4_000, retainSecrets);
-      normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80) });
+      normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80), ...(message?.block_tombstone === true ? { tombstone: true } : {}) });
     }
     const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || ""), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
     return { messages: normalized, tool_events: eventSummary, message_count: normalized.length, event_count: eventSummary.length, digest: canonicalKeyHash({ messages: normalized, tool_events: eventSummary }) };
@@ -369,7 +488,8 @@ function createTier1ContextCoordinator({
   function deterministicFallback({ projectId, sessionId, previous, reduction, workflow, objective, constraints, decisions, protectedRefs, sourceBlocks, limit }) {
     const max = summaryBudget(limit);
     const facts = [];
-    for (const message of reduction.messages) if (message.role === "user" && message.content) facts.push(`User request: ${truncateText(message.content, 1_900)}`);
+    for (const message of reduction.messages) if (message.tombstone && message.content) facts.push(`Released work: ${truncateText(message.content, 1_900)}`);
+    else if (message.role === "user" && message.content) facts.push(`User request: ${truncateText(message.content, 1_900)}`);
     for (const event of reduction.tool_events) if (event.tool_name) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.${event.safe_excerpt ? ` Result: ${truncateText(event.safe_excerpt, 1_000)}` : ""}`);
     const previousFacts = Array.isArray(previous?.grounded_facts) ? previous.grounded_facts : [];
     // A deterministic fallback is deliberately content addressed.  If the
@@ -802,14 +922,14 @@ function createTier1ContextCoordinator({
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 conversation state requires opaque project and session IDs.");
     const state = hydrateSession(projectId, sessionId);
     const list = Array.isArray(messages) ? messages : [messages];
-    state.active = capActive([...state.active, ...list.filter(Boolean).map(clone)]);
+    state.active = ingestActive(state, [...state.active, ...list.filter(Boolean).map(clone)]);
     syncMeter(projectId, sessionId, ["Active Conversation"]);
     return { ok: true, active: clone(state.active), count: state.active.length };
   }
   function setActiveConversation(projectId, sessionId, messages) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 conversation state requires opaque project and session IDs.");
     const state = hydrateSession(projectId, sessionId);
-    state.active = capActive(messages);
+    state.active = ingestActive(state, messages);
     syncMeter(projectId, sessionId, ["Active Conversation"]);
     return { ok: true, active: clone(state.active), count: state.active.length };
   }
@@ -834,6 +954,17 @@ function createTier1ContextCoordinator({
     dest.blockA = source.blockA ? clone(source.blockA) : null;
     dest.lastAssembly = null;
     dest.activeHydrated = true;
+    dest.nextBlockIndex = source.nextBlockIndex;
+    dest.pinned = new Set(source.pinned);
+    dest.released = new Map();
+    for (const message of dest.active) {
+      if (message.block_tombstone !== true || !Number.isSafeInteger(message.block_index)) continue;
+      const entry = loadReleased(projectId, sourceSessionId, source, message.block_index);
+      if (!entry) continue;
+      let stored = false;
+      try { stored = sensitiveStore?.writeReleasedBlock?.(projectId, destSessionId, message.block_index, { block_id: entry.blockId, messages: entry.messages })?.ok === true; } catch { stored = false; }
+      if (!stored) dest.released.set(message.block_index, { blockId: entry.blockId, messages: entry.messages.map(clone) });
+    }
     persistActive(projectId, destSessionId);
     if (dest.summary && sensitiveStore?.writeCheckpoint) {
       try { sensitiveStore.writeCheckpoint(projectId, destSessionId, dest.summary); } catch { /* in-memory summary remains */ }
@@ -844,9 +975,112 @@ function createTier1ContextCoordinator({
     const value = hydrateSession(projectId, sessionId);
     return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) };
   }
+  function tokenCount(message) { return count(message).tokens; }
+  function tombstoneText(block, reason, retainSecrets) {
+    const opener = block.messages.find((message) => message.role === "user" && message.block_tombstone !== true);
+    const prompt = redactText(opener?.content || "", 160, retainSecrets);
+    const tools = new Map();
+    for (const message of block.messages) {
+      if (message.role !== "assistant" || !Array.isArray(message.tool_calls)) continue;
+      for (const call of message.tool_calls) {
+        const name = String(call?.function?.name || call?.name || "").trim();
+        if (name) tools.set(name, (tools.get(name) || 0) + 1);
+      }
+    }
+    const toolText = [...tools].map(([name, calls]) => (calls > 1 ? `${name} x${calls}` : name)).join(", ");
+    const note = redactText(reason || "", 240, retainSecrets);
+    const findings = extractBlockFindings(block.messages, { retainSecrets });
+    return `[Block ${block.index} released from context: ${block.messages.length} messages${prompt ? `, started by "${prompt}"` : ""}${toolText ? `, tools: ${toolText}` : ""}${findings ? `. Findings: ${findings}` : ""}${note ? `. Note: ${note}` : ""}. Call recall_block with index ${block.index} to read it again.]`;
+  }
+  function loadReleased(projectId, sessionId, state, index) {
+    const cached = state.released.get(index);
+    if (cached) return cached;
+    if (!sensitiveStore?.readReleasedBlock) return null;
+    try {
+      const loaded = sensitiveStore.readReleasedBlock(projectId, sessionId, index);
+      if (!loaded?.ok || !loaded.exists) return null;
+      return { blockId: loaded.blockId, messages: loaded.messages.map(clone) };
+    } catch { return null; }
+  }
+  // Releases whole finished blocks from the Active Conversation. The full
+  // messages are written to the encrypted session store first; only then is the
+  // block replaced in place by one tombstone that keeps its block_index. A block
+  // is never half released, so every tool_call keeps its tool result. The newest
+  // block is the live turn and is never released.
+  function evictBlocks(projectId, sessionId, requested = [], { retainSecrets = false } = {}) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Releasing blocks requires opaque project and session IDs.");
+    const state = hydrateSession(projectId, sessionId);
+    const blocks = blocksFromActive(state.active, tokenCount);
+    const newest = blocks.at(-1);
+    const rejected = [];
+    const plan = [];
+    const seen = new Set();
+    for (const entry of Array.isArray(requested) ? requested : [requested]) {
+      const request = entry && typeof entry === "object" ? entry : { index: entry };
+      const index = typeof request.index === "string" && request.index.trim() !== "" ? Number(request.index) : request.index;
+      if (!Number.isSafeInteger(index) || index < 0) { rejected.push({ index: request.index, code: "BLOCK_INDEX_INVALID" }); continue; }
+      if (seen.has(index)) continue;
+      seen.add(index);
+      const block = blocks.find((candidate) => candidate.index === index);
+      if (!block) rejected.push({ index, code: "BLOCK_NOT_FOUND" });
+      else if (block.state === "evicted") rejected.push({ index, code: "BLOCK_ALREADY_RELEASED" });
+      else if (state.pinned.has(block.index)) rejected.push({ index, code: "BLOCK_PINNED" });
+      else if (block === newest) rejected.push({ index, code: "BLOCK_IN_FLIGHT" });
+      else plan.push({ block, reason: request.reason });
+    }
+    const stored = [];
+    for (const item of plan) {
+      const messages = item.block.messages.map(clone);
+      let saved;
+      try { saved = sensitiveStore?.writeReleasedBlock ? sensitiveStore.writeReleasedBlock(projectId, sessionId, item.block.index, { block_id: item.block.blockId, messages }) : { ok: true }; }
+      catch (error) { saved = { ok: false, code: "MEMORY_RELEASED_BLOCK_WRITE_FAILED", error: error.message }; }
+      if (saved?.ok !== true) { rejected.push({ index: item.block.index, code: saved?.code || "BLOCK_PERSIST_FAILED" }); continue; }
+      // With a store the encrypted copy is the source of truth; keeping every
+      // released block in memory as well would defeat the point of releasing it.
+      if (!sensitiveStore?.writeReleasedBlock) state.released.set(item.block.index, { blockId: item.block.blockId, messages });
+      stored.push(item);
+    }
+    const evicted = [];
+    for (const item of [...stored].sort((left, right) => right.block.start - left.block.start)) {
+      const content = tombstoneText(item.block, item.reason, retainSecrets);
+      const tombstone = { role: "user", content, block_index: item.block.index, block_tombstone: true, released_tokens: item.block.tokenEstimate };
+      state.active.splice(item.block.start, item.block.messages.length, tombstone);
+      evicted.unshift({ index: item.block.index, blockId: item.block.blockId, messages: item.block.messages.length, tokensBefore: item.block.tokenEstimate, tokensAfter: tokenCount(tombstone), tombstone: content });
+    }
+    if (evicted.length) syncMeter(projectId, sessionId, ["Active Conversation"]);
+    return { ok: true, evicted, rejected, active: clone(state.active), count: state.active.length };
+  }
+  // Reads a released block back. The ledger is not touched: the caller returns
+  // the messages as the tool result of the current turn, which is the "new
+  // block" and keeps the provider prefix append-only.
+  function recallBlock(projectId, sessionId, index) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Recalling a block requires opaque project and session IDs.");
+    const number = typeof index === "string" && index.trim() !== "" ? Number(index) : index;
+    if (!Number.isSafeInteger(number) || number < 0) return operationFailure("MEMORY_BLOCK_INDEX_INVALID", "A block index must be a non-negative integer.");
+    const state = hydrateSession(projectId, sessionId);
+    const live = blocksFromActive(state.active, tokenCount).find((block) => block.index === number);
+    if (live && live.state === "active") return operationFailure("MEMORY_BLOCK_ACTIVE", `Block ${number} is still in context.`);
+    const entry = loadReleased(projectId, sessionId, state, number);
+    if (!entry) return operationFailure("MEMORY_BLOCK_NOT_RELEASED", `Block ${number} was not released or its stored copy is unavailable.`);
+    const messages = entry.messages.map(clone);
+    return { ok: true, index: number, blockId: entry.blockId, messages, tokens: count(messages).tokens };
+  }
   function activeBlocks(projectId, sessionId) {
     const value = hydrateSession(projectId, sessionId);
-    return blocksFromActive(value.active, (message) => count(message).tokens);
+    return blocksFromActive(value.active, tokenCount).map((block) => ({ ...block, pinned: value.pinned.has(block.index) }));
+  }
+  // Pinned blocks are skipped by automatic release and refused by release_blocks.
+  function pinBlock(projectId, sessionId, index, pinned = true) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Pinning a block requires opaque project and session IDs.");
+    const number = typeof index === "string" && index.trim() !== "" ? Number(index) : index;
+    if (!Number.isSafeInteger(number) || number < 0) return operationFailure("MEMORY_BLOCK_INDEX_INVALID", "A block index must be a non-negative integer.");
+    const state = hydrateSession(projectId, sessionId);
+    const block = blocksFromActive(state.active, tokenCount).find((candidate) => candidate.index === number);
+    if (!block) return operationFailure("MEMORY_BLOCK_NOT_FOUND", `Block ${number} is not in the conversation.`);
+    if (block.state === "evicted") return operationFailure("MEMORY_BLOCK_RELEASED", `Block ${number} was already released.`);
+    if (pinned === false) state.pinned.delete(number); else state.pinned.add(number);
+    persistActive(projectId, sessionId);
+    return { ok: true, index: number, pinned: state.pinned.has(number), pinnedBlocks: [...state.pinned].sort((left, right) => left - right) };
   }
   function clear(projectId, sessionId) { sessions.delete(sessionKey(projectId, sessionId)); return { ok: true }; }
   function clearProject(projectId) {
@@ -856,7 +1090,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, evictBlocks, recallBlock, pinBlock, clear, clearProject });
 }
 
-module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, METER_ROWS });
+module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, METER_ROWS });

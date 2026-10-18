@@ -318,7 +318,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
     const checked = validateActiveValue(loaded.value, project, session);
     return checked.ok ? { ...loaded, value: checked.value } : checked;
   }
-  function writeActive(projectId, sessionId, messages) {
+  function writeActive(projectId, sessionId, messages, { nextBlockIndex = null, pinnedBlocks = null } = {}) {
     let project;
     let session;
     try {
@@ -332,10 +332,36 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
       project_id: project,
       session_id: session,
       active: (Array.isArray(messages) ? messages : []).slice(0, 2_000).map(clone),
+      ...(Number.isSafeInteger(nextBlockIndex) && nextBlockIndex >= 0 ? { next_block_index: nextBlockIndex } : {}),
+      ...(Array.isArray(pinnedBlocks) ? { pinned_blocks: pinnedBlocks.filter((index) => Number.isSafeInteger(index) && index >= 0) } : {}),
     };
     const checked = validateActiveValue(candidate, project, session);
     if (!checked.ok) return checked;
     return writeFile(activeFile(project, session), candidate);
+  }
+  // Released Active Conversation blocks keep their full messages here, encrypted
+  // like the active ledger and inside the session directory, so deleting the
+  // session deletes them. The prompt only carries a tombstone for each one.
+  function releasedBlockFile(projectId, sessionId, index) {
+    if (!Number.isSafeInteger(index) || index < 0) throw new TypeError("Invalid released block index.");
+    return path.join(sessionDir(projectId, sessionId), "released", `block-${index}.enc.json`);
+  }
+  function writeReleasedBlock(projectId, sessionId, index, block = {}) {
+    let file;
+    try { file = releasedBlockFile(projectId, sessionId, index); } catch (error) { return operationFailure(error.code || "MEMORY_RELEASED_BLOCK_INVALID", error.message, {}, false); }
+    if (!Array.isArray(block.messages) || !block.messages.length) return operationFailure("MEMORY_RELEASED_BLOCK_INVALID", "A released block needs at least one message.", {}, false);
+    return writeFile(file, { schema_version: 1, index, block_id: String(block.block_id || ""), messages: block.messages.map(clone) });
+  }
+  function readReleasedBlock(projectId, sessionId, index) {
+    let file;
+    try { file = releasedBlockFile(projectId, sessionId, index); } catch (error) { return operationFailure(error.code || "MEMORY_RELEASED_BLOCK_INVALID", error.message, {}, false); }
+    const read = readFile(file);
+    if (!read.ok || !read.exists) return read;
+    const value = read.value || {};
+    if (value.index !== index || !Array.isArray(value.messages) || !value.messages.length) {
+      return operationFailure("MEMORY_RELEASED_BLOCK_INVALID", "The stored released block is invalid.", { path: file }, false);
+    }
+    return { ok: true, exists: true, durable: read.durable, index, blockId: String(value.block_id || ""), messages: value.messages };
   }
   // Images attached to chat messages are kept at full sent quality, encrypted
   // like the transcript and inside its session directory, so deleting the
@@ -431,7 +457,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   }
   function clearEphemeral() { ephemeral.clear(); }
 
-  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, readActive, writeActive, writeChatReferenceSnapshot, readChatReferenceSnapshot, writeChatImage, readChatImage, deleteSession, status, flush, resetProject, clearEphemeral });
+  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, readActive, writeActive, writeReleasedBlock, readReleasedBlock, writeChatReferenceSnapshot, readChatReferenceSnapshot, writeChatImage, readChatImage, deleteSession, status, flush, resetProject, clearEphemeral });
 }
 
 module.exports = Object.freeze({ createTier1SensitiveStore });
