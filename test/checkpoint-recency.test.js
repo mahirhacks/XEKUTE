@@ -141,7 +141,7 @@ test("the model is shown the NEWEST window of a long ledger and told how much wa
   assert.equal(payload.deterministic_reduction.message_count, 250);
   assert.equal(payload.active_conversation.length, 100);
   assert.equal(payload.active_conversation.at(-1).content, "message-249");
-  assert.deepEqual(payload.omitted_before, { messages: 150, tool_events: 0, active_conversation: 150 });
+  assert.deepEqual(payload.omitted_before, { messages: 150, tool_events: 0, attempts: 0, active_conversation: 150 });
 });
 
 test("a model that returns many facts keeps all of them up to the field cap", async () => {

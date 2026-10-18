@@ -16,7 +16,7 @@ test("nothing is released below the trigger", () => {
 
 test("past the trigger the oldest blocks go first until the target is reached", () => {
   const selected = selectBlocksToRelease({ blocks: blocks([8000, 8000, 8000, 8000, 8000, 8000]), releasableBefore: 6, totalTokens: 65_000, limit: 100_000 });
-  assert.deepEqual(selected.map((entry) => entry.index), [0, 1, 2], "20,000 tokens must go and each release frees 7,920");
+  assert.deepEqual(selected.map((entry) => entry.index), [0, 1, 2], "20,000 tokens must go and each release frees 7,700");
   const heavy = selectBlocksToRelease({ blocks: blocks([8000, 8000, 8000, 8000, 8000, 8000]), releasableBefore: 6, totalTokens: 70_000, limit: 100_000 });
   assert.deepEqual(heavy.map((entry) => entry.index), [0, 1, 2, 3], "25,000 tokens must go, which takes four blocks");
 });

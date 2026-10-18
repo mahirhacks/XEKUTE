@@ -13,7 +13,7 @@ const DEFAULT_RELEASE_POLICY = Object.freeze({
   minBlockTokens: 600,
   // The newest finished turns are the ones the model is most likely to refer back to.
   keepRecent: 2,
-  tombstoneTokens: 80,
+  tombstoneTokens: 300,
 });
 
 function number(value, fallback) {

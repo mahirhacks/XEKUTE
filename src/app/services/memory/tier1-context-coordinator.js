@@ -5,6 +5,7 @@ const { canonicalJson, canonicalKeyHash, isMemoryId } = require("../../../contra
 const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/schema-registry.js");
 const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = require("../../storage/memory/memory-storage-utils.js");
 const { redactToolCallMessages } = require("../../../shared/secret-redaction.js");
+const { attemptFact, attemptsFromLedger, mergeAttemptEvents } = require("./checkpoint-attempts.js");
 
 const SUMMARY_MAX = 32_768;
 const SUMMARY_RATIO = 0.05;
@@ -98,10 +99,16 @@ function freshRecords({ reduction, constraints, decisions, workflow } = {}) {
     if (message.tombstone && message.content) facts.push(`Released work: ${truncateText(message.content, 1_900)}`);
     else if (message.role === "user" && message.content) facts.push(`User request: ${truncateText(message.content, 1_900)}`);
   }
-  for (const event of list(reduction?.tool_events)) if (event.tool_name) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.${event.safe_excerpt ? ` Result: ${truncateText(event.safe_excerpt, 1_000)}` : ""}`);
+  const attempts = list(reduction?.attempts);
+  for (const attempt of attempts) facts.push(attemptFact(attempt));
+  // An event whose call is in the ledger is described by that call's attempt.
+  const explained = new Set(list(reduction?.ledger_call_ids));
+  const legacy = list(reduction?.tool_events).filter((event) => event.tool_name && !(event.call_id && explained.has(event.call_id)));
+  for (const event of legacy) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.${event.safe_excerpt ? ` Result: ${truncateText(event.safe_excerpt, 1_000)}` : ""}`);
   return {
     facts,
-    events: list(reduction?.tool_events).filter((event) => event.tool_name).map((event) => `${event.tool_name}: ${event.outcome}`),
+    attempts,
+    legacyEvents: legacy.map((event) => `${event.tool_name}: ${event.outcome}`),
     constraints: list(constraints).map(String),
     decisions: list(decisions).map(String),
     unresolved: workflow?.continuation_point?.next_action ? [workflow.continuation_point.next_action] : [],
@@ -527,8 +534,11 @@ function createTier1ContextCoordinator({
       const content = redactText(message?.content || "", 4_000, retainSecrets);
       normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80), ...(message?.block_tombstone === true ? { tombstone: true } : {}) });
     }
-    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || "").slice(0, 120), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
-    return { messages: normalized, tool_events: eventSummary, message_count: normalized.length, event_count: eventSummary.length, digest: canonicalKeyHash({ messages: normalized, tool_events: eventSummary }) };
+    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || "").slice(0, 120), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [], call_id: String(event?.call_id || "").slice(0, 200) }));
+    // Commands live in the assistant tool calls, which the normalized messages do
+    // not keep, so attempts are read from the raw ledger.
+    const ledger = attemptsFromLedger(source, events, { retainSecrets, redact: (text, maximum) => redactText(text, maximum, retainSecrets) });
+    return { messages: normalized, tool_events: eventSummary, attempts: ledger.attempts, ledger_call_ids: ledger.callIds, message_count: normalized.length, event_count: eventSummary.length, digest: canonicalKeyHash({ messages: normalized, tool_events: eventSummary }) };
   }
 
   function deterministicFallback({ projectId, sessionId, previous, reduction, workflow, objective, constraints, decisions, protectedRefs, sourceBlocks, limit }) {
@@ -565,7 +575,7 @@ function createTier1ContextCoordinator({
       constraints: keepNewest([...earlier("constraints"), ...fresh.constraints], 200),
       decisions: keepNewest([...earlier("decisions"), ...fresh.decisions], 200),
       grounded_facts: keepNewest([...earlier("grounded_facts"), ...fresh.facts], 300),
-      significant_events: keepNewest([...earlier("significant_events"), ...fresh.events], 300),
+      significant_events: keepNewest(mergeAttemptEvents(earlier("significant_events"), fresh.attempts, fresh.legacyEvents), 300),
       unverified_claims: [],
       unresolved_work: keepNewest([...earlier("unresolved_work"), ...fresh.unresolved], 200),
       workflow_continuity: workflow,
@@ -716,6 +726,7 @@ function createTier1ContextCoordinator({
     add(context?.previous?.significant_events);
     add(context?.reduction?.messages);
     add(context?.reduction?.tool_events);
+    add(context?.reduction?.attempts);
     add(context?.workflow);
     const text = values.join(" ");
     const words = new Set((text.match(/[a-z0-9][a-z0-9._:/-]{2,}/gi) || []).map((word) => word.toLowerCase()));
@@ -776,7 +787,9 @@ function createTier1ContextCoordinator({
     candidate.grounded_facts = merge("grounded_facts", groundedFacts.values, fresh.facts, 300);
     candidate.constraints = merge("constraints", constraints.values, fresh.constraints, 200);
     candidate.decisions = merge("decisions", decisions.values, fresh.decisions, 200);
-    candidate.significant_events = merge("significant_events", significantEvents.values, fresh.events, 300);
+    const mergedEvents = mergeAttemptEvents(earlier("significant_events"), fresh.attempts, fresh.legacyEvents);
+    const knownEvents = new Set(mergedEvents);
+    candidate.significant_events = keepNewest([...clean(significantEvents.values.filter((value) => !knownEvents.has(value))), ...clean(mergedEvents)], 300);
     candidate.unresolved_work = merge("unresolved_work", unresolvedWork.values, fresh.unresolved, 200);
     candidate.unverified_claims = keepNewest([
       ...(Array.isArray(candidate.unverified_claims) ? candidate.unverified_claims : []),
@@ -822,14 +835,15 @@ function createTier1ContextCoordinator({
     };
     const messageWindow = newest(context.reduction?.messages);
     const eventWindow = newest(context.reduction?.tool_events);
+    const attemptWindow = newest(context.reduction?.attempts);
     const activeWindow = newest(context.active);
     const previousWindow = context.previous ? { ...context.previous } : null;
     if (previousWindow) for (const field of ["grounded_facts", "significant_events", "constraints", "decisions", "unresolved_work", "unverified_claims"]) previousWindow[field] = newest(previousWindow[field]).items;
     const payload = sanitizeValue({
       previous_checkpoint: previousWindow,
-      deterministic_reduction: context.reduction ? { ...context.reduction, messages: messageWindow.items, tool_events: eventWindow.items } : context.reduction,
+      deterministic_reduction: context.reduction ? { ...context.reduction, ledger_call_ids: undefined, messages: messageWindow.items, tool_events: eventWindow.items, attempts: attemptWindow.items } : context.reduction,
       active_conversation: redactToolCallMessages(activeWindow.items, { retainSecrets: context?.retainSecrets === true }),
-      omitted_before: { messages: messageWindow.omitted, tool_events: eventWindow.omitted, active_conversation: activeWindow.omitted },
+      omitted_before: { messages: messageWindow.omitted, tool_events: eventWindow.omitted, attempts: attemptWindow.omitted, active_conversation: activeWindow.omitted },
       current_prompt_context_only: context.currentPrompt,
       current_workflow: context.workflow || null,
       objective: context.objective || "",
@@ -1075,7 +1089,11 @@ function createTier1ContextCoordinator({
     const toolText = [...tools].map(([name, calls]) => (calls > 1 ? `${name} x${calls}` : name)).join(", ");
     const note = redactText(reason || "", 240, retainSecrets);
     const findings = extractBlockFindings(block.messages, { retainSecrets });
-    return `[Block ${block.index} released from context: ${block.messages.length} messages${prompt ? `, started by "${prompt}"` : ""}${toolText ? `, tools: ${toolText}` : ""}${findings ? `. Findings: ${findings}` : ""}${note ? `. Note: ${note}` : ""}. Call recall_block with index ${block.index} to read it again.]`;
+    // The full arguments of this block's tool calls are about to leave the ledger,
+    // so what was run is written into the tombstone while it can still be read.
+    const ran = attemptsFromLedger(block.messages, [], { retainSecrets, redact: (text, maximum) => redactText(text, maximum, retainSecrets) }).attempts
+      .slice(-6).map((attempt) => `${attempt.tool} ${attempt.digest} -> ${attempt.outcome}${attempt.count > 1 ? ` x${attempt.count}` : ""}`).join("; ").slice(0, 480);
+    return `[Block ${block.index} released from context: ${block.messages.length} messages${prompt ? `, started by "${prompt}"` : ""}${toolText ? `, tools: ${toolText}` : ""}${findings ? `. Findings: ${findings}` : ""}${ran ? `. Ran: ${ran}` : ""}${note ? `. Note: ${note}` : ""}. Call recall_block with index ${block.index} to read it again.]`;
   }
   function loadReleased(projectId, sessionId, state, index) {
     const cached = state.released.get(index);
