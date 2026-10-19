@@ -1216,28 +1216,79 @@ function createTier1ContextCoordinator({
     syncMeter(projectId, sessionId, ["Current Workflow"]);
     return clone(state.workflow);
   }
+  // One run writes a session's ledger at a time. A run takes the lease before
+  // it reads the ledger and gives it back when it ends; another run for the
+  // same session waits its turn instead of overwriting the first one's work.
+  // While the lease is held, `committed` is the state as it was when the run
+  // began, which is what a fork copies.
+  const writerQueues = new Map();
+  function acquireWriter(projectId, sessionId, { signal = null } = {}) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return Promise.resolve(() => {});
+    const key = sessionKey(projectId, sessionId);
+    const queue = writerQueues.get(key) || { held: false, waiting: [] };
+    writerQueues.set(key, queue);
+    return new Promise((resolve, reject) => {
+      const grant = () => {
+        queue.held = true;
+        const state = hydrateSession(projectId, sessionId);
+        state.committed = {
+          active: state.active.map(clone),
+          summary: state.summary ? clone(state.summary) : null,
+          workflow: state.workflow ? clone(state.workflow) : null,
+          checkpointRevision: state.checkpointRevision,
+          pinned: new Set(state.pinned),
+          directives: clone(state.directives),
+        };
+        let released = false;
+        resolve(() => {
+          if (released) return;
+          released = true;
+          state.committed = null;
+          queue.held = false;
+          const next = queue.waiting.shift();
+          if (next) next();
+          else writerQueues.delete(key);
+        });
+      };
+      if (!queue.held) return grant();
+      const onAbort = () => {
+        const at = queue.waiting.indexOf(waiter);
+        if (at >= 0) queue.waiting.splice(at, 1);
+        reject(Object.assign(new Error("The run was stopped while waiting for the session."), { code: "SESSION_WRITER_ABORTED" }));
+      };
+      const waiter = () => { signal?.removeEventListener?.("abort", onAbort); grant(); };
+      if (signal?.aborted) return onAbort();
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      queue.waiting.push(waiter);
+    });
+  }
+
   function cloneSession(projectId, sourceSessionId, destSessionId) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sourceSessionId, "session") || !isMemoryId(destSessionId, "session")) {
       return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 session clone requires opaque project and session IDs.");
     }
     if (sourceSessionId === destSessionId) return { ok: true, sessionId: destSessionId, activeCount: 0, copied: false };
-    const source = hydrateSession(projectId, sourceSessionId);
+    const live = hydrateSession(projectId, sourceSessionId);
+    // A fork during a run copies the state from before that run: never a
+    // half-written turn, an open tool call or a summary in progress.
+    const source = live.committed || live;
     const dest = stateFor(projectId, destSessionId);
     dest.active = capActive(source.active);
     dest.summary = source.summary ? clone(source.summary) : null;
     dest.workflow = source.workflow ? clone(source.workflow) : null;
     dest.checkpointRevision = Number(source.checkpointRevision) || 0;
-    dest.blockA = source.blockA ? clone(source.blockA) : null;
+    dest.blockA = live.blockA ? clone(live.blockA) : null;
     dest.lastAssembly = null;
     dest.activeHydrated = true;
-    dest.nextBlockIndex = source.nextBlockIndex;
+    // Indexes the running turn has issued stay used, so the fork never reuses one.
+    dest.nextBlockIndex = live.nextBlockIndex;
     dest.pinned = new Set(source.pinned);
     dest.directives = clone(source.directives);
     dest.released = new Map();
     // Every released block is copied, not only those whose tombstone is still in
     // the ledger: the copied summary names earlier ones as recallable too.
-    for (let index = 0; index < (Number(source.nextBlockIndex) || 0); index += 1) {
-      const entry = loadReleased(projectId, sourceSessionId, source, index);
+    for (let index = 0; index < (Number(live.nextBlockIndex) || 0); index += 1) {
+      const entry = loadReleased(projectId, sourceSessionId, live, index);
       if (!entry) continue;
       let stored = false;
       try { stored = sensitiveStore?.writeReleasedBlock?.(projectId, destSessionId, index, { block_id: entry.blockId, messages: entry.messages })?.ok === true; } catch { stored = false; }
@@ -1373,7 +1424,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, evictBlocks, recallBlock, pinBlock, recordDirective, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, acquireWriter, state, activeBlocks, evictBlocks, recallBlock, pinBlock, recordDirective, clear, clearProject });
 }
 
 module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, isOperatorInput, keepNewest, networkEntities, operatorText, METER_ROWS });

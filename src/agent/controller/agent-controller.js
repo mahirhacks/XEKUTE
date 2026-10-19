@@ -554,7 +554,30 @@ function tier1SessionId(rawSessionId, runId = "") {
   return `session_${digest}`;
 }
 
-async function runAgentTurn({
+// A run for a chat with Tier 1 memory holds that chat's writer lease from before
+// it reads the ledger until it ends, so two runs for one chat never interleave
+// their writes. A meter preview only reads and takes no lease.
+async function runAgentTurn(options = {}) {
+  const tier1Context = options.tier1Context;
+  const projectId = String(options.projectId || "").trim();
+  const sessionId = String(options.memorySessionId || "").trim();
+  if (options.previewOnly || typeof tier1Context?.acquireWriter !== "function" || !isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) {
+    return runAgentTurnWithLease(options);
+  }
+  let release;
+  try {
+    release = await tier1Context.acquireWriter(projectId, sessionId, { signal: options.signal || null });
+  } catch (error) {
+    return { ok: false, aborted: true, error: "The agent turn was stopped.", code: error?.code || "SESSION_WRITER_ABORTED" };
+  }
+  try {
+    return await runAgentTurnWithLease(options);
+  } finally {
+    release();
+  }
+}
+
+async function runAgentTurnWithLease({
   workspace = "",
   model = "",
   numCtx = 8192,

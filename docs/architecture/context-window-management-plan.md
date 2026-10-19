@@ -118,6 +118,8 @@ All six phases are implemented and covered by tests. The plan above is the origi
 - After a checkpoint the task's own messages go back into the ledger as messages, with or without a live-input supervisor, so the task stays an instruction rather than summarized data. A checkpoint before a model call is skipped when the ledger holds nothing but those messages.
 - Tests: `memory-v3-tier1-blocks-model.test.js` checks the coordinator against a reference model through trims, forks, restarts and checkpoints; `context-blocks-controller-fuzz.test.js` runs whole agent turns with random block tool use, forced checkpoints and live steering; `npm run verify:context-blocks` drives the real app against a scripted Ollama.
 - A forked chat gets a copy of every released block, so the "Released work" lines its summary carries stay recallable.
+- One run writes a chat's ledger at a time. A run takes the chat's writer lease (`acquireWriter`) before it reads the ledger and gives it back when it ends, so a background continuation waits for a foreground run instead of overwriting it; a stop while waiting ends the run without touching the chat. Meter previews only read and take no lease.
+- A fork taken while a run is going copies the state from when that run began (the lease's committed snapshot): never a half-written turn, an open tool call or a summary in progress. It keeps the running turn's block counter, so it never reuses an index.
 
 ### Where the build differs from the plan
 
