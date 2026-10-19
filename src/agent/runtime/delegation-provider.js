@@ -150,10 +150,11 @@ function parseChildFinding(text = "") {
 
 // A report that does not fit the summary is saved in full and the summary ends
 // with a pointer to it. The returned finding never carries the full text.
-function boundChildFinding(finding, { workspace, childInvocationId } = {}) {
+function boundChildFinding(finding, { workspace, childInvocationId, retainSecrets = false } = {}) {
   const { truncated, fullText, ...kept } = finding;
   if (!truncated) return kept;
-  const spilled = spillChildReport({ workspace, childInvocationId, text: fullText });
+  // `retainSecrets` is the project's "Redact secrets" setting turned off.
+  const spilled = spillChildReport({ workspace, childInvocationId, text: fullText, ...(retainSecrets ? { redact: (text) => text } : {}) });
   const pointer = spilled.ok ? `\n[Summary shortened. Full report: ${spilled.relativePath}]` : "\n[Summary shortened. The full report could not be saved.]";
   return {
     ...kept,
@@ -704,7 +705,7 @@ function createRuntimeDelegationProvider({
       const status = childController.signal.aborted
         ? "stopped"
         : childResultStatus(result);
-      let finding = boundChildFinding(parseChildFinding(result?.finalText || ""), { workspace, childInvocationId });
+      let finding = boundChildFinding(parseChildFinding(result?.finalText || ""), { workspace, childInvocationId, retainSecrets: projectProfile?.dataHandling?.redactSecrets === false });
       const childSummary = finding.summary.slice(0, MAX_SUMMARY_CHARS);
       const error = String(result?.error || result?.runState?.stopReason || "").slice(0, MAX_SUMMARY_CHARS);
       const terminalType = status === "completed" ? "subagent_completed" : status === "stopped" ? "subagent_stopped" : "subagent_failed";

@@ -55,7 +55,8 @@ test("the renderer, preload and main process are wired for blocks, pinning and r
   assert.match(read("src/ui/core/runtime-modules.js"), /import "\.\.\/features\/chat\/context-blocks-view\.js";/);
   assert.match(bootstrap, /blocks: globalThis\.XekuteContextBlocksView\?\.normalizeContextBlocks\(value\.blocks\) \|\| \[\]/);
   assert.match(bootstrap, /blocks: storedIsTier1 \? \(storedUsage\.blocks \|\| \[\]\) : \[\]/);
-  assert.match(bootstrap, /renderContextBlocksHtml\(breakdown\.blocks, \{ escapeHtml, formatTokenCount \}\)/);
+  assert.match(bootstrap, /renderContextBlocksPanel\(breakdown\.blocks\)/);
+  assert.match(bootstrap, /renderContextBlocksHtml\(list, \{ escapeHtml, formatTokenCount \}\)/);
   assert.match(bootstrap, /window\.api\.contextPinBlock\(\{ workspace: rootPath \|\| "", memorySessionId: session\.memorySessionId \|\| "", index, pinned \}\)/);
   assert.match(bootstrap, /if \(payload\.type === "context_release"\) \{\s+applyContextReleaseUi\(run, payload\);/);
   assert.match(read("src/app/electron/preload.js"), /contextPinBlock: \(payload = \{\}\) => ipcRenderer\.invoke\("context:pinBlock", payload\)/);

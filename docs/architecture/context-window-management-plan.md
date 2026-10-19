@@ -1,6 +1,6 @@
 # Context window management plan
 
-Status: proposal. Three pillars working together to keep the live context small during long cybersecurity runs. Delegation keeps bulk out of the main thread. Active-conversation block eviction drops finished turns. Checkpoint summarization is the fallback when eviction is not enough.
+Status: implemented (see Status below). Three pillars working together to keep the live context small during long cybersecurity runs. Delegation keeps bulk out of the main thread. Active-conversation block eviction drops finished turns. Checkpoint summarization is the fallback when eviction is not enough.
 
 ## What already exists
 
@@ -110,10 +110,14 @@ All six phases are implemented and covered by tests. The plan above is the origi
 - A block is one user turn. Each block opener carries a `block_index` that is stamped once and never reused, so index 7 stays 7 after block 3 is released. A counter is persisted with the active ledger.
 - Releasing replaces the whole block with one tombstone that keeps its index. The full messages are written to the encrypted session store first. If that write fails the block stays in context.
 - The model learns block numbers from tombstones and from `release_blocks` with `operation: "list"`. Blocks are not labelled in the prompt, because rewriting an old message would break the prompt cache for everything after it.
-- `recall_block` returns the old messages as a tool result of the current turn. Nothing is spliced back into the middle of history.
+- `recall_block` returns the old messages as a text transcript in a tool result of the current turn. Nothing is spliced back into the middle of history. A transcript larger than about 20% of the window comes back as head and tail with `next_offset`, and `recall_block` with that `offset` pages through the rest.
 - Only blocks from before the task in progress can be released. The live task, its steering messages and any open tool exchange are protected.
 - Automatic release starts at 60% of the context window and releases the oldest finished blocks until usage is near 45%. It keeps the two newest finished blocks, skips pinned blocks and blocks under 600 tokens, and never runs in preview mode or when the coordinator has no block support. Checkpoint summarization still runs at 90%.
-- Pins are a set of block indexes stored with the active ledger, not a flag on messages, so they survive the controller re-sending its own copy of the ledger.
+- Pins are a set of block indexes stored with the active ledger, not a flag on messages, so they survive the controller re-sending its own copy of the ledger. A pin stops release only: a checkpoint still summarizes a pinned block, and its pin is dropped unless the block comes back as the live task.
+- The coordinator keeps the newest `ACTIVE_MAX` (2,000) messages. A trim that cuts into a block leaves that block's index on its surviving head and marks it partial, and the controller offsets its own longer ledger by the trimmed count when it releases. A partial block is never released (`BLOCK_PARTIAL`): releasing only its tail would let a re-sent ledger bring its opener back as a second block with the same index.
+- After a checkpoint the task's own messages go back into the ledger as messages, with or without a live-input supervisor, so the task stays an instruction rather than summarized data. A checkpoint before a model call is skipped when the ledger holds nothing but those messages.
+- Tests: `memory-v3-tier1-blocks-model.test.js` checks the coordinator against a reference model through trims, forks, restarts and checkpoints; `context-blocks-controller-fuzz.test.js` runs whole agent turns with random block tool use, forced checkpoints and live steering; `npm run verify:context-blocks` drives the real app against a scripted Ollama.
+- A forked chat gets a copy of every released block, so the "Released work" lines its summary carries stay recallable.
 
 ### Where the build differs from the plan
 
@@ -130,6 +134,7 @@ All six phases are implemented and covered by tests. The plan above is the origi
 - Capping and saving a single huge tool output inside one running turn. Block release cannot touch the turn that is still running.
 - A model-based relevance classifier. The model-driven tool and the size and age policy came first; add a classifier only if they leave reclaim unused.
 - Measuring the real prompt-cache cost of a release against a live provider.
+- Pillar 2's candidate filter is simpler than designed: release picks by age, size and the newest-two rule. It does not check "outcome completed" or later references to a block's artifacts, and blocks holding older browser-screenshot exchanges can be released.
 
 ## Gotchas
 

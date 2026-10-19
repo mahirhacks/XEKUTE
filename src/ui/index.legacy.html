@@ -1060,7 +1060,6 @@
           <div class="composer-input-row">
             <div id="chat-input" contenteditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Chat message" data-placeholder="Ask, investigate, run, or search" class="chat-input-empty"><span id="selected-slash-command" class="selected-slash-command" hidden></span></div>
           </div>
-          <div id="chat-input-measure" aria-hidden="true"></div>
           <div class="composer-toolbar">
             <div class="composer-meta">
               <div id="chat-mode-toggle" class="chat-mode-toggle">
@@ -1215,7 +1214,18 @@
     </div>
   </div>
 
-  <div id="context-usage-popover" class="context-usage-popover" hidden>
+  <div id="context-usage-menu" class="model-controls-menu context-usage-menu" role="menu" aria-label="Context" hidden>
+    <button type="button" id="context-window-trigger" class="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="context-usage-popover">
+      <span>Context window</span><span id="context-window-value" class="model-control-value">0 / 0</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span>
+    </button>
+    <button type="button" id="context-blocks-trigger" class="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="context-blocks-panel">
+      <span>Conversation blocks</span><span id="context-blocks-value" class="model-control-value">0</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span>
+    </button>
+  </div>
+  <div id="context-blocks-panel" class="context-blocks-panel" role="dialog" aria-label="Conversation blocks" hidden>
+    <div id="context-blocks-list" class="context-blocks"></div>
+  </div>
+  <div id="context-usage-popover" class="context-usage-popover" role="dialog" aria-label="Context window" hidden>
     <div class="context-usage-header">
       <div class="context-usage-heading-group">
         <div class="context-usage-heading">Context Usage</div>
