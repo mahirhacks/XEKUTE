@@ -15,7 +15,7 @@ const read = (relative) => fs.readFileSync(path.join(__dirname, "..", relative),
 test("normalization clamps bad input and keeps only the newest blocks", () => {
   assert.deepEqual(normalizeContextBlocks(undefined), []);
   assert.deepEqual(normalizeContextBlocks([{ index: -4, tokens: "x", state: "weird", pinned: "yes", summary: "  a\n  b  " }]), [
-    { index: 0, state: "in_context", tokens: 0, releasedTokens: 0, messages: 0, pinned: false, summary: "a b" },
+    { index: 0, state: "in_context", tokens: 0, releasedTokens: 0, messages: 0, pinned: false, turnStart: false, summary: "a b" },
   ]);
   const many = Array.from({ length: MAX_BLOCKS + 10 }, (_, index) => ({ index, tokens: 1 }));
   assert.equal(normalizeContextBlocks(many).length, MAX_BLOCKS);
@@ -55,8 +55,8 @@ test("the renderer, preload and main process are wired for blocks, pinning and r
   assert.match(read("src/ui/core/runtime-modules.js"), /import "\.\.\/features\/chat\/context-blocks-view\.js";/);
   assert.match(bootstrap, /blocks: globalThis\.XekuteContextBlocksView\?\.normalizeContextBlocks\(value\.blocks\) \|\| \[\]/);
   assert.match(bootstrap, /blocks: storedIsTier1 \? \(storedUsage\.blocks \|\| \[\]\) : \[\]/);
-  assert.match(bootstrap, /renderContextBlocksPanel\(breakdown\.blocks\)/);
-  assert.match(bootstrap, /renderContextBlocksHtml\(list, \{ escapeHtml, formatTokenCount \}\)/);
+  assert.match(bootstrap, /renderContextBlocksPanel\(breakdown\.blocks, breakdown\.pinBudgetTokens\)/);
+  assert.match(bootstrap, /renderContextBlocksHtml\(list, \{ escapeHtml, formatTokenCount, pinBudgetTokens \}\)/);
   assert.match(bootstrap, /window\.api\.contextPinBlock\(\{ workspace: rootPath \|\| "", memorySessionId: session\.memorySessionId \|\| "", index, pinned \}\)/);
   assert.match(bootstrap, /if \(payload\.type === "context_release"\) \{\s+applyContextReleaseUi\(run, payload\);/);
   assert.match(read("src/app/electron/preload.js"), /contextPinBlock: \(payload = \{\}\) => ipcRenderer\.invoke\("context:pinBlock", payload\)/);

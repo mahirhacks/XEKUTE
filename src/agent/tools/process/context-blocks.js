@@ -116,6 +116,7 @@ function describeBlocks(blocks, releasableBefore, redact = (value) => value) {
       state: block.state === "evicted" ? "released" : "in_context",
       releasable: block.state !== "evicted" && block.pinned !== true && block.partial !== true && position < releasableBefore,
       pinned: block.pinned === true,
+      turnStart: block.turnStart === true,
       releasedTokens: tombstone ? Math.max(0, Number(tombstone.released_tokens) || 0) : 0,
       messages: block.messages.length,
       tokens: block.tokenEstimate,
@@ -123,7 +124,8 @@ function describeBlocks(blocks, releasableBefore, redact = (value) => value) {
       summary,
     };
   });
-  return rows.length > MAX_LIST_BLOCKS ? rows.slice(-MAX_LIST_BLOCKS) : rows;
+  // Older pinned rows stay listed past the cap so they can still be unpinned.
+  return rows.length > MAX_LIST_BLOCKS ? [...rows.slice(0, -MAX_LIST_BLOCKS).filter((row) => row.pinned), ...rows.slice(-MAX_LIST_BLOCKS)] : rows;
 }
 
 function sameMessages(left, right) {

@@ -28,7 +28,7 @@ const { createRoundAccounting, waitForRetry } = require("../runtime/round-accoun
 const { completeExchanges, coherentTail } = require("../runtime/tool-protocol.js");
 const { runModelAttempt } = require("../runtime/model-attempt.js");
 const { CONTEXT_START, prepareChatReferenceContext, referenceIds } = require("../runtime/chat-references.js");
-const { approximateTokens, summaryBudget } = require("../../app/services/memory/tier1-context-coordinator.js");
+const { approximateTokens, summaryBudget, PIN_BUDGET_RATIO } = require("../../app/services/memory/tier1-context-coordinator.js");
 const { NON_OPERATOR_ID } = require("../../app/services/memory/message-provenance.js");
 const { neutralizeContextMarkers } = require("../../shared/context-markers.js");
 const { estimateBrowserImageTokens, retainBrowserScreenshotExchanges } = require("../llm/openrouter/browser-images.js");
@@ -647,6 +647,20 @@ async function runAgentTurnWithLease({
   const resolvedTier1SessionId = isMemoryId(suppliedTier1SessionId, "session")
     ? suppliedTier1SessionId
     : tier1SessionId(sessionId, runId);
+  // Context events are followed by the chat's memory save health whenever it
+  // changed, so the renderer can warn while Tier 1 memory cannot be saved.
+  const emitEvent = sendEvent;
+  let lastSaveHealth = "";
+  sendEvent = (event) => {
+    emitEvent(event);
+    if (!["context_usage", "context_checkpoint", "context_release"].includes(event?.type) || typeof tier1Context?.saveHealth !== "function") return;
+    let health = null;
+    try { health = tier1Context.saveHealth(tier1ProjectId, resolvedTier1SessionId); } catch { health = null; }
+    const key = JSON.stringify(health || {});
+    if (!health || key === lastSaveHealth) return;
+    lastSaveHealth = key;
+    emitEvent({ type: "memory_save_health", ...health });
+  };
   let currentWorkflow = suppliedCurrentWorkflow && typeof suppliedCurrentWorkflow === "object"
     ? { ...suppliedCurrentWorkflow }
     : null;
@@ -1003,6 +1017,7 @@ async function runAgentTurnWithLease({
       approximate: true,
       sections,
       blocks: contextBlocksForUsage(),
+      pinBudgetTokens: Math.floor(effectiveContextLimit * PIN_BUDGET_RATIO),
       toolNames: [...allowedNames],
       effectiveLimitTokens: effectiveContextLimit,
       contextWindow: effectiveContextLimit,
@@ -1087,6 +1102,37 @@ async function runAgentTurnWithLease({
       return policy.configured ? (entity) => evaluateNetworkTarget(entity, policy).ok === true : null;
     } catch { return null; }
   };
+  // Pinned turns that fit the pin budget, newest first, are kept through a
+  // checkpoint. Older pins past the budget (the window shrank) are unpinned
+  // and summarized with everything else. The live task is re-added anyway.
+  const pinnedTurnsToKeep = () => {
+    if (typeof tier1Context?.activeBlocks !== "function") return [];
+    let blocks = [];
+    try { blocks = tier1Context.activeBlocks(tier1ProjectId, resolvedTier1SessionId); } catch { return []; }
+    // Only finished turns: anything from the task's first block on is re-added
+    // with the task, in order.
+    const taskStart = blocks.findIndex((block) => block.messages.some(taskInputMatches));
+    const pinned = blocks.filter((block, position) => block.pinned && block.state !== "evicted" && (taskStart < 0 || position < taskStart));
+    const budget = Math.floor(effectiveContextLimit * PIN_BUDGET_RATIO);
+    const kept = [];
+    let used = 0;
+    for (const block of [...pinned].reverse()) {
+      if (used + block.tokenEstimate <= budget) { kept.unshift(block); used += block.tokenEstimate; continue; }
+      try { tier1Context.pinBlock?.(tier1ProjectId, resolvedTier1SessionId, block.index, false); } catch { /* it is summarized either way */ }
+    }
+    // The ledger objects, so the checkpoint input can leave exactly these out.
+    const own = new Set(kept.map((block) => block.index));
+    const byIndex = new Map();
+    let current = null;
+    for (const message of tier1Active) {
+      if (Number.isSafeInteger(message.block_index) && message.role === "user") current = message.block_index;
+      if (current !== null && own.has(current)) {
+        if (!byIndex.has(current)) byIndex.set(current, []);
+        byIndex.get(current).push(message);
+      }
+    }
+    return kept.filter((block) => byIndex.has(block.index)).map((block) => ({ ...block, messages: byIndex.get(block.index) }));
+  };
   const checkpointTier1IfNeeded = async ({ force = false, reason = "iteration", midTask = false } = {}) => {
     if (!useTier1 || tier1CheckpointInFlight) return tier1CheckpointInFlight || { ok: true, checkpointed: false, skipped: true };
     // A stopped run starts no summarization; the next run does it from the start.
@@ -1102,10 +1148,13 @@ async function runAgentTurnWithLease({
     if (!force && !pressure.shouldCheckpoint) return { ok: true, checkpointed: false, pressure };
     tier1CheckpointInFlight = (async () => {
       sendEvent({ type: "context_checkpoint", status: "started", reason, midTask, threshold: pressure.threshold, totalTokens: pressure.totalTokens });
+      const keptPinned = pinnedTurnsToKeep();
+      const keptMessages = new Set(keptPinned.flatMap((block) => block.messages));
       const checkpoint = await tier1Context.checkpoint({
         project_id: tier1ProjectId,
         session_id: resolvedTier1SessionId,
-        active_conversation: tier1Active,
+        // Pinned turns stay word for word, so they are not summarized.
+        active_conversation: tier1Active.filter((message) => !keptMessages.has(message)),
         tool_events: tier1ToolEvents,
         current_workflow: currentWorkflow || null,
         // The checkpoint trusts its objective, so a late tool result is left out of it.
@@ -1113,7 +1162,6 @@ async function runAgentTurnWithLease({
         protected_refs: Array.isArray(workingReferences) ? workingReferences.map((entry) => entry?.record_id || entry?.recordId || entry?.id || entry).filter(Boolean) : [],
         source_block_refs: precedingBlockId ? [precedingBlockId] : [],
         effective_context_limit: effectiveContextLimit,
-        retain_secrets: projectProfile?.dataHandling?.redactSecrets === false,
         // The active block model is the only semantic checkpoint author.  A
         // missing provider callback safely falls back to the deterministic
         // reducer inside the coordinator.
@@ -1140,8 +1188,11 @@ async function runAgentTurnWithLease({
         const openerIdentity = (message) => message.source_message_id || `${message.role}:${message.content}`;
         const stamps = new Map(tier1Active.filter((message) => Number.isSafeInteger(message.block_index)).map((message) => [openerIdentity(message), message.block_index]));
         tier1Active.splice(0, tier1Active.length);
+        tier1Active.push(...keptPinned.flatMap((block) => block.messages.map((message) => ({ ...message }))));
         tier1Active.push(...inputMessages.map((message) => (stamps.has(openerIdentity(message)) ? { ...message, block_index: stamps.get(openerIdentity(message)) } : { ...message })));
-        tier1Active.push(...screenshotExchanges);
+        const kept = new Set(tier1Active.filter((message) => message.tool_call_id).map((message) => message.tool_call_id));
+        tier1Active.push(...screenshotExchanges.filter((message) => !(message.tool_call_id && kept.has(message.tool_call_id))
+          && !(message.tool_calls || []).some((call) => kept.has(call.id))));
         tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1Active);
         tier1ToolEvents.splice(0, tier1ToolEvents.length);
         currentWorkflow = checkpoint.currentWorkflow || null;
@@ -1565,7 +1616,7 @@ async function runAgentTurnWithLease({
       // Steering from the operator is kept as a directive the moment it arrives; a
       // late tool result arrives the same way and is not one.
       if (useTier1 && !NON_OPERATOR_ID.test(delivery.id)) {
-        try { tier1Context.recordDirective?.(tier1ProjectId, resolvedTier1SessionId, { text: scopedContent(message), sourceMessageId: delivery.id, revision: delivery.revision, retainSecrets: projectProfile?.dataHandling?.redactSecrets === false }); }
+        try { tier1Context.recordDirective?.(tier1ProjectId, resolvedTier1SessionId, { text: scopedContent(message), sourceMessageId: delivery.id, revision: delivery.revision }); }
         catch { /* the message stays in the ledger either way */ }
       }
     }

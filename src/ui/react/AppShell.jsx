@@ -1041,6 +1041,7 @@ export default memo(function AppShell() {
     
           <div id="input-bar">
             <div id="chat-history-security-warning" className="chat-history-security-warning" role="status" aria-live="polite" hidden></div>
+            <div id="memory-save-banner" className="memory-save-banner" role="status" aria-live="polite" hidden><span className="memory-save-banner-text"></span><button type="button" className="memory-save-banner-close" title="Dismiss" aria-label="Dismiss memory warning"><span className="codicon codicon-close" aria-hidden="true"></span></button></div>
             <div id="composer-questions" className="composer-questions" hidden aria-live="polite"></div>
             <div id="composer-task-list" className="composer-task-list" hidden aria-live="polite"></div>
             <div id="chat-error-toast" className="chat-error-toast" role="status" aria-live="polite" hidden>

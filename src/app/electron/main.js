@@ -74,6 +74,7 @@ const { createExecutionContext, projectExecutionContext } = require("../../contr
 const { isMemoryId } = require("../../contracts/memory/index.js");
 const { redactStructuredValue, redactToolCallMessages } = require("../../shared/secret-redaction.js");
 const { CHECKPOINT_REQUEST_CONTRACT, CHECKPOINT_SYSTEM_PROMPT, attachModelStats, checkpointContextSize, estimateTokens: estimateCheckpointTokens, promptWasTruncated } = require("../services/memory/tier1-checkpoint-request.js");
+const { refuseUnsavedInput } = require("../services/memory/save-refusal.js");
 
 // Build the model-facing catalog from the canonical tool registry.
 function toolCatalogFromRegistry(registry) {
@@ -3375,9 +3376,9 @@ function tier1SessionIdForRun(rawSessionId, runKey = "") {
   return `session_${digest}`;
 }
 
-// `retainSecrets` mirrors the project setting "Redact secrets" being off. It is
-// passed in because this adapter has no project profile of its own.
-async function runTier1CheckpointModel({ context = {}, model = "", provider = "", reasoningEffort = null, retainSecrets = false, signal = null } = {}) {
+// A summary always redacts secrets, whatever the project's "Redact secrets"
+// setting, which only decides what the live model reads.
+async function runTier1CheckpointModel({ context = {}, model = "", provider = "", reasoningEffort = null, signal = null } = {}) {
   // Checkpoint synthesis is a model boundary, not a trusted local call.
   // Keep Block C exact in the local coordinator while redacting credential
   // material from the provider payload (including nested tool/working-memory
@@ -3388,7 +3389,7 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
     required_contract: "ConversationCheckpointV3",
     previous_checkpoint: context.previous || null,
     deterministic_reduction: context.reduction || {},
-    active_conversation: Array.isArray(context.active) ? redactToolCallMessages(context.active.slice(0, 500), { retainSecrets }) : [],
+    active_conversation: Array.isArray(context.active) ? redactToolCallMessages(context.active.slice(0, 500)) : [],
     current_prompt_context_only: String(context.currentPrompt || "").slice(0, 2_000),
     current_workflow: context.workflow || null,
     constraints: Array.isArray(context.constraints) ? context.constraints.slice(0, 200) : [],
@@ -3422,7 +3423,6 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
 // the coordinator's v2 contract is handed to its own runner.
 function createTier1ModelCallback(payload = {}) {
   return (input = {}, { signal = null } = {}) => {
-    const retainSecrets = readProjectProfile(payload.workspace)?.profile?.dataHandling?.redactSecrets === false;
     const common = {
       model: String(payload.model || ""),
       provider: String(payload.provider || getActiveProvider() || "ollama"),
@@ -3446,7 +3446,7 @@ function createTier1ModelCallback(payload = {}) {
         repair: input.repair === true ? { invalid_output_hash: input.invalid_output_hash, schema_error_paths: input.schema_error_paths || [], required_fields: input.required_fields || [] } : null,
       }
       : input;
-    return runTier1CheckpointModel({ context, ...common, retainSecrets });
+    return runTier1CheckpointModel({ context, ...common });
   };
 }
 
@@ -3854,7 +3854,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       completionBarrier: () => computeOrchestrationHold(subagentCoordinator, coordinationKey),
       inputId: payload.inputId || payload.userMessageId, userMessage: isContinuation ? parentDescriptor?.payload?.userMessage || payload.userMessage : payload.userMessage,
       binding: { ...payload, provider: payload.provider || getActiveProvider() } });
-    if (!supervisedRun.ok) return supervisedRun;
+    if (!supervisedRun.ok) return refuseUnsavedInput(supervisedRun, sendAgentEvent);
     if (supervisedRun.fresh) subagentCoordinator.resetParentForTask?.(coordinationKey);
     durableRunId = supervisedRun.runId;
     tier1SessionId = supervisedRun.sessionId;
@@ -4215,7 +4215,7 @@ ipcMain.handle("agent:submitInput", async (event, payload = {}) => {
   const receipt = await agentSessionRuntime.receive({ workspace, sessionId: memorySessionId,
     binding: { provider: getActiveProvider(), model: payload.model || descriptor?.payload?.model || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" },
     input: { id: payload.messageId, text: payload.text, targetTaskId: payload.targetTaskId || "" } });
-  return receipt;
+  return refuseUnsavedInput(receipt, (data) => { if (!event.sender.isDestroyed()) event.sender.send("agent:event", { ...data, sessionId }); });
 });
 ipcMain.handle("agent:cancelTask", async (event, payload = {}) => {
   const descriptor = parentRunDescriptors.get(sessionRunKey(payload.sessionId));

@@ -41,6 +41,7 @@ function createAgentRunHandlerFixture() {
   const context = {
     crypto,
     path,
+    refuseUnsavedInput: require("../../src/app/services/memory/save-refusal.js").refuseUnsavedInput,
     fs: { existsSync: () => false },
     mainLog: { write() {}, ignored: () => () => {} },
     AbortController,
