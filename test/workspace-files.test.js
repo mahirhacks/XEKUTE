@@ -68,6 +68,24 @@ test("workspace file mutations stay inside the root and preserve edit, copy, mov
   assert.equal(fs.existsSync(path.join(workspace, "src", "moved.txt")), false);
 });
 
+test("workspace file edits reject symlinks that resolve outside the workspace", async (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-workspace-symlink-"));
+  const workspace = path.join(parent, "workspace");
+  const external = path.join(parent, "external");
+  fs.mkdirSync(workspace);
+  fs.mkdirSync(external);
+  fs.writeFileSync(path.join(external, "protected.txt"), "keep this data", "utf8");
+  fs.symlinkSync(external, path.join(workspace, "linked"), process.platform === "win32" ? "junction" : "dir");
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+
+  const workspaceSearch = createWorkspaceSearch({ fs, path });
+  const files = createWorkspaceFiles({ fs, path, workspaceSearch });
+  const result = await files.editWorkspaceFile(workspace, "linked/protected.txt", { code: "overwritten" });
+
+  assert.equal(result.error, "Path escapes workspace");
+  assert.equal(fs.readFileSync(path.join(external, "protected.txt"), "utf8"), "keep this data");
+});
+
 test("workspace UI search returns every literal occurrence with exact locations", (t) => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-workspace-search-"));
   const workspace = path.join(parent, "workspace");

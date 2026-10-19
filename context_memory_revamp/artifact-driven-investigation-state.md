@@ -36,8 +36,8 @@ canonical investigation Markdown.
 ## Layers that remain
 
 - **Tier 1** — encrypted transcript and conversation checkpoint storage.
-- **Tier 3** — bundled knowledge packs (WSTG), local BGE embeddings, native KAG.
-  Project/investigation input to KAG is derived from the artifact tree.
+- **Tier 3** — knowledge-release provenance retained in checkpoint schemas.
+  The former bundled BGE embedding and native KAG runtime do not ship.
 - **Operational sources** — `traffic/*.jsonl`, tool output, runs, and maps stay
   as raw sources. Assessment-root `findings/findings.json` may remain unread.
 

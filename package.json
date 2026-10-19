@@ -1,6 +1,6 @@
 {
   "name": "xekute-app",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
   "main": "src/app/electron/main.js",
@@ -29,7 +29,6 @@
     "release:metadata": "node scripts/release-metadata.js",
     "update:seti-icons": "node scripts/update-vscode-seti-icons.js",
     "verify:native": "node -e \"require('node-pty'); console.log('node-pty prebuild available')\"",
-    "verify:memory-assets": "node scripts/verify-memory-assets.js",
     "audit:runtime": "npm audit --omit=dev --audit-level=high"
   },
   "devDependencies": {
@@ -60,7 +59,6 @@
     ]
   },
   "dependencies": {
-    "@huggingface/transformers": "3.7.2",
     "@vscode/codicons": "0.0.45",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",

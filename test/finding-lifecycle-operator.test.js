@@ -45,7 +45,7 @@ test("workspace has no findings API; verified evidence is E-#### and leftover fi
   assert.equal(typeof workspace.appendFinding, "undefined");
   assert.equal(fs.existsSync(path.join(__dirname, "..", "src", "domain", "assessment", "finding-validation.js")), false);
   seedVerified(artifacts, root);
-  assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "E-0001.md")), false);
+  assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "E-0001.md")), true);
   assert.equal(fs.existsSync(path.join(root, ".xekute", "findings")), false);
   fs.mkdirSync(path.join(root, "findings"), { recursive: true });
   fs.writeFileSync(path.join(root, "findings", "findings.json"), `${JSON.stringify({ findings: [{ id: "LEGACY", title: "Leftover" }] }, null, 2)}\n`);

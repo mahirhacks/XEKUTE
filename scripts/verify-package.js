@@ -66,8 +66,11 @@ function checkAllowlist(files, directory = "") {
 }
 checkAllowlist(header.files);
 assert.throws(() => statFile("src/ui/index.legacy.html"), "The legacy UI shell must not ship");
+assert.throws(() => statFile("node_modules/@huggingface/transformers/package.json"), "The retired embedding runtime must not ship");
+assert.throws(() => statFile("node_modules/onnxruntime-node/package.json"), "The retired ONNX runtime must not ship");
+assert.throws(() => statFile("resources/memory-v3"), "The retired embedding model bundle must not ship");
 
-// Native modules load from app.asar.unpacked, for the packaged platform only.
+// node-pty loads from app.asar.unpacked, for the packaged platform only.
 const resourcesDir = path.dirname(archive);
 const unpacked = path.join(resourcesDir, "app.asar.unpacked", "node_modules");
 const target = `${process.platform}-${process.arch}`;
@@ -76,8 +79,6 @@ for (const binary of ["pty.node", "conpty.node"]) {
   assert.ok(fs.existsSync(path.join(ptyPrebuilds, target, binary)), `node-pty ${target}/${binary} is not unpacked`);
 }
 assert.deepEqual(fs.readdirSync(ptyPrebuilds), [target], "node-pty ships prebuilds for other platforms");
-const ortBinding = path.join(unpacked, "onnxruntime-node", "bin", "napi-v3", process.platform, process.arch, "onnxruntime_binding.node");
-assert.ok(fs.existsSync(ortBinding), `onnxruntime-node binding for ${target} is not unpacked`);
 
 async function checkFuses() {
   const executable = path.join(path.dirname(resourcesDir), process.platform === "win32" ? "XEKUTE.exe" : "XEKUTE");
@@ -89,7 +90,7 @@ async function checkFuses() {
 }
 
 checkFuses().then(() => {
-  console.log(`Package verified: archive links resolve internally, node-forge ${manifest.version} and the compiled UI are bundled, only allowlisted files ship, ${target} native modules are unpacked, and fuses are set.`);
+  console.log(`Package verified: archive links resolve internally, node-forge ${manifest.version} and the compiled UI are bundled, only allowlisted files ship, node-pty ${target} is unpacked, and fuses are set.`);
 }, (error) => {
   console.error(error);
   process.exitCode = 1;

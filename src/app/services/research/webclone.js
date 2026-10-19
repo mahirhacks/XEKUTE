@@ -11,6 +11,39 @@ function safeRelativePath(value, fallback = "asset.txt") {
   return parts.join("/").slice(0, 180) || fallback;
 }
 
+function isPathWithin(pathApi, root, target) {
+  const relative = pathApi.relative(root, target);
+  return !relative || (relative !== ".." && !relative.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(relative));
+}
+
+function resolvesWithin(fs, pathApi, root, target) {
+  const lexicalRoot = pathApi.resolve(root);
+  const lexicalTarget = pathApi.resolve(target);
+  if (!isPathWithin(pathApi, lexicalRoot, lexicalTarget)) return false;
+
+  let realRoot;
+  try { realRoot = fs.realpathSync(lexicalRoot); }
+  catch { return false; }
+
+  const relative = pathApi.relative(lexicalRoot, lexicalTarget);
+  const segments = relative ? relative.split(pathApi.sep).filter(Boolean) : [];
+  let logical = lexicalRoot;
+  let physical = realRoot;
+  for (let index = 0; index < segments.length; index += 1) {
+    const candidate = pathApi.join(logical, segments[index]);
+    try { fs.lstatSync(candidate); }
+    catch (error) {
+      if (error.code !== "ENOENT") return false;
+      return isPathWithin(pathApi, realRoot, pathApi.resolve(physical, ...segments.slice(index)));
+    }
+    try { physical = fs.realpathSync(candidate); }
+    catch { return false; }
+    if (!isPathWithin(pathApi, realRoot, physical)) return false;
+    logical = candidate;
+  }
+  return true;
+}
+
 function inScope(root, target, projectProfileProvider) {
   try {
     const profile = typeof projectProfileProvider === "function" ? projectProfileProvider(root) : null;
@@ -50,7 +83,11 @@ function createWebCloneService({ fs, path: pathApi, webResearch, projectProfileP
 
     const limit = Math.max(1, Math.min(Number(maxAssets) || MAX_ASSETS, MAX_ASSETS));
     const baseFolder = pathApi.join(root, "WebClone");
-    fs.mkdirSync(pathApi.join(baseFolder, "assets"), { recursive: true });
+    fs.mkdirSync(baseFolder, { recursive: true });
+    if (!resolvesWithin(fs, pathApi, root, baseFolder)) return { error: "The WebClone folder must stay inside the assessment." };
+    const assetsFolder = pathApi.join(baseFolder, "assets");
+    if (!resolvesWithin(fs, pathApi, baseFolder, assetsFolder)) return { error: "The WebClone assets folder must stay inside WebClone." };
+    fs.mkdirSync(assetsFolder, { recursive: true });
     const page = await webResearch.fetchRawUrl(targetUrl.toString(), { maxBytes: MAX_FILE_BYTES });
     if (page.error) return page;
     const files = [];
@@ -59,7 +96,9 @@ function createWebCloneService({ fs, path: pathApi, webResearch, projectProfileP
       const full = pathApi.join(baseFolder, safe);
       const relativeCheck = pathApi.relative(baseFolder, full);
       if (relativeCheck.startsWith("..") || pathApi.isAbsolute(relativeCheck)) return;
+      if (!resolvesWithin(fs, pathApi, baseFolder, full)) return;
       fs.mkdirSync(pathApi.dirname(full), { recursive: true });
+      if (!resolvesWithin(fs, pathApi, baseFolder, full)) return;
       const value = String(content || "").slice(0, MAX_FILE_BYTES);
       fs.writeFileSync(full, value, "utf8");
       files.push({ path: `WebClone/${safe}`, bytes: Buffer.byteLength(value), contentType, ...(source ? { source } : {}) });
@@ -79,12 +118,19 @@ function createWebCloneService({ fs, path: pathApi, webResearch, projectProfileP
       } catch { /* Individual assets are best-effort. */ }
     }
     const manifest = { version: 1, target: targetUrl.toString(), finalUrl: page.finalUrl, builtAt: new Date().toISOString(), files };
-    fs.writeFileSync(pathApi.join(baseFolder, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const manifestPath = pathApi.join(baseFolder, "manifest.json");
+    if (!resolvesWithin(fs, pathApi, baseFolder, manifestPath)) return { error: "The WebClone manifest must stay inside WebClone." };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     return { ok: true, ...manifest, folder: baseFolder };
   }
 
   function readManifest(root) {
-    try { return { ok: true, ...JSON.parse(fs.readFileSync(pathApi.join(root, "WebClone", "manifest.json"), "utf8")) }; }
+    try {
+      const baseFolder = pathApi.resolve(root, "WebClone");
+      const file = pathApi.join(baseFolder, "manifest.json");
+      if (!resolvesWithin(fs, pathApi, root, baseFolder) || !resolvesWithin(fs, pathApi, baseFolder, file)) return { ok: true, files: [], target: "", builtAt: "" };
+      return { ok: true, ...JSON.parse(fs.readFileSync(file, "utf8")) };
+    }
     catch { return { ok: true, files: [], target: "", builtAt: "" }; }
   }
 
@@ -96,6 +142,7 @@ function createWebCloneService({ fs, path: pathApi, webResearch, projectProfileP
       const target = pathApi.resolve(cloneRoot, normalized);
       const relation = pathApi.relative(cloneRoot, target);
       if (!relation || relation.startsWith("..") || pathApi.isAbsolute(relation)) return { error: "The WebClone file path is invalid." };
+      if (!resolvesWithin(fs, pathApi, root, cloneRoot) || !resolvesWithin(fs, pathApi, cloneRoot, target)) return { error: "The WebClone file path is invalid." };
       const stat = fs.statSync(target);
       if (!stat.isFile()) return { error: "The selected WebClone entry is not a file." };
       if (stat.size > MAX_FILE_BYTES) return { error: `WebClone file exceeds the ${MAX_FILE_BYTES}-byte preview limit.` };

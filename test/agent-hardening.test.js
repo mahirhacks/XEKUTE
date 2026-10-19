@@ -38,6 +38,26 @@ test("scope engine enforces host boundaries, wildcard rules, exclusions, and DNS
   assert.equal((await ScopeEngine.resolveTargetAddresses("https://example.com", { lookup: async () => [{ address: "127.0.0.1", family: 4 }] })).code, "DNS_PRIVATE_OR_RESERVED");
 });
 
+test("DNS IPv4-mapped IPv6 answers are checked against the embedded IPv4 range", async () => {
+  const resolve = address => ScopeEngine.resolveTargetAddresses("https://example.com", {
+    lookup: async () => [{ address, family: 6 }],
+  });
+
+  assert.equal((await resolve("::ffff:127.0.0.1")).code, "DNS_PRIVATE_OR_RESERVED");
+  assert.equal((await resolve("::ffff:7f00:1")).code, "DNS_PRIVATE_OR_RESERVED");
+  assert.equal((await resolve("::ffff:c0a8:101")).code, "DNS_PRIVATE_OR_RESERVED");
+  assert.equal((await resolve("::ffff:808:808")).ok, true);
+});
+
+test("DNS documentation IPv6 answers are rejected", async () => {
+  const resolve = address => ScopeEngine.resolveTargetAddresses("https://example.com", {
+    lookup: async () => [{ address, family: 6 }],
+  });
+
+  assert.equal((await resolve("2001:db8::1")).code, "DNS_PRIVATE_OR_RESERVED");
+  assert.equal((await resolve("3fff::1")).code, "DNS_PRIVATE_OR_RESERVED");
+});
+
 test("claims and evidence records fail closed", () => {
   const claim = AgentRuntime.validateFinalClaims("The target is secure and a confirmed vulnerability exists.", { evidenceIds: [] });
   assert.equal(claim.ok, false);

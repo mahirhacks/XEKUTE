@@ -37,6 +37,7 @@ jobs:
         shell: bash
         run: |
           node -e "const p=require('./package.json');const tag=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(tag!==p.version){console.error('Tag '+process.env.GITHUB_REF_NAME+' does not match package.json version '+p.version);process.exit(1)}"
+          test -f "docs/release-notes/${GITHUB_REF_NAME}.md"
 
       - run: npm ci
       - name: Verify installer build inputs
@@ -83,5 +84,6 @@ jobs:
             out/make/SHA256SUMS.txt
             out/make/xekute-sbom.cdx.json
           generate_release_notes: true
+          body_path: docs/release-notes/${{ github.ref_name }}.md
         # Deliberately NOT pre-release: electron-updater consumes stable
         # GitHub release metadata and latest.yml.

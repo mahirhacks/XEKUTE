@@ -63,10 +63,135 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
 
   function hash(content) { return crypto.createHash("sha256").update(String(content || ""), "utf8").digest("hex"); }
   function readText(file) { return fs.readFileSync(file, "utf8"); }
+  function safeDirectory(root, directory, { create = false, code = "ARTIFACT_PATH_INVALID" } = {}) {
+    const workspace = path.resolve(root);
+    const resolved = path.resolve(directory);
+    const relative = path.relative(workspace, resolved);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw Object.assign(new Error("Artifact directory escapes the assessment workspace."), { code: "ARTIFACT_PATH_UNSAFE" });
+    }
+    let rootStat;
+    try { rootStat = fs.lstatSync(workspace); } catch (error) { throw Object.assign(error, { code: error.code || code }); }
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      throw Object.assign(new Error("Artifact workspace must be a regular directory."), { code });
+    }
+    let current = workspace;
+    if (!relative) return { path: resolved, exists: true };
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      current = path.join(current, segment);
+      let stat;
+      try { stat = fs.lstatSync(current); }
+      catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        if (!create) return { path: resolved, exists: false };
+        try { fs.mkdirSync(current); }
+        catch (mkdirError) { if (mkdirError.code !== "EEXIST") throw mkdirError; }
+        stat = fs.lstatSync(current);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) {
+          throw Object.assign(new Error(`Artifact directory is not a regular directory: ${path.relative(workspace, current)}.`), { code });
+        }
+        syncDirectory(path.dirname(current));
+        continue;
+      }
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw Object.assign(new Error(`Artifact directory is not a regular directory: ${path.relative(workspace, current)}.`), { code });
+      }
+    }
+    return { path: resolved, exists: true };
+  }
+  function currentFileState(root, relativePath, conflictCode = "ARTIFACT_PATH_INVALID") {
+    const file = target(root, relativePath);
+    const parent = safeDirectory(root, path.dirname(file), { code: conflictCode });
+    if (!parent.exists) return { exists: false, content: null, hash: "", path: file };
+    let stat;
+    try { stat = fs.lstatSync(file); } catch (error) {
+      if (error.code === "ENOENT") return { exists: false, content: null, hash: "", path: file };
+      throw error;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw Object.assign(new Error(`Artifact path is not a regular file: ${relativePath}.`), { code: conflictCode });
+    }
+    const content = readText(file);
+    return { exists: true, content, hash: hash(content), path: file };
+  }
+  function currentFileHash(root, relativePath, conflictCode = "ARTIFACT_PATH_INVALID") {
+    return currentFileState(root, relativePath, conflictCode).hash;
+  }
   function writeNew(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content, { encoding: "utf8", flag: "wx" }); }
   function syncFile(file) { const descriptor = fs.openSync(file, "r+"); try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); } }
-  function syncDirectory(directory) { try { const descriptor = fs.openSync(directory, "r"); try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); } } catch { /* Directory fsync is unavailable on some Windows filesystems. */ } }
-  function writeSynced(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content, "utf8"); syncFile(file); }
+  function syncDirectory(directory) {
+    let descriptor;
+    try { descriptor = fs.openSync(directory, "r"); } catch (error) {
+      if (process.platform === "win32" && ["EISDIR", "EINVAL", "ENOTSUP", "ENOSYS"].includes(error.code)) return false;
+      throw error;
+    }
+    try {
+      try { fs.fsyncSync(descriptor); } catch (error) {
+        if (process.platform === "win32" && ["EPERM", "EISDIR", "EINVAL", "ENOTSUP", "ENOSYS"].includes(error.code)) return false;
+        throw error;
+      }
+      return true;
+    } finally { fs.closeSync(descriptor); }
+  }
+  function transactionDirectory(root) {
+    return target(root, Artifacts.PATHS.transactionDirectory);
+  }
+
+  function transactionJournalPath(root, transactionId) {
+    if (!/^txn-[a-z0-9]+-[a-f0-9]{16}$/i.test(String(transactionId || ""))) {
+      throw Object.assign(new Error("Artifact transaction id is invalid."), { code: "ARTIFACT_TRANSACTION_STATE_INVALID" });
+    }
+    return target(root, `${Artifacts.PATHS.transactionDirectory}/${transactionId}.json`);
+  }
+
+  function transactionTempPath(root, transactionId, index, relativePath) {
+    const directory = transactionDirectory(root);
+    safeDirectory(root, directory, { create: true, code: "ARTIFACT_TRANSACTION_DIRECTORY_INVALID" });
+    const prefix = `${transactionId}-${String(index).padStart(4, "0")}-${path.basename(relativePath)}-`;
+    let tempFile;
+    do {
+      tempFile = target(root, `${Artifacts.PATHS.transactionDirectory}/${prefix}${crypto.randomBytes(8).toString("hex")}.tmp`);
+    } while (fs.existsSync(tempFile));
+    return tempFile;
+  }
+
+  function ensureDirectoryDurable(root, directory) {
+    return safeDirectory(root, directory, { create: true, code: "ARTIFACT_PATH_INVALID" }).path;
+  }
+
+  function atomicReplaceFromTransaction(root, tempFile, destination, content, expected = null) {
+    ensureDirectoryDurable(root, path.dirname(tempFile));
+    ensureDirectoryDurable(root, path.dirname(destination));
+    try {
+      fs.writeFileSync(tempFile, content, { encoding: "utf8", flag: "wx" });
+      syncFile(tempFile);
+      if (expected) {
+        const currentHash = currentFileHash(root, expected.relativePath, expected.conflictCode);
+        if (currentHash === expected.afterHash) return;
+        if (currentHash !== expected.beforeHash) {
+          throw Object.assign(new Error(`Artifact changed during transaction recovery: ${expected.relativePath}.`), { code: expected.conflictCode });
+        }
+      }
+      fs.renameSync(tempFile, destination);
+      syncDirectory(path.dirname(destination));
+    } finally {
+      if (fs.existsSync(tempFile)) fs.rmSync(tempFile, { force: true });
+    }
+  }
+
+  function writeDerivedArtifact(root, relativePath, content) {
+    const current = currentFileState(root, relativePath, "ARTIFACT_INDEX_REBUILD_FAILED");
+    if (current.hash === hash(content)) return;
+    const destination = current.path;
+    const directory = ensureDirectoryDurable(root, path.dirname(destination));
+    const tempFile = path.join(directory, `.${path.basename(destination)}-${crypto.randomBytes(8).toString("hex")}.tmp`);
+    atomicReplaceFromTransaction(root, tempFile, destination, content, {
+      relativePath,
+      beforeHash: current.hash,
+      afterHash: hash(content),
+      conflictCode: "ARTIFACT_INDEX_REBUILD_FAILED",
+    });
+  }
 
   function assertNoSecrets(value, key = "", depth = 0) {
     if (depth > 14) throw Object.assign(new Error("Artifact operation is too deeply nested."), { code: "ARTIFACT_PAYLOAD_TOO_DEEP" });
@@ -77,10 +202,129 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     for (const [childKey, child] of Object.entries(value)) assertNoSecrets(child, childKey, depth + 1);
   }
 
+  function transactionRecord(root, journalFile, expectedId = "") {
+    safeDirectory(root, path.dirname(journalFile), { code: "ARTIFACT_TRANSACTION_DIRECTORY_INVALID" });
+    const stat = fs.lstatSync(journalFile);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw Object.assign(new Error("Artifact transaction journal is not a regular file."), { code: "ARTIFACT_TRANSACTION_INVALID" });
+    const journal = JSON.parse(readText(journalFile));
+    if (journal?.version !== 2 || !/^txn-[a-z0-9]+-[a-f0-9]{16}$/i.test(String(journal.staging_id || ""))
+      || (expectedId && journal.staging_id !== expectedId) || !Array.isArray(journal.files) || !journal.files.length) {
+      throw Object.assign(new Error("Artifact transaction journal has an invalid shape."), { code: "ARTIFACT_TRANSACTION_INVALID" });
+    }
+    const seenPaths = new Set();
+    for (const file of journal.files) {
+      if (!file || typeof file.relative_path !== "string" || !Artifacts.isPersistedArtifactPath(file.relative_path)
+        || typeof file.content !== "string" || typeof file.before_hash !== "string" || !/^(?:[a-f0-9]{64})?$/i.test(file.before_hash)
+        || typeof file.after_hash !== "string" || !/^[a-f0-9]{64}$/i.test(file.after_hash) || hash(file.content) !== file.after_hash
+        || !((file.before_content === null && file.before_hash === "")
+          || (typeof file.before_content === "string" && hash(file.before_content) === file.before_hash))
+        || seenPaths.has(file.relative_path)) {
+        throw Object.assign(new Error("Artifact transaction journal contains invalid file data."), { code: "ARTIFACT_TRANSACTION_INVALID" });
+      }
+      target(root, file.relative_path);
+      assertNoSecrets(file.content);
+      seenPaths.add(file.relative_path);
+    }
+    return journal;
+  }
+
+  function sameJournalFiles(left, right) {
+    const shape = (files) => files.map(({ relative_path, content, before_content, before_hash, after_hash }) => ({ relative_path, content, before_content, before_hash, after_hash }));
+    return JSON.stringify(shape(left)) === JSON.stringify(shape(right));
+  }
+
+  function writeTransactionJournal(root, transactionId, files) {
+    const journalPath = transactionJournalPath(root, transactionId);
+    const journal = {
+      version: 2,
+      staging_id: transactionId,
+      files: files.map(({ relative_path, content, before_content, before_hash, after_hash }) => ({ relative_path, content, before_content, before_hash, after_hash })),
+    };
+    const directory = transactionDirectory(root);
+    safeDirectory(root, directory, { create: true, code: "ARTIFACT_TRANSACTION_DIRECTORY_INVALID" });
+    if (fs.existsSync(journalPath)) {
+      const existing = transactionRecord(root, journalPath, transactionId);
+      if (!sameJournalFiles(existing.files, journal.files)) {
+        throw Object.assign(new Error("Artifact transaction journal does not match the staged transaction."), { code: "ARTIFACT_TRANSACTION_STATE_INVALID" });
+      }
+      return journalPath;
+    }
+    let tempFile;
+    do { tempFile = path.join(directory, `${transactionId}-journal-${crypto.randomBytes(8).toString("hex")}.tmp`); } while (fs.existsSync(tempFile));
+    atomicReplaceFromTransaction(root, tempFile, journalPath, `${JSON.stringify(journal)}\n`);
+    syncDirectory(directory);
+    return journalPath;
+  }
+
+  function applyTransactionFiles(root, journal, conflictCode) {
+    const files = journal.files;
+    for (const file of files) {
+      const currentHash = currentFileHash(root, file.relative_path, conflictCode);
+      if (currentHash !== file.before_hash && currentHash !== file.after_hash) {
+        throw Object.assign(new Error(`Artifact changed during transaction recovery: ${file.relative_path}.`), { code: conflictCode });
+      }
+    }
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const destination = target(root, file.relative_path);
+      const currentHash = currentFileHash(root, file.relative_path, conflictCode);
+      if (currentHash === file.after_hash) continue;
+      if (currentHash !== file.before_hash) {
+        throw Object.assign(new Error(`Artifact changed during transaction recovery: ${file.relative_path}.`), { code: conflictCode });
+      }
+      const tempFile = transactionTempPath(root, journal.staging_id, index, file.relative_path);
+      atomicReplaceFromTransaction(root, tempFile, destination, file.content, {
+        relativePath: file.relative_path,
+        beforeHash: file.before_hash,
+        afterHash: file.after_hash,
+        conflictCode,
+      });
+    }
+  }
+
+  function rollbackTransactionFiles(root, journal) {
+    for (let index = journal.files.length - 1; index >= 0; index -= 1) {
+      const file = journal.files[index];
+      if (file.before_hash === file.after_hash) continue;
+      const current = currentFileState(root, file.relative_path, "ARTIFACT_ROLLBACK_CONFLICT");
+      if (current.hash === file.before_hash) continue;
+      // Preserve a non-transactional edit. Other files that still contain the
+      // transaction's exact output can be restored to make the failed set
+      // internally consistent again.
+      if (current.hash !== file.after_hash) continue;
+      if (file.before_content === null) {
+        fs.rmSync(current.path, { force: true });
+        syncDirectory(path.dirname(current.path));
+        continue;
+      }
+      const tempFile = transactionTempPath(root, journal.staging_id, index, `${file.relative_path}.rollback`);
+      atomicReplaceFromTransaction(root, tempFile, current.path, file.before_content, {
+        relativePath: file.relative_path,
+        beforeHash: file.after_hash,
+        afterHash: file.before_hash,
+        conflictCode: "ARTIFACT_ROLLBACK_CONFLICT",
+      });
+    }
+    overlay.delete(overlayKey(root));
+  }
+
+  function quarantineTransactionJournal(root, journalPath, reason) {
+    const suffix = String(reason || "conflict").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+    const base = `${journalPath}.${suffix}`;
+    let quarantinedPath = base;
+    if (fs.existsSync(quarantinedPath)) quarantinedPath = `${base}-${crypto.randomBytes(4).toString("hex")}`;
+    fs.renameSync(journalPath, quarantinedPath);
+    syncDirectory(path.dirname(journalPath));
+    return path.relative(root, quarantinedPath).replace(/\\/g, "/");
+  }
+
   function recordFiles(root, directoryPath, pattern) {
     const directory = target(root, directoryPath);
-    if (!fs.existsSync(directory)) return [];
-    return fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isFile() && pattern.test(entry.name)).map((entry) => path.join(directory, entry.name)).sort();
+    const safe = safeDirectory(root, directory, { code: "ARTIFACT_PATH_INVALID" });
+    if (!safe.exists) return [];
+    return fs.readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.isSymbolicLink() && pattern.test(entry.name))
+      .map((entry) => path.join(directory, entry.name)).sort();
   }
 
   function aggregateRevision(idsAndHashes) {
@@ -92,39 +336,54 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     let root;
     try { root = rootFor(workspace); } catch (error) { return failure(error.code, error.message); }
     const artifactRoot = path.join(root, Artifacts.PATHS.root);
-    if (!fs.existsSync(artifactRoot) || !fs.statSync(artifactRoot).isDirectory()) {
+    let artifactDirectory;
+    try { artifactDirectory = safeDirectory(root, artifactRoot, { code: "ARTIFACT_PATH_INVALID" }); }
+    catch (error) { return failure(error.code || "ARTIFACT_PATH_INVALID", error.message, { root }); }
+    if (!artifactDirectory.exists) {
       return failure("ARTIFACT_ASSESSMENT_REQUIRED", "Canonical project artifacts are created only for initialized assessment workspaces.");
     }
+    const recovery = recover(root);
+    if (!recovery.ok) return failure(recovery.code, recovery.error, { root, recovery });
     const created = [];
     try {
-      fs.mkdirSync(target(root, Artifacts.PATHS.projectDirectory), { recursive: true });
+      safeDirectory(root, target(root, Artifacts.PATHS.projectDirectory), { create: true, code: "ARTIFACT_PATH_INVALID" });
       for (const document of Artifacts.PROJECT_DOCUMENTS) {
-        const file = target(root, document.path);
-        if (!fs.existsSync(file)) { writeNew(file, Artifacts.projectDocumentTemplate(document.id)); created.push(document.path); }
+        const state = currentFileState(root, document.path);
+        if (!state.exists) { writeNew(state.path, Artifacts.projectDocumentTemplate(document.id)); created.push(document.path); }
       }
       const validation = inspect(workspace);
-      if (validation.ok) rebuildIndexes(workspace);
-      return { ok: validation.ok, root, created, recovery: { ok: true, recovered: [], discarded: [], quarantined: [] }, validation, ...(validation.ok ? {} : { code: validation.code, error: validation.error }) };
+      if (validation.ok) {
+        const rebuilt = rebuildIndexes(workspace);
+        if (!rebuilt.ok) return { ...rebuilt, root, created, recovery, validation };
+      }
+      return { ok: validation.ok, root, created, recovery, validation, ...(validation.ok ? {} : { code: validation.code, error: validation.error }) };
     } catch (error) { return failure(error.code || "ARTIFACT_BOOTSTRAP_FAILED", error.message, { root, created }); }
   }
 
   function inspect(workspace) {
     let root;
     try { root = rootFor(workspace); } catch (error) { return failure(error.code, error.message); }
+    const recovery = recover(root);
+    if (!recovery.ok) return failure(recovery.code, recovery.error, { root, recovery });
     const required = Artifacts.SOURCE_ENTRY_PATHS;
-    const missing = required.filter((relativePath) => !fs.existsSync(target(root, relativePath)));
+    let sourceStates;
+    try { sourceStates = Object.fromEntries(required.map((relativePath) => [relativePath, currentFileState(root, relativePath)])); }
+    catch (error) { return failure(error.code || "ARTIFACT_READ_FAILED", error.message, { root }); }
+    const missing = required.filter((relativePath) => !sourceStates[relativePath].exists);
     if (missing.length) return failure("ARTIFACT_FILES_MISSING", `Missing canonical artifact files: ${missing.join(", ")}.`, { missing });
     try {
-      const texts = Object.fromEntries(required.map((relativePath) => [relativePath, readText(target(root, relativePath))]));
+      const texts = Object.fromEntries(required.map((relativePath) => [relativePath, sourceStates[relativePath].content]));
       const folder = Artifacts.parseProjectFolder(Object.fromEntries(Artifacts.PROJECT_DOCUMENTS.map((document) => [document.id, texts[document.path]])));
       if (!folder.ok) return { ...folder, validation: { path: folder.path || Artifacts.PROJECT_DOCUMENT_BY_ID?.[folder.document]?.path || Artifacts.PATHS.projectEngagement } };
       const runtime = overlayState(root);
+      const hypothesesState = currentFileState(root, Artifacts.PATHS.hypotheses);
+      const checklistState = currentFileState(root, Artifacts.PATHS.checklist);
       const hypothesesText = runtime.hypotheses
         ? Artifacts.renderHypotheses(runtime.hypotheses)
-        : (fs.existsSync(target(root, Artifacts.PATHS.hypotheses)) ? readText(target(root, Artifacts.PATHS.hypotheses)) : Artifacts.hypothesesTemplate());
+        : (hypothesesState.exists ? hypothesesState.content : Artifacts.hypothesesTemplate());
       const checklistText = runtime.checklist
         ? Artifacts.renderChecklist(runtime.checklist, runtime.hypotheses || [])
-        : (fs.existsSync(target(root, Artifacts.PATHS.checklist)) ? readText(target(root, Artifacts.PATHS.checklist)) : Artifacts.checklistTemplate());
+        : (checklistState.exists ? checklistState.content : Artifacts.checklistTemplate());
       const hypotheses = runtime.hypotheses ? { ok: true, value: clone(runtime.hypotheses) } : Artifacts.parseHypotheses(hypothesesText);
       const checklist = runtime.checklist ? { ok: true, value: clone(runtime.checklist) } : Artifacts.parseChecklist(checklistText);
       for (const parsed of [hypotheses, checklist]) if (!parsed.ok) return { ...parsed, validation: { path: parsed === hypotheses ? Artifacts.PATHS.hypotheses : Artifacts.PATHS.checklist } };
@@ -487,9 +746,14 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     for (const document of Artifacts.PROJECT_DOCUMENTS) {
       writes.set(document.path, Artifacts.renderProjectDocument(document.id, state.project.documents[document.id] || []));
     }
+    writes.set(Artifacts.PATHS.projectIndex, Artifacts.renderProjectIndex(state.project.documents));
     writes.set(Artifacts.PATHS.hypotheses, Artifacts.renderHypotheses(state.hypotheses));
     writes.set(Artifacts.PATHS.checklist, Artifacts.renderChecklist(state.checklist, state.hypotheses));
     for (const record of state.evidence) writes.set(`${Artifacts.PATHS.evidenceDirectory}/${record.id}.md`, Artifacts.renderEvidence(record));
+    const evidenceIndexPath = target(root, Artifacts.PATHS.evidenceIndex);
+    if (state.evidence.length || fs.existsSync(evidenceIndexPath)) {
+      writes.set(Artifacts.PATHS.evidenceIndex, Artifacts.renderEvidenceIndex(state.evidence));
+    }
     return writes;
   }
 
@@ -497,7 +761,11 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     const snapshot = inspect(workspace);
     if (!snapshot.ok) return snapshot;
     try {
-      writeSynced(target(snapshot.root, Artifacts.PATHS.projectIndex), Artifacts.renderProjectIndex(snapshot.project.documents));
+      writeDerivedArtifact(snapshot.root, Artifacts.PATHS.projectIndex, Artifacts.renderProjectIndex(snapshot.project.documents));
+      const evidenceIndexPath = target(snapshot.root, Artifacts.PATHS.evidenceIndex);
+      if (snapshot.evidence.length || fs.existsSync(evidenceIndexPath)) {
+        writeDerivedArtifact(snapshot.root, Artifacts.PATHS.evidenceIndex, Artifacts.renderEvidenceIndex(snapshot.evidence));
+      }
       return { ok: true, root: snapshot.root };
     } catch (error) { return failure(error.code || "ARTIFACT_INDEX_REBUILD_FAILED", error.message); }
   }
@@ -528,7 +796,8 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
       for (const content of writeSet.values()) assertNoSecrets(content);
       const files = [];
       for (const [relativePath, content] of writeSet.entries()) {
-        files.push({ relative_path: relativePath, content, before_hash: fs.existsSync(target(root, relativePath)) ? hash(readText(target(root, relativePath))) : "", after_hash: hash(content) });
+        const before = currentFileState(root, relativePath);
+        files.push({ relative_path: relativePath, content, before_content: before.content, before_hash: before.hash, after_hash: hash(content) });
       }
       stagedTransactions.set(id, { root, files, assigned: applied.assigned, state: applied.state, hasOperations });
       return { ok: true, staged: true, staging_id: id, assigned_ids: applied.assigned, changed_paths: files.filter((file) => file.before_hash !== file.after_hash).map((file) => file.relative_path), resulting_hashes: Object.fromEntries(files.map((file) => [file.relative_path, file.after_hash])), validation: { secret_safe: true, mode_owned: true, revisions: snapshot.revisions } };
@@ -541,41 +810,166 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     const lockKey = root.toLowerCase();
     if (locks.has(lockKey)) return failure("ARTIFACT_COMMIT_BUSY", "Another artifact commit is active.", { retryable: true });
     locks.add(lockKey);
+    let journalPath = "";
     try {
       const staged = stagedTransactions.get(stagingId);
       if (!staged || overlayKey(staged.root) !== overlayKey(root)) return failure("ARTIFACT_TRANSACTION_STATE_INVALID", "Cannot commit an unknown artifact transaction.");
-      for (const file of staged.files) {
-        if (!Artifacts.isPersistedArtifactPath(file.relative_path)) continue;
-        const destination = target(root, file.relative_path);
-        const currentHash = fs.existsSync(destination) ? hash(readText(destination)) : "";
+      const persistedFiles = staged.files.filter((file) => Artifacts.isPersistedArtifactPath(file.relative_path));
+      for (const file of persistedFiles) {
+        const currentHash = currentFileHash(root, file.relative_path, "ARTIFACT_COMMIT_CONFLICT");
         if (currentHash !== file.before_hash && currentHash !== file.after_hash) return failure("ARTIFACT_COMMIT_CONFLICT", `Artifact changed after staging: ${file.relative_path}.`, { retryable: false });
       }
-      for (const file of staged.files) {
-        if (!Artifacts.isPersistedArtifactPath(file.relative_path)) continue;
-        const destination = target(root, file.relative_path);
-        if (fs.existsSync(destination) && hash(readText(destination)) === file.after_hash) continue;
-        writeSynced(destination, file.content);
+      if (persistedFiles.length) {
+        journalPath = transactionJournalPath(root, stagingId);
+        journalPath = writeTransactionJournal(root, stagingId, persistedFiles);
+        const journal = { version: 2, staging_id: stagingId, files: persistedFiles };
+        try { applyTransactionFiles(root, journal, "ARTIFACT_COMMIT_CONFLICT"); }
+        catch (error) {
+          if (error.code === "ARTIFACT_COMMIT_CONFLICT") {
+            try { rollbackTransactionFiles(root, journal); }
+            catch (rollbackError) {
+              return failure(rollbackError.code || "ARTIFACT_ROLLBACK_FAILED", rollbackError.message, { retryable: true });
+            }
+          }
+          throw error;
+        }
       }
       if (staged.hasOperations && staged.state) {
         const runtime = overlayState(root);
         runtime.hypotheses = clone(staged.state.hypotheses || []);
         runtime.checklist = clone(staged.state.checklist || []);
         runtime.evidence = clone(staged.state.evidence || []);
-        rebuildIndexes(workspace);
+      }
+      let cleanupWarning = "";
+      if (journalPath) {
+        try {
+          fs.rmSync(journalPath, { force: true });
+          syncDirectory(transactionDirectory(root));
+        } catch (error) {
+          // Every target file is already fsynced. If journal cleanup is not
+          // durable, a later recovery safely reapplies the same after-images.
+          cleanupWarning = error.message;
+        }
       }
       stagedTransactions.delete(stagingId);
-      return { ok: true, committed: true, staging_id: stagingId, assigned_ids: staged.assigned, changed_paths: staged.files.filter((file) => file.before_hash !== file.after_hash).map((file) => file.relative_path) };
-    } catch (error) { return failure(error.code || "ARTIFACT_COMMIT_FAILED", error.message); }
+      return { ok: true, committed: true, staging_id: stagingId, assigned_ids: staged.assigned, changed_paths: staged.files.filter((file) => file.before_hash !== file.after_hash).map((file) => file.relative_path), ...(cleanupWarning ? { warning: `Artifact commit completed; journal cleanup will be retried: ${cleanupWarning}` } : {}) };
+    } catch (error) { return failure(error.code || "ARTIFACT_COMMIT_FAILED", error.message, { retryable: Boolean(journalPath && fs.existsSync(journalPath)) }); }
     finally { locks.delete(lockKey); }
   }
 
   function discard(workspace, stagingId) {
+    let root;
+    try { root = rootFor(workspace); } catch (error) { return failure(error.code, error.message); }
+    try {
+      const directory = safeDirectory(root, transactionDirectory(root), { code: "ARTIFACT_TRANSACTION_DIRECTORY_INVALID" });
+      if (directory.exists) {
+        const journalPath = transactionJournalPath(root, stagingId);
+        let journalStat = null;
+        try { journalStat = fs.lstatSync(journalPath); } catch (error) { if (error.code !== "ENOENT") throw error; }
+        if (journalStat) {
+          if (!journalStat.isFile() || journalStat.isSymbolicLink()) return failure("ARTIFACT_TRANSACTION_INVALID", "Artifact transaction journal is not a regular file.");
+          return failure("ARTIFACT_TRANSACTION_DURABLE", "The artifact transaction has entered durable commit and cannot be discarded; retry commit or recovery.", { retryable: true });
+        }
+      }
+    } catch (error) { return failure(error.code || "ARTIFACT_TRANSACTION_STATE_INVALID", error.message); }
     stagedTransactions.delete(stagingId);
     return { ok: true, discarded: true, staging_id: stagingId };
   }
 
-  function recover(_workspace) {
-    return { ok: true, recovered: [], discarded: [], quarantined: [] };
+  function recover(workspace) {
+    let root;
+    try { root = rootFor(workspace); } catch (error) { return failure(error.code, error.message); }
+    const directory = transactionDirectory(root);
+    let safeTransactionDirectory;
+    try { safeTransactionDirectory = safeDirectory(root, directory, { code: "ARTIFACT_TRANSACTION_DIRECTORY_INVALID" }); }
+    catch (error) { return failure(error.code || "ARTIFACT_TRANSACTION_DIRECTORY_INVALID", error.message, { root }); }
+    if (!safeTransactionDirectory.exists) return { ok: true, root, recovered: [], discarded: [], quarantined: [] };
+    let stat;
+    let entries;
+    try {
+      stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return failure("ARTIFACT_TRANSACTION_DIRECTORY_INVALID", "Artifact transaction path must be a regular directory.", { root });
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      return failure(error.code || "ARTIFACT_TRANSACTION_RECOVERY_FAILED", error.message, { root });
+    }
+
+    const recovered = [];
+    const discarded = [];
+    const quarantined = [];
+    const warnings = [];
+    const journals = entries.filter((entry) => entry.name.toLowerCase().endsWith(".json")).sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of journals) {
+      const journalPath = path.join(directory, entry.name);
+      try {
+        if (!entry.isFile() || entry.isSymbolicLink()) throw Object.assign(new Error("Artifact transaction journal is not a regular file."), { code: "ARTIFACT_TRANSACTION_INVALID" });
+        const transactionId = path.basename(entry.name, path.extname(entry.name));
+        const journal = transactionRecord(root, journalPath, transactionId);
+        applyTransactionFiles(root, journal, "ARTIFACT_RECOVERY_CONFLICT");
+        overlay.delete(overlayKey(root));
+        recovered.push(transactionId);
+        try {
+          fs.rmSync(journalPath, { force: true });
+          syncDirectory(directory);
+        } catch (cleanupError) {
+          warnings.push(`Recovered ${transactionId}; journal cleanup will be retried: ${cleanupError.message}`);
+        }
+      } catch (error) {
+        const invalid = error.code === "ARTIFACT_TRANSACTION_INVALID" || error instanceof SyntaxError;
+        if (invalid || error.code === "ARTIFACT_RECOVERY_CONFLICT") {
+          if (!invalid) {
+            try {
+              const transactionId = path.basename(entry.name, path.extname(entry.name));
+              rollbackTransactionFiles(root, transactionRecord(root, journalPath, transactionId));
+            } catch (rollbackError) {
+              return failure(rollbackError.code || "ARTIFACT_ROLLBACK_FAILED", rollbackError.message, {
+                root,
+                retryable: true,
+                recovered,
+                discarded,
+                quarantined,
+              });
+            }
+          }
+          try {
+            quarantined.push(quarantineTransactionJournal(root, journalPath, invalid ? "invalid" : "conflict"));
+          } catch (quarantineError) {
+            return failure(quarantineError.code || "ARTIFACT_TRANSACTION_QUARANTINE_FAILED", quarantineError.message, {
+              root,
+              recovered,
+              discarded,
+              quarantined,
+            });
+          }
+          const code = invalid ? "ARTIFACT_TRANSACTION_INVALID" : "ARTIFACT_RECOVERY_CONFLICT";
+          const message = invalid ? "Artifact transaction journal was invalid and has been quarantined." : "Artifact transaction conflicts with an external file change and has been quarantined.";
+          return failure(code, message, { root, recovered, discarded, quarantined });
+        }
+        return failure(error.code || "ARTIFACT_TRANSACTION_RECOVERY_FAILED", error.message, {
+          root,
+          retryable: true,
+          recovered,
+          discarded,
+          quarantined,
+        });
+      }
+    }
+
+    try {
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.toLowerCase().endsWith(".tmp")) fs.rmSync(path.join(directory, entry.name), { force: true });
+      }
+      syncDirectory(directory);
+      return { ok: true, root, recovered, discarded, quarantined, ...(warnings.length ? { warnings } : {}) };
+    } catch (error) {
+      return failure(error.code || "ARTIFACT_TRANSACTION_RECOVERY_FAILED", error.message, {
+        root,
+        retryable: true,
+        recovered,
+        discarded,
+        quarantined,
+      });
+    }
   }
 
   function resolveAgentPhase(snapshot, checkpointPhase) {
@@ -592,8 +986,10 @@ function createProjectArtifactService({ fs = nodeFs, path = nodePath, crypto = n
     if (!snapshot.ok) return snapshot;
     const needle = String(query || "").toLowerCase();
     const relevant = (record) => !needle || JSON.stringify(record).toLowerCase().includes(needle.split(/\s+/).filter((word) => word.length > 3)[0] || needle);
-    const indexPath = target(snapshot.root, Artifacts.PATHS.projectIndex);
-    const indexMarkdown = fs.existsSync(indexPath) ? readText(indexPath) : "";
+    let indexState;
+    try { indexState = currentFileState(snapshot.root, Artifacts.PATHS.projectIndex); }
+    catch (error) { return failure(error.code || "ARTIFACT_READ_FAILED", error.message); }
+    const indexMarkdown = indexState.exists ? indexState.content : "";
     const currentPhase = resolveAgentPhase(snapshot, checkpointPhase);
     const payload = { revisions: snapshot.revisions, current_phase: currentPhase };
     if (mode === "agent") {

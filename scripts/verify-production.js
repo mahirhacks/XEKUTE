@@ -64,6 +64,7 @@ const html = read("src/ui/index.html");
 const preload = read("src/app/electron/preload.js");
 const forgeConfig = read("forge.config.js");
 const packageJson = JSON.parse(read("package.json"));
+const packageLock = read("package-lock.json");
 const compositionSource = read("src/infrastructure/di/container.js");
 const ToolRegistry = require(path.join(root, "src/agent/tools/config/tool-registry.js"));
 const ToolPort = require(path.join(root, "src/contracts/tool/tool-port.js"));
@@ -94,18 +95,22 @@ assert.deepEqual(
 );
 assert.equal(packageJson.devDependencies.electron, "43.4.0");
 assert.equal(packageJson.dependencies["@vscode/codicons"], "0.0.45");
+assert.equal(packageJson.dependencies["@huggingface/transformers"], undefined, "retired local embedding runtime must not ship");
+assert.doesNotMatch(packageLock, /@huggingface\/transformers|onnxruntime-(?:node|web)/, "retired embedding dependencies must not remain locked");
+assert.equal(exists("resources/memory-v3/models"), false, "retired local embedding model bundle must not ship");
 assert.equal(packageJson.productName, "XEKUTE");
 assert.match(packageJson.scripts.make, /prepare:update-config/);
 assert.ok(exists("scripts/prepare-update-config.js"));
 // Packaging is an allowlist: development folders stay out of the installer.
 const { isIgnoredPackagePath } = require(path.join(root, "forge.config.js"));
-for (const devOnly of ["/temp_test/x.js", "/graphify-out/graph.json", "/test/x.test.js", "/scripts/browser-dev/host.cjs", "/tmp/x", "/.vs/x", "/.env", "/src/ui/react/App.jsx"]) {
+for (const devOnly of ["/temp_test/x.js", "/graphify-out/graph.json", "/test/x.test.js", "/scripts/browser-dev/host.cjs", "/tmp/x", "/.vs/x", "/.env", "/src/ui/react/App.jsx", "/resources/memory-v3/x"]) {
   assert.equal(isIgnoredPackagePath(devOnly), true, `${devOnly} must not be packaged`);
 }
-for (const runtime of ["/package.json", "/src/app/electron/main.js", "/src/ui/dist/index.html", "/node_modules/node-pty/lib/index.js", "/resources/memory-v3/x"]) {
+for (const runtime of ["/package.json", "/src/app/electron/main.js", "/src/ui/dist/index.html", "/node_modules/node-pty/lib/index.js"]) {
   assert.equal(isIgnoredPackagePath(runtime), false, `${runtime} must be packaged`);
 }
 assert.match(forgeConfig, /node_modules\/node-pty/);
+assert.doesNotMatch(forgeConfig, /onnxruntime-node|resources\/memory-v3/, "retired embedding assets must not be unpacked");
 assert.doesNotMatch(forgeConfig, /maker-squirrel|electron-winstaller|Squirrel\.Windows/);
 const builderConfig = read("electron-builder.config.js");
 assert.match(builderConfig, /oneClick:\s*false/);

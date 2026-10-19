@@ -133,6 +133,34 @@ test("a saved ordinary tool round resumes after its first effect without another
   assert.equal(tools[0].tool_call_id, firstCall.id); assert.equal(new Set(tools.map((message) => message.tool_call_id)).size, 3);
 });
 
+test("a newer steering input discards a saved unstarted execution after restart", async (t) => {
+  const state = await setup(t);
+  await state.main.liveInput.prepareRound({ revision: 1, inputWatermark: 1,
+    result: { ok: true, toolCalls: [{ id: "stale-after-restart", function: { name: "exec_command", arguments: { command: "remove important.txt" } } }] },
+    engineSnapshot: { revision: 1, accounting: { providerAttempts: 1 } },
+  });
+  await state.runtime.receive({ ...state.location, input: { id: "steer-after-restart", text: "Do not remove important.txt" } });
+
+  const restarted = await createAgentSessionRuntime({ store: state.fixture.open().store }).admit({ ...state.location, runId: "main", resume: true });
+  const executed = [];
+  let rounds = 0;
+  const resumed = await run(restarted, async (request) => {
+    rounds += 1;
+    assert.ok(request.messages.some((message) => String(message.content || "").includes("Do not remove important.txt")));
+    return { ok: true, fullText: "I will leave the file in place.", toolCalls: [end] };
+  }, {
+    tools: [{ type: "function", function: { name: "exec_command", description: "Run a command", parameters: { type: "object", properties: { command: { type: "string" } } } } }],
+    executeToolCall: async ({ toolCall }) => { executed.push(toolCall.id); return { ok: true, value: { removed: true } }; },
+  });
+
+  assert.equal(resumed.ok, true, resumed.error);
+  assert.deepEqual(executed, [], "restart must route steering before resuming an unstarted tool plan");
+  assert.equal(rounds, 1);
+  const control = state.fixture.open().supervisor.snapshot(state.location).control;
+  assert.equal(control.tasks[0].appliedRevision, 2);
+  assert.equal(control.tasks[0].pendingExecution, undefined);
+});
+
 
 test("a sub-prompt reaches the main task at the next boundary without a routing model call", async (t) => {
   const state = await setup(t);

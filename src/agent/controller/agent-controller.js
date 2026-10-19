@@ -1150,6 +1150,17 @@ async function runAgentTurnWithLease({
       sendEvent({ type: "context_checkpoint", status: "started", reason, midTask, threshold: pressure.threshold, totalTokens: pressure.totalTokens });
       const keptPinned = pinnedTurnsToKeep();
       const keptMessages = new Set(keptPinned.flatMap((block) => block.messages));
+      const screenshotExchanges = browserImageTokens(tier1Active) > 0
+        ? retainBrowserScreenshotExchanges(tier1Active).map((message) => ({ ...message })) : [];
+      const openerIdentity = (message) => message.source_message_id || `${message.role}:${message.content}`;
+      const stamps = new Map(tier1Active.filter((message) => Number.isSafeInteger(message.block_index)).map((message) => [openerIdentity(message), message.block_index]));
+      const activeAfterCheckpoint = [
+        ...keptPinned.flatMap((block) => block.messages.map((message) => ({ ...message }))),
+        ...inputMessages.map((message) => (stamps.has(openerIdentity(message)) ? { ...message, block_index: stamps.get(openerIdentity(message)) } : { ...message })),
+      ];
+      const retainedToolCalls = new Set(activeAfterCheckpoint.filter((message) => message.tool_call_id).map((message) => message.tool_call_id));
+      activeAfterCheckpoint.push(...screenshotExchanges.filter((message) => !(message.tool_call_id && retainedToolCalls.has(message.tool_call_id))
+        && !(message.tool_calls || []).some((call) => retainedToolCalls.has(call.id))));
       const checkpoint = await tier1Context.checkpoint({
         project_id: tier1ProjectId,
         session_id: resolvedTier1SessionId,
@@ -1168,6 +1179,7 @@ async function runAgentTurnWithLease({
         model: typeof tier1Model === "function" ? tier1Model : null,
         allow_model: typeof tier1Model === "function",
         reason,
+        active_after_checkpoint: activeAfterCheckpoint,
         scope_check: tier1ScopeCheck(),
         // How much of the summarizer's input window the request may use.
         summarizer_input_tokens: contextPlan?.provider === "openrouter" ? 60_000 : 20_000,
@@ -1179,20 +1191,12 @@ async function runAgentTurnWithLease({
         return { ok: true, checkpointed: false, interrupted: true, pressure };
       }
       if (checkpoint?.ok) {
-        const screenshotExchanges = browserImageTokens(tier1Active) > 0
-          ? retainBrowserScreenshotExchanges(tier1Active).map((message) => ({ ...message })) : [];
         // The task's own messages stay instructions after a checkpoint, with or
         // without a live-input supervisor; in the summary they would only be data.
         // The stamps live on the ledger copies, so the live task carries its
         // block index (and any pin on it) across the checkpoint.
-        const openerIdentity = (message) => message.source_message_id || `${message.role}:${message.content}`;
-        const stamps = new Map(tier1Active.filter((message) => Number.isSafeInteger(message.block_index)).map((message) => [openerIdentity(message), message.block_index]));
         tier1Active.splice(0, tier1Active.length);
-        tier1Active.push(...keptPinned.flatMap((block) => block.messages.map((message) => ({ ...message }))));
-        tier1Active.push(...inputMessages.map((message) => (stamps.has(openerIdentity(message)) ? { ...message, block_index: stamps.get(openerIdentity(message)) } : { ...message })));
-        const kept = new Set(tier1Active.filter((message) => message.tool_call_id).map((message) => message.tool_call_id));
-        tier1Active.push(...screenshotExchanges.filter((message) => !(message.tool_call_id && kept.has(message.tool_call_id))
-          && !(message.tool_calls || []).some((call) => kept.has(call.id))));
+        tier1Active.push(...activeAfterCheckpoint.map((message) => ({ ...message })));
         tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1Active);
         tier1ToolEvents.splice(0, tier1ToolEvents.length);
         currentWorkflow = checkpoint.currentWorkflow || null;
@@ -1636,10 +1640,10 @@ async function runAgentTurnWithLease({
         const restoredCounts = Object.fromEntries(Object.keys(current).filter((key) => typeof current[key] === "number").map((key) => [key, Math.max(current[key], Number(savedAccounting[key]) || 0)]));
         accounting = createRoundAccounting({ snapshot: { ...savedAccounting, ...restoredCounts, progressFingerprints: [...new Set([...current.progressFingerprints, ...(savedAccounting.progressFingerprints || [])])].slice(-128) }, limits: roundLimits, onChange: (state) => { runState.accounting = state; } });
       }
-    }
+    } else pendingPlan = null;
     if (pendingPlan?.revision !== revision) pendingPlan = null;
     await checkpointLive(changed ? { previousRevision } : {});
-    return { changed };
+    return { changed, arrival: response.arrival };
   }
 
   // A result that will never arrive becomes a note to the model, so it decides
@@ -1780,18 +1784,43 @@ async function runAgentTurnWithLease({
     const modelRevision = revision;
     const request = await prepareModelRequest();
     if (!request.ok) { finishReferenceImport("failed"); exhaustion = request.code; noteLimitation(request.error); break; }
+    // Context preparation can include an asynchronous summary. Steering that
+    // arrives during it must be applied before the prepared prompt is sent.
+    const afterPreparation = await boundary("after_model_preparation");
+    if (afterPreparation.changed || modelRevision !== revision) {
+      await persistProgress({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, supersededModelRequest: true } });
+      continue;
+    }
+    const modelInputWatermark = Number.isSafeInteger(afterPreparation.arrival) ? afterPreparation.arrival : null;
     const { contextUsage, provider, preflightPromptTokens, fitted } = request;
     sendEvent({ type: "context_usage", usage: contextUsage });
     const activePlan = pendingPlan && pendingPlan.revision === revision ? pendingPlan : null;
     let result = activePlan ? activePlan.result : await invokeModel(request);
+    // A reply can arrive while the model (or its retry backoff) is in flight.
+    // Apply it before accepting the reply's tool declarations, so an old
+    // request cannot execute effects after the operator has changed direction.
+    const afterModel = await boundary("after_model");
+    if (afterModel.changed || modelRevision !== revision
+      || (Number.isSafeInteger(modelInputWatermark) && Number.isSafeInteger(afterModel.arrival) && afterModel.arrival > modelInputWatermark)) {
+      await persistProgress({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, supersededModelRound: true } });
+      continue;
+    }
+    let executionInputWatermark = activePlan?.inputWatermark ?? modelInputWatermark;
     if (activePlan) {
       pendingPlan = null;
       consumedPlanId = activePlan.id;
       consumedPlanIds.add(activePlan.id);
     }
     if (!activePlan && result?.ok && liveInput?.prepareRound) {
-      const prepared = requireLive(await liveInput.prepareRound({ revision, result, engineSnapshot: snapshotEngine() }));
+      const persisted = await liveInput.prepareRound({ revision, result, engineSnapshot: snapshotEngine(), inputWatermark: modelInputWatermark });
+      if (!persisted.ok && persisted.code === "TASK_INPUT_PENDING") {
+        await boundary("before_tool_execution");
+        await persistProgress({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: runState.phase, supersededModelRound: true } });
+        continue;
+      }
+      const prepared = requireLive(persisted);
       result = prepared.plan.result;
+      executionInputWatermark = prepared.plan.inputWatermark ?? executionInputWatermark;
       consumedPlanId = prepared.plan.id;
       consumedPlanIds.add(prepared.plan.id);
     }
@@ -2226,6 +2255,8 @@ async function runAgentTurnWithLease({
                 sessionId,
                 mode: profile.key,
                 durableRunId: runId,
+                taskRevision: revision,
+                inputWatermark: executionInputWatermark,
               }));
             } catch (error) {
               result = { ok: false, error: error.message, errorCode: "TOOL_EXECUTION_FAILED", retryable: false };
@@ -2312,6 +2343,7 @@ async function runAgentTurnWithLease({
             mode: profile.key,
             durableRunId: runId,
             taskRevision: revision,
+            inputWatermark: executionInputWatermark,
           }));
         } catch (error) {
           toolResult = {

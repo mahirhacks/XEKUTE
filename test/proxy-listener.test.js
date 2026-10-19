@@ -109,6 +109,73 @@ test("an occupied listener port returns a startup error and the same service can
   }
 });
 
+test("stopping during listener startup prevents the late startup from reviving the proxy", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-proxy-start-stop-"));
+  const closed = [];
+  const listenCalls = [];
+  const listenWaiters = new Map();
+  let instanceId = 0;
+  function waitForListenCall(index) {
+    if (listenCalls[index]) return Promise.resolve(listenCalls[index]);
+    return new Promise(resolve => listenWaiters.set(index, resolve));
+  }
+  const service = createProxyListenerService({
+    fs,
+    path,
+    assessmentWorkspace: {},
+    proxyAdapter: {
+      create() {
+        const instance = {
+          id: ++instanceId,
+          httpPort: 43000 + instanceId,
+          onError() {},
+          onRequest() {},
+          onRequestData() {},
+          onRequestEnd() {},
+          onResponse() {},
+          onResponseData() {},
+          onResponseEnd() {},
+        };
+        return instance;
+      },
+      listen(_options, instance) {
+        let resolve;
+        const pending = { instance, resolve: result => resolve(result) };
+        listenCalls.push(pending);
+        listenWaiters.get(listenCalls.length - 1)?.(pending);
+        return new Promise(complete => { resolve = complete; });
+      },
+      close(instance) { closed.push(instance?.id); },
+    },
+  });
+
+  try {
+    const starting = service.configure(root, { settings: listenerSettings(), targets: [] });
+    const first = await waitForListenCall(0);
+    await service.stop();
+    assert.ok(closed.includes(first.instance.id), "stop closes the in-flight listener instance");
+
+    const restarting = service.configure(root, { settings: listenerSettings(), targets: [] });
+    const second = await waitForListenCall(1);
+    assert.notEqual(second.instance.id, first.instance.id);
+
+    first.resolve({ error: "" });
+    assert.equal((await starting).code, "PROXY_START_CANCELLED");
+    assert.equal(service.getStatus().running, false, "a stale successful bind cannot replace the restarted listener");
+
+    second.resolve({ error: "" });
+    assert.equal((await restarting).running, true);
+    assert.equal(service.getStatus().port, second.instance.httpPort);
+    assert.equal(closed.includes(second.instance.id), false, "late cleanup for the old start cannot close the new listener");
+
+    await service.stop();
+    assert.equal(service.getStatus().running, false);
+  } finally {
+    await service.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("proxy client error classification covers browser-close TLS failures", () => {
   assert.equal(isConnectionProxyError(null, new Error("SSLV3_ALERT_CERTIFICATE_UNKNOWN"), "HTTPS_CLIENT_ERROR"), true);
   assert.equal(isConnectionProxyError(null, new Error("listener failed"), "PROXY_ERROR"), false);

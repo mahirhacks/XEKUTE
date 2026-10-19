@@ -89,6 +89,30 @@ test("proxied browser uses a dedicated profile and routes Chrome through XEKUTE"
   assert.equal(context.closed, true);
 });
 
+test("proxied browser brackets an IPv6 loopback listener address", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-proxy-browser-ipv6-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "project");
+  const caCertPath = path.join(root, "ca.pem");
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(caCertPath, "test-ca");
+  const context = fakeContext();
+  let launchOptions;
+  const service = createProxyBrowserService({
+    fs,
+    path,
+    crypto,
+    profilesDirectory: path.join(root, "profiles"),
+    findBrowser: () => ({ name: "chrome", executablePath: "chrome.exe" }),
+    chromium: { async launchPersistentContext(_profile, options) { launchOptions = options; return context; } },
+  });
+
+  await service.launch({ workspace, proxy: { running: true, host: "::1", port: 8080 }, caCertPath });
+
+  assert.equal(launchOptions.proxy.server, "http://[::1]:8080");
+  await service.close();
+});
+
 test("switching projects closes the old proxied browser context", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-proxy-browser-switch-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

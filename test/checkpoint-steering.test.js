@@ -61,6 +61,7 @@ test("steering sent during summarization is not summarized and reaches the model
   assert.equal(result.ok, true, JSON.stringify(result.error || ""));
 
   assert.equal(summaries.length, 1);
+  assert.equal(requests.length, 1, "the first model request is rebuilt after steering that arrived during summarization");
   for (const text of steering) assert.equal(summaries[0].includes(text), false, `"${text}" was not part of the summary`);
   assert.ok(events.some((event) => event.type === "context_checkpoint" && event.status === "completed"));
   const delivered = requests.find((messages) => steering.every((text) => messages.some((content) => content.includes(text))));

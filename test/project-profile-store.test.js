@@ -88,6 +88,54 @@ test("project profiles clear authentication selections without a reference id", 
   assert.equal(invalidExecutionModel.profile.engagement.executionModel, "operator_choice");
 });
 
+test("project profiles recover a valid backup when the primary file is missing", (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-project-profile-missing-primary-"));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const projectRoot = path.join(temporary, "project");
+  const appData = path.join(temporary, "app-data");
+  fs.mkdirSync(projectRoot);
+  const store = createProjectProfileStore({ fs, path, crypto, baseDirectory: appData });
+  const first = store.read(projectRoot);
+  assert.equal(store.save(projectRoot, { ...first.profile, project: { ...first.profile.project, name: "Last good profile" } }).ok, true);
+  const second = store.read(projectRoot);
+  assert.equal(store.save(projectRoot, { ...second.profile, project: { ...second.profile.project, name: "Newer profile" } }).ok, true);
+
+  const primary = path.join(appData, fs.readdirSync(appData).find((name) => name.endsWith(".json")));
+  fs.rmSync(primary);
+  const recovered = store.read(projectRoot);
+
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.exists, true);
+  assert.equal(recovered.recoveredFromBackup, true);
+  assert.equal(recovered.profile.project.name, "Last good profile");
+});
+
+test("saving a profile recovered from a corrupt primary preserves its good backup", (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-project-profile-recovered-save-"));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const projectRoot = path.join(temporary, "project");
+  const appData = path.join(temporary, "app-data");
+  fs.mkdirSync(projectRoot);
+  const store = createProjectProfileStore({ fs, path, crypto, baseDirectory: appData });
+  const first = store.read(projectRoot);
+  store.save(projectRoot, { ...first.profile, project: { ...first.profile.project, name: "Last good profile" } });
+  const second = store.read(projectRoot);
+  store.save(projectRoot, { ...second.profile, project: { ...second.profile.project, name: "Damaged primary profile" } });
+
+  const primary = path.join(appData, fs.readdirSync(appData).find((name) => name.endsWith(".json")));
+  fs.writeFileSync(primary, "{damaged", "utf8");
+  const recovered = store.read(projectRoot);
+  assert.equal(recovered.recoveredFromBackup, true);
+  assert.equal(recovered.profile.project.name, "Last good profile");
+  assert.equal(store.save(projectRoot, { ...recovered.profile, project: { ...recovered.profile.project, description: "Saved after recovery" } }).ok, true);
+
+  fs.writeFileSync(primary, "{damaged again", "utf8");
+  const recoveredAgain = store.read(projectRoot);
+  assert.equal(recoveredAgain.ok, true);
+  assert.equal(recoveredAgain.recoveredFromBackup, true);
+  assert.equal(recoveredAgain.profile.project.name, "Last good profile");
+});
+
 test("browser transfer settings default open, clamp the size limit, and reject unknown values", () => {
   const { normalizeProjectProfile } = require("../src/app/storage/project-profile-store.js");
   const path = require("node:path");

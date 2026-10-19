@@ -32,6 +32,12 @@ function proxyConnectHost(host) {
   return ["", "0.0.0.0", "::", "[::]"].includes(value) ? "127.0.0.1" : value;
 }
 
+function proxyUrlHost(host) {
+  const value = String(host || "").trim();
+  const unbracketed = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+  return unbracketed.includes(":") ? `[${unbracketed}]` : unbracketed;
+}
+
 const PROFILE_LOCK_FILES = ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"];
 
 function browserProcessEnv(env = process.env) {
@@ -214,6 +220,7 @@ function createProxyBrowserService({
     }
 
     const proxyHost = proxyConnectHost(proxy.host);
+    const proxyUrlAddress = proxyUrlHost(proxyHost);
     const userDataDir = profileDirectory(root, captureIdentity);
     prepareProfileDirectory(userDataDir, { fs, path });
     const spki = caSpkiHash(caCertPath, fs);
@@ -228,7 +235,7 @@ function createProxyBrowserService({
       viewport: null,
       timeout: 45_000,
       env: browserProcessEnv(),
-      proxy: { server: `http://${proxyHost}:${port}`, bypass: "<-loopback>" },
+      proxy: { server: `http://${proxyUrlAddress}:${port}`, bypass: "<-loopback>" },
       ...(captureToken ? { extraHTTPHeaders: { "X-Xekute-Capture-Context": String(captureToken) } } : {}),
       args: [
         "--start-maximized",
@@ -304,6 +311,7 @@ module.exports = {
   findInstalledProxyBrowser,
   browserCandidates,
   proxyConnectHost,
+  proxyUrlHost,
   browserProcessEnv,
   caSpkiHash,
 };

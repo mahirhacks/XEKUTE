@@ -182,13 +182,18 @@ function targetsFromRecord(resource, record) {
 }
 
 function validateRecordScope(scopePolicy, resource, record) {
-  if (!scopePolicy.targets.length && !scopePolicy.wildcardRules.length) return { ok: true };
+  const hasAllowlist = scopePolicy.targets.length > 0 || scopePolicy.wildcardRules.length > 0;
+  if (!hasAllowlist && !scopePolicy.excludedTargets.length) return { ok: true };
   for (const target of targetsFromRecord(resource, record)) {
     const verdict = ScopeEngine.evaluateTarget(target, {
       targets: scopePolicy.targets,
       wildcardRules: scopePolicy.wildcardRules,
       excludedTargets: scopePolicy.excludedTargets,
     });
+    // Ingestion has historically accepted records while no allowlist is set.
+    // Still honor explicit exclusions in that state; SCOPE_EMPTY is not a
+    // rejection for ingestion unless an allowlist was configured.
+    if (!hasAllowlist && verdict.code === "SCOPE_EMPTY") continue;
     if (!verdict.allowed) return { ok: false, target: String(target), reason: verdict.reason || verdict.code || "out_of_scope" };
   }
   return { ok: true };

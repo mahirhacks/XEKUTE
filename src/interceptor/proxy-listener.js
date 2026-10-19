@@ -68,7 +68,7 @@ function defaultProxyAdapter() {
       instance = new Proxy();
       return instance;
     },
-    listen(options) {
+    listen(options, target = instance) {
       return new Promise((resolve) => {
         let settled = false;
         const finish = error => {
@@ -78,15 +78,15 @@ function defaultProxyAdapter() {
         };
         // http-mitm-proxy reports a bind failure through onError, without
         // invoking its listen callback. Browser admission must still settle.
-        instance.onError((ctx, error) => { if (!ctx) finish(error); });
-        try { instance.listen(options, finish); }
+        target.onError((ctx, error) => { if (!ctx) finish(error); });
+        try { target.listen(options, finish); }
         catch (error) { finish(error); }
       });
     },
-    close() {
-      if (!instance) return;
-      try { instance.close(); } catch { /* ignore */ }
-      instance = null;
+    close(target = instance) {
+      if (!target) return;
+      try { target.close(); } catch { /* ignore */ }
+      if (instance === target) instance = null;
     },
   };
 }
@@ -102,6 +102,8 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
   const records = new Map();
   const captureContexts = new Map();
   const artifactJobs = new Set();
+  const starting = new Set();
+  let lifecycleGeneration = 0;
 
   function emitStatus(extra = {}) {
     status = { ...status, ...extra };
@@ -165,7 +167,11 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     return { ok: true };
   }
 
-  async function stop() {
+  function closeInstance(instance) {
+    try { adapter.close(instance); } catch { /* ignore */ }
+  }
+
+  async function stopCurrent(generation = lifecycleGeneration) {
     for (const entry of pending.values()) {
       clearTimeout(entry.timer);
       try { entry.callback(); } catch { /* ignore */ }
@@ -173,19 +179,32 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     pending.clear();
     records.clear();
     if (proxy) {
-      try { adapter.close(); } catch { /* ignore */ }
+      closeInstance(proxy);
       proxy = null;
+    }
+    for (const entry of starting) {
+      starting.delete(entry);
+      entry.cancel();
+      closeInstance(entry.instance);
     }
     captureContexts.clear();
     await Promise.all([...artifactJobs].map((job) => job.catch(() => {})));
     artifactJobs.clear();
     try { await javascriptArtifacts?.flush?.(root); } catch { /* Artifact persistence failures do not block proxy shutdown. */ }
-    emitStatus({ running: false, host: "", port: null, assessmentPath: "", warning: "", error: "" });
+    if (generation === lifecycleGeneration) {
+      emitStatus({ running: false, host: "", port: null, assessmentPath: "", warning: "", error: "" });
+    }
     return { ok: true, running: false };
   }
 
-  function attachHandlers(instance) {
+  function stop() {
+    const generation = ++lifecycleGeneration;
+    return stopCurrent(generation);
+  }
+
+  function attachHandlers(instance, isCurrent = () => true) {
     instance.onError((ctx, error, kind) => {
+      if (!isCurrent()) return;
       const message = error?.message || String(error);
       if (isConnectionProxyError(ctx, error, kind)) {
         if (ctx?.uuid) emitCapture({ id: ctx.uuid, phase: "error", error: message, transient: true });
@@ -196,6 +215,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     });
 
     instance.onRequest((ctx, callback) => {
+      if (!isCurrent()) { callback(); return; }
       let url;
       try { url = requestUrl(ctx); } catch { callback(); return; }
       const requestHeaders = ctx.clientToProxyRequest.headers || {};
@@ -240,6 +260,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     });
 
     instance.onRequestData((ctx, chunk, callback) => {
+      if (!isCurrent()) { callback(null, chunk); return; }
       const record = records.get(ctx.uuid);
       if (!record) { callback(null, chunk); return; }
       if (record.replacementBody != null) {
@@ -255,6 +276,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     });
 
     instance.onRequestEnd((ctx, callback) => {
+      if (!isCurrent()) { callback(); return; }
       const record = records.get(ctx.uuid);
       if (!record) { callback(); return; }
 
@@ -285,6 +307,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     });
 
     instance.onResponse((ctx, callback) => {
+      if (!isCurrent()) { callback(); return; }
       const record = records.get(ctx.uuid);
       if (record) {
         const headers = ctx.serverToProxyResponse?.headers || {};
@@ -297,6 +320,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     });
 
     instance.onResponseData((ctx, chunk, callback) => {
+      if (!isCurrent()) { callback(null, chunk); return; }
       const record = records.get(ctx.uuid);
       if (record) {
         appendBounded(record.responseChunks, chunk, record, "responseBytes");
@@ -306,6 +330,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
     });
 
     instance.onResponseEnd((ctx, callback) => {
+      if (!isCurrent()) { callback(); return; }
       const record = records.get(ctx.uuid);
       if (!record) { callback(); return; }
 
@@ -366,7 +391,11 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
   }
 
   async function start(assessmentRoot, nextSettings) {
-    await stop();
+    const generation = ++lifecycleGeneration;
+    await stopCurrent(generation);
+    if (generation !== lifecycleGeneration) {
+      return { error: "Proxy listener startup was cancelled", code: "PROXY_START_CANCELLED" };
+    }
     root = assessmentRoot;
     settings = nextSettings;
     const listener = settings.listener || {};
@@ -385,33 +414,53 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
       try { assessmentWorkspace?.ensureTrafficLog?.(root); } catch { /* First capture recreates traffic/ if this fails. */ }
     }
     const instance = adapter.create();
-    attachHandlers(instance);
+    let cancelStartup;
+    const startup = {
+      instance,
+      cancel: null,
+      cancelled: new Promise((resolve) => { cancelStartup = resolve; }),
+    };
+    startup.cancel = cancelStartup;
+    starting.add(startup);
+    attachHandlers(instance, () => generation === lifecycleGeneration);
 
-    return new Promise((resolve) => {
-      // Do not impose a fixed socket lifetime. Production applications use
-      // streaming responses, WebSockets, and slow endpoints that legitimately
-      // stay open beyond 30 seconds. Individual intercepted requests retain
-      // their separate 60-second auto-forward deadline above.
-      adapter.listen({ host, port, sslCaDir, keepAlive: true, timeout: 0 }).then(({ error }) => {
-        if (error) {
-          try { adapter.close(); } catch { /* ignore */ }
-          emitStatus({ running: false, error });
-          resolve({ error, code: "PROXY_START_FAILED" });
-          return;
-        }
-        proxy = instance;
-        const actualPort = instance.httpPort;
-        const caCertPath = path.join(sslCaDir, "certs", "ca.pem");
-        if (sslCaDir !== legacyCaDir && fs.existsSync(caCertPath) && fs.existsSync(legacyCaDir)) {
-          try { fs.rmSync(legacyCaDir, { recursive: true, force: true }); } catch { /* Keep the verified legacy copy for manual recovery. */ }
-        }
-        const targetCount = scopeTargets().length;
-        const onlyInScope = Boolean(settings.interception?.onlyInScope);
-        const warning = onlyInScope && targetCount === 0 ? "Only in-scope capture is enabled, but In-Scope has no targets" : "";
-        emitStatus({ running: true, host, port: actualPort, assessmentPath: root, caDirectory: sslCaDir, caCertPath, targetCount, onlyInScope, warning, error: "" });
-        resolve({ ok: true, running: true, host, port: actualPort, assessmentPath: root, caDirectory: sslCaDir, caCertPath, targetCount, onlyInScope, warning });
-      });
+    // Do not impose a fixed socket lifetime. Production applications use
+    // streaming responses, WebSockets, and slow endpoints that legitimately
+    // stay open beyond 30 seconds. Individual intercepted requests retain
+    // their separate 60-second auto-forward deadline above.
+    const listening = Promise.resolve()
+      .then(() => adapter.listen({ host, port, sslCaDir, keepAlive: true, timeout: 0 }, instance))
+      .then(result => result || { error: "Proxy listener returned no startup result" }, error => ({ error: error?.message || String(error) }));
+    const lateCleanup = listening.then(() => {
+      if (generation !== lifecycleGeneration) closeInstance(instance);
     });
+    const outcome = await Promise.race([listening, startup.cancelled.then(() => ({ cancelled: true }))]);
+    if (outcome?.cancelled || generation !== lifecycleGeneration) {
+      starting.delete(startup);
+      closeInstance(instance);
+      lateCleanup.catch(() => {});
+      return { error: "Proxy listener startup was cancelled", code: "PROXY_START_CANCELLED" };
+    }
+
+    starting.delete(startup);
+    if (outcome.error) {
+      closeInstance(instance);
+      emitStatus({ running: false, error: outcome.error });
+      return { error: outcome.error, code: "PROXY_START_FAILED" };
+    }
+
+    proxy = instance;
+    const actualPort = instance.httpPort;
+    const caCertPath = path.join(sslCaDir, "certs", "ca.pem");
+    if (sslCaDir !== legacyCaDir && fs.existsSync(caCertPath) && fs.existsSync(legacyCaDir)) {
+      try { fs.rmSync(legacyCaDir, { recursive: true, force: true }); } catch { /* Keep the verified legacy copy for manual recovery. */ }
+    }
+    const targetCount = scopeTargets().length;
+    const onlyInScope = Boolean(settings.interception?.onlyInScope);
+    const warning = onlyInScope && targetCount === 0 ? "Only in-scope capture is enabled, but In-Scope has no targets" : "";
+    emitStatus({ running: true, host, port: actualPort, assessmentPath: root, caDirectory: sslCaDir, caCertPath, targetCount, onlyInScope, warning, error: "" });
+    lateCleanup.catch(() => {});
+    return { ok: true, running: true, host, port: actualPort, assessmentPath: root, caDirectory: sslCaDir, caCertPath, targetCount, onlyInScope, warning };
   }
 
   async function configure(assessmentPath, overrides = {}) {

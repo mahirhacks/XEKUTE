@@ -42,6 +42,64 @@ test("Arial arriving during a model round reaches the next normal round as a use
   assert.equal(events.some((event) => event.type === "input_applied" && event.messageId === "arial"), true);
   assert.equal(result.appendedMessages.filter((message) => message.role === "tool").every((message) => message.content), true);
 });
+test("steering received during a provider retry suppresses stale tool effects", async (t) => {
+  const { runtime, location, admitted, run } = await setup(t);
+  const entered = deferred(); const finish = deferred(); const executed = [];
+  let rounds = 0;
+  const operation = run(admitted, async (request) => {
+    rounds += 1;
+    if (rounds === 1) return { ok: false, code: "MODEL_ROUND_FAILED", error: "ECONNRESET" };
+    if (rounds === 2) {
+      entered.resolve();
+      await finish.promise;
+      return { ok: true, toolCalls: [{ id: "stale-delete", type: "function", function: { name: "exec_command", arguments: '{"command":"delete important.txt"}' } }] };
+    }
+    assert.ok(request.messages.some((message) => String(message.content || "").includes("Do not run the deletion command")));
+    return { ok: true, fullText: "I will leave the file in place.", toolCalls: [end("finish")] };
+  }, {
+    tools: [{ type: "function", function: { name: "exec_command", description: "Run a command", parameters: { type: "object", properties: { command: { type: "string" } } } } }],
+    executeToolCall: async ({ toolCall }) => { executed.push(toolCall.id); return { ok: true, value: { deleted: true } }; },
+    retryDelayMs: 1,
+  });
+  await entered.promise;
+  const receipt = await runtime.receive({ ...location, input: { id: "cancel-delete", text: "Do not run the deletion command" } });
+  assert.equal(receipt.durable, true);
+  finish.resolve();
+  const result = await operation;
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(executed, [], "the pre-steering model declaration never reaches a tool executor");
+  assert.equal(rounds, 3);
+});
+test("an arrival racing execution-plan persistence supersedes the live model round", async (t) => {
+  const { runtime, location, admitted, run } = await setup(t);
+  const executed = [];
+  let rounds = 0;
+  let injected = false;
+  const liveInput = {
+    ...admitted.liveInput,
+    async prepareRound(args) {
+      if (!injected) {
+        injected = true;
+        const receipt = await runtime.receive({ ...location, input: { id: "cancel-before-effect", text: "Do not run the stale command" } });
+        assert.equal(receipt.durable, true);
+      }
+      return admitted.liveInput.prepareRound(args);
+    },
+  };
+  const result = await run(admitted, async (request) => {
+    rounds += 1;
+    if (rounds === 1) return { ok: true, toolCalls: [{ id: "stale-live", type: "function", function: { name: "exec_command", arguments: '{"command":"remove important.txt"}' } }] };
+    assert.ok(request.messages.some((message) => String(message.content || "").includes("Do not run the stale command")));
+    return { ok: true, fullText: "I will not run that command.", toolCalls: [end("finish-live")] };
+  }, {
+    liveInput,
+    tools: [{ type: "function", function: { name: "exec_command", description: "Run a command", parameters: { type: "object", properties: { command: { type: "string" } } } } }],
+    executeToolCall: async ({ toolCall }) => { executed.push(toolCall.id); return { ok: true, value: { removed: true } }; },
+  });
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(executed, [], "the result is fenced inside prepareRound before its executor starts");
+  assert.equal(rounds, 2);
+});
 test("encrypted receipt failure leaves the input unapplied and does not acknowledge it", async (t) => {
   const { fixture, runtime, location } = await setup(t);
   fixture.mode.available = false;

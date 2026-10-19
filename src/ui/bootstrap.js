@@ -940,6 +940,10 @@ installChatInputEditorAdapter();
 let appSettingsSection = "general";
 let projectProfileData = null;
 let projectProfileExists = false;
+let projectProfileWorkspace = "";
+let projectProfileLoadGeneration = 0;
+let projectProfileWorkspaceGenerations = new Map();
+let projectProfileWriteGenerations = new Map();
 let authoritySettingsData = null;
 let customGuidanceEntries = [];
 let selectedGuidancePath = "";
@@ -3837,8 +3841,14 @@ function renderGuidanceSettings() {
   if (guidanceDraft && !guidanceDraft.isNew) renderGuidanceDetail();
 }
 
+let guidanceEntriesRequestGeneration = 0;
+let guidanceContextRequestGeneration = 0;
+
 async function refreshCustomSkillCatalog() {
-  const catalog = await window.api.guidanceEntries?.({ workspace: rootPath || "", scope: "all" });
+  const requestedWorkspace = rootPath || "";
+  const requestGeneration = ++guidanceEntriesRequestGeneration;
+  const catalog = await window.api.guidanceEntries?.({ workspace: requestedWorkspace, scope: "all" });
+  if (rootPath !== requestedWorkspace || requestGeneration !== guidanceEntriesRequestGeneration) return false;
   if (!Array.isArray(catalog?.entries)) return false;
   customGuidanceEntries = catalog.entries;
   syncCustomSkillSlashCommands();
@@ -3848,21 +3858,27 @@ async function refreshCustomSkillCatalog() {
 
 async function loadGuidanceContext() {
   if (!window.api.guidanceContext) {
+    guidanceContextRequestGeneration += 1;
     guidanceContext = "";
     return guidanceContext;
   }
   const requestedWorkspace = rootPath || "__global__";
+  const workspace = rootPath || "";
   if (guidanceContextPromise && guidanceContextRequestPath === requestedWorkspace) return guidanceContextPromise;
+  const requestGeneration = ++guidanceContextRequestGeneration;
   guidanceContext = "";
   guidanceContextRequestPath = requestedWorkspace;
-  guidanceContextPromise = window.api.guidanceContext({ workspace: rootPath || "" })
+  guidanceContextPromise = window.api.guidanceContext({ workspace })
     .then((result) => {
-      if ((rootPath || "__global__") === requestedWorkspace) guidanceContext = result?.context || "";
+      if (requestGeneration === guidanceContextRequestGeneration && (rootPath || "__global__") === requestedWorkspace) guidanceContext = result?.context || "";
       return guidanceContext;
     })
-    .catch(() => { guidanceContext = ""; return guidanceContext; })
+    .catch(() => {
+      if (requestGeneration === guidanceContextRequestGeneration && (rootPath || "__global__") === requestedWorkspace) guidanceContext = "";
+      return guidanceContext;
+    })
     .finally(() => {
-      if (guidanceContextRequestPath === requestedWorkspace) {
+      if (requestGeneration === guidanceContextRequestGeneration && guidanceContextRequestPath === requestedWorkspace) {
         guidanceContextPromise = null;
         guidanceContextRequestPath = "";
       }
@@ -3871,6 +3887,8 @@ async function loadGuidanceContext() {
 }
 
 async function loadGuidanceSettings({ preserveSelection = false } = {}) {
+  const requestedWorkspace = rootPath || "";
+  const requestGeneration = ++guidanceEntriesRequestGeneration;
   const previousSelection = selectedGuidancePath;
   const previousScope = selectedGuidanceScope;
   if (!preserveSelection) guidanceDraft = null;
@@ -3882,7 +3900,8 @@ async function loadGuidanceSettings({ preserveSelection = false } = {}) {
     renderGuidanceSettings();
     return;
   }
-  const result = await window.api.guidanceEntries({ workspace: rootPath || "", scope: "all" });
+  const result = await window.api.guidanceEntries({ workspace: requestedWorkspace, scope: "all" });
+  if (rootPath !== requestedWorkspace || requestGeneration !== guidanceEntriesRequestGeneration) return;
   customGuidanceEntries = Array.isArray(result?.entries) ? result.entries : [];
   syncCustomSkillSlashCommands();
   if (preserveSelection && previousSelection && customGuidanceEntries.some((entry) => guidanceEntryKey(entry) === `${previousScope}:${previousSelection}`)) {
@@ -3896,11 +3915,18 @@ async function loadGuidanceSettings({ preserveSelection = false } = {}) {
   await loadGuidanceContext();
 }
 
+let authoritySettingsLoadGeneration = 0;
+let authoritySettingsWriteGeneration = 0;
 async function loadAuthoritySettings() {
+  const loadGeneration = ++authoritySettingsLoadGeneration;
+  const stateGeneration = ++authoritySettingsWriteGeneration;
+  const requestedWorkspace = rootPath;
+  const requestedAssessment = assessmentPath;
   let stored = {};
   try { stored = JSON.parse(localStorage.getItem(AUTHORITY_SETTINGS_KEY) || "{}"); } catch { stored = {}; }
   if (assessmentPath && !assessmentSettingsVirtual) {
     const settings = assessmentSettingsCache || (await refreshAssessmentSettingsCache())?.settings;
+    if (loadGeneration !== authoritySettingsLoadGeneration || stateGeneration !== authoritySettingsWriteGeneration || rootPath !== requestedWorkspace || assessmentPath !== requestedAssessment) return authoritySettingsData;
     if (settings?.authority) stored = settings.authority;
   }
   authoritySettingsData = normalizeAuthoritySettings(stored);
@@ -3929,13 +3955,18 @@ function syncAuthorityLabel() {
 }
 
 async function persistAuthoritySettings() {
+  const stateGeneration = ++authoritySettingsWriteGeneration;
+  const requestedWorkspace = rootPath;
+  const requestedAssessment = assessmentPath;
   try {
     authoritySettingsData = normalizeAuthoritySettings(authoritySettingsData);
+    const requestedAuthority = { ...authoritySettingsData, permissions: { ...authoritySettingsData.permissions } };
     localStorage.setItem(AUTHORITY_SETTINGS_KEY, JSON.stringify(authoritySettingsData));
     if (assessmentSettingsCache && assessmentPath && !assessmentSettingsVirtual) {
-      const nextSettings = { ...assessmentSettingsCache, authority: authoritySettingsData };
+      const nextSettings = { ...assessmentSettingsCache, authority: requestedAuthority };
       assessmentSettingsCache = nextSettings;
-      const result = await window.api.assessmentWriteSettings?.({ path: assessmentPath, settings: nextSettings });
+      const result = await window.api.assessmentWriteSettings?.({ path: requestedAssessment, settings: nextSettings });
+      if (stateGeneration !== authoritySettingsWriteGeneration || rootPath !== requestedWorkspace || assessmentPath !== requestedAssessment) return result;
       if (result?.error) {
         addErrorMessage(result.error);
       } else if (result?.settings) {
@@ -3947,9 +3978,12 @@ async function persistAuthoritySettings() {
         syncOpenSettingsTabContent(result.settings);
       }
     }
+    if (stateGeneration !== authoritySettingsWriteGeneration || rootPath !== requestedWorkspace || assessmentPath !== requestedAssessment) return;
     syncAuthorityLabel();
   } catch (error) {
-    addErrorMessage(error?.message || "Failed to save authority settings");
+    if (stateGeneration === authoritySettingsWriteGeneration && rootPath === requestedWorkspace && assessmentPath === requestedAssessment) {
+      addErrorMessage(error?.message || "Failed to save authority settings");
+    }
   }
 }
 
@@ -4062,6 +4096,8 @@ function collectProjectSettings() {
 let projectAutosaveTimer = null;
 let projectAutosaveRevision = 0;
 let projectAutosaveRunning = false;
+let projectAutosavePending = new Map();
+let projectAutosaveLatestRevisionByWorkspace = new Map();
 
 function queueProjectProfileAutosave(delay = 650) {
   clearTimeout(projectAutosaveTimer);
@@ -4069,22 +4105,54 @@ function queueProjectProfileAutosave(delay = 650) {
 }
 
 function scheduleProjectProfileAutosave({ immediate = false } = {}) {
-  if (!rootPath || !projectProfileData || !projectSettingsForm) return;
+  if (!rootPath || projectProfileWorkspace !== rootPath || !projectProfileData || !projectSettingsForm) return;
   projectAutosaveRevision += 1;
+  const pending = {
+    workspace: rootPath,
+    revision: projectAutosaveRevision,
+    profileGeneration: projectProfileWorkspaceGenerations.get(rootPath) ?? projectProfileLoadGeneration,
+    writeGeneration: projectProfileWriteGenerations.get(rootPath) || 0,
+    profile: collectProjectSettings(),
+    accounts: collectEngagementAccountSnapshots(),
+  };
+  projectAutosavePending.set(rootPath, pending);
+  projectAutosaveLatestRevisionByWorkspace.set(rootPath, pending.revision);
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Saving automatically…";
   queueProjectProfileAutosave(immediate ? 0 : 650);
 }
 
+function isCurrentProjectProfileAutosave({ workspace, revision, profileGeneration, writeGeneration }) {
+  return projectAutosaveLatestRevisionByWorkspace.get(workspace) === revision
+    && projectProfileWorkspaceGenerations.get(workspace) === profileGeneration
+    && (projectProfileWriteGenerations.get(workspace) || 0) === writeGeneration;
+}
+
 async function flushProjectProfileAutosave() {
   projectAutosaveTimer = null;
-  if (projectAutosaveRunning || !rootPath || !projectProfileData) return;
+  if (projectAutosaveRunning || !projectAutosavePending.size) return;
+  const pending = projectAutosavePending.values().next().value;
+  if (projectAutosavePending.get(pending.workspace) === pending) projectAutosavePending.delete(pending.workspace);
   projectAutosaveRunning = true;
-  const revision = projectAutosaveRevision;
   try {
-    await saveProjectProfile({ autoSave: true, revision });
+    await saveProjectProfile({
+      autoSave: true,
+      revision: pending.revision,
+      profileGeneration: pending.profileGeneration,
+      writeGeneration: pending.writeGeneration,
+      workspace: pending.workspace,
+      profile: pending.profile,
+      accounts: pending.accounts,
+    });
+  } catch (error) {
+    if (isCurrentProjectProfileAutosave(pending)
+      && rootPath === pending.workspace
+      && projectProfileWorkspace === pending.workspace
+      && commandSettingsStatus) {
+      commandSettingsStatus.textContent = error?.message || "Could not save project settings";
+    }
   } finally {
     projectAutosaveRunning = false;
-    if (revision !== projectAutosaveRevision) queueProjectProfileAutosave(0);
+    if (projectAutosavePending.size) queueProjectProfileAutosave(0);
   }
 }
 
@@ -4132,10 +4200,16 @@ function setProjectSettingsTarget(targetId, { scroll = false } = {}) {
 }
 
 async function loadProjectProfile() {
-  clearTimeout(projectAutosaveTimer);
-  projectAutosaveTimer = null;
-  projectAutosaveRevision = 0;
-  const hasProject = Boolean(rootPath);
+  const loadGeneration = ++projectProfileLoadGeneration;
+  if (!projectAutosavePending?.size) {
+    clearTimeout(projectAutosaveTimer);
+    projectAutosaveTimer = null;
+  }
+  projectAutosaveRevision += 1;
+  const workspace = rootPath;
+  if (workspace) projectProfileWorkspaceGenerations.set(workspace, loadGeneration);
+  projectProfileWorkspace = "";
+  const hasProject = Boolean(workspace);
   if (projectSettingsUnavailable) projectSettingsUnavailable.hidden = hasProject;
   if (projectSettingsShell) projectSettingsShell.hidden = !hasProject;
   if (!hasProject) {
@@ -4145,7 +4219,8 @@ async function loadProjectProfile() {
     return null;
   }
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Loading project settingsâ€¦";
-  const result = await window.api.projectProfileGet?.({ path: rootPath });
+  const result = await window.api.projectProfileGet?.({ path: workspace });
+  if (rootPath !== workspace || loadGeneration !== projectProfileLoadGeneration) return null;
   if (result?.error || !result?.profile) {
     projectProfileData = null;
     projectProfileExists = false;
@@ -4154,6 +4229,7 @@ async function loadProjectProfile() {
   }
   projectProfileData = result.profile;
   projectProfileExists = Boolean(result.exists);
+  projectProfileWorkspace = workspace;
   populateProjectSettings(projectProfileData);
   const activeTarget = projectSettingsNavButtons.find((button) => button.classList.contains("active"))?.dataset.projectSettingsTarget;
   setProjectSettingsTarget(activeTarget);
@@ -4163,32 +4239,55 @@ async function loadProjectProfile() {
       : "New profile â€” project folder remains untouched";
   }
   await loadIdentitySettings();
+  if (rootPath !== workspace || loadGeneration !== projectProfileLoadGeneration) return null;
   return result;
 }
 
-async function saveProjectProfile({ autoSave = false, revision = projectAutosaveRevision } = {}) {
-  if (!rootPath || !projectSettingsForm) {
-    if (commandSettingsStatus) commandSettingsStatus.textContent = "Open a project first";
+async function saveProjectProfile({ autoSave = false, revision = projectAutosaveRevision, profileGeneration = projectProfileLoadGeneration, writeGeneration: requestedWriteGeneration = null, workspace: requestedWorkspace = rootPath, profile: requestedProfile = null, accounts = null } = {}) {
+  const workspace = requestedWorkspace;
+  if (!workspace || !projectSettingsForm) {
+    if (rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Open a project first";
     return;
   }
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Saving authentication accounts…";
-  const accountsResult = await saveEngagementAccounts();
-  if (!accountsResult.ok) {
-    if (commandSettingsStatus) commandSettingsStatus.textContent = accountsResult.error || "Authentication accounts could not be saved";
+  if (!autoSave && (projectProfileWorkspace !== workspace || profileGeneration !== projectProfileLoadGeneration)) {
+    if (rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Project settings are still loading";
     return;
   }
-  const currentAuthentication = projectProfileData?.engagement?.authenticationSelection || { kind: "none", id: "" };
-  if (currentAuthentication.kind === "none" && accountsResult.credentialIds[0]) {
-    setProjectFieldValue(projectProfileData, "engagement.authenticationSelection", { kind: "credential", id: accountsResult.credentialIds[0] });
-  }
-  const profile = collectProjectSettings();
+  const profile = requestedProfile || collectProjectSettings();
   if (!profile.project?.name?.trim()) {
-    if (commandSettingsStatus) commandSettingsStatus.textContent = "Project name is required";
-    projectSettingsForm.querySelector('[data-project-field="project.name"]')?.focus();
+    if (rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Project name is required";
+    if (rootPath === workspace) projectSettingsForm.querySelector('[data-project-field="project.name"]')?.focus();
     return;
   }
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Saving project settingsâ€¦";
-  const result = await window.api.projectProfileSave?.({ path: rootPath, profile });
+  let writeGeneration = requestedWriteGeneration;
+  if (autoSave) {
+    const snapshot = { workspace, revision, profileGeneration, writeGeneration };
+    if (!isCurrentProjectProfileAutosave(snapshot)) return;
+  } else {
+    writeGeneration = (projectProfileWriteGenerations.get(workspace) || 0) + 1;
+    projectProfileWriteGenerations.set(workspace, writeGeneration);
+  }
+  const currentWorkspaceProfileGeneration = projectProfileWorkspaceGenerations.get(workspace);
+  const isCurrentWrite = () => autoSave
+    ? isCurrentProjectProfileAutosave({ workspace, revision, profileGeneration, writeGeneration })
+    : (projectProfileWriteGenerations.get(workspace) || 0) === writeGeneration
+      && (currentWorkspaceProfileGeneration === undefined
+        ? projectProfileWorkspaceGenerations.get(workspace) === undefined
+        : projectProfileWorkspaceGenerations.get(workspace) === profileGeneration);
+  if (rootPath === workspace && projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Saving authentication accounts…";
+  const accountsResult = await saveEngagementAccounts({ workspace, accounts, isCurrent: isCurrentWrite });
+  if (!accountsResult.ok) {
+    if (isCurrentWrite() && rootPath === workspace && projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = accountsResult.error || "Authentication accounts could not be saved";
+    return;
+  }
+  if (!isCurrentWrite()) return;
+  const currentAuthentication = profile?.engagement?.authenticationSelection || { kind: "none", id: "" };
+  if (currentAuthentication.kind === "none" && accountsResult.credentialIds[0]) {
+    setProjectFieldValue(profile, "engagement.authenticationSelection", { kind: "credential", id: accountsResult.credentialIds[0] });
+  }
+  if (rootPath === workspace && projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Saving project settingsâ€¦";
+  const result = await window.api.projectProfileSave?.({ path: workspace, profile });
+  if (!isCurrentWrite() || rootPath !== workspace || projectProfileWorkspace !== workspace || profileGeneration !== projectProfileLoadGeneration) return result;
   if (result?.error || !result?.profile) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = result?.error || "Could not save project settings";
     return;
@@ -4199,7 +4298,12 @@ async function saveProjectProfile({ autoSave = false, revision = projectAutosave
   if (commandSettingsStatus && (!autoSave || revision === projectAutosaveRevision)) {
     commandSettingsStatus.textContent = autoSave ? "All changes saved" : "Saved outside the project folder";
   }
-  if (!autoSave) await loadIdentitySettings();
+  if (!autoSave) {
+    if (!isCurrentWrite()) return result;
+    await loadIdentitySettings();
+    if (!isCurrentWrite() || rootPath !== workspace || projectProfileWorkspace !== workspace || profileGeneration !== projectProfileLoadGeneration) return result;
+  }
+  if (!isCurrentWrite() || rootPath !== workspace || projectProfileWorkspace !== workspace || profileGeneration !== projectProfileLoadGeneration) return result;
   await configureProxyListener();
 }
 
@@ -5105,7 +5209,10 @@ function renderIdentitySettings(snapshot = identitySettingsSnapshot) {
   return { identityListError, credentialListError, secureStorageUnavailable, missingSelectionReset };
 }
 
+let identitySettingsLoadGeneration = 0;
+
 async function loadIdentitySettings() {
+  const loadGeneration = ++identitySettingsLoadGeneration;
   const workspace = identityWorkspacePath();
   if (!workspace || !window.api.identitiesGet) {
     renderIdentitySettings({ identities: [], runtime: { available: false } });
@@ -5114,6 +5221,7 @@ async function loadIdentitySettings() {
   setIdentitySettingsStatus("Loading…");
   try {
     const result = await window.api.identitiesGet({ workspace });
+    if (identityWorkspacePath() !== workspace || loadGeneration !== identitySettingsLoadGeneration) return;
     const rendered = renderIdentitySettings(result);
     if (result?.ok === false || result?.error) {
       setIdentitySettingsStatus(result.error?.message || result.error || "Identity settings unavailable", "error");
@@ -5133,6 +5241,7 @@ async function loadIdentitySettings() {
     }
     setIdentitySettingsStatus("Ready");
   } catch (error) {
+    if (identityWorkspacePath() !== workspace || loadGeneration !== identitySettingsLoadGeneration) return;
     renderIdentitySettings({ identities: [], credentials: [], runtime: { available: false } });
     setIdentitySettingsStatus(error?.message || "Identity settings unavailable", "error");
   }
@@ -5184,40 +5293,62 @@ async function createCredentialFromSettings() {
   }
 }
 
-async function saveEngagementAccounts() {
-  if (!engagementAccountList) return { ok: true, credentialIds: [] };
-  const workspace = identityWorkspacePath();
-  if (!workspace || !window.api.credentialSave) return { ok: false, error: "Encrypted account storage is unavailable." };
-  const rows = [...engagementAccountList.querySelectorAll(".engagement-account-row")];
-  const credentialIds = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-    const credentialId = String(row.dataset.credentialId || "").trim();
+function collectEngagementAccountSnapshots() {
+  if (!engagementAccountList) return [];
+  return [...engagementAccountList.querySelectorAll(".engagement-account-row")].map((row, index) => {
     const usernameInput = row.querySelector('[data-account-field="username"]');
     const passwordInput = row.querySelector('[data-account-field="password"]');
     const roleInput = row.querySelector('[data-account-field="role"]');
     const cookieInput = row.querySelector('[data-account-field="cookie"]');
-    const username = String(usernameInput?.value || "").trim();
-    const password = String(passwordInput?.value || "");
-    const role = String(roleInput?.value || "").trim();
-    const cookie = String(cookieInput?.value || "");
-    if (!credentialId && !username && !password && !role && !cookie) continue;
-    if (!username || (!credentialId && !password)) {
-      usernameInput?.focus();
-      return { ok: false, error: `Test Account ${index + 1} requires a username and password.` };
+    return {
+      row,
+      index,
+      credentialId: String(row.dataset.credentialId || "").trim(),
+      usernameInput,
+      passwordInput,
+      roleInput,
+      cookieInput,
+      username: String(usernameInput?.value || "").trim(),
+      password: String(passwordInput?.value || ""),
+      role: String(roleInput?.value || "").trim(),
+      cookie: String(cookieInput?.value || ""),
+    };
+  });
+}
+
+async function saveEngagementAccounts({ workspace = identityWorkspacePath(), accounts = null, isCurrent = null } = {}) {
+  if (!engagementAccountList) return { ok: true, credentialIds: [] };
+  if (!workspace || !window.api.credentialSave) return { ok: false, error: "Encrypted account storage is unavailable." };
+  if (isCurrent && !isCurrent()) return { ok: true, credentialIds: [], stale: true };
+  const accountSnapshots = accounts || collectEngagementAccountSnapshots();
+  for (const account of accountSnapshots) {
+    if (isCurrent && !isCurrent()) return { ok: true, credentialIds: [], stale: true };
+    if (!account.credentialId && !account.username && !account.password && !account.role && !account.cookie) continue;
+    if (!account.username || (!account.credentialId && !account.password)) {
+      if (identityWorkspacePath() === workspace) account.usernameInput?.focus();
+      return { ok: false, error: `Test Account ${account.index + 1} requires a username and password.` };
     }
+  }
+  const credentialIds = [];
+  for (const account of accountSnapshots) {
+    if (isCurrent && !isCurrent()) return { ok: true, credentialIds, stale: true };
+    const { row, index, credentialId, passwordInput, cookieInput, username, password, role, cookie } = account;
+    if (!credentialId && !username && !password && !role && !cookie) continue;
     const result = await window.api.credentialSave({
       workspace,
       credential: { credentialId, label: `Test Account ${index + 1}`, username, password, role, cookie },
     });
-    if (passwordInput?.value === password) passwordInput.value = "";
-    if (cookieInput?.value === cookie) cookieInput.value = "";
+    if (isCurrent && !isCurrent()) return { ok: true, credentialIds, stale: true };
+    if (identityWorkspacePath() === workspace) {
+      if (passwordInput?.value === password) passwordInput.value = "";
+      if (cookieInput?.value === cookie) cookieInput.value = "";
+    }
     if (result?.ok === false || result?.error) {
       return { ok: false, error: result.error?.message || result.error || `Test Account ${index + 1} could not be saved.` };
     }
     const savedId = String(result?.value?.credential?.credentialId || credentialId);
     if (savedId) {
-      row.dataset.credentialId = savedId;
+      if (identityWorkspacePath() === workspace) row.dataset.credentialId = savedId;
       credentialIds.push(savedId);
     }
   }
@@ -5340,9 +5471,13 @@ function renderWebCloneFiles() {
   webcloneFileList.querySelectorAll("[data-webclone-file]").forEach((button) => button.addEventListener("click", () => openWebCloneFile(button.dataset.webcloneFile)));
 }
 
+let webcloneFileRequestGeneration = 0;
 async function openWebCloneFile(relativePath) {
   if (!relativePath || !assessmentPath) return;
-  const file = await window.api.webCloneReadFile?.({ path: assessmentPath, relativePath });
+  const requestedAssessment = assessmentPath;
+  const requestGeneration = ++webcloneFileRequestGeneration;
+  const file = await window.api.webCloneReadFile?.({ path: requestedAssessment, relativePath });
+  if (assessmentPath !== requestedAssessment || requestGeneration !== webcloneFileRequestGeneration) return;
   if (!file || file?.error) return addErrorMessage(file?.error || "WebClone file reader is unavailable.");
   webcloneSelectedFile = relativePath;
   if (webcloneFileTitle) webcloneFileTitle.textContent = relativePath.replace(/^WebClone\//, "");
@@ -5352,9 +5487,13 @@ async function openWebCloneFile(relativePath) {
   if (webclonePreviewAction) webclonePreviewAction.disabled = !String(relativePath).endsWith("index.html");
 }
 
+let webcloneManifestRequestGeneration = 0;
 async function loadWebCloneManifest() {
   if (!assessmentPath) return;
-  const result = await window.api.webCloneManifest?.({ path: assessmentPath });
+  const requestedAssessment = assessmentPath;
+  const requestGeneration = ++webcloneManifestRequestGeneration;
+  const result = await window.api.webCloneManifest?.({ path: requestedAssessment });
+  if (assessmentPath !== requestedAssessment || requestGeneration !== webcloneManifestRequestGeneration) return;
   webcloneManifest = result?.ok === false ? null : result;
   const files = webcloneManifest?.files || [];
   if (webcloneEmpty) webcloneEmpty.hidden = files.length > 0;
@@ -6061,6 +6200,7 @@ async function refreshAssessmentState() {
     message: "Project folder active. Engagement, scope, ROE, and context are managed in XEKUTE Settings.",
   });
   await refreshAssessmentSettingsCache();
+  if (sequence !== assessmentRefreshSequence) return;
   await configureProxyListener();
 }
 
@@ -6124,8 +6264,11 @@ function resetProjectWorkspaceState() {
   showResourceWorkspace();
 }
 
+let projectActivationGeneration = 0;
+
 async function activateProjectWorkspace(folder) {
   if (!folder) return false;
+  const activationGeneration = ++projectActivationGeneration;
 
   // Verify the folder before replacing the current Target state. This keeps a
   // canceled/invalid selection from blanking the active assessment.
@@ -6133,9 +6276,11 @@ async function activateProjectWorkspace(folder) {
   try {
     entries = await window.api.readdir(folder);
   } catch (error) {
+    if (activationGeneration !== projectActivationGeneration) return false;
     setAssessmentUiState("error", { title: "Project Open Failed", message: error?.message || "Could not read the selected folder." });
     return false;
   }
+  if (activationGeneration !== projectActivationGeneration) return false;
   if (!entries || entries.error) {
     setAssessmentUiState("error", { title: "Project Open Failed", message: entries?.error || "Could not read the selected folder." });
     return false;
@@ -6146,14 +6291,17 @@ async function activateProjectWorkspace(folder) {
   try {
     loaded = await loadWorkspace(folder);
   } catch (error) {
+    if (activationGeneration !== projectActivationGeneration) return false;
     setAssessmentUiState("error", { title: "Project Open Failed", message: error?.message || "The selected folder could not be loaded." });
     return false;
   }
+  if (activationGeneration !== projectActivationGeneration) return false;
   if (!loaded) {
     setAssessmentUiState("error", { title: "Project Open Failed", message: "The selected folder could not be loaded." });
     return false;
   }
   await refreshAssessmentState();
+  if (activationGeneration !== projectActivationGeneration) return false;
   refreshSecurityHistoryIfVisible();
   if (resourceViewerTitle) resourceViewerTitle.textContent = projectName(folder);
   return true;
@@ -10536,14 +10684,20 @@ async function loadWorkspace(folder) {
   await TerminalManager.openWithProject(folder);
   if (!appController.isCurrent(workspaceOperation.epoch)) return false;
   await window.api.watchWorkspace?.(folder);
+  if (!appController.isCurrent(workspaceOperation.epoch)) return false;
   await restoreChatSessionsForCurrentWorkspace();
+  if (!appController.isCurrent(workspaceOperation.epoch)) return false;
   await loadGuidanceSettings({ preserveSelection: true });
+  if (!appController.isCurrent(workspaceOperation.epoch)) return false;
   updateContextUsage();
   setAssessmentUiState("project", {
     title: projectName(folder),
     message: "Project folder active. Configure engagement, scope, ROE, and context in XEKUTE Settings.",
   });
-  if (currentWorkspaceMode === "settings") await loadProjectProfile();
+  if (currentWorkspaceMode === "settings") {
+    await loadProjectProfile();
+    if (!appController.isCurrent(workspaceOperation.epoch)) return false;
+  }
   return true;
 }
 
@@ -12771,9 +12925,14 @@ workspaceContextMenu?.addEventListener("click", async (event) => {
   await runWorkspaceContextAction(button.dataset.workspaceContextAction);
 });
 
+const treeRenderGenerations = new WeakMap();
+
 async function renderTree(dirPath, container, depth) {
-  container.innerHTML = "";
+  const renderGeneration = (treeRenderGenerations.get(container) || 0) + 1;
+  treeRenderGenerations.set(container, renderGeneration);
+  container.replaceChildren();
   const entries = await window.api.readdir(dirPath);
+  if (treeRenderGenerations.get(container) !== renderGeneration) return;
 
   if (entries.error) {
     const errorRow = document.createElement("div");
@@ -13374,14 +13533,20 @@ function syncInterceptorToggleUi(settings = assessmentSettingsCache) {
   }
 }
 
+let assessmentSettingsRefreshGeneration = 0;
+
 async function refreshAssessmentSettingsCache() {
+  const refreshGeneration = ++assessmentSettingsRefreshGeneration;
   if (!assessmentPath) {
     assessmentSettingsCache = null;
     assessmentSettingsVirtual = false;
     syncInterceptorToggleUi(null);
     return null;
   }
-  const result = await window.api.assessmentSettings({ path: assessmentPath });
+  const requestedAssessment = assessmentPath;
+  const requestedWorkspace = rootPath;
+  const result = await window.api.assessmentSettings({ path: requestedAssessment });
+  if (assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace || refreshGeneration !== assessmentSettingsRefreshGeneration) return null;
   if (result?.error) {
     assessmentSettingsCache = null;
     assessmentSettingsVirtual = false;
@@ -13397,7 +13562,10 @@ async function refreshAssessmentSettingsCache() {
 
 async function saveAssessmentSettings(settings) {
   if (!assessmentPath) return { error: "No project open" };
-  const result = await window.api.assessmentWriteSettings({ path: assessmentPath, settings });
+  const requestedAssessment = assessmentPath;
+  const requestedWorkspace = rootPath;
+  const result = await window.api.assessmentWriteSettings({ path: requestedAssessment, settings });
+  if (assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return result;
   if (result?.error) return result;
   assessmentSettingsCache = result.settings;
   assessmentSettingsVirtual = false;
@@ -13416,7 +13584,10 @@ async function toggleInterceptorCapture() {
     setSecurityStatus("Create or open a project first", "error");
     return;
   }
+  const requestedAssessment = assessmentPath;
+  const requestedWorkspace = rootPath;
   const current = assessmentSettingsCache || (await refreshAssessmentSettingsCache())?.settings;
+  if (assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return;
   if (!current) {
     setSecurityStatus("Could not read project runtime settings", "error");
     return;
@@ -13431,12 +13602,15 @@ async function toggleInterceptorCapture() {
     nextSettings.listener.enabled = true;
   }
   const result = await saveAssessmentSettings(nextSettings);
+  if (assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return;
   if (result?.error) {
     setSecurityStatus(result.error, "error");
     return;
   }
   setSecurityStatus(turningOn ? "Request interception enabled" : "Request interception disabled — traffic passes through");
 }
+
+let proxyConfigurationGeneration = 0;
 
 function syncProxyListenerUi(nextState = {}) {
   proxyListenerState = { ...proxyListenerState, ...nextState };
@@ -13457,14 +13631,19 @@ function syncProxyListenerUi(nextState = {}) {
 }
 
 async function configureProxyListener() {
+  const requestGeneration = ++proxyConfigurationGeneration;
+  const requestedAssessment = assessmentPath;
+  const requestedWorkspace = rootPath;
   try {
     const result = await window.api.proxyConfigure({
-      assessmentPath,
+      assessmentPath: requestedAssessment,
     });
+    if (requestGeneration !== proxyConfigurationGeneration || assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return result;
     syncProxyListenerUi(result || {});
     return result;
   } catch (error) {
     const result = { error: error?.message || "Proxy listener configuration failed", running: false };
+    if (requestGeneration !== proxyConfigurationGeneration || assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return result;
     syncProxyListenerUi(result);
     return result;
   }
@@ -15191,12 +15370,17 @@ void (async () => {
 
 // ── Tools & system prompt ─────────────────────────────────────────────────────
 
+let dirMapRequestGeneration = 0;
+
 async function refreshDirMap() {
-  if (!rootPath) {
+  const requestGeneration = ++dirMapRequestGeneration;
+  const requestedWorkspace = rootPath;
+  if (!requestedWorkspace) {
     dirMapCache = "";
     return;
   }
-  const result = await window.api.dirMap(rootPath);
+  const result = await window.api.dirMap(requestedWorkspace);
+  if (rootPath !== requestedWorkspace || requestGeneration !== dirMapRequestGeneration) return;
   dirMapCache = result.map || "";
 }
 

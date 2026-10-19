@@ -35,6 +35,15 @@ test("canonicalize treats circular references as a stable sentinel", () => {
   assert.equal(JSON.parse(canonicalJson(cycle)).self, "[CIRCULAR]");
 });
 
+test("canonicalize preserves repeated shared values instead of treating them as cycles", () => {
+  const shared = { value: 1 };
+  const aliased = { first: shared, second: shared };
+  const copied = { first: { value: 1 }, second: { value: 1 } };
+
+  assert.equal(canonicalJson(aliased), '{"first":{"value":1},"second":{"value":1}}');
+  assert.equal(canonicalKeyHash(aliased), canonicalKeyHash(copied));
+});
+
 test("canonicalize still rejects non-JSON values", () => {
   assert.throws(() => canonicalize(() => {}), /JSON-compatible/);
   assert.throws(() => canonicalize(undefined), /JSON-compatible/);
