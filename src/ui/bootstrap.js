@@ -260,6 +260,7 @@ const contextUsagePopover = $("context-usage-popover");
 const contextUsageHeadingValue = $("context-usage-heading-value");
 const inputBar         = $("input-bar");
 const chatHistorySecurityWarning = $("chat-history-security-warning");
+const memorySaveBanner = $("memory-save-banner");
 const composerEl       = inputBar?.querySelector(".composer") || null;
 const composerQuestionsEl = $("composer-questions");
 const composerTaskListEl = $("composer-task-list");
@@ -2802,7 +2803,9 @@ function appendStoppedPlainText(turn, segments = []) {
     else turn.appendChild(reply);
   }
   if (replyEndsWithStopped(reply)) return;
-  const raw = String(reply.dataset.rawMd || "").trim();
+  // A later re-render of the reply can fold an earlier label onto its last
+  // line ("... detail Stopped"); take it off so the label appears once, alone.
+  const raw = String(reply.dataset.rawMd || "").trim().replace(/\s+Stopped$/, "");
   const next = raw ? `${raw}\n\nStopped` : "Stopped";
   reply.dataset.rawMd = next;
   const segment = segments.find((item) => item?.el === reply);
@@ -3273,6 +3276,7 @@ function applyActiveChatSession(session) {
   }
   activeChatSessionId = session.id;
   browserWorkspace?.chatChanged();
+  renderMemorySaveBanner();
   session.history = MessageIdentity?.ensureMessageIdentity
     ? MessageIdentity.ensureMessageIdentity(session.history, session.id)
     : (Array.isArray(session.history) ? session.history : []);
@@ -8859,6 +8863,18 @@ async function forkChatSession(sourceId = activeChatSessionId) {
   fork.contextFilesCache = cloneSessionValue(source.contextFilesCache || []);
   fork.currentWorkflow = cloneSessionValue(source.currentWorkflow);
   fork.lastContextUsage = cloneSessionValue(source.lastContextUsage);
+  // A fork taken during a run ends at the last finished turn, like its memory
+  // copy, which never includes the turn in progress.
+  const runningPrompt = isChatSessionRunning(source.id) && Number.isInteger(source.memoryBlockHistoryStart) && source.memoryBlockHistoryStart >= 0
+    ? source.memoryBlockHistoryStart : -1;
+  if (runningPrompt >= 0) {
+    const prompt = String(source.history?.[runningPrompt]?.content || "");
+    fork.history = fork.history.slice(0, runningPrompt);
+    const runs = normalizeUiTranscript(fork.transcript).runs;
+    const running = runs.findLastIndex((run) => (run.timeline || []).some((item) => item.type === "user" && item.message && prompt.startsWith(item.message)));
+    fork.transcript = { ...normalizeUiTranscript(fork.transcript), runs: running >= 0 ? runs.slice(0, running) : runs };
+    fork.messagesHtml = "";
+  }
   fork.kind = "chat";
   fork.memoryProjectId = source.memoryProjectId || "";
   fork.memorySessionId = "";
@@ -9604,6 +9620,7 @@ function getContextBreakdown() {
     tools: [],
     messages: [],
     blocks: storedIsTier1 ? (storedUsage.blocks || []) : [],
+    pinBudgetTokens: storedIsTier1 ? storedUsage.pinBudgetTokens || null : null,
     authoritative: storedIsTier1,
   };
 }
@@ -9835,6 +9852,7 @@ function normalizeContextUsageSnapshot(value) {
     cost: Number.isFinite(Number(value.cost)) ? Math.max(0, Number(value.cost)) : null,
     sections,
     blocks: globalThis.XekuteContextBlocksView?.normalizeContextBlocks(value.blocks) || [],
+    pinBudgetTokens: Number.isFinite(Number(value.pinBudgetTokens)) && Number(value.pinBudgetTokens) > 0 ? Math.floor(Number(value.pinBudgetTokens)) : null,
     toolNames: (Array.isArray(value.toolNames) ? value.toolNames : []).slice(0, 64).map((name) => String(name).slice(0, 100)),
     route: value.route && typeof value.route === "object" ? {
       kind: String(value.route.kind || "conversation").slice(0, 40),
@@ -9993,7 +10011,7 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
       });
     contextUsageBreakdown.innerHTML = rows.join("");
   }
-  renderContextBlocksPanel(breakdown.blocks);
+  renderContextBlocksPanel(breakdown.blocks, breakdown.pinBudgetTokens);
   setContextCheckpointUi(contextCheckpointing);
   if (contextUsageMenu && !contextUsageMenu.hidden) {
     requestAnimationFrame(positionContextPopover);
@@ -10082,12 +10100,12 @@ async function pinContextBlock(index, pinned) {
 }
 
 // The block count stays in the first menu; the list lives in its own panel.
-function renderContextBlocksPanel(blocks) {
+function renderContextBlocksPanel(blocks, pinBudgetTokens = null) {
   const view = globalThis.XekuteContextBlocksView;
   const list = view?.normalizeContextBlocks?.(blocks) || [];
-  if (contextBlocksValue) contextBlocksValue.textContent = String(list.length);
+  if (contextBlocksValue) contextBlocksValue.textContent = String((view?.visibleContextBlocks?.(list) || list).length);
   if (!contextBlocksList) return;
-  contextBlocksList.innerHTML = view?.renderContextBlocksHtml(list, { escapeHtml, formatTokenCount })
+  contextBlocksList.innerHTML = view?.renderContextBlocksHtml(list, { escapeHtml, formatTokenCount, pinBudgetTokens })
     || `<div class="context-blocks-heading"><span>Conversation blocks</span></div><div class="context-blocks-empty">No turns in this conversation yet.</div>`;
 }
 
@@ -10098,6 +10116,31 @@ contextBlocksList?.addEventListener("click", (event) => {
   event.stopPropagation();
   const index = Number(button.getAttribute("data-block-pin"));
   if (Number.isSafeInteger(index)) void pinContextBlock(index, button.getAttribute("aria-pressed") !== "true");
+});
+
+// While this chat's memory cannot be saved, a banner above the composer says
+// so until the next save succeeds. Closing it hides it for this failure only.
+const MEMORY_SAVE_REASONS = {
+  secure_storage: "the system's secure storage is unavailable",
+  disk_full: "the disk is full",
+  no_access: "the memory folder cannot be written to",
+  write_failed: "the memory folder cannot be written to",
+};
+function renderMemorySaveBanner() {
+  if (!memorySaveBanner) return;
+  const session = activeChatSession();
+  const health = session?.memorySaveHealth || null;
+  const show = Boolean(health) && session.memorySaveDismissed !== health.reason;
+  memorySaveBanner.hidden = !show;
+  if (!show) return;
+  const reason = MEMORY_SAVE_REASONS[health.reason] || MEMORY_SAVE_REASONS.write_failed;
+  memorySaveBanner.querySelector(".memory-save-banner-text").textContent = `Memory can't be saved because ${reason}. This chat will lose its earlier context if you restart the app.`;
+}
+
+memorySaveBanner?.querySelector(".memory-save-banner-close")?.addEventListener("click", () => {
+  const session = activeChatSession();
+  if (session?.memorySaveHealth) session.memorySaveDismissed = session.memorySaveHealth.reason;
+  memorySaveBanner.hidden = true;
 });
 
 // Released blocks are shown in the chat the same way a checkpoint is, so the
@@ -19427,6 +19470,15 @@ async function sendMessageWithAgentRuntime(options = {}) {
 
     if (payload.type === "chat_reference_import") {
       applyChatReferenceImportUi(run, payload);
+      return;
+    }
+    if (payload.type === "memory_save_health") {
+      if (runSession) {
+        runSession.memorySaveHealth = payload.ok === false ? { reason: String(payload.reason || "write_failed") } : null;
+        // Closing hides one failure; after a recovery the next one shows again.
+        if (payload.ok !== false) runSession.memorySaveDismissed = null;
+      }
+      renderMemorySaveBanner();
       return;
     }
     if (payload.type === "context_release") {

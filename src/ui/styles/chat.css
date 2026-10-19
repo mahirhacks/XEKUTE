@@ -1986,6 +1986,39 @@
 
 .chat-history-security-warning[hidden] { display: none; }
 
+/* Neutral on purpose: a gray notice, not an alarm. */
+.memory-save-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: min(760px, calc(100% - 24px));
+  margin: 0 auto 6px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  background: #1f1f1f;
+  color: #d4d4d4;
+  font: 400 12px/1.4 var(--font-ui);
+}
+.memory-save-banner[hidden] { display: none; }
+.memory-save-banner-text { flex: 1 1 auto; min-width: 0; }
+.memory-save-banner-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #9a9a9a;
+  cursor: pointer;
+}
+.memory-save-banner-close:hover { background: #2c2c2c; color: #e0e0e0; }
+.memory-save-banner-close:focus-visible { outline: 1px solid #777; outline-offset: 1px; }
+
 .composer-input-row #chat-input {
   display:block;
   min-width:0;

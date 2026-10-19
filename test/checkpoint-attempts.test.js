@@ -189,9 +189,10 @@ test("with Redact secrets turned off, digests, facts and tombstones keep the raw
     { role: "assistant", content: "Working." },
   ];
   const coordinator = createTier1ContextCoordinator();
+  // A summary redacts even when the project keeps secrets for the live model.
   const checkpoint = (await checkpointOf(coordinator, { active_conversation: ledger, retain_secrets: true })).checkpoint;
-  assert.equal(checkpoint.grounded_facts.includes("Attempt: exec_command curl -u admin:hunter2 http://10.0.0.5/admin -> success: ok"), true);
-  assert.deepEqual(checkpoint.significant_events, ["exec_command curl -u admin:hunter2 http://10.0.0.5/admin -> success"]);
+  assert.equal(JSON.stringify(checkpoint).includes("hunter2"), false);
+  assert.equal(checkpoint.grounded_facts.some((fact) => fact.startsWith("Attempt: exec_command curl -u")), true, "the attempt is still recorded");
 
   const other = createTier1ContextCoordinator();
   other.assemble({ project_id: projectId, session_id: sessionId, system_prompt: "s", active_conversation: ledger, effective_context_limit: BIG });

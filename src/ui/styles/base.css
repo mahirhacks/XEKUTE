@@ -5476,6 +5476,12 @@ html.panel-resizing iframe {
   border-radius: 10px;
 }
 .context-blocks-panel[hidden] { display: none !important; }
+/* The status (released, freed, pins and their budget) gets its own line. */
+.context-blocks-panel .context-blocks-heading {
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
 .context-blocks-empty {
   padding: 6px 0;
   font-size: 12px;
@@ -5527,6 +5533,10 @@ html.panel-resizing iframe {
 .context-block-pin:hover,
 .context-block-pin.pinned {
   opacity: 1;
+}
+.context-block-pin:disabled {
+  opacity: 0.2;
+  cursor: default;
 }
 .context-usage-row-label {
   display: inline-flex;

@@ -3,8 +3,9 @@ const http = require("node:http");
 
 // A scripted Ollama for driving the real app without a GPU. The chat model
 // obeys "RELEASE n" and "RECALL n" in the prompt, answers "BIG" prompts with a
-// long reply, and otherwise answers and ends its turn. Summarizer requests
-// (non-streaming JSON) go to `summarize`, which may hold them open.
+// long reply and "HUGE" prompts with one larger than a 32K window, and
+// otherwise answers and ends its turn. Summarizer requests (non-streaming
+// JSON) go to `summarize`, which may hold them open.
 function startFakeOllama({ model = "fixture:1b", contextLength = 32768, summarize = null } = {}) {
   const requests = [];
   const summaries = [];
@@ -36,7 +37,7 @@ function startFakeOllama({ model = "fixture:1b", contextLength = 32768, summariz
       let message;
       if (last.role !== "tool" && release) message = { role: "assistant", content: "", tool_calls: [{ function: { name: "release_blocks", arguments: { operation: "release", blocks: [{ index: Number(release[1]), note: "fixture release" }] } } }] };
       else if (last.role !== "tool" && recall) message = { role: "assistant", content: "", tool_calls: [{ function: { name: "recall_block", arguments: { index: Number(recall[1]) } } }] };
-      else message = { role: "assistant", content: /BIG/.test(prompt) ? `OK ${"detail ".repeat(5_200)}` : "OK", tool_calls: [{ function: { name: "end_turn", arguments: { status: "stop" } } }] };
+      else message = { role: "assistant", content: /HUGE/.test(prompt) ? `OK ${"detail ".repeat(22_000)}` : /BIG/.test(prompt) ? `OK ${"detail ".repeat(5_200)}` : "OK", tool_calls: [{ function: { name: "end_turn", arguments: { status: "stop" } } }] };
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
       res.write(`${JSON.stringify({ model, message, done: false })}\n`);
       res.end(`${JSON.stringify({ model, message: { role: "assistant", content: "" }, done: true, done_reason: "stop", prompt_eval_count: 100, eval_count: 5 })}\n`);

@@ -134,7 +134,7 @@ test("a command password in the ledger never reaches the summarizer payload", as
   assert.equal(JSON.stringify(ledger).includes("hunter2"), true, "the local ledger is untouched");
 });
 
-test("retained secrets still reach the payload when the project keeps them", async () => {
+test("the summarizer never sees secrets, even when the project keeps them for the live model", async () => {
   const coordinator = createTier1ContextCoordinator();
   const ledger = [
     { role: "user", content: "Check" },
@@ -145,17 +145,30 @@ test("retained secrets still reach the payload when the project keeps them", asy
     project_id: projectId, session_id: sessionId, active_conversation: ledger, objective: "Check", effective_context_limit: 200_000, retain_secrets: true,
     model: async (request) => { payload = request; return {}; },
   });
-  assert.equal(JSON.stringify(payload).includes("hunter2"), true);
+  assert.equal(JSON.stringify(payload).includes("hunter2"), false);
 });
 
-test("the main-process summarizer request honors the project's Redact secrets setting", () => {
+test("the main-process summarizer request always redacts, whatever the Redact secrets setting", () => {
   const fs = require("node:fs");
   const path = require("node:path");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
-  assert.match(main, /async function runTier1CheckpointModel\(\{ context = \{\}, model = "", provider = "", reasoningEffort = null, retainSecrets = false, signal = null \} = \{\}\)/);
-  assert.match(main, /redactToolCallMessages\(context\.active\.slice\(0, 500\), \{ retainSecrets \}\)/);
-  assert.match(main, /const retainSecrets = readProjectProfile\(payload\.workspace\)\?\.profile\?\.dataHandling\?\.redactSecrets === false;/);
-  assert.match(main, /return runTier1CheckpointModel\(\{ context, \.\.\.common, retainSecrets \}\);/);
-  const users = main.match(/tier1Model: tier1ProjectId \? createTier1ModelCallback\(payload\) : null,/g) || [];
-  assert.equal(users.length, 2, "both agent run handlers use the one callback that reads the setting");
+  assert.match(main, /async function runTier1CheckpointModel\(\{ context = \{\}, model = "", provider = "", reasoningEffort = null, signal = null \} = \{\}\)/);
+  assert.match(main, /redactToolCallMessages\(context\.active\.slice\(0, 500\)\)/);
+  const callback = main.slice(main.indexOf("function createTier1ModelCallback"), main.indexOf("async function runTier1CheckpointDelta"));
+  assert.doesNotMatch(callback, /redactSecrets|retainSecrets/, "the summarizer callback does not read the setting");
+});
+
+test("the v2 summarizer request never sees secrets either", async () => {
+  const coordinator = createTier1ContextCoordinator({ policy: { requestV2: true } });
+  const ledger = [
+    { role: "user", content: "Check" },
+    { role: "assistant", content: "", tool_calls: [{ id: "c1", function: { name: "exec_command", arguments: { command: "curl -u admin:hunter2 http://10.0.0.5/admin" } } }] },
+    { role: "tool", tool_call_id: "c1", content: JSON.stringify({ ok: true, payload: { stdout: "password: hunter2hunter2" } }) },
+  ];
+  let payload = null;
+  await coordinator.checkpoint({
+    project_id: projectId, session_id: sessionId, active_conversation: ledger, objective: "Check", effective_context_limit: 200_000, retain_secrets: true,
+    model: async (request) => { payload = request; return {}; },
+  });
+  assert.equal(JSON.stringify(payload).includes("hunter2"), false);
 });

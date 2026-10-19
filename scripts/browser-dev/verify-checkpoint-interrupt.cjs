@@ -51,28 +51,9 @@ async function verifyCheckpointInterrupt() {
     };
     const settle = () => page.waitForFunction(() => !document.querySelector("#send-btn")?.classList.contains("stop"), null, { timeout: 90000 });
 
-    // Pinned turns cannot be released, so pinning every turn so far makes a
-    // summary the only way to fit the next one.
-    const pinAll = async () => {
-      await page.locator("#context-usage-btn").click();
-      await page.locator("#context-blocks-trigger").click();
-      const unpinned = await page.locator("#context-blocks-panel [data-block-pin][aria-pressed='false']").evaluateAll((pins) => pins.map((pin) => pin.dataset.blockPin));
-      for (const index of unpinned) {
-        await page.locator(`[data-block-pin="${index}"]`).click();
-        await page.waitForFunction((index) => document.querySelector(`[data-block-pin="${index}"]`)?.getAttribute("aria-pressed") === "true", index);
-      }
-      await page.locator("#context-usage-btn").click();
-      return unpinned;
-    };
-
-    // Two long replies plus a third push the chat past the summary line.
-    await type("BIG one");
-    await settle();
-    await type("BIG two");
-    await settle();
-    assert.equal(ollama.summaries.length, 0, "no summary yet");
-    assert.ok((await pinAll()).length >= 2, "the earlier turns are pinned");
-    await type("BIG three");
+    // A reply larger than the window cannot be released (it is the live turn),
+    // so the turn ends in a summary.
+    await type("HUGE one");
     await page.waitForFunction(() => /being summarized/i.test([...document.querySelectorAll("#messages .context-checkpoint-notice")].at(-1)?.innerText || ""), null, { timeout: 60000 });
     for (let i = 0; i < 100 && !ollama.summaries.length; i += 1) await page.waitForTimeout(50);
     assert.equal(ollama.summaries.length, 1, "the summarizer was called");
@@ -85,20 +66,34 @@ async function verifyCheckpointInterrupt() {
     assert.equal(ollama.summaries[0].aborted, true, "the summarizer request was cancelled");
     assert.equal(ollama.summaries[0].answered, false);
     assert.equal(await page.locator("#chat-error-toast:not([hidden])").count(), 0, "a stop is not reported as an error");
+    const stoppedLabels = await page.evaluate(() => {
+      const exchange = [...document.querySelectorAll("#messages .chat-exchange")].at(-1);
+      return [...exchange.querySelectorAll(".assistant-reply")].map((reply) => (reply.textContent.match(/\bStopped\b/g) || []).length).reduce((sum, count) => sum + count, 0);
+    });
+    assert.equal(stoppedLabels, 1, "a stopped reply says Stopped once");
     pass("Stop during summarization says it was interrupted and cancels the summarizer");
 
-    // Pin the stopped turn too, so the next message still needs a summary.
-    await pinAll();
     holdSummaries = false;
-    await type("continue");
+    await type("HUGE two");
     await page.waitForFunction(() => /Chat context summarized/.test([...document.querySelectorAll("#messages .context-checkpoint-notice")].at(-1)?.innerText || ""), null, { timeout: 60000 });
     await settle();
     assert.equal(ollama.summaries.length, 2, "summarization ran again");
     assert.equal(ollama.summaries[1].answered, true);
     const second = JSON.stringify(ollama.summaries[1].body.messages);
-    assert.match(second, /BIG one/, "the second summary starts from the beginning of the chat");
+    assert.match(second, /HUGE one/, "the second summary covers the chat from its beginning");
     assert.match(await lastNotice(), /Chat context summarized/);
     pass("the next message summarizes again from the start");
+
+    // Forking while a run is going copies the chat up to its last finished turn.
+    holdSummaries = true;
+    await type("HUGE three");
+    await page.waitForFunction(() => /being summarized/i.test([...document.querySelectorAll("#messages .context-checkpoint-notice")].at(-1)?.innerText || ""), null, { timeout: 60000 });
+    await page.locator('[aria-label="Fork chat"]').first().click({ force: true });
+    await page.waitForFunction(() => {
+      const prompts = [...document.querySelectorAll("#messages .chat-turn.user")].map((node) => node.innerText);
+      return prompts.some((text) => text.includes("HUGE two")) && !prompts.some((text) => text.includes("HUGE three"));
+    }, null, { timeout: 15000 });
+    pass("a fork during a run ends at the last finished turn");
 
     const imagePath = path.resolve(__dirname, "../../tmp/checkpoint-interrupt.png");
     await page.locator("#messages").screenshot({ path: imagePath });

@@ -290,7 +290,7 @@ test("cloning a Tier 1 session copies the active ledger without changing the sou
   assert.equal(coordinator.state(projectId, destSessionId).active.length, 1);
 });
 
-test("checkpoint keeps captured cookies when secrets are retained and redacts them otherwise", async () => {
+test("a checkpoint redacts captured cookies whether or not the project keeps secrets", async () => {
   const cookie = "Cookie: traefik-session=3d2d022e-081d-40b1-b3a6-66384b890109";
   const retained = createTier1ContextCoordinator({ now: () => new Date("2026-08-29T00:00:00.000Z") });
   const kept = await retained.checkpoint({
@@ -303,7 +303,7 @@ test("checkpoint keeps captured cookies when secrets are retained and redacts th
     effective_context_limit: 100_000,
   });
   assert.equal(kept.ok, true);
-  assert.equal(JSON.stringify(kept.checkpoint).includes("traefik-session=3d2d022e-081d-40b1-b3a6-66384b890109"), true);
+  assert.equal(JSON.stringify(kept.checkpoint).includes("traefik-session=3d2d022e-081d-40b1-b3a6-66384b890109"), false);
 
   const redacted = createTier1ContextCoordinator({ now: () => new Date("2026-08-29T00:00:00.000Z") });
   const hidden = await redacted.checkpoint({

@@ -15,6 +15,7 @@
     "verify:composer": "npm run build:ui && node scripts/browser-dev/verify-composer.cjs",
     "verify:context-blocks": "npm run build:ui && node scripts/browser-dev/verify-context-blocks.cjs",
     "verify:checkpoint-interrupt": "npm run build:ui && node scripts/browser-dev/verify-checkpoint-interrupt.cjs",
+    "verify:memory-save": "npm run build:ui && node scripts/browser-dev/verify-memory-save.cjs",
     "dev:electron": "npm run build:ui && electronmon --inspect=5858 . --dev",
     "dev:ui": "vite --config src/ui/vite.config.mjs",
     "build:ui": "vite build --config src/ui/vite.config.mjs && node scripts/copy-ui-assets.mjs",
