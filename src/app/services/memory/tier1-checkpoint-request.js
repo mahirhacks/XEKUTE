@@ -9,6 +9,7 @@
 
 const { attemptEvent, digestToolCall, readToolMessage } = require("./checkpoint-attempts.js");
 const { messageOrigin, operatorText } = require("./message-provenance.js");
+const { neutralizeContextMarkers } = require("../../../shared/context-markers.js");
 
 const CHECKPOINT_REQUEST_CONTRACT = "checkpoint_delta_v1";
 const MIN_LEDGER_MESSAGES = 3;
@@ -62,7 +63,7 @@ function projectMessage(message, index, { redact, retainSecrets }) {
   if (message.block_tombstone === true) return { ref, role: "user", origin: "runtime", text: redact(squash(message.content), TOMBSTONE_TEXT_MAX) };
   if (message.role === "user") {
     const origin = messageOrigin(message);
-    const text = redact(squash(origin === "operator" ? operatorText(message) : message.content), MESSAGE_TEXT_MAX);
+    const text = redact(squash(origin === "operator" ? operatorText(message) : neutralizeContextMarkers(String(message.content || ""))), MESSAGE_TEXT_MAX);
     return text ? { ref, role: "user", origin, text } : null;
   }
   if (message.role === "assistant") {
@@ -70,13 +71,13 @@ function projectMessage(message, index, { redact, retainSecrets }) {
       .map((call) => ({ name: String(call?.function?.name || call?.name || "").slice(0, 120), digest: digestToolCall(call?.function?.name || call?.name, call?.function?.arguments, { retainSecrets }) }))
       .filter((call) => call.digest)
       .map((call) => `${call.name} ${call.digest}`);
-    const text = redact(squash(message.content), MESSAGE_TEXT_MAX);
+    const text = redact(squash(neutralizeContextMarkers(String(message.content || ""))), MESSAGE_TEXT_MAX);
     if (!text && !calls.length) return null;
     return { ref, role: "assistant", ...(text ? { text } : {}), ...(calls.length ? { calls } : {}) };
   }
   if (message.role === "tool") {
     const read = readToolMessage(message.content);
-    return { ref, role: "tool", tool: String(message.tool_name || "").slice(0, 120), outcome: read.outcome, text: redact(squash(read.excerpt), MESSAGE_TEXT_MAX) };
+    return { ref, role: "tool", tool: String(message.tool_name || "").slice(0, 120), outcome: read.outcome, text: redact(squash(neutralizeContextMarkers(String(read.excerpt || ""))), MESSAGE_TEXT_MAX) };
   }
   return null;
 }
@@ -112,6 +113,11 @@ function buildSummarizerRequest({ context, fresh, redact, budgetTokens = 20_000 
   };
 
   const ledger = list(context?.active).filter(Boolean);
+  // A protected prompt that is not in the ledger yet is still this window's request.
+  const prompt = String(context?.currentPrompt || "");
+  if (prompt && !ledger.some((message) => message.role === "user" && String(message.content || "") === prompt)) {
+    fixed.current_prompt = headTail(redact(squash(prompt), 100_000), MESSAGE_TEXT_MAX);
+  }
   const kept = [];
   let used = estimateTokens(fixed);
   let oldest = ledger.length;

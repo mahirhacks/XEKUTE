@@ -1153,7 +1153,7 @@ test("tool-call batches are not checkpointed until the batch seals", async () =>
   assert.equal(events.some((event) => event.type === "context_checkpoint" && event.reason === "tool_results" && events.indexOf(event) < lastToolResult), false);
 });
 
-test("before_model_call does not force a checkpoint when active conversation is empty", async () => {
+test("before_model_call does not force a checkpoint when the ledger holds only the task", async () => {
   const ids = memoryIds(4407);
   const events = [];
   let modelCalls = 0;

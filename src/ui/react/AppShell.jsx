@@ -1041,6 +1041,7 @@ export default memo(function AppShell() {
     
           <div id="input-bar">
             <div id="chat-history-security-warning" className="chat-history-security-warning" role="status" aria-live="polite" hidden></div>
+            <div id="memory-save-banner" className="memory-save-banner" role="status" aria-live="polite" hidden><span className="memory-save-banner-text"></span><button type="button" className="memory-save-banner-close" title="Dismiss" aria-label="Dismiss memory warning"><span className="codicon codicon-close" aria-hidden="true"></span></button></div>
             <div id="composer-questions" className="composer-questions" hidden aria-live="polite"></div>
             <div id="composer-task-list" className="composer-task-list" hidden aria-live="polite"></div>
             <div id="chat-error-toast" className="chat-error-toast" role="status" aria-live="polite" hidden>
@@ -1055,7 +1056,6 @@ export default memo(function AppShell() {
               <div className="composer-input-row">
                 <div id="chat-input" contentEditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Chat message" data-placeholder="Ask, investigate, run, or search" className="chat-input-empty"><span id="selected-slash-command" className="selected-slash-command" hidden></span></div>
               </div>
-              <div id="chat-input-measure" aria-hidden="true"></div>
               <div className="composer-toolbar">
                 <div className="composer-meta">
                   <div id="chat-mode-toggle" className="chat-mode-toggle">
@@ -1213,7 +1213,18 @@ export default memo(function AppShell() {
         </div>
       </div>
     
-      <div id="context-usage-popover" className="context-usage-popover" hidden>
+      <div id="context-usage-menu" className="model-controls-menu context-usage-menu" role="menu" aria-label="Context" hidden>
+        <button type="button" id="context-window-trigger" className="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="context-usage-popover">
+          <span>Context window</span><span id="context-window-value" className="model-control-value">0 / 0</span><span className="codicon codicon-chevron-right" aria-hidden="true"></span>
+        </button>
+        <button type="button" id="context-blocks-trigger" className="model-control-option" role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="context-blocks-panel">
+          <span>Conversation blocks</span><span id="context-blocks-value" className="model-control-value">0</span><span className="codicon codicon-chevron-right" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div id="context-blocks-panel" className="context-blocks-panel" role="dialog" aria-label="Conversation blocks" hidden>
+        <div id="context-blocks-list" className="context-blocks"></div>
+      </div>
+      <div id="context-usage-popover" className="context-usage-popover" role="dialog" aria-label="Context window" hidden>
         <div className="context-usage-header">
           <div className="context-usage-heading-group">
             <div className="context-usage-heading">Context Usage</div>

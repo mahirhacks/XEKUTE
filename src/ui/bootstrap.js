@@ -203,7 +203,6 @@ const proxyCaPath = $("proxy-ca-path");
 const btnShowProxyCa = $("btn-show-proxy-ca");
 const messages         = $("messages");
 const chatInput        = $("chat-input");
-const chatInputMeasure = $("chat-input-measure");
 const sendBtn          = $("send-btn");
 const attachImageBtn   = $("attach-image-btn");
 const attachImageInput = $("attach-image-input");
@@ -261,6 +260,7 @@ const contextUsagePopover = $("context-usage-popover");
 const contextUsageHeadingValue = $("context-usage-heading-value");
 const inputBar         = $("input-bar");
 const chatHistorySecurityWarning = $("chat-history-security-warning");
+const memorySaveBanner = $("memory-save-banner");
 const composerEl       = inputBar?.querySelector(".composer") || null;
 const composerQuestionsEl = $("composer-questions");
 const composerTaskListEl = $("composer-task-list");
@@ -276,6 +276,13 @@ const contextUsageBreakdown = $("context-usage-breakdown");
 const contextUsageSource = $("context-usage-source");
 const contextUsageClose = $("context-usage-close");
 const contextUsageSegments = $("context-usage-segments");
+const contextUsageMenu = $("context-usage-menu");
+const contextWindowTrigger = $("context-window-trigger");
+const contextWindowValue = $("context-window-value");
+const contextBlocksTrigger = $("context-blocks-trigger");
+const contextBlocksValue = $("context-blocks-value");
+const contextBlocksPanel = $("context-blocks-panel");
+const contextBlocksList = $("context-blocks-list");
 const CONTEXT_USAGE_SECTIONS = Object.freeze([
   Object.freeze({ key: "system_prompt", label: "System Prompt", color: "#a7a7ab" }),
   Object.freeze({ key: "tool_definitions", label: "Tool Definitions", color: "#77a8d8" }),
@@ -2796,7 +2803,9 @@ function appendStoppedPlainText(turn, segments = []) {
     else turn.appendChild(reply);
   }
   if (replyEndsWithStopped(reply)) return;
-  const raw = String(reply.dataset.rawMd || "").trim();
+  // A later re-render of the reply can fold an earlier label onto its last
+  // line ("... detail Stopped"); take it off so the label appears once, alone.
+  const raw = String(reply.dataset.rawMd || "").trim().replace(/\s+Stopped$/, "");
   const next = raw ? `${raw}\n\nStopped` : "Stopped";
   reply.dataset.rawMd = next;
   const segment = segments.find((item) => item?.el === reply);
@@ -3267,6 +3276,7 @@ function applyActiveChatSession(session) {
   }
   activeChatSessionId = session.id;
   browserWorkspace?.chatChanged();
+  renderMemorySaveBanner();
   session.history = MessageIdentity?.ensureMessageIdentity
     ? MessageIdentity.ensureMessageIdentity(session.history, session.id)
     : (Array.isArray(session.history) ? session.history : []);
@@ -8853,6 +8863,18 @@ async function forkChatSession(sourceId = activeChatSessionId) {
   fork.contextFilesCache = cloneSessionValue(source.contextFilesCache || []);
   fork.currentWorkflow = cloneSessionValue(source.currentWorkflow);
   fork.lastContextUsage = cloneSessionValue(source.lastContextUsage);
+  // A fork taken during a run ends at the last finished turn, like its memory
+  // copy, which never includes the turn in progress.
+  const runningPrompt = isChatSessionRunning(source.id) && Number.isInteger(source.memoryBlockHistoryStart) && source.memoryBlockHistoryStart >= 0
+    ? source.memoryBlockHistoryStart : -1;
+  if (runningPrompt >= 0) {
+    const prompt = String(source.history?.[runningPrompt]?.content || "");
+    fork.history = fork.history.slice(0, runningPrompt);
+    const runs = normalizeUiTranscript(fork.transcript).runs;
+    const running = runs.findLastIndex((run) => (run.timeline || []).some((item) => item.type === "user" && item.message && prompt.startsWith(item.message)));
+    fork.transcript = { ...normalizeUiTranscript(fork.transcript), runs: running >= 0 ? runs.slice(0, running) : runs };
+    fork.messagesHtml = "";
+  }
   fork.kind = "chat";
   fork.memoryProjectId = source.memoryProjectId || "";
   fork.memorySessionId = "";
@@ -9598,12 +9620,14 @@ function getContextBreakdown() {
     tools: [],
     messages: [],
     blocks: storedIsTier1 ? (storedUsage.blocks || []) : [],
+    pinBudgetTokens: storedIsTier1 ? storedUsage.pinBudgetTokens || null : null,
     authoritative: storedIsTier1,
   };
 }
 
 const CONTEXT_SUMMARIZING_NOTICE = "Chat context being summarized...";
 const CONTEXT_SUMMARIZED_NOTICE = "Chat context summarized";
+const CONTEXT_SUMMARIZATION_INTERRUPTED_NOTICE = "Chat summarization interrupted";
 
 function pendingContextCheckpointNotice(container = messages) {
   if (contextCheckpointNotice?.isConnected && contextCheckpointNotice.dataset.state === "pending" && container?.contains?.(contextCheckpointNotice)) return contextCheckpointNotice;
@@ -9684,9 +9708,11 @@ function hydrateContextCheckpointNotices(root = messages) {
 function finishContextCheckpointNotice(container = messages, outcome = "completed") {
   const notice = pendingContextCheckpointNotice(container || messages);
   if (!notice) return null;
-  const failed = String(outcome || "").toLowerCase() === "failed";
-  setContextCheckpointNoticeText(notice, failed ? "Context checkpoint needs attention" : CONTEXT_SUMMARIZED_NOTICE);
-  notice.dataset.state = failed ? "error" : "complete";
+  const result = String(outcome || "").toLowerCase();
+  const failed = result === "failed";
+  const interrupted = result === "interrupted";
+  setContextCheckpointNoticeText(notice, failed ? "Context checkpoint needs attention" : interrupted ? CONTEXT_SUMMARIZATION_INTERRUPTED_NOTICE : CONTEXT_SUMMARIZED_NOTICE);
+  notice.dataset.state = failed ? "error" : interrupted ? "interrupted" : "complete";
   if (contextCheckpointNotice === notice) contextCheckpointNotice = null;
   return notice;
 }
@@ -9826,6 +9852,7 @@ function normalizeContextUsageSnapshot(value) {
     cost: Number.isFinite(Number(value.cost)) ? Math.max(0, Number(value.cost)) : null,
     sections,
     blocks: globalThis.XekuteContextBlocksView?.normalizeContextBlocks(value.blocks) || [],
+    pinBudgetTokens: Number.isFinite(Number(value.pinBudgetTokens)) && Number(value.pinBudgetTokens) > 0 ? Math.floor(Number(value.pinBudgetTokens)) : null,
     toolNames: (Array.isArray(value.toolNames) ? value.toolNames : []).slice(0, 64).map((name) => String(name).slice(0, 100)),
     route: value.route && typeof value.route === "object" ? {
       kind: String(value.route.kind || "conversation").slice(0, 40),
@@ -9949,7 +9976,9 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
     contextUsageFill.classList.toggle("full", displayPct >= 0.9);
   }
   const displayCapacity = Number(total) > 0 ? Number(total) : (Number(modelMaxTokens) || 0);
-  if (contextUsageHeadingValue) contextUsageHeadingValue.textContent = `${formatTokenCount(Math.round(displayUsed))} / ${formatContextWindowLabel(Math.round(displayCapacity))}`;
+  const windowLabel = `${formatTokenCount(Math.round(displayUsed))} / ${formatContextWindowLabel(Math.round(displayCapacity))}`;
+  if (contextUsageHeadingValue) contextUsageHeadingValue.textContent = windowLabel;
+  if (contextWindowValue) contextWindowValue.textContent = windowLabel;
   if (contextUsageUsed) contextUsageUsed.textContent = `${Math.round(displayPct * 100)}%`;
   if (contextUsagePct) {
     contextUsagePct.textContent = `Next prompt estimate · ${formatTokenCount(displayFree)} free`;
@@ -9980,11 +10009,11 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
           </div>
         `;
       });
-    const blocksHtml = globalThis.XekuteContextBlocksView?.renderContextBlocksHtml(breakdown.blocks, { escapeHtml, formatTokenCount }) || "";
-    contextUsageBreakdown.innerHTML = rows.join("") + (blocksHtml ? `<div class="context-blocks">${blocksHtml}</div>` : "");
+    contextUsageBreakdown.innerHTML = rows.join("");
   }
+  renderContextBlocksPanel(breakdown.blocks, breakdown.pinBudgetTokens);
   setContextCheckpointUi(contextCheckpointing);
-  if (contextUsagePopover && !contextUsagePopover.hidden) {
+  if (contextUsageMenu && !contextUsageMenu.hidden) {
     requestAnimationFrame(positionContextPopover);
   }
 }
@@ -10070,13 +10099,48 @@ async function pinContextBlock(index, pinned) {
   } catch { /* the meter keeps showing the last pin state */ }
 }
 
-contextUsageBreakdown?.addEventListener("click", (event) => {
+// The block count stays in the first menu; the list lives in its own panel.
+function renderContextBlocksPanel(blocks, pinBudgetTokens = null) {
+  const view = globalThis.XekuteContextBlocksView;
+  const list = view?.normalizeContextBlocks?.(blocks) || [];
+  if (contextBlocksValue) contextBlocksValue.textContent = String((view?.visibleContextBlocks?.(list) || list).length);
+  if (!contextBlocksList) return;
+  contextBlocksList.innerHTML = view?.renderContextBlocksHtml(list, { escapeHtml, formatTokenCount, pinBudgetTokens })
+    || `<div class="context-blocks-heading"><span>Conversation blocks</span></div><div class="context-blocks-empty">No turns in this conversation yet.</div>`;
+}
+
+contextBlocksList?.addEventListener("click", (event) => {
   const button = event.target?.closest?.("[data-block-pin]");
   if (!button) return;
   event.preventDefault();
   event.stopPropagation();
   const index = Number(button.getAttribute("data-block-pin"));
   if (Number.isSafeInteger(index)) void pinContextBlock(index, button.getAttribute("aria-pressed") !== "true");
+});
+
+// While this chat's memory cannot be saved, a banner above the composer says
+// so until the next save succeeds. Closing it hides it for this failure only.
+const MEMORY_SAVE_REASONS = {
+  secure_storage: "the system's secure storage is unavailable",
+  disk_full: "the disk is full",
+  no_access: "the memory folder cannot be written to",
+  write_failed: "the memory folder cannot be written to",
+};
+function renderMemorySaveBanner() {
+  if (!memorySaveBanner) return;
+  const session = activeChatSession();
+  const health = session?.memorySaveHealth || null;
+  const show = Boolean(health) && session.memorySaveDismissed !== health.reason;
+  memorySaveBanner.hidden = !show;
+  if (!show) return;
+  const reason = MEMORY_SAVE_REASONS[health.reason] || MEMORY_SAVE_REASONS.write_failed;
+  memorySaveBanner.querySelector(".memory-save-banner-text").textContent = `Memory can't be saved because ${reason}. This chat will lose its earlier context if you restart the app.`;
+}
+
+memorySaveBanner?.querySelector(".memory-save-banner-close")?.addEventListener("click", () => {
+  const session = activeChatSession();
+  if (session?.memorySaveHealth) session.memorySaveDismissed = session.memorySaveHealth.reason;
+  memorySaveBanner.hidden = true;
 });
 
 // Released blocks are shown in the chat the same way a checkpoint is, so the
@@ -10097,52 +10161,63 @@ function applyContextReleaseUi(run, payload = {}) {
     label.className = "context-checkpoint-text";
     label.textContent = `Released ${count} earlier ${count === 1 ? "turn" : "turns"} from context${freed ? ` · ${formatTokenCount(freed)} freed` : ""}`;
     notice.append(label);
-    host.appendChild(notice);
+    // Placed in the stream where the release happened, like a summary notice,
+    // so a turn reads top to bottom in order.
+    if (run?.assistant?.splitAtContextCheckpoint) run.assistant.splitAtContextCheckpoint(notice);
+    else host.appendChild(notice);
   }
   const session = run?.session;
   if (session && activeChatSessionId === session.id && !run?.viewHost) updateContextUsage();
 }
 
+// Like the model picker: a small menu above the ring, and each row's panel
+// beside the menu (left of it when the right edge is too close).
+function positionContextMenuPanel(panel, row) {
+  const pad = 8;
+  const parent = contextUsageMenu.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  const width = panel.offsetWidth;
+  const height = panel.offsetHeight;
+  let left = parent.right + 4;
+  if (left + width > window.innerWidth - pad) left = parent.left - width - 4;
+  const top = Math.min(rowRect.top, parent.bottom - height);
+  panel.style.left = `${Math.max(pad, Math.min(left, window.innerWidth - width - pad))}px`;
+  panel.style.top = `${Math.max(pad, Math.min(top, window.innerHeight - height - pad))}px`;
+}
+
 function positionContextPopover() {
-  if (!contextUsagePopover || !contextUsageBtn || !chatPane) return;
-  const buttonRect = contextUsageBtn.getBoundingClientRect();
-  const paneRect = chatPane.getBoundingClientRect();
-  const anchorRect = inputBar?.getBoundingClientRect() || buttonRect;
-  const composerRect = composerEl?.getBoundingClientRect() || anchorRect;
-  const popH = contextUsagePopover.offsetHeight || 100;
-  const panePadding = 14;
-  let top = anchorRect.top - popH - 14;
-  let left = composerRect.left;
-  let width = composerRect.width;
+  if (!contextUsageMenu || contextUsageMenu.hidden || !contextUsageBtn) return;
+  const pad = 8;
+  const rect = contextUsageBtn.getBoundingClientRect();
+  const width = contextUsageMenu.offsetWidth;
+  const height = contextUsageMenu.offsetHeight;
+  let top = rect.top - height - pad;
+  if (top < pad) top = rect.bottom + pad;
+  contextUsageMenu.style.left = `${Math.max(pad, Math.min(rect.right - width, window.innerWidth - width - pad))}px`;
+  contextUsageMenu.style.top = `${Math.max(pad, Math.min(top, window.innerHeight - height - pad))}px`;
+  if (!contextUsagePopover.hidden) positionContextMenuPanel(contextUsagePopover, contextWindowTrigger);
+  if (contextBlocksPanel && !contextBlocksPanel.hidden) positionContextMenuPanel(contextBlocksPanel, contextBlocksTrigger);
+}
 
-  if (width > 0) {
-    const maxWidth = paneRect.width - panePadding * 2;
-    width = Math.min(width, maxWidth);
-    contextUsagePopover.style.width = `${Math.max(width, 260)}px`;
+// Opens one row's panel and closes the other; a second click on the same row closes it.
+function showContextPanel(panel) {
+  const panels = [[contextUsagePopover, contextWindowTrigger], [contextBlocksPanel, contextBlocksTrigger]];
+  for (const [candidate, trigger] of panels) {
+    if (!candidate || !trigger) continue;
+    const open = candidate === panel && candidate.hidden;
+    candidate.hidden = !open;
+    trigger.setAttribute("aria-expanded", open ? "true" : "false");
   }
-
-  const popW = contextUsagePopover.offsetWidth || 240;
-
-  if (top < paneRect.top + panePadding) {
-    top = Math.min(
-      anchorRect.bottom + 10,
-      paneRect.bottom - popH - panePadding,
-    );
-  }
-  if (left < paneRect.left + panePadding) {
-    left = paneRect.left + panePadding;
-  }
-  if (left + popW > paneRect.right - panePadding) {
-    left = paneRect.right - popW - panePadding;
-  }
-
-  contextUsagePopover.style.top = `${top}px`;
-  contextUsagePopover.style.left = `${left}px`;
+  positionContextPopover();
 }
 
 function closeContextPopover() {
-  if (!contextUsagePopover) return;
+  if (!contextUsageMenu) return;
+  contextUsageMenu.hidden = true;
   contextUsagePopover.hidden = true;
+  if (contextBlocksPanel) contextBlocksPanel.hidden = true;
+  contextWindowTrigger?.setAttribute("aria-expanded", "false");
+  contextBlocksTrigger?.setAttribute("aria-expanded", "false");
   contextUsageBtn?.classList.remove("active");
   contextUsageBtn?.setAttribute("aria-expanded", "false");
 }
@@ -10151,14 +10226,15 @@ function openContextPopover() {
   closeModelMenu();
   closeChatHistoryPopover();
   updateContextUsage();
-  contextUsagePopover.hidden = false;
+  contextUsageMenu.hidden = false;
   contextUsageBtn.classList.add("active");
   contextUsageBtn.setAttribute("aria-expanded", "true");
   positionContextPopover();
+  contextWindowTrigger?.focus();
 }
 
 function toggleContextPopover() {
-  if (contextUsagePopover.hidden) openContextPopover();
+  if (contextUsageMenu.hidden) openContextPopover();
   else closeContextPopover();
 }
 
@@ -14328,22 +14404,6 @@ function getChatInputMetrics() {
   };
 }
 
-function syncChatInputMeasureStyles() {
-  if (!chatInput || !chatInputMeasure) return;
-  const style = getComputedStyle(chatInput);
-  chatInputMeasure.style.width = `${chatInput.clientWidth}px`;
-  chatInputMeasure.style.font = style.font;
-  chatInputMeasure.style.fontFamily = style.fontFamily;
-  chatInputMeasure.style.fontSize = style.fontSize;
-  chatInputMeasure.style.fontWeight = style.fontWeight;
-  chatInputMeasure.style.letterSpacing = style.letterSpacing;
-  chatInputMeasure.style.lineHeight = style.lineHeight;
-  chatInputMeasure.style.paddingTop = style.paddingTop;
-  chatInputMeasure.style.paddingRight = style.paddingRight;
-  chatInputMeasure.style.paddingBottom = style.paddingBottom;
-  chatInputMeasure.style.paddingLeft = style.paddingLeft;
-}
-
 function getChatInputMaxHeight() {
   const { line, padTop, padBot } = getChatInputMetrics();
   return Math.ceil(padTop + padBot + line * CHAT_INPUT_MAX_LINES);
@@ -14355,23 +14415,16 @@ function getChatInputDefaultHeight() {
   return Math.ceil(Math.max(padTop + padBot + line, declaredMinHeight));
 }
 
+// The editor's own scroll height is the rendered truth. Its text is not:
+// Chromium keeps a placeholder <br> after a deleted last line, so innerText
+// ends in "\n" while nothing renders below the text.
 function resizeChatInput() {
   if (!chatInput) return;
   const maxH = getChatInputMaxHeight();
   const minH = getChatInputDefaultHeight();
-  let contentH = 0;
-
-  if (chatInputMeasure) {
-    syncChatInputMeasureStyles();
-    let measureText = fileTagDisplayText(chatInput.value) || " ";
-    if (measureText.endsWith("\n")) measureText += " ";
-    chatInputMeasure.textContent = measureText;
-    contentH = chatInputMeasure.scrollHeight;
-  }
-
   chatInput.style.maxHeight = `${maxH}px`;
   chatInput.style.height = "0px";
-  const scrollH = Math.max(contentH, chatInput.scrollHeight);
+  const scrollH = chatInput.scrollHeight;
   const next = Math.min(Math.max(scrollH, minH), maxH);
   chatInput.style.height = `${next}px`;
   const atCap = scrollH > maxH;
@@ -15117,7 +15170,7 @@ window.addEventListener("resize", () => {
   if (!modelControlsMenu.hidden) positionModelPanel(modelControlsMenu, modelPicker);
   if (!modelMenu.hidden) positionModelMenu();
   if (authorityMenu && !authorityMenu.hidden) positionAuthorityMenu();
-  if (!contextUsagePopover.hidden) positionContextPopover();
+  if (!contextUsageMenu.hidden) positionContextPopover();
   if (!modelEditMenu.hidden && editingModel) {
     positionModelEditMenu(modelEditMenu.dataset.panel === "context" ? modelContextTrigger : modelEffortTrigger);
   }
@@ -17921,7 +17974,12 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
       this.statusEl = header;
       this.exploredFoldEl = null;
       this.exploredBodyEl = null;
-      if (this.finalOutcome) return fold;
+      // Late events can still mount work after the run ended; that fold is
+      // finished, not live.
+      if (this.finalOutcome) {
+        if (header && header.dataset.final !== "true") Object.assign(header.dataset, { final: "true", state: "complete" });
+        return fold;
+      }
       if (this.modelEmitting) this.startWorkTimer();
       else this.paintPlanningHeader(header);
       return fold;
@@ -19414,6 +19472,15 @@ async function sendMessageWithAgentRuntime(options = {}) {
       applyChatReferenceImportUi(run, payload);
       return;
     }
+    if (payload.type === "memory_save_health") {
+      if (runSession) {
+        runSession.memorySaveHealth = payload.ok === false ? { reason: String(payload.reason || "write_failed") } : null;
+        // Closing hides one failure; after a recovery the next one shows again.
+        if (payload.ok !== false) runSession.memorySaveDismissed = null;
+      }
+      renderMemorySaveBanner();
+      return;
+    }
     if (payload.type === "context_release") {
       applyContextReleaseUi(run, payload);
       return;
@@ -19705,6 +19772,10 @@ async function sendMessageWithAgentRuntime(options = {}) {
     assistant.contentEl.classList.remove("streaming");
     assistant.finalizeThinking();
 
+    // A stop during summarization ends the run without a completed checkpoint
+    // event; the pending notice must not keep saying it is summarizing.
+    if ((result?.aborted || run.stopRequested) && run.contextCheckpointPending) applyContextCheckpointUi(run, { status: "interrupted" });
+
     if (result?.error) {
       const aborted = Boolean(result.aborted || run.stopRequested);
       assistant.completeTaskBrief(aborted ? "stopped" : "error");
@@ -19765,6 +19836,12 @@ async function sendMessageWithAgentRuntime(options = {}) {
     } else {
       assistant.completeTaskBrief(result?.runState?.status === "inconclusive" ? "inconclusive" : "complete");
       assistant.finalizeContent();
+      // A run that stopped on a limit (such as the context window) before
+      // writing anything would otherwise leave the prompt with no answer at all.
+      const limitations = Array.isArray(result?.runState?.limitations) ? result.runState.limitations : [];
+      if (result?.code && !assistant.displayContent().trim() && !hasStopVerdict) {
+        addErrorMessage(String(limitations.at(-1) || "The agent stopped before answering. You can retry the message."), { container: chatRunContainer(run), session: runSession });
+      }
       assistant.pruneIfEmpty();
       syncChatRunSession(run);
       await finalizeChatHistory(assistant.rawContent.trim() ? "completed" : "incomplete");
@@ -21225,6 +21302,8 @@ chatHeader?.addEventListener("click", (e) => {
   if (button.id === "btn-chat-delete") deleteActiveChatSession();
 });
 chatInput.addEventListener("keydown", (e) => {
+  // Keys pressed while an IME is composing belong to the composition.
+  if (e.isComposing || e.keyCode === 229) return;
   if (handleFileTagKeydown(e)) {
     e.preventDefault();
     return;
@@ -21260,7 +21339,7 @@ chatInput.addEventListener("keydown", (e) => {
   }
 
   if (e.key === "Enter" && !e.shiftKey) {
-    if (e.repeat || e.isComposing) return;
+    if (e.repeat) return;
     e.preventDefault();
     e.stopPropagation();
     submitChatComposerFromInput();
@@ -21601,12 +21680,36 @@ contextUsageBtn.addEventListener("click", (e) => {
 contextUsageClose?.addEventListener("click", (e) => {
   e.stopPropagation();
   closeContextPopover();
+  contextUsageBtn.focus();
 });
 
+contextWindowTrigger?.addEventListener("click", (e) => { e.stopPropagation(); showContextPanel(contextUsagePopover); });
+contextBlocksTrigger?.addEventListener("click", (e) => { e.stopPropagation(); showContextPanel(contextBlocksPanel); });
+
+for (const surface of [contextUsageMenu, contextUsagePopover, contextBlocksPanel]) {
+  surface?.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeContextPopover();
+      contextUsageBtn.focus();
+      return;
+    }
+    if (surface !== contextUsageMenu) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      (document.activeElement === contextWindowTrigger ? contextBlocksTrigger : contextWindowTrigger)?.focus();
+    } else if (e.key === "ArrowRight" && (document.activeElement === contextWindowTrigger || document.activeElement === contextBlocksTrigger)) {
+      e.preventDefault();
+      document.activeElement.click();
+    }
+  });
+}
+
 document.addEventListener("click", (e) => {
-  if (!contextUsagePopover.hidden) {
-    const inPopover = contextUsagePopover.contains(e.target) || contextUsageBtn.contains(e.target);
-    if (!inPopover) closeContextPopover();
+  if (contextUsageMenu && !contextUsageMenu.hidden) {
+    const inside = [contextUsageMenu, contextUsagePopover, contextBlocksPanel, contextUsageBtn].some((element) => element?.contains(e.target));
+    if (!inside) closeContextPopover();
   }
 });
 

@@ -179,7 +179,10 @@ test("the checkpoint call is told why it runs, and the completed event says whet
   const events = [];
   const result = await runAgentTurn({
     workspace: "", model: "local:small", numCtx: 32_768, contextBudget: 32_768, tools: [], mode: "ask", modeFamily: "assist",
-    projectId, memorySessionId: sessionId, tier1Context: tier1, userMessage: "Summarize the findings", chatHistory: [],
+    projectId, memorySessionId: sessionId, tier1Context: tier1, userMessage: "Summarize the findings",
+    // An earlier exchange gives the checkpoint something to summarize; a ledger
+    // holding only the task is never checkpointed.
+    chatHistory: [{ role: "user", content: "Scan 10.0.0.5" }, { role: "assistant", content: "Port 22 is open." }],
     sendEvent: (event) => events.push(event),
     async runModelRound() { return { ok: true, fullText: "Done.", toolCalls: [endTurnCall()], finishReason: "stop" }; },
     async executeToolCall() { return { ok: true, value: {} }; },

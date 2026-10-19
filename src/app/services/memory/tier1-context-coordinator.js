@@ -5,6 +5,7 @@ const { canonicalJson, canonicalKeyHash, isMemoryId } = require("../../../contra
 const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/schema-registry.js");
 const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = require("../../storage/memory/memory-storage-utils.js");
 const { redactToolCallMessages } = require("../../../shared/secret-redaction.js");
+const { neutralizeContextMarkers } = require("../../../shared/context-markers.js");
 const { NON_OPERATOR_ID, isOperatorInput, messageOrigin, operatorText } = require("./message-provenance.js");
 const { resolveCheckpointPolicy } = require("./checkpoint-policy.js");
 const { buildSummarizerRequest } = require("./tier1-checkpoint-request.js");
@@ -14,6 +15,9 @@ const SUMMARY_MAX = 32_768;
 const SUMMARY_RATIO = 0.05;
 const CHECKPOINT_RATIO = 0.90;
 const ACTIVE_MAX = 2_000;
+// Pinned turns are kept word for word, so together they may use at most this
+// share of the context window.
+const PIN_BUDGET_RATIO = 0.25;
 const METER_ROWS = Object.freeze([
   "System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP",
   "Summarized Conversation", "Active Conversation", "Current Workflow",
@@ -22,7 +26,42 @@ const SEMANTIC_STOPWORDS = new Set([
   "the", "and", "that", "this", "with", "from", "for", "was", "were", "has", "have",
   "into", "then", "when", "will", "must", "should", "could", "would", "user", "agent",
 ]);
-const SECRET_TEXT = /(?:bearer\s+|basic\s+|(?:cookie|set-cookie|authorization|proxy-authorization)\s*:\s*(?:(?:bearer|basic)\s+)?|(?:password|passwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*|-----BEGIN [^-]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)[^\s,;]*/gi;
+const SECRET_TEXT = /(?:bearer\s+|basic\s+|(?:cookie|set-cookie|authorization|proxy-authorization)\s*:\s*(?:(?:bearer|basic)\s+)?|(?:password|passwd|passphrase|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*|-----BEGIN [^-]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)[^\s,;]*/gi;
+
+// Replaces, in place, every string the final secret gate would reject with
+// "[REDACTED]" and returns how many were replaced.
+function quarantineSecretStrings(value) {
+  let count = 0;
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (typeof child === "string") {
+        try { assertNoSecretValues(child); } catch { node[key] = "[REDACTED]"; count += 1; }
+      } else visit(child);
+    }
+  };
+  visit(value);
+  return count;
+}
+
+const INTERRUPTED = "MEMORY_CHECKPOINT_INTERRUPTED";
+function interruption() {
+  return Object.assign(new Error("The checkpoint was stopped."), { code: INTERRUPTED });
+}
+function interrupted() {
+  return { ok: false, code: INTERRUPTED, interrupted: true, error: "The checkpoint was stopped before it was written.", details: [], activePreserved: true };
+}
+
+// The legacy summarizer request carries raw ledger messages; label who wrote
+// each one and neutralize look-alike markers in anything not trusted.
+function labelForSummarizer(message) {
+  if (!message || typeof message !== "object") return message;
+  const origin = messageOrigin(message);
+  const trusted = message.block_tombstone === true || origin === "operator";
+  const content = typeof message.content === "string" && !trusted ? neutralizeContextMarkers(message.content) : message.content;
+  return { ...message, content, ...(origin ? { origin: message.block_tombstone === true ? "runtime" : origin } : {}) };
+}
 
 function redactText(value, maximum = 8_000, retainSecrets = false) {
   const text = String(value == null ? "" : value);
@@ -266,6 +305,27 @@ function stampBlocks(previousMessages, incomingMessages, nextIndex = 0) {
   return next;
 }
 
+// A turn starts with a prompt the operator sent. Steering inside a running
+// task, late tool results, runtime notes and the tail of a trimmed block
+// belong to the turn already under way. A placeholder keeps the answer of
+// the block it replaced.
+function isTurnStart(message) {
+  if (!message || message.role !== "user" || message.block_partial === true) return false;
+  if (message.block_tombstone === true) return message.turn_start === true;
+  if (message.__xekuteInternalRuntimeInput === true || NON_OPERATOR_ID.test(String(message.source_message_id || ""))) return false;
+  return !(Number(message.task_revision) > 0);
+}
+
+// Why a save to the encrypted store did not reach disk, in the four words the
+// renderer's memory banner knows.
+function saveFailureReason(result = {}) {
+  const text = `${result.code || ""} ${result.error || result.warning || ""}`;
+  if (result.ephemeral === true || /SECURE_STORAGE_UNAVAILABLE|ENCRYPT_FAILED/.test(text)) return "secure_storage";
+  if (/ENOSPC|disk is full|no space/i.test(text)) return "disk_full";
+  if (/EACCES|EPERM|EROFS|permission|read-only/i.test(text)) return "no_access";
+  return "write_failed";
+}
+
 function blocksFromActive(messages, estimate = approximateTokens) {
   const source = ledgerOf(messages);
   const measure = typeof estimate === "function" ? estimate : approximateTokens;
@@ -284,6 +344,8 @@ function blocksFromActive(messages, estimate = approximateTokens) {
       index,
       blockId,
       state: opener.block_tombstone === true ? "evicted" : "active",
+      ...(opener.block_partial === true ? { partial: true } : {}),
+      turnStart: isTurnStart(opener),
       start: group.start,
       messages: group.messages,
       tokenEstimate: group.messages.reduce((sum, message) => sum + Math.max(0, Number(measure(message)) || 0), 0),
@@ -308,7 +370,7 @@ function createTier1ContextCoordinator({
   function sessionKey(projectId, sessionId) { return `${String(projectId)}|${String(sessionId)}`; }
   function stateFor(projectId, sessionId) {
     const key = sessionKey(projectId, sessionId);
-    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false, nextBlockIndex: 0, released: new Map(), pinned: new Set(), directives: [] });
+    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false, nextBlockIndex: 0, released: new Map(), pinned: new Set(), directives: [], saveHealth: { ok: true } });
     return sessions.get(key);
   }
   function hydrateActive(projectId, sessionId, state) {
@@ -330,18 +392,61 @@ function createTier1ContextCoordinator({
     if (!sensitiveStore?.writeActive) return;
     const state = stateFor(projectId, sessionId);
     prunePins(state);
-    try { sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned], operatorDirectives: state.directives }); } catch { /* in-memory ledger remains authoritative */ }
+    // While a summary is unsaved, the saved ledger must stay the one it
+    // replaced, or a restart would find neither the summary nor the turns it
+    // covered. Retry the summary first; the shortened ledger waits for it.
+    if (state.checkpointUnsaved) {
+      let saved;
+      try { saved = sensitiveStore.writeCheckpoint ? sensitiveStore.writeCheckpoint(projectId, sessionId, state.summary) : { ok: true }; }
+      catch (error) { saved = { ok: false, code: error.code || "MEMORY_SAVE_FAILED", error: error.message }; }
+      noteSave(state, saved);
+      if (saved?.ok !== true) return;
+      state.checkpointUnsaved = false;
+    }
+    let result;
+    try { result = sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned], operatorDirectives: state.directives }); }
+    catch (error) { result = { ok: false, code: error.code || "MEMORY_SAVE_FAILED", error: error.message }; }
+    noteSave(state, result);
   }
-  // A pin only means something while its block is in the ledger; a checkpoint or
-  // a front trim removes the block and the pin goes with it.
+  // Every save says whether this chat's memory reached durable storage. The
+  // in-memory state stays authoritative either way, and the next save that
+  // succeeds clears the warning by itself.
+  function noteSave(state, result) {
+    if (!result || typeof result !== "object") return result;
+    if (result.ok === true && result.durable !== false) {
+      state.saveHealth = { ok: true };
+      return result;
+    }
+    state.saveHealth = { ok: false, reason: saveFailureReason(result), code: String(result.code || (result.ephemeral ? "MEMORY_SECURE_STORAGE_UNAVAILABLE" : "MEMORY_SAVE_FAILED")) };
+    return result;
+  }
+  function saveHealth(projectId, sessionId) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return null;
+    return clone(hydrateSession(projectId, sessionId).saveHealth || { ok: true });
+  }
+  // A pin only means something while its block is in the ledger; a front trim
+  // removes the block and the pin goes with it. An empty ledger is the moment
+  // between a checkpoint and the controller re-sending the live task, so pins
+  // wait for the next ledger to say which blocks came back.
   function prunePins(state) {
-    if (!state.pinned.size) return;
+    if (!state.pinned.size || !state.active.length) return;
     const present = new Set(blockOpeners(state.active).map((opener) => opener.block_index));
     for (const index of [...state.pinned]) if (!present.has(index)) state.pinned.delete(index);
   }
+  // A trim that cuts into a block leaves that block's index on its surviving
+  // head. Otherwise the head would be numbered by position, as block 0, and
+  // collide with a released block 0. The head is marked partial: releasing
+  // only its tail would let a re-sent ledger bring the opener back as a second
+  // block with the same index.
   function capActive(messages) {
     const source = (Array.isArray(messages) ? messages : []).filter(Boolean).map(clone);
-    return source.length > ACTIVE_MAX ? source.slice(-ACTIVE_MAX) : source;
+    if (source.length <= ACTIVE_MAX) return source;
+    const kept = source.slice(-ACTIVE_MAX);
+    if (!Number.isSafeInteger(kept[0].block_index)) {
+      const opener = blockOpeners(source.slice(0, source.length - ACTIVE_MAX)).filter((message) => Number.isSafeInteger(message.block_index)).pop();
+      if (opener) Object.assign(kept[0], { block_index: opener.block_index, block_partial: true });
+    }
+    return kept;
   }
   // Stamp block indexes in place on the caller's objects before cloning them, so
   // a controller that keeps re-sending its own ledger keeps the same indexes.
@@ -504,6 +609,7 @@ function createTier1ContextCoordinator({
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 assembly requires opaque project and session IDs.");
     const limit = Math.max(1, Number(input.effective_context_limit || input.effectiveContextLimit || 1));
     const state = hydrateSession(projectId, sessionId);
+    state.lastLimit = limit;
     // A preview reports what Tier 1 currently holds for the display meter. It
     // must never advance the ledger, its durable copy, or the cached Block A
     // used by later OnChange recalculation.
@@ -576,9 +682,11 @@ function createTier1ContextCoordinator({
     const normalized = [];
     for (const message of source) {
       const role = String(message?.role || "unknown");
-      const content = redactText(message?.content || "", 4_000, retainSecrets);
       // Where a user-role message came from decides how it may be described later.
       const origin = messageOrigin(message) === "unattributed" ? "" : messageOrigin(message);
+      // Only real placeholders and the operator's own words keep marker text as is.
+      const trustedText = message?.block_tombstone === true || origin === "operator";
+      const content = redactText(trustedText ? message?.content || "" : neutralizeContextMarkers(String(message?.content || "")), 4_000, retainSecrets);
       normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80), ...(message?.block_tombstone === true ? { tombstone: true } : {}), ...(origin ? { origin } : {}) });
     }
     const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || "").slice(0, 120), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [], call_id: String(event?.call_id || "").slice(0, 200) }));
@@ -856,10 +964,14 @@ function createTier1ContextCoordinator({
       return keepNewest([...clean(earlier(field)), ...modelValues.filter((value) => !known.has(value)), ...clean(freshValues)], maximum);
     };
     const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpora.full, { retainSecrets });
-    const constraints = normalizeSemanticField(candidate.constraints, corpora.trusted, { retainSecrets });
-    const decisions = normalizeSemanticField(candidate.decisions, corpora.trusted, { retainSecrets });
+    // Fields that steer the agent may name only hosts the operator named (or
+    // that the project's scope covers); one shared word with the operator's
+    // text is not enough to carry a new target in.
+    const entityCheck = checkpointPolicy.trustTiers === false ? null : { trusted: corpora.trusted.entities, scopeCheck: context?.scopeCheck };
+    const constraints = normalizeSemanticField(candidate.constraints, corpora.trusted, { retainSecrets, entityCheck });
+    const decisions = normalizeSemanticField(candidate.decisions, corpora.trusted, { retainSecrets, entityCheck });
     const significantEvents = normalizeSemanticField(candidate.significant_events, corpora.full, { retainSecrets });
-    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpora.assistant, { retainSecrets, entityCheck: checkpointPolicy.trustTiers === false ? null : { trusted: corpora.trusted.entities, scopeCheck: context?.scopeCheck } });
+    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpora.assistant, { retainSecrets, entityCheck });
     candidate.grounded_facts = merge("grounded_facts", groundedFacts.values, fresh.facts, 300);
     candidate.constraints = merge("constraints", constraints.values, fresh.constraints, 200);
     candidate.decisions = merge("decisions", decisions.values, fresh.decisions, 200);
@@ -926,7 +1038,9 @@ function createTier1ContextCoordinator({
     const payload = requestV2 ? sanitizeValue(requestV2.request, "", 0, new WeakSet(), context?.retainSecrets === true, 400) || {} : sanitizeValue({
       previous_checkpoint: previousWindow,
       deterministic_reduction: context.reduction ? { ...context.reduction, ledger_call_ids: undefined, messages: messageWindow.items, tool_events: eventWindow.items, attempts: attemptWindow.items } : context.reduction,
-      active_conversation: redactToolCallMessages(activeWindow.items, { retainSecrets: context?.retainSecrets === true }),
+      // Each user message says where it came from, as in the v2 request, and
+      // untrusted text cannot imitate a placeholder or the Tier 1 header.
+      active_conversation: redactToolCallMessages(activeWindow.items.map(labelForSummarizer), { retainSecrets: context?.retainSecrets === true }),
       omitted_before: { messages: messageWindow.omitted, tool_events: eventWindow.omitted, attempts: attemptWindow.omitted, active_conversation: activeWindow.omitted },
       current_prompt_context_only: context.currentPrompt,
       current_workflow: context.workflow || null,
@@ -936,43 +1050,45 @@ function createTier1ContextCoordinator({
       authoritative_refs: context.protectedRefs,
       source_block_refs: context.sourceBlocks,
     }, "", 0, new WeakSet(), context?.retainSecrets === true) || {};
+    // A stop from the operator ends the call at once; the adapter also gets the
+    // signal so it can cancel its own request.
+    const signal = context.signal || null;
     const callModel = async (input) => new Promise((resolve, reject) => {
       let settled = false;
-      const timer = setTimeout(() => {
+      const finish = (callback, value) => {
         if (settled) return;
         settled = true;
-        reject(Object.assign(new Error("checkpoint model timeout"), { code: "MEMORY_CHECKPOINT_TIMEOUT" }));
-      }, 60_000);
+        clearTimeout(timer);
+        signal?.removeEventListener?.("abort", onAbort);
+        callback(value);
+      };
+      const onAbort = () => finish(reject, interruption());
+      const timer = setTimeout(() => finish(reject, Object.assign(new Error("checkpoint model timeout"), { code: "MEMORY_CHECKPOINT_TIMEOUT" })), 60_000);
+      if (signal?.aborted) return onAbort();
+      signal?.addEventListener?.("abort", onAbort, { once: true });
       Promise.resolve()
-        .then(() => checkpointModel(input))
-        .then((value) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(value);
-        })
-        .catch((error) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          reject(error);
-        });
+        .then(() => checkpointModel(input, { signal }))
+        .then((value) => finish(resolve, value), (error) => finish(reject, error));
     });
     let raw;
-    try { raw = await callModel(payload); } catch (error) { return operationFailure(error.code || "MEMORY_CHECKPOINT_MODEL_FAILED", error.message, {}, true); }
+    try { raw = await callModel(payload); } catch (error) { return operationFailure(signal?.aborted ? INTERRUPTED : error.code || "MEMORY_CHECKPOINT_MODEL_FAILED", error.message, {}, true); }
     // The adapter may attach how the call went as a non-enumerable `stats`.
     const modelStats = raw && typeof raw === "object" && raw.stats && typeof raw.stats === "object" ? { ...raw.stats, ...(requestV2 ? { omittedBefore: requestV2.omittedBefore } : {}) } : (requestV2 ? { omittedBefore: requestV2.omittedBefore } : null);
     let candidate = checkpointCandidate(raw, context, "model");
     let grounding = candidate ? validateCheckpointGrounding(candidate, context) : { ok: false, details: [{ instancePath: "", message: "checkpoint output must be an object" }] };
     let validation = candidate ? schemas.validate("ConversationCheckpointV3", candidate) : { ok: false, error: { details: [{ instancePath: "", message: "checkpoint output must be an object" }] } };
     if (!grounding.ok) validation = { ok: false, error: grounding };
-    if (!validation.ok || !fitCheckpointToBudget(candidate, context.limit)) {
-      // One repair maximum.  The invalid payload itself is never sent back;
-      // only its hash and bounded schema paths cross the model boundary.
+    // A valid answer that cannot fit its budget would not fit after a repair either.
+    if (validation.ok && !fitCheckpointToBudget(candidate, context.limit)) return { ok: false, code: "MEMORY_CHECKPOINT_BUDGET_EXCEEDED", details: [] };
+    if (!validation.ok) {
+      // One repair maximum.  The invalid output itself is never sent back, only
+      // its hash and bounded schema paths, alongside the same redacted request:
+      // a stateless provider has nothing to repair from otherwise.
       const invalidOutputHash = hashText(crypto, stable(raw == null ? null : raw));
       let repaired;
       try {
         repaired = await callModel({
+          ...payload,
           repair: true,
           invalid_output_hash: invalidOutputHash,
           schema_error_paths: (validation.error?.details || []).slice(0, 20).map((entry) => ({ path: entry.instancePath || entry.schemaPath || "", message: String(entry.message || "").slice(0, 240) })),
@@ -980,7 +1096,7 @@ function createTier1ContextCoordinator({
           authoritative_refs: sanitizeValue(context.protectedRefs) || [],
         });
       } catch (error) {
-        return operationFailure(error.code || "MEMORY_CHECKPOINT_MODEL_FAILED", error.message, {}, true);
+        return operationFailure(signal?.aborted ? INTERRUPTED : error.code || "MEMORY_CHECKPOINT_MODEL_FAILED", error.message, {}, true);
       }
       candidate = checkpointCandidate(repaired, context, "model");
       grounding = candidate ? validateCheckpointGrounding(candidate, context) : { ok: false, details: [] };
@@ -1004,6 +1120,10 @@ function createTier1ContextCoordinator({
   }
 
   async function checkpoint(input = {}) {
+    // A stopped checkpoint writes nothing: the ledger stays as it was and the
+    // next checkpoint starts from the beginning.
+    const signal = input.signal || null;
+    if (signal?.aborted) return interrupted();
     const projectId = String(input.project_id || input.projectId || "");
     const sessionId = String(input.session_id || input.sessionId || "");
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_CHECKPOINT_INPUT_INVALID", "A V3 checkpoint requires opaque project_id and session_id.");
@@ -1019,7 +1139,10 @@ function createTier1ContextCoordinator({
     const reductionMessages = currentPrompt && !promptAlreadyActive
       ? [{ role: "user", content: currentPrompt, id: `prompt_${canonicalKeyHash({ projectId, sessionId, currentPrompt }).slice(0, 32)}` }, ...active]
       : active;
-    const retainSecrets = input.retain_secrets === true || input.retainSecrets === true;
+    // Summaries always redact secrets. The project's "Redact secrets" setting
+    // decides what the live model reads (tool output, placeholders, recall);
+    // a summary is kept and carried forward, so it never holds a credential.
+    const retainSecrets = false;
     const reduction = reduceConversation(reductionMessages, input.tool_events || input.toolEvents || [], retainSecrets);
     const operatorTexts = reductionMessages.filter(isOperatorInput).map((message) => redactText(operatorText(message), 4_000, retainSecrets)).filter(Boolean);
     // Steering recorded as it arrived. It survives the block it arrived in being
@@ -1073,34 +1196,47 @@ function createTier1ContextCoordinator({
       retainSecrets,
       trimStats: {},
       summarizerInputTokens: Number(input.summarizer_input_tokens ?? input.summarizerInputTokens) || 0,
+      signal,
     };
     let semantic = null;
-    if (input.allow_model !== false && input.reason !== "emergency") semantic = await semanticCheckpoint(context);
+    if (input.allow_model !== false) semantic = await semanticCheckpoint(context);
+    // Never fall back to the deterministic summary for a run that was stopped.
+    if (signal?.aborted) return interrupted();
     let checkpointValue = semantic?.ok ? semantic.checkpoint : deterministicFallback(context);
     checkpointValue = fitCheckpointToBudget(checkpointValue, context.limit, context.trimStats);
     // A summary that cannot fit its budget is refused and the live ledger is
     // kept. Silently dropping an operator restriction to make it fit would be
     // worse than failing this checkpoint.
     if (!checkpointValue) return { ok: false, code: "MEMORY_CHECKPOINT_BUDGET_EXCEEDED", error: "The checkpoint exceeds its adaptive budget.", details: [], activePreserved: true, trimmed: context.trimStats };
-    if (checkpointValue) {
-      const hashInput = { ...checkpointValue };
-      delete hashInput.content_hash;
-      checkpointValue.content_hash = hashText(crypto, stable(hashInput));
-    }
+    // One credential-shaped string the redactor missed costs that string, not the
+    // checkpoint: a whole-checkpoint rejection would repeat at every checkpoint.
+    const quarantined = retainSecrets ? 0 : quarantineSecretStrings(checkpointValue);
+    const hashInput = { ...checkpointValue };
+    delete hashInput.content_hash;
+    checkpointValue.content_hash = hashText(crypto, stable(hashInput));
     try {
       // The checkpoint is persisted in sensitive storage, but it is also
       // copied into the readable Tier 1 assembly and diagnostics.  Keep the
       // final boundary defensive in case a custom model/provider callback
       // returns a credential-shaped value that earlier normalization missed.
-      if (checkpointValue && !retainSecrets) assertNoSecretValues(checkpointValue);
+      if (!retainSecrets) assertNoSecretValues(checkpointValue);
     } catch (error) {
       return { ok: false, code: error.code || "MEMORY_CHECKPOINT_SECRET_REJECTED", error: "Checkpoint contains a prohibited sensitive value.", details: {}, activePreserved: true };
     }
-    const validation = checkpointValue ? schemas.validate("ConversationCheckpointV3", checkpointValue) : { ok: false, error: { message: "The checkpoint exceeds its adaptive budget.", details: [] } };
+    const validation = schemas.validate("ConversationCheckpointV3", checkpointValue);
     if (!validation.ok) return { ok: false, code: "MEMORY_CHECKPOINT_INVALID", error: validation.error.message, details: validation.error.details, activePreserved: true };
+    // The commit below is synchronous, so a stop either lands before this check
+    // and discards everything, or after the checkpoint is fully written.
+    if (signal?.aborted) return interrupted();
     let stored = { ok: true, ephemeral: true };
-    if (sensitiveStore?.writeCheckpoint) stored = sensitiveStore.writeCheckpoint(projectId, sessionId, checkpointValue);
-    if (!stored.ok) return { ...stored, checkpointed: false, activePreserved: true };
+    if (sensitiveStore?.writeCheckpoint) {
+      try { stored = sensitiveStore.writeCheckpoint(projectId, sessionId, checkpointValue); }
+      catch (error) { stored = { ok: false, code: error.code || "MEMORY_SAVE_FAILED", error: error.message }; }
+      noteSave(state, stored);
+      state.checkpointUnsaved = stored?.ok !== true;
+    }
+    // A summary that cannot be saved still applies in memory: the chat keeps
+    // fitting its window, and the save warning says it will not survive a restart.
     state.summary = checkpointValue;
     state.checkpointRevision += 1;
     state.directives = state.directives.filter((entry) => !consumedDirectives.includes(entry.source_message_id));
@@ -1109,17 +1245,18 @@ function createTier1ContextCoordinator({
     // The workflow visible in Tier 1 changes only at this checkpoint boundary.
     state.workflow = checkpointValue.workflow_continuity?.state === "completed" ? null : clone(checkpointValue.workflow_continuity);
     syncMeter(projectId, sessionId, ["Summarized Conversation", "Active Conversation", "Current Workflow"]);
-    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", modelStats: semantic?.ok === true ? semantic.modelStats || null : null, trimmed: context.trimStats };
+    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", modelStats: semantic?.ok === true ? semantic.modelStats || null : null, trimmed: context.trimStats, quarantined };
   }
 
   // Operator steering is recorded when it arrives and folded into the
   // checkpoint's constraints at the next checkpoint. Only the operator's own words
   // belong here, so a late tool result is refused.
-  function recordDirective(projectId, sessionId, { text = "", sourceMessageId = "", revision = 0, retainSecrets = false } = {}) {
+  // Directives exist only to be folded into a summary, so they are always redacted.
+  function recordDirective(projectId, sessionId, { text = "", sourceMessageId = "", revision = 0 } = {}) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "A directive needs opaque project and session IDs.");
     const id = String(sourceMessageId || "").trim().slice(0, 240);
     if (!id || NON_OPERATOR_ID.test(id)) return operationFailure("MEMORY_DIRECTIVE_NOT_OPERATOR", "Only operator messages can be recorded as directives.");
-    const clean = redactText(text, 600, retainSecrets);
+    const clean = redactText(text, 600);
     if (!clean) return operationFailure("MEMORY_DIRECTIVE_EMPTY", "A directive needs text.");
     const state = hydrateSession(projectId, sessionId);
     state.directives = [...state.directives.filter((entry) => entry.source_message_id !== id), { text: clean, source_message_id: id, revision: Number(revision) || 0 }].slice(-50);
@@ -1149,31 +1286,83 @@ function createTier1ContextCoordinator({
     syncMeter(projectId, sessionId, ["Current Workflow"]);
     return clone(state.workflow);
   }
+  // One run writes a session's ledger at a time. A run takes the lease before
+  // it reads the ledger and gives it back when it ends; another run for the
+  // same session waits its turn instead of overwriting the first one's work.
+  // While the lease is held, `committed` is the state as it was when the run
+  // began, which is what a fork copies.
+  const writerQueues = new Map();
+  function acquireWriter(projectId, sessionId, { signal = null } = {}) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return Promise.resolve(() => {});
+    const key = sessionKey(projectId, sessionId);
+    const queue = writerQueues.get(key) || { held: false, waiting: [] };
+    writerQueues.set(key, queue);
+    return new Promise((resolve, reject) => {
+      const grant = () => {
+        queue.held = true;
+        const state = hydrateSession(projectId, sessionId);
+        state.committed = {
+          active: state.active.map(clone),
+          summary: state.summary ? clone(state.summary) : null,
+          workflow: state.workflow ? clone(state.workflow) : null,
+          checkpointRevision: state.checkpointRevision,
+          pinned: new Set(state.pinned),
+          directives: clone(state.directives),
+        };
+        let released = false;
+        resolve(() => {
+          if (released) return;
+          released = true;
+          state.committed = null;
+          queue.held = false;
+          const next = queue.waiting.shift();
+          if (next) next();
+          else writerQueues.delete(key);
+        });
+      };
+      if (!queue.held) return grant();
+      const onAbort = () => {
+        const at = queue.waiting.indexOf(waiter);
+        if (at >= 0) queue.waiting.splice(at, 1);
+        reject(Object.assign(new Error("The run was stopped while waiting for the session."), { code: "SESSION_WRITER_ABORTED" }));
+      };
+      const waiter = () => { signal?.removeEventListener?.("abort", onAbort); grant(); };
+      if (signal?.aborted) return onAbort();
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      queue.waiting.push(waiter);
+    });
+  }
+
   function cloneSession(projectId, sourceSessionId, destSessionId) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sourceSessionId, "session") || !isMemoryId(destSessionId, "session")) {
       return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 session clone requires opaque project and session IDs.");
     }
     if (sourceSessionId === destSessionId) return { ok: true, sessionId: destSessionId, activeCount: 0, copied: false };
-    const source = hydrateSession(projectId, sourceSessionId);
+    const live = hydrateSession(projectId, sourceSessionId);
+    // A fork during a run copies the state from before that run: never a
+    // half-written turn, an open tool call or a summary in progress.
+    const source = live.committed || live;
     const dest = stateFor(projectId, destSessionId);
     dest.active = capActive(source.active);
     dest.summary = source.summary ? clone(source.summary) : null;
     dest.workflow = source.workflow ? clone(source.workflow) : null;
     dest.checkpointRevision = Number(source.checkpointRevision) || 0;
-    dest.blockA = source.blockA ? clone(source.blockA) : null;
+    dest.blockA = live.blockA ? clone(live.blockA) : null;
     dest.lastAssembly = null;
     dest.activeHydrated = true;
-    dest.nextBlockIndex = source.nextBlockIndex;
+    // Indexes the running turn has issued stay used, so the fork never reuses one.
+    dest.nextBlockIndex = live.nextBlockIndex;
     dest.pinned = new Set(source.pinned);
     dest.directives = clone(source.directives);
     dest.released = new Map();
-    for (const message of dest.active) {
-      if (message.block_tombstone !== true || !Number.isSafeInteger(message.block_index)) continue;
-      const entry = loadReleased(projectId, sourceSessionId, source, message.block_index);
+    // Every released block is copied, not only those whose tombstone is still in
+    // the ledger: the copied summary names earlier ones as recallable too.
+    for (let index = 0; index < (Number(live.nextBlockIndex) || 0); index += 1) {
+      const entry = loadReleased(projectId, sourceSessionId, live, index);
       if (!entry) continue;
       let stored = false;
-      try { stored = sensitiveStore?.writeReleasedBlock?.(projectId, destSessionId, message.block_index, { block_id: entry.blockId, messages: entry.messages })?.ok === true; } catch { stored = false; }
-      if (!stored) dest.released.set(message.block_index, { blockId: entry.blockId, messages: entry.messages.map(clone) });
+      try { stored = sensitiveStore?.writeReleasedBlock?.(projectId, destSessionId, index, { block_id: entry.blockId, messages: entry.messages })?.ok === true; } catch { stored = false; }
+      if (!stored) dest.released.set(index, { blockId: entry.blockId, messages: entry.messages.map(clone) });
     }
     persistActive(projectId, destSessionId);
     if (dest.summary && sensitiveStore?.writeCheckpoint) {
@@ -1239,6 +1428,7 @@ function createTier1ContextCoordinator({
       if (!block) rejected.push({ index, code: "BLOCK_NOT_FOUND" });
       else if (block.state === "evicted") rejected.push({ index, code: "BLOCK_ALREADY_RELEASED" });
       else if (state.pinned.has(block.index)) rejected.push({ index, code: "BLOCK_PINNED" });
+      else if (block.partial) rejected.push({ index, code: "BLOCK_PARTIAL" });
       else if (block === newest) rejected.push({ index, code: "BLOCK_IN_FLIGHT" });
       else plan.push({ block, reason: request.reason });
     }
@@ -1248,6 +1438,7 @@ function createTier1ContextCoordinator({
       let saved;
       try { saved = sensitiveStore?.writeReleasedBlock ? sensitiveStore.writeReleasedBlock(projectId, sessionId, item.block.index, { block_id: item.block.blockId, messages }) : { ok: true }; }
       catch (error) { saved = { ok: false, code: "MEMORY_RELEASED_BLOCK_WRITE_FAILED", error: error.message }; }
+      if (sensitiveStore?.writeReleasedBlock) noteSave(state, saved);
       if (saved?.ok !== true) { rejected.push({ index: item.block.index, code: saved?.code || "BLOCK_PERSIST_FAILED" }); continue; }
       // With a store the encrypted copy is the source of truth; keeping every
       // released block in memory as well would defeat the point of releasing it.
@@ -1257,7 +1448,7 @@ function createTier1ContextCoordinator({
     const evicted = [];
     for (const item of [...stored].sort((left, right) => right.block.start - left.block.start)) {
       const content = tombstoneText(item.block, item.reason, retainSecrets);
-      const tombstone = { role: "user", content, block_index: item.block.index, block_tombstone: true, released_tokens: item.block.tokenEstimate };
+      const tombstone = { role: "user", content, block_index: item.block.index, block_tombstone: true, released_tokens: item.block.tokenEstimate, turn_start: isTurnStart(item.block.messages[0]) };
       state.active.splice(item.block.start, item.block.messages.length, tombstone);
       evicted.unshift({ index: item.block.index, blockId: item.block.blockId, messages: item.block.messages.length, tokensBefore: item.block.tokenEstimate, tokensAfter: tokenCount(tombstone), tombstone: content });
     }
@@ -1275,9 +1466,15 @@ function createTier1ContextCoordinator({
     const live = blocksFromActive(state.active, tokenCount).find((block) => block.index === number);
     if (live && live.state === "active") return operationFailure("MEMORY_BLOCK_ACTIVE", `Block ${number} is still in context.`);
     const entry = loadReleased(projectId, sessionId, state, number);
+    if (!entry && live?.state === "evicted") return operationFailure("MEMORY_BLOCK_COPY_LOST", `Block ${number} was released, but its saved copy is missing, so it cannot be read again.`);
     if (!entry) return operationFailure("MEMORY_BLOCK_NOT_RELEASED", `Block ${number} was not released or its stored copy is unavailable.`);
     const messages = entry.messages.map(clone);
     return { ok: true, index: number, blockId: entry.blockId, messages, tokens: count(messages).tokens };
+  }
+  // The window the session was last assembled for decides the pin budget.
+  function pinBudget(state) {
+    const limit = Number(state.lastLimit || state.lastAssembly?.effective_context_limit);
+    return Number.isFinite(limit) && limit > 1 ? Math.floor(limit * PIN_BUDGET_RATIO) : 0;
   }
   function activeBlocks(projectId, sessionId) {
     const value = hydrateSession(projectId, sessionId);
@@ -1292,6 +1489,11 @@ function createTier1ContextCoordinator({
     const block = blocksFromActive(state.active, tokenCount).find((candidate) => candidate.index === number);
     if (!block) return operationFailure("MEMORY_BLOCK_NOT_FOUND", `Block ${number} is not in the conversation.`);
     if (block.state === "evicted") return operationFailure("MEMORY_BLOCK_RELEASED", `Block ${number} was already released.`);
+    if (pinned !== false && !state.pinned.has(number)) {
+      const budget = pinBudget(state);
+      const used = blocksFromActive(state.active, tokenCount).filter((candidate) => state.pinned.has(candidate.index)).reduce((sum, candidate) => sum + candidate.tokenEstimate, 0);
+      if (budget && used + block.tokenEstimate > budget) return operationFailure("BLOCK_PIN_BUDGET", `Pinned turns may use at most ${Math.round(PIN_BUDGET_RATIO * 100)}% of the context window.`, { budget, used, tokens: block.tokenEstimate });
+    }
     if (pinned === false) state.pinned.delete(number); else state.pinned.add(number);
     persistActive(projectId, sessionId);
     return { ok: true, index: number, pinned: state.pinned.has(number), pinnedBlocks: [...state.pinned].sort((left, right) => left - right) };
@@ -1304,7 +1506,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, evictBlocks, recallBlock, pinBlock, recordDirective, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, acquireWriter, saveHealth, state, activeBlocks, evictBlocks, recallBlock, pinBlock, recordDirective, clear, clearProject });
 }
 
-module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, isOperatorInput, keepNewest, networkEntities, operatorText, METER_ROWS });
+module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, PIN_BUDGET_RATIO, isTurnStart, saveFailureReason, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, isOperatorInput, keepNewest, networkEntities, operatorText, METER_ROWS });

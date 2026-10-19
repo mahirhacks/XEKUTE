@@ -69,14 +69,14 @@ test("a directive is recorded with its words, deduped by message id, and refused
   assert.equal(coordinator.recordDirective("nope", sessionId, { text: "x", sourceMessageId: "s" }).code, "MEMORY_TIER1_INPUT_INVALID");
 });
 
-test("directive text is redacted unless the project keeps secrets, bounded, and the list keeps the newest 50", () => {
+test("directive text is always redacted, bounded, and the list keeps the newest 50", () => {
   const coordinator = createTier1ContextCoordinator();
   coordinator.recordDirective(projectId, sessionId, { text: "use password=hunter2 for the lab", sourceMessageId: "steer-1" });
   coordinator.recordDirective(projectId, sessionId, { text: "use password=hunter2 for the lab", sourceMessageId: "steer-2", retainSecrets: true });
   coordinator.recordDirective(projectId, sessionId, { text: "x".repeat(2_000), sourceMessageId: "steer-3" });
   const [first, second, third] = coordinator.state(projectId, sessionId).directives;
   assert.equal(first.text, "use [REDACTED] for the lab");
-  assert.equal(second.text, "use password=hunter2 for the lab", "a project that keeps secrets keeps them");
+  assert.equal(second.text, "use [REDACTED] for the lab", "directives only feed summaries, which never keep secrets");
   assert.equal(third.text.length, 600);
   for (let index = 0; index < 60; index += 1) coordinator.recordDirective(projectId, sessionId, { text: `directive ${index}`, sourceMessageId: `many-${index}` });
   const kept = coordinator.state(projectId, sessionId).directives;

@@ -1,6 +1,6 @@
 # Context window management plan
 
-Status: proposal. Three pillars working together to keep the live context small during long cybersecurity runs. Delegation keeps bulk out of the main thread. Active-conversation block eviction drops finished turns. Checkpoint summarization is the fallback when eviction is not enough.
+Status: implemented (see Status below). Three pillars working together to keep the live context small during long cybersecurity runs. Delegation keeps bulk out of the main thread. Active-conversation block eviction drops finished turns. Checkpoint summarization is the fallback when eviction is not enough.
 
 ## What already exists
 
@@ -110,10 +110,23 @@ All six phases are implemented and covered by tests. The plan above is the origi
 - A block is one user turn. Each block opener carries a `block_index` that is stamped once and never reused, so index 7 stays 7 after block 3 is released. A counter is persisted with the active ledger.
 - Releasing replaces the whole block with one tombstone that keeps its index. The full messages are written to the encrypted session store first. If that write fails the block stays in context.
 - The model learns block numbers from tombstones and from `release_blocks` with `operation: "list"`. Blocks are not labelled in the prompt, because rewriting an old message would break the prompt cache for everything after it.
-- `recall_block` returns the old messages as a tool result of the current turn. Nothing is spliced back into the middle of history.
+- `recall_block` returns the old messages as a text transcript in a tool result of the current turn. Nothing is spliced back into the middle of history. A transcript larger than about 20% of the window comes back as head and tail with `next_offset`, and `recall_block` with that `offset` pages through the rest.
 - Only blocks from before the task in progress can be released. The live task, its steering messages and any open tool exchange are protected.
 - Automatic release starts at 60% of the context window and releases the oldest finished blocks until usage is near 45%. It keeps the two newest finished blocks, skips pinned blocks and blocks under 600 tokens, and never runs in preview mode or when the coordinator has no block support. Checkpoint summarization still runs at 90%.
-- Pins are a set of block indexes stored with the active ledger, not a flag on messages, so they survive the controller re-sending its own copy of the ledger.
+- Pins are a set of block indexes stored with the active ledger, not a flag on messages, so they survive the controller re-sending its own copy of the ledger. A pinned block is never released, and a checkpoint keeps it word for word: the controller leaves pinned turns out of the summary input and puts them back in the ledger before the task (`pinnedTurnsToKeep`). The live task is re-added as before.
+- Pinned turns may use at most 25% of the window (`PIN_BUDGET_RATIO`). `pinBlock` refuses a pin past that with `BLOCK_PIN_BUDGET`, measured against the window the session was last assembled for. If the window shrinks, a checkpoint keeps the newest pins that fit and unpins and summarizes the older ones. `test/context-pins.test.js` covers this.
+- The blocks panel shows the pin budget in its heading ("N pinned (X of Y)") and disables the pin button on a turn that would go past it. It lists only the last six turns, plus every pinned block. A turn starts with a prompt the operator sent. Steering with `task_revision` above 0, late `result:` deliveries, runtime notes and the surviving head of a trimmed block are not new turns, and a tombstone keeps the `turn_start` of the block it replaced.
+- Every save to the encrypted Tier 1 store is recorded per chat (`noteSave`, `saveHealth(projectId, sessionId)`), with a reason of `secure_storage`, `disk_full`, `no_access` or `write_failed`. The in-memory state stays authoritative, and the next save that succeeds clears the failure.
+- A summary whose save fails still applies in memory, so the chat keeps fitting its window. A release whose copy cannot be saved is refused and the block stays in context. Recalling a released block whose saved copy is missing returns `MEMORY_BLOCK_COPY_LOST`.
+- A deleted session folder is recreated by the next save: the atomic writer recreates directories and the full ledger is rewritten.
+- The controller emits a `memory_save_health` event when a chat's save health changes. The renderer shows a closeable gray banner above the composer ("Memory can't be saved because ... This chat will lose its earlier context if you restart the app.") until a save succeeds. Checks: `test/memory-save-health.test.js` and `npm run verify:memory-save`.
+- Known limit: if the whole session folder cannot be written, the session supervisor (the durable live-input queue) cannot admit the run, and the run fails with a raw error before Tier 1 is involved.
+- The coordinator keeps the newest `ACTIVE_MAX` (2,000) messages. A trim that cuts into a block leaves that block's index on its surviving head and marks it partial, and the controller offsets its own longer ledger by the trimmed count when it releases. A partial block is never released (`BLOCK_PARTIAL`): releasing only its tail would let a re-sent ledger bring its opener back as a second block with the same index.
+- After a checkpoint the task's own messages go back into the ledger as messages, with or without a live-input supervisor, so the task stays an instruction rather than summarized data. A checkpoint before a model call is skipped when the ledger holds nothing but those messages.
+- Tests: `memory-v3-tier1-blocks-model.test.js` checks the coordinator against a reference model through trims, forks, restarts and checkpoints; `context-blocks-controller-fuzz.test.js` runs whole agent turns with random block tool use, forced checkpoints and live steering; `npm run verify:context-blocks` drives the real app against a scripted Ollama.
+- A forked chat gets a copy of every released block, so the "Released work" lines its summary carries stay recallable.
+- One run writes a chat's ledger at a time. A run takes the chat's writer lease (`acquireWriter`) before it reads the ledger and gives it back when it ends, so a background continuation waits for a foreground run instead of overwriting it; a stop while waiting ends the run without touching the chat. Meter previews only read and take no lease.
+- A fork taken while a run is going copies the state from when that run began (the lease's committed snapshot): never a half-written turn, an open tool call or a summary in progress. It keeps the running turn's block counter, so it never reuses an index.
 
 ### Where the build differs from the plan
 
@@ -130,6 +143,7 @@ All six phases are implemented and covered by tests. The plan above is the origi
 - Capping and saving a single huge tool output inside one running turn. Block release cannot touch the turn that is still running.
 - A model-based relevance classifier. The model-driven tool and the size and age policy came first; add a classifier only if they leave reclaim unused.
 - Measuring the real prompt-cache cost of a release against a live provider.
+- Pillar 2's candidate filter is simpler than designed: release picks by age, size and the newest-two rule. It does not check "outcome completed" or later references to a block's artifacts, and blocks holding older browser-screenshot exchanges can be released.
 
 ## Gotchas
 

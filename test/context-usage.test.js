@@ -23,6 +23,10 @@ test("context meter uses the nine Tier 1 sections and current usage snapshots", 
   assert.ok(runtimeModules.includes('"../../prompts/skills/context-router.js"'));
   assert.ok(html.includes('id="context-usage-heading-value"'));
   assert.ok(html.includes('id="context-usage-breakdown"'));
+  // The ring opens a two-row menu, like the model picker; each row opens its own panel.
+  assert.match(html, /id="context-usage-menu"[\s\S]*?id="context-window-trigger"[\s\S]*?aria-controls="context-usage-popover"[\s\S]*?id="context-blocks-trigger"[\s\S]*?aria-controls="context-blocks-panel"/);
+  assert.match(html, /id="context-blocks-panel"[\s\S]*?id="context-blocks-list"/);
+  assert.doesNotMatch(renderer, /contextUsageBreakdown\.innerHTML = rows\.join\(""\) \+/, "blocks are not rendered into the window panel");
   for (const section of ["System Prompt", "Tool Definitions", "Rules", "Skills", "Subagents", "MCP", "Summarized Conversation", "Active Conversation", "Current Workflow"]) {
     assert.match(renderer, new RegExp(`label: "${section}"`));
   }
