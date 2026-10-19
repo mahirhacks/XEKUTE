@@ -4936,25 +4936,6 @@ html.panel-resizing iframe {
   user-select: text;
 }
 
-#chat-input-measure {
-  box-sizing: border-box;
-  position: absolute;
-  visibility: hidden;
-  pointer-events: none;
-  z-index: -1;
-  inset: 0 auto auto 0;
-  width: 100%;
-  min-height: 0;
-  overflow: hidden;
-  padding: 8px 10px 3px;
-  border: none;
-  font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-}
-
 #chat-input.at-scroll-cap {
   overflow-y: auto;
 }
@@ -5478,10 +5459,27 @@ html.panel-resizing iframe {
   line-height: 14px;
 }
 
-.context-blocks {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+/* The context ring opens a small menu like the model picker's; each row opens
+   its own panel beside it. */
+.context-usage-menu { width: 250px; }
+.context-usage-menu .model-control-value { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.context-blocks-panel {
+  position: fixed;
+  z-index: 10000;
+  width: 336px;
+  max-width: calc(100vw - 28px);
+  max-height: min(420px, calc(100vh - 16px));
+  padding: 10px 12px;
+  overflow-y: auto;
+  background: #181818;
+  border: 1px solid #303030;
+  border-radius: 10px;
+}
+.context-blocks-panel[hidden] { display: none !important; }
+.context-blocks-empty {
+  padding: 6px 0;
+  font-size: 12px;
+  opacity: 0.6;
 }
 .context-blocks-heading {
   display: flex;

@@ -16,7 +16,7 @@ const NOTE_MAX = 240;
 const SUMMARY_MAX = 120;
 
 const RELEASE_BLOCKS_DESCRIPTION = "Manage context space. Each earlier user turn of this conversation is a numbered block. Use operation list to see which finished blocks can be released, then operation release to replace finished blocks you no longer need with a one-line placeholder. Put anything you still need (hosts, credentials, findings, file paths) in your reply or notes first, because a released block leaves context. A released block can be restored with recall_block. Blocks from the task you are working on now cannot be released.";
-const RECALL_BLOCK_DESCRIPTION = "Read a released block again. Pass the block index shown in its placeholder or in the release_blocks list. The block is returned in this tool result and does not return to its old place in the conversation.";
+const RECALL_BLOCK_DESCRIPTION = "Read a released block again. Pass the block index shown in its placeholder or in the release_blocks list. The block is returned in this tool result and does not return to its old place in the conversation. A block too large for one result comes back cut, with next_offset: call again with that offset to read the omitted part.";
 
 const RELEASE_BLOCKS_INPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -51,6 +51,7 @@ const RECALL_BLOCK_INPUT_SCHEMA = Object.freeze({
   description: RECALL_BLOCK_DESCRIPTION,
   properties: {
     index: { type: "integer", minimum: 0, description: "Block number of a released block." },
+    offset: { type: "integer", minimum: 0, description: "Character offset into the block's transcript, from a previous result's next_offset. Omit to read from the start." },
   },
   required: ["index"],
   additionalProperties: false,
@@ -113,7 +114,7 @@ function describeBlocks(blocks, releasableBefore, redact = (value) => value) {
     return {
       index: block.index,
       state: block.state === "evicted" ? "released" : "in_context",
-      releasable: block.state !== "evicted" && block.pinned !== true && position < releasableBefore,
+      releasable: block.state !== "evicted" && block.pinned !== true && block.partial !== true && position < releasableBefore,
       pinned: block.pinned === true,
       releasedTokens: tombstone ? Math.max(0, Number(tombstone.released_tokens) || 0) : 0,
       messages: block.messages.length,
@@ -137,7 +138,9 @@ function sameMessages(left, right) {
 }
 
 // Plain-text transcript of a released block for the recall_block result.
-function renderReleasedBlock(messages, { maxChars = 60_000 } = {}) {
+// Without an offset a large block shows its head and tail; `nextOffset` is where
+// the omitted middle starts. With an offset it returns the page from there.
+function renderReleasedBlock(messages, { maxChars = 60_000, offset = 0 } = {}) {
   const lines = [];
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!message) continue;
@@ -159,9 +162,14 @@ function renderReleasedBlock(messages, { maxChars = 60_000 } = {}) {
   }
   const text = lines.join("\n");
   const limit = Math.max(1_000, Math.floor(Number(maxChars) || 60_000));
-  if (text.length <= limit) return { text, truncated: false };
+  const from = Math.max(0, Math.floor(Number(offset) || 0));
+  if (from > 0) {
+    const end = Math.min(text.length, from + limit);
+    return { text: text.slice(from, end), truncated: end < text.length, nextOffset: end < text.length ? end : null, totalChars: text.length };
+  }
+  if (text.length <= limit) return { text, truncated: false, nextOffset: null, totalChars: text.length };
   const head = Math.floor(limit * 0.68);
-  return { text: `${text.slice(0, head)}\n... ${text.length - limit} characters omitted ...\n${text.slice(-(limit - head))}`, truncated: true };
+  return { text: `${text.slice(0, head)}\n... ${text.length - limit} characters omitted (read them with offset ${head}) ...\n${text.slice(-(limit - head))}`, truncated: true, nextOffset: head, totalChars: text.length };
 }
 
 function createContextBlockTool(name, description, inputSchema) {

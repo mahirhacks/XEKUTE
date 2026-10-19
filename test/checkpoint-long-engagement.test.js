@@ -81,7 +81,9 @@ for (const withModel of [false, true]) {
 
 test("the last facts of a long engagement belong to its latest period", async () => {
   const { checkpoint } = await runEngagement({ withModel: false });
-  const tail = checkpoint.grounded_facts.slice(-3).join(" ");
-  assert.equal(tail.includes(`10.1.${CHECKPOINTS - 1}.`) || tail.includes("10.250.0.10"), true);
+  // The repeated failing scan moves to the newest position every period, so it
+  // is left out: it would make any tail look recent.
+  const newest = checkpoint.grounded_facts.filter((fact) => !fact.includes("10.250.0.10")).at(-1);
+  assert.match(newest, new RegExp(`10\\.1\\.${CHECKPOINTS - 1}\\.`));
   assert.equal(checkpoint.grounded_facts.some((fact) => fact.includes(`10.1.${CHECKPOINTS - 1}.10`)), true);
 });

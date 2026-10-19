@@ -152,7 +152,7 @@ test("the main-process summarizer request honors the project's Redact secrets se
   const fs = require("node:fs");
   const path = require("node:path");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
-  assert.match(main, /async function runTier1CheckpointModel\(\{ context = \{\}, model = "", provider = "", reasoningEffort = null, retainSecrets = false \} = \{\}\)/);
+  assert.match(main, /async function runTier1CheckpointModel\(\{ context = \{\}, model = "", provider = "", reasoningEffort = null, retainSecrets = false, signal = null \} = \{\}\)/);
   assert.match(main, /redactToolCallMessages\(context\.active\.slice\(0, 500\), \{ retainSecrets \}\)/);
   assert.match(main, /const retainSecrets = readProjectProfile\(payload\.workspace\)\?\.profile\?\.dataHandling\?\.redactSecrets === false;/);
   assert.match(main, /return runTier1CheckpointModel\(\{ context, \.\.\.common, retainSecrets \}\);/);

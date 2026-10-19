@@ -28,7 +28,9 @@ const { createRoundAccounting, waitForRetry } = require("../runtime/round-accoun
 const { completeExchanges, coherentTail } = require("../runtime/tool-protocol.js");
 const { runModelAttempt } = require("../runtime/model-attempt.js");
 const { CONTEXT_START, prepareChatReferenceContext, referenceIds } = require("../runtime/chat-references.js");
-const { approximateTokens } = require("../../app/services/memory/tier1-context-coordinator.js");
+const { approximateTokens, summaryBudget } = require("../../app/services/memory/tier1-context-coordinator.js");
+const { NON_OPERATOR_ID } = require("../../app/services/memory/message-provenance.js");
+const { neutralizeContextMarkers } = require("../../shared/context-markers.js");
 const { estimateBrowserImageTokens, retainBrowserScreenshotExchanges } = require("../llm/openrouter/browser-images.js");
 
 // Delivery state of every detached tool result in this process, keyed by its
@@ -918,6 +920,8 @@ async function runAgentTurn({
     consumedPlanId = "";
   }
   let tier1CheckpointInFlight = null;
+  let roundCheckpointed = false;
+  let summaryRefitted = false;
   const refreshTier1Prompt = ({ resetHistory = true } = {}) => {
     if (!useTier1) return tier1Assembly;
     const next = tier1Context.assemble({
@@ -1062,6 +1066,8 @@ async function runAgentTurn({
   };
   const checkpointTier1IfNeeded = async ({ force = false, reason = "iteration", midTask = false } = {}) => {
     if (!useTier1 || tier1CheckpointInFlight) return tier1CheckpointInFlight || { ok: true, checkpointed: false, skipped: true };
+    // A stopped run starts no summarization; the next run does it from the start.
+    if (signal?.aborted) return { ok: true, checkpointed: false, skipped: true, interrupted: true };
     // Reassemble immediately before measuring pressure.  Tool results and
     // assistant messages are appended between model iterations; measuring the
     // previous assembly would checkpoint one iteration too late and could
@@ -1079,7 +1085,8 @@ async function runAgentTurn({
         active_conversation: tier1Active,
         tool_events: tier1ToolEvents,
         current_workflow: currentWorkflow || null,
-        objective: taskInstructions,
+        // The checkpoint trusts its objective, so a late tool result is left out of it.
+        objective: inputMessages.filter((message) => !NON_OPERATOR_ID.test(String(message.source_message_id || ""))).map(scopedContent).join("\n\n") || String(userMessage || ""),
         protected_refs: Array.isArray(workingReferences) ? workingReferences.map((entry) => entry?.record_id || entry?.recordId || entry?.id || entry).filter(Boolean) : [],
         source_block_refs: precedingBlockId ? [precedingBlockId] : [],
         effective_context_limit: effectiveContextLimit,
@@ -1093,14 +1100,26 @@ async function runAgentTurn({
         scope_check: tier1ScopeCheck(),
         // How much of the summarizer's input window the request may use.
         summarizer_input_tokens: contextPlan?.provider === "openrouter" ? 60_000 : 20_000,
+        signal,
       });
+      if (checkpoint?.interrupted) {
+        // Nothing was written; callers carry on and the stop ends the run.
+        sendEvent({ type: "context_checkpoint", status: "interrupted", reason, midTask, pressureTokens: pressure.totalTokens });
+        return { ok: true, checkpointed: false, interrupted: true, pressure };
+      }
       if (checkpoint?.ok) {
         const screenshotExchanges = browserImageTokens(tier1Active) > 0
           ? retainBrowserScreenshotExchanges(tier1Active).map((message) => ({ ...message })) : [];
+        // The task's own messages stay instructions after a checkpoint, with or
+        // without a live-input supervisor; in the summary they would only be data.
+        // The stamps live on the ledger copies, so the live task carries its
+        // block index (and any pin on it) across the checkpoint.
+        const openerIdentity = (message) => message.source_message_id || `${message.role}:${message.content}`;
+        const stamps = new Map(tier1Active.filter((message) => Number.isSafeInteger(message.block_index)).map((message) => [openerIdentity(message), message.block_index]));
         tier1Active.splice(0, tier1Active.length);
-        if (liveInput) tier1Active.push(...inputMessages.map((message) => ({ ...message })));
+        tier1Active.push(...inputMessages.map((message) => (stamps.has(openerIdentity(message)) ? { ...message, block_index: stamps.get(openerIdentity(message)) } : { ...message })));
         tier1Active.push(...screenshotExchanges);
-        if (liveInput || screenshotExchanges.length) tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1Active);
+        tier1Context.setActiveConversation?.(tier1ProjectId, resolvedTier1SessionId, tier1Active);
         tier1ToolEvents.splice(0, tier1ToolEvents.length);
         currentWorkflow = checkpoint.currentWorkflow || null;
         const refreshed = refreshTier1Prompt();
@@ -1116,6 +1135,7 @@ async function runAgentTurn({
           fallbackCode: checkpoint.semanticCode || "",
           modelStats: checkpoint.modelStats || null,
           trimmed: checkpoint.trimmed || {},
+          quarantined: checkpoint.quarantined || 0,
           checkpointId: checkpoint.checkpoint?.checkpoint_id || "",
           checkpointRevision: checkpoint.checkpoint?.checkpoint_id || "",
           activeConversationTokens: usageSectionTokens(usage, "active_conversation"),
@@ -1145,7 +1165,10 @@ async function runAgentTurn({
     refreshTier1Prompt({ resetHistory: false });
     const blocks = tier1Context.activeBlocks(tier1ProjectId, resolvedTier1SessionId);
     const taskStart = blocks.findIndex((block) => block.messages.some(taskInputMatches));
-    return { blocks, releasableBefore: taskStart >= 0 ? taskStart : Math.max(0, blocks.length - 1) };
+    // The coordinator keeps only the newest ACTIVE_MAX messages, so its block
+    // positions count from where that suffix starts in this ledger.
+    const shift = Math.max(0, tier1Active.length - blocks.reduce((sum, block) => sum + block.messages.length, 0));
+    return { blocks, shift, releasableBefore: taskStart >= 0 ? taskStart : Math.max(0, blocks.length - 1) };
   };
   const contextToolFailure = (error, errorCode) => ({ ok: false, error, errorCode, retryable: false });
   const releaseContextBlocks = (requested, view = contextBlockView()) => {
@@ -1155,11 +1178,12 @@ async function runAgentTurn({
       const position = view.blocks.findIndex((block) => block.index === Number(entry.index));
       const block = position >= 0 ? view.blocks[position] : null;
       if (!block || block.state === "evicted") { approved.push({ index: entry.index, reason: entry.note }); continue; }
-      const end = block.start + block.messages.length;
+      const start = block.start + view.shift;
+      const end = start + block.messages.length;
       if (position >= view.releasableBefore) { rejected.push({ index: block.index, code: "BLOCK_IN_CURRENT_TASK" }); continue; }
       if (end > promptHistoryBaseline
-        || !sameMessages(tier1Active.slice(block.start, end), block.messages)
-        || !sameMessages(workingHistory.slice(block.start, end), block.messages)) { rejected.push({ index: block.index, code: "BLOCK_MISALIGNED" }); continue; }
+        || !sameMessages(tier1Active.slice(start, end), block.messages)
+        || !sameMessages(workingHistory.slice(start, end), block.messages)) { rejected.push({ index: block.index, code: "BLOCK_MISALIGNED" }); continue; }
       approved.push({ index: entry.index, reason: entry.note });
     }
     const result = tier1Context.evictBlocks(tier1ProjectId, resolvedTier1SessionId, approved, { retainSecrets: projectProfile?.dataHandling?.redactSecrets === false });
@@ -1168,8 +1192,8 @@ async function runAgentTurn({
     for (const entry of [...result.evicted].sort((left, right) => byIndex.get(right.index).start - byIndex.get(left.index).start)) {
       const block = byIndex.get(entry.index);
       const tombstone = result.active.find((message) => message.block_tombstone === true && message.block_index === entry.index);
-      tier1Active.splice(block.start, block.messages.length, { ...tombstone });
-      workingHistory.splice(block.start, block.messages.length, { ...tombstone });
+      tier1Active.splice(block.start + view.shift, block.messages.length, { ...tombstone });
+      workingHistory.splice(block.start + view.shift, block.messages.length, { ...tombstone });
       promptHistoryBaseline -= block.messages.length - 1;
     }
     if (result.evicted.length) {
@@ -1190,8 +1214,8 @@ async function runAgentTurn({
   const recallContextBlock = (args) => {
     const result = tier1Context.recallBlock(tier1ProjectId, resolvedTier1SessionId, args?.index);
     if (result?.ok !== true) return contextToolFailure(result?.error || "The block could not be recalled.", result?.code || "BLOCK_RECALL_FAILED");
-    const rendered = renderReleasedBlock(result.messages, { maxChars: Math.max(4_000, Math.floor(effectiveContextLimit * 0.2 * 3.6)) });
-    return { ok: true, value: { operation: "recall", index: result.index, messages: result.messages.length, tokens: result.tokens, truncated: rendered.truncated, transcript: rendered.text } };
+    const rendered = renderReleasedBlock(result.messages, { maxChars: Math.max(4_000, Math.floor(effectiveContextLimit * 0.2 * 3.6)), offset: args?.offset });
+    return { ok: true, value: { operation: "recall", index: result.index, messages: result.messages.length, tokens: result.tokens, truncated: rendered.truncated, total_chars: rendered.totalChars, ...(rendered.nextOffset !== null ? { next_offset: rendered.nextOffset } : {}), transcript: rendered.text } };
   };
   // Runs before checkpointing: when the prompt crosses the release trigger, the
   // oldest finished blocks are released in one batch so that the full checkpoint
@@ -1206,7 +1230,10 @@ async function runAgentTurn({
       const pressure = tier1PressureFor(assembled);
       if (!pressureTriggersRelease({ totalTokens: pressure.totalTokens, limit: effectiveContextLimit, policy: contextReleasePolicy || {} })) return null;
       const view = contextBlockView();
-      const selected = selectBlocksToRelease({ blocks: view.blocks, releasableBefore: view.releasableBefore, totalTokens: pressure.totalTokens, limit: effectiveContextLimit, policy: contextReleasePolicy || {} });
+      // A summary keeps browser screenshot exchanges; marking them lets the
+      // policy leave those turns to it rather than drop the screenshots.
+      const blocks = view.blocks.map((block) => (browserImageTokens(block.messages) > 0 ? { ...block, screenshots: true } : block));
+      const selected = selectBlocksToRelease({ blocks, releasableBefore: view.releasableBefore, totalTokens: pressure.totalTokens, limit: effectiveContextLimit, policy: contextReleasePolicy || {} });
       if (!selected.length) return null;
       sendEvent({ type: "context_release", status: "started", reason: "pressure", totalTokens: pressure.totalTokens, indices: selected.map((entry) => entry.index) });
       const result = releaseContextBlocks(selected, view);
@@ -1222,7 +1249,11 @@ async function runAgentTurn({
     if (toolName === RECALL_BLOCK_TOOL_NAME) return recallContextBlock(args);
     const request = normalizeReleaseRequest(args);
     if (request.ok !== true) return request;
-    if (request.operation === "release") return releaseContextBlocks(request.blocks);
+    if (request.operation === "release") {
+      const result = releaseContextBlocks(request.blocks);
+      if (result.value?.released?.length) sendEvent({ type: "context_release", status: "completed", reason: "model", indices: result.value.released.map((entry) => entry.index), tokensFreed: result.value.tokensFreed });
+      return result;
+    }
     const view = contextBlockView();
     return { ok: true, value: { operation: "list", blocks: describeBlocks(view.blocks, view.releasableBefore), note: "Only blocks marked releasable can be released. Blocks from the current task stay in context." } };
   };
@@ -1280,7 +1311,9 @@ async function runAgentTurn({
   };
 
   const compactForNextRound = async ({ reason = "context_overflow" } = {}) => {
-    if (useTier1) {
+    // At most one summary per round: a second one right after the first could
+    // only summarize the summary.
+    if (useTier1 && !roundCheckpointed) {
       const checkpoint = await checkpointTier1IfNeeded({ force: true, reason, midTask: true });
       if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
     }
@@ -1386,15 +1419,24 @@ async function runAgentTurn({
 
   async function prepareModelRequest() {
     await preparePendingChatReferences();
+    roundCheckpointed = false;
     if (useTier1) {
       maybeAutoReleaseContext();
       const refreshed = refreshTier1Prompt({ resetHistory: false });
       if (!refreshed) throw Object.assign(new Error("Tier 1 context could not be assembled."), { code: "MEMORY_TIER1_REASSEMBLY_FAILED" });
       const pressure = tier1PressureFor(refreshed);
       if (pressure.protectedOverflow) applyToolCatalog(keepNativeAndRecentTools(availableTools, recentToolNames()));
-      if (pressure.shouldCheckpoint && tier1Active.length) {
-        const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call", midTask: true });
+      // A summary written for a larger window (the model was switched) is refit
+      // to this window's budget once, even when nothing new needs summarizing.
+      const summaryTokens = tier1UsageSections(refreshed).find((section) => section.key === "summarized_conversation")?.tokens || 0;
+      const refitSummary = !summaryRefitted && summaryTokens > summaryBudget(effectiveContextLimit);
+      // A ledger that holds only the task's own messages has nothing to summarize;
+      // checkpointing it again would repeat every round.
+      if (refitSummary || (pressure.shouldCheckpoint && tier1Active.some((message) => !taskInputMatches(message)))) {
+        summaryRefitted ||= refitSummary;
+        const checkpoint = await checkpointTier1IfNeeded({ force: refitSummary, reason: "before_model_call", midTask: true });
         if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
+        roundCheckpointed = checkpoint?.checkpointed === true || Boolean(checkpoint?.checkpoint);
       }
     }
     let requestTools = [...availableTools];
@@ -1477,6 +1519,10 @@ async function runAgentTurn({
     if (!liveInput || previewOnly) return { changed: false };
     if (signal?.aborted) throw Object.assign(new Error("The agent turn was stopped."), { code: "LIVE_INPUT_ABORTED", aborted: true });
     const previousRevision = revision;
+    // Steering that arrives while the context is being summarized stays queued
+    // with the supervisor; it joins the conversation after the summary, never
+    // inside it.
+    if (tier1CheckpointInFlight) await tier1CheckpointInFlight.catch(() => null);
     const response = requireLive(await liveInput.boundary({ kind, runId, revision }));
     if (!Number.isSafeInteger(response.revision) || response.revision < revision) throw Object.assign(new Error("Live input returned an obsolete applied revision."), { code: "LIVE_REVISION_STALE" });
     const deliveries = Array.isArray(response.deliveries) ? response.deliveries : [];
@@ -1486,14 +1532,16 @@ async function runAgentTurn({
         if (delivery.intentScope) { const initial = inputMessages.find((message) => message.source_message_id === delivery.id); if (initial) initial.intent_scope = delivery.intentScope; }
         continue;
       }
-      const message = { role: "user", content: delivery.text + (delivery.contextText || ""), ...(delivery.contextText ? { source_text: delivery.text, reference_context: delivery.contextText } : {}), source_message_id: delivery.id, task_revision: delivery.revision, ...(delivery.intentScope ? { intent_scope: delivery.intentScope } : {}) };
+      // A late tool result is untrusted text even though it arrives as a user message.
+      const deliveredText = NON_OPERATOR_ID.test(delivery.id) ? neutralizeContextMarkers(delivery.text) : delivery.text;
+      const message = { role: "user", content: deliveredText + (delivery.contextText || ""), ...(delivery.contextText ? { source_text: delivery.text, reference_context: delivery.contextText } : {}), source_message_id: delivery.id, task_revision: delivery.revision, ...(delivery.intentScope ? { intent_scope: delivery.intentScope } : {}) };
       workingHistory.push(message);
       inputMessages.push(message);
       appliedInputIds.add(delivery.id);
       appendTier1Messages(message);
       // Steering from the operator is kept as a directive the moment it arrives; a
       // late tool result arrives the same way and is not one.
-      if (useTier1 && !/^(?:result|execution):/.test(delivery.id)) {
+      if (useTier1 && !NON_OPERATOR_ID.test(delivery.id)) {
         try { tier1Context.recordDirective?.(tier1ProjectId, resolvedTier1SessionId, { text: scopedContent(message), sourceMessageId: delivery.id, revision: delivery.revision, retainSecrets: projectProfile?.dataHandling?.redactSecrets === false }); }
         catch { /* the message stays in the ledger either way */ }
       }

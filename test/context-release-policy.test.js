@@ -52,3 +52,38 @@ test("the pre-check agrees with the selector at the trigger boundary", () => {
   assert.equal(pressureTriggersRelease({ totalTokens: 10, limit: 0 }), false);
   assert.equal(pressureTriggersRelease({}), false);
 });
+
+test("newest turns are kept only while they fit: past the summary line they go too, largest first", () => {
+  // Window 256K with one 357K recent turn: releasing only the older turns
+  // leaves the prompt over the summary line, which used to force a summary.
+  const shrunk = selectBlocksToRelease({
+    blocks: [block(0, 60_000), block(1, 60_000), block(2, 55_000), block(3, 357_600), block(4, 20_000), block(5, 2_000)],
+    releasableBefore: 5,
+    totalTokens: 572_000,
+    limit: 256_000,
+  });
+  assert.deepEqual(shrunk.map((entry) => entry.index), [0, 1, 2, 3], "the huge recent turn goes, the small newest one stays");
+
+  // Below the summary line after the normal batch, the newest two stay.
+  const fits = selectBlocksToRelease({ blocks: blocks([9000, 9000, 9000, 9000, 9000]), releasableBefore: 4, totalTokens: 95_000, limit: 100_000 });
+  assert.deepEqual(fits.map((entry) => entry.index), [0, 1]);
+
+  // Pinned and partial turns are never taken, even past the line.
+  const guarded = selectBlocksToRelease({
+    blocks: [block(0, 100_000, { pinned: true }), block(1, 100_000, { partial: true }), block(2, 50_000), block(3, 1_000)],
+    releasableBefore: 3,
+    totalTokens: 240_000,
+    limit: 256_000,
+  });
+  assert.deepEqual(guarded.map((entry) => entry.index), [2]);
+});
+
+test("past the summary line, recent turns holding screenshots are left to the summary", () => {
+  const selected = selectBlocksToRelease({
+    blocks: [block(0, 300_000, { screenshots: true }), block(1, 2_000)],
+    releasableBefore: 1,
+    totalTokens: 310_000,
+    limit: 256_000,
+  });
+  assert.deepEqual(selected, []);
+});

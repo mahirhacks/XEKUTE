@@ -1,5 +1,7 @@
 "use strict";
 
+const { neutralizeContextMarkers } = require("../../shared/context-markers.js");
+
 function boundedPayload(payload, limit = 32_000) {
   const cloned = JSON.parse(JSON.stringify(payload));
   let serialized = JSON.stringify(cloned);
@@ -29,6 +31,8 @@ function boundedPayload(payload, limit = 32_000) {
 }
 
 /** Keep model-facing tool results bounded and stable across adapters. */
+// Tool output is untrusted text the model reads, so look-alike context markers
+// in it are neutralized (see shared/context-markers.js).
 function toolResultContentForModel(result) {
   const value = result?.value && typeof result.value === "object" ? result.value : {};
   const data = result?.data && typeof result.data === "object" ? result.data : {};
@@ -37,14 +41,14 @@ function toolResultContentForModel(result) {
     ? preferred
     : Object.fromEntries(Object.entries(result && typeof result === "object" ? result : {}).filter(([key]) => !["ok", "status", "error", "errorCode", "code", "evidenceIds", "evidence_refs", "activeTools"].includes(key)));
   if (Array.isArray(result?.activeTools)) payload.activatedMcpTools = result.activeTools.map((tool) => tool?.function?.name).filter(Boolean).slice(0, 50);
-  return JSON.stringify({
+  return neutralizeContextMarkers(JSON.stringify({
     ok: result?.ok === true || result?.status === "success" || result?.status === "partial",
     status: result?.status || "",
     error: result?.error || "",
     errorCode: result?.errorCode || result?.code || "",
     evidenceIds: result?.evidenceIds || result?.evidence_refs || value.evidenceIds || [],
     payload: boundedPayload(payload),
-  });
+  }));
 }
 
 function projectToolResult(result) {

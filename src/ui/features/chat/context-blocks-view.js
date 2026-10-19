@@ -55,7 +55,7 @@
       const label = block.summary || (released ? "Released turn" : "Turn");
       const pin = released
         ? ""
-        : `<button type="button" class="context-block-pin${block.pinned ? " pinned" : ""}" data-block-pin="${block.index}" aria-pressed="${block.pinned ? "true" : "false"}" aria-label="${block.pinned ? "Unpin" : "Pin"} block ${block.index}" title="${block.pinned ? "Pinned: kept in context. Click to unpin." : "Pin: never release this block."}"><span class="codicon ${block.pinned ? "codicon-pinned" : "codicon-pin"}" aria-hidden="true"></span></button>`;
+        : `<button type="button" class="context-block-pin${block.pinned ? " pinned" : ""}" data-block-pin="${block.index}" aria-pressed="${block.pinned ? "true" : "false"}" aria-label="${block.pinned ? "Unpin" : "Pin"} block ${block.index}" title="${block.pinned ? "Pinned: never released. A checkpoint still summarizes it. Click to unpin." : "Pin: never release this block. A checkpoint still summarizes it."}"><span class="codicon ${block.pinned ? "codicon-pinned" : "codicon-pin"}" aria-hidden="true"></span></button>`;
       return `<div class="context-block-row${released ? " released" : ""}${block.pinned ? " pinned" : ""}" data-block-index="${block.index}">`
         + `<span class="context-block-index">#${block.index}</span>`
         + `<span class="context-block-summary" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`
