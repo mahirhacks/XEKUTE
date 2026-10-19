@@ -397,14 +397,23 @@ function createTier1ContextCoordinator({
     // covered. Retry the summary first; the shortened ledger waits for it.
     if (state.checkpointUnsaved) {
       let saved;
-      try { saved = sensitiveStore.writeCheckpoint ? sensitiveStore.writeCheckpoint(projectId, sessionId, state.summary) : { ok: true }; }
+      try {
+        if (sensitiveStore.writeCheckpointTransition) {
+          saved = sensitiveStore.writeCheckpointTransition(projectId, sessionId, state.summary, {
+            active: state.active,
+            nextBlockIndex: state.nextBlockIndex,
+            pinnedBlocks: [...state.pinned],
+            operatorDirectives: state.directives,
+          });
+        } else saved = sensitiveStore.writeCheckpoint ? sensitiveStore.writeCheckpoint(projectId, sessionId, state.summary) : { ok: true };
+      }
       catch (error) { saved = { ok: false, code: error.code || "MEMORY_SAVE_FAILED", error: error.message }; }
       noteSave(state, saved);
       if (saved?.ok !== true) return;
       state.checkpointUnsaved = false;
     }
     let result;
-    try { result = sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned], operatorDirectives: state.directives }); }
+    try { result = sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned], operatorDirectives: state.directives, checkpointId: state.summary?.checkpoint_id || "" }); }
     catch (error) { result = { ok: false, code: error.code || "MEMORY_SAVE_FAILED", error: error.message }; }
     noteSave(state, result);
   }
@@ -1228,8 +1237,21 @@ function createTier1ContextCoordinator({
     // The commit below is synchronous, so a stop either lands before this check
     // and discards everything, or after the checkpoint is fully written.
     if (signal?.aborted) return interrupted();
+    const directivesAfterCheckpoint = state.directives.filter((entry) => !consumedDirectives.includes(entry.source_message_id));
     let stored = { ok: true, ephemeral: true };
-    if (sensitiveStore?.writeCheckpoint) {
+    if (sensitiveStore?.writeCheckpointTransition) {
+      try {
+        stored = sensitiveStore.writeCheckpointTransition(projectId, sessionId, checkpointValue, {
+          active: Array.isArray(input.active_after_checkpoint) ? input.active_after_checkpoint : [],
+          nextBlockIndex: state.nextBlockIndex,
+          pinnedBlocks: [...state.pinned],
+          operatorDirectives: directivesAfterCheckpoint,
+        });
+      }
+      catch (error) { stored = { ok: false, code: error.code || "MEMORY_SAVE_FAILED", error: error.message }; }
+      noteSave(state, stored);
+      state.checkpointUnsaved = stored?.ok !== true;
+    } else if (sensitiveStore?.writeCheckpoint) {
       try { stored = sensitiveStore.writeCheckpoint(projectId, sessionId, checkpointValue); }
       catch (error) { stored = { ok: false, code: error.code || "MEMORY_SAVE_FAILED", error: error.message }; }
       noteSave(state, stored);
@@ -1239,13 +1261,14 @@ function createTier1ContextCoordinator({
     // fitting its window, and the save warning says it will not survive a restart.
     state.summary = checkpointValue;
     state.checkpointRevision += 1;
-    state.directives = state.directives.filter((entry) => !consumedDirectives.includes(entry.source_message_id));
-    state.active = [];
+    state.directives = directivesAfterCheckpoint;
+    const activeAfterCheckpoint = Array.isArray(input.active_after_checkpoint) ? input.active_after_checkpoint.map(clone) : [];
+    state.active = ingestActive(state, activeAfterCheckpoint);
     state.currentPrompt = "";
     // The workflow visible in Tier 1 changes only at this checkpoint boundary.
     state.workflow = checkpointValue.workflow_continuity?.state === "completed" ? null : clone(checkpointValue.workflow_continuity);
     syncMeter(projectId, sessionId, ["Summarized Conversation", "Active Conversation", "Current Workflow"]);
-    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", modelStats: semantic?.ok === true ? semantic.modelStats || null : null, trimmed: context.trimStats, quarantined };
+    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: clone(state.active), currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", modelStats: semantic?.ok === true ? semantic.modelStats || null : null, trimmed: context.trimStats, quarantined };
   }
 
   // Operator steering is recorded when it arrives and folded into the

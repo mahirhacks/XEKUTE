@@ -121,8 +121,6 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
         await deliverPending(snapshot);
         let current = snapshot.control.tasks.find((entry) => entry.id === task.id);
         if (!current || !["running", "waiting"].includes(current.status)) return { ok: false, code: "TASK_STOPPED", error: "The task was stopped.", aborted: true };
-        if (current.pendingExecution && current.pendingExecution.revision === revision) return { ok: true, revision,
-          cancellationEpoch: snapshot.control.cancellationEpoch, deliveries: [], pendingPlan: current.pendingExecution };
         if (snapshot.batch.length && current.kind === "primary" && !current.pendingPlan) {
           const proposal = routeSessionInput({ ...snapshot, planningTaskId: task.id });
           if (!proposal.ok) return proposal;
@@ -142,19 +140,47 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
           await deliverPending(snapshot);
           current = snapshot.control.tasks.find((entry) => entry.id === task.id);
         }
+        const pendingExecution = current.pendingExecution;
+        const hasUnreadInput = snapshot.batch.length > 0;
+        const executionWatermark = pendingExecution?.inputWatermark;
+        const executionSuperseded = pendingExecution && (pendingExecution.revision !== current.revision
+          || (Number.isSafeInteger(executionWatermark) ? snapshot.control.arrival > executionWatermark : hasUnreadInput));
+        if (executionSuperseded) {
+          const discarded = await store.transactSession(workspace, sessionId, (document) => {
+            const control = document.run_control = normalizeRunControl(document.run_control);
+            const owner = control.tasks.find((entry) => entry.id === task.id);
+            const plan = owner?.pendingExecution;
+            if (!plan || plan.id !== pendingExecution.id) return { ok: true, write: false };
+            const unread = control.arrival > control.routed;
+            const stale = plan.revision !== owner.revision
+              || (Number.isSafeInteger(plan.inputWatermark) ? control.arrival > plan.inputWatermark : unread);
+            if (stale) delete owner.pendingExecution;
+            return { ok: true, write: stale };
+          });
+          if (!discarded.ok) return discarded;
+          snapshot = supervisor.snapshot(location);
+          if (!snapshot.ok) return snapshot;
+          current = snapshot.control.tasks.find((entry) => entry.id === task.id);
+        }
+        if (current.pendingExecution && current.pendingExecution.revision === revision && current.appliedRevision === revision
+          && !(snapshot.control.arrival > (current.pendingExecution.inputWatermark ?? snapshot.control.arrival))) return { ok: true, revision,
+          arrival: snapshot.control.arrival, cancellationEpoch: snapshot.control.cancellationEpoch, deliveries: [], pendingPlan: current.pendingExecution };
         const inputs = new Map(snapshot.control.inputs.map((input) => [input.id, input]));
-        return { ok: true, revision: current.revision, cancellationEpoch: snapshot.control.cancellationEpoch,
+        return { ok: true, revision: current.revision, arrival: snapshot.control.arrival, cancellationEpoch: snapshot.control.cancellationEpoch,
           deliveries: current.deliveries.filter((delivery) => delivery.revision > revision).map((delivery) => ({ id: delivery.messageId, text: inputs.get(delivery.messageId).text, contextText: inputs.get(delivery.messageId).contextText, revision: delivery.revision,
             intentScope: delivery.intentScope })),
           pendingPlan: current.pendingPlan || null };
       },
-      async prepareRound({ revision, result, engineSnapshot }) {
+      async prepareRound({ revision, result, engineSnapshot, inputWatermark }) {
         const receipt = await store.transactSession(workspace, sessionId, (document) => {
+          const control = document.run_control = normalizeRunControl(document.run_control);
           const owner = document.run_control.tasks.find((entry) => entry.id === task.id);
-          if (!owner || !["running", "waiting"].includes(owner.status) || owner.appliedRevision !== revision) return { ok: false, code: "TASK_REVISION_STALE", error: "The task cannot persist this execution round." };
+          const expectedArrival = Number.isSafeInteger(inputWatermark) ? inputWatermark : control.arrival;
+          if (control.arrival !== expectedArrival || control.arrival !== control.routed) return { ok: false, code: "TASK_INPUT_PENDING", error: "New session input arrived before this execution round could be persisted." };
+          if (!owner || !["running", "waiting"].includes(owner.status) || owner.appliedRevision !== revision || owner.revision !== revision) return { ok: false, code: "TASK_REVISION_STALE", error: "The task cannot persist this execution round." };
           if (owner.pendingExecution) return { ok: false, code: "EXECUTION_ROUND_PENDING", error: "A previous execution round must be reconciled first." };
           const id = `execution:${crypto.randomUUID()}`;
-          const plan = { id, taskId: task.id, revision, result: identifyToolCalls(result, id), accounting: engineSnapshot.accounting };
+          const plan = { id, taskId: task.id, revision, inputWatermark: expectedArrival, result: identifyToolCalls(result, id), accounting: engineSnapshot.accounting };
           owner.engine = engineSnapshot; owner.pendingExecution = plan;
           return { ok: true, value: plan };
         });
@@ -203,8 +229,11 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
         if (!call?.id && !call?.callId) return { ok: false, errorCode: "OPERATION_ID_REQUIRED", error: "A stable tool call ID is required for supervised execution." };
         const signature = crypto.createHash("sha256").update(JSON.stringify(call)).digest("hex");
         const prepared = await store.transactSession(workspace, sessionId, (document) => {
-          const owner = document.run_control.tasks.find((entry) => entry.id === task.id);
-          if (!owner || !["running", "waiting"].includes(owner.status) || (request.taskRevision !== undefined && owner.appliedRevision !== request.taskRevision)) return { ok: false, code: "TOOL_TASK_STALE", error: "The task no longer owns this tool round." };
+          const control = document.run_control = normalizeRunControl(document.run_control);
+          const owner = control.tasks.find((entry) => entry.id === task.id);
+          if (!owner || !["running", "waiting"].includes(owner.status)
+            || (request.taskRevision !== undefined && (owner.appliedRevision !== request.taskRevision || owner.revision !== request.taskRevision))
+            || (Number.isSafeInteger(request.inputWatermark) && control.arrival > request.inputWatermark)) return { ok: false, code: "TOOL_TASK_STALE", error: "The task no longer owns this tool round." };
           operationId = `${task.runId}:${owner.pendingExecution?.id || owner.pendingPlan?.id || `revision:${owner.appliedRevision}`}:${call.id || call.callId}`;
           owner.operations ||= [];
           const prior = owner.operations.find((operation) => operation.id === operationId);

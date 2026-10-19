@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const PACKAGED_ROOT_FILES = new Set(["/package.json", "/LICENSE", "/xekute_icon.png"]);
-const PACKAGED_ROOT_DIRS = ["/src", "/node_modules", "/resources"];
+const PACKAGED_ROOT_DIRS = ["/src", "/node_modules"];
 
 function isIgnoredPackagePath(file) {
   if (!file) return false;
@@ -18,8 +18,7 @@ function isIgnoredPackagePath(file) {
   return /\.(?:o|obj|pdb|map)$/i.test(file);
 }
 
-// node-pty and onnxruntime-node carry native binaries for every OS. Keep only
-// the target's; the others roughly double the installer and every update.
+// node-pty carries native binaries for every OS. Keep only the target's.
 function pruneForeignNativeBinaries(buildPath, _electronVersion, platform, arch, done) {
   try {
     const remove = (target) => fs.rmSync(target, { recursive: true, force: true });
@@ -27,18 +26,6 @@ function pruneForeignNativeBinaries(buildPath, _electronVersion, platform, arch,
     if (fs.existsSync(ptyPrebuilds)) {
       for (const name of fs.readdirSync(ptyPrebuilds)) {
         if (name !== `${platform}-${arch}`) remove(path.join(ptyPrebuilds, name));
-      }
-    }
-    const ortBin = path.join(buildPath, "node_modules", "onnxruntime-node", "bin");
-    if (fs.existsSync(ortBin)) {
-      for (const napi of fs.readdirSync(ortBin)) {
-        const napiDir = path.join(ortBin, napi);
-        for (const os of fs.readdirSync(napiDir)) {
-          if (os !== platform) { remove(path.join(napiDir, os)); continue; }
-          for (const cpu of fs.readdirSync(path.join(napiDir, os))) {
-            if (cpu !== arch) remove(path.join(napiDir, os, cpu));
-          }
-        }
       }
     }
     done();
@@ -64,14 +51,10 @@ module.exports = {
     executableName: "XEKUTE",
     appBundleId: "com.xekute.securityworkspace",
     icon: "xekute_icon.ico",
-    // Native ONNX loads model files through real filesystem paths. Keep the
-    // quantized BGE bundle and native runtimes outside ASAR while the rest of
-    // the application remains packaged and integrity-checked. `asarUnpack`
-    // is an electron-builder option; Electron Forge passes the unpack rules
-    // through the nested @electron/packager `asar` object instead.
+    // Electron Forge passes unpack rules through the nested
+    // @electron/packager `asar` object.
     asar: {
-      unpack: "**/{node_modules/node-pty,node_modules/onnxruntime-node,resources/memory-v3/models,resources/memory-v3/knowledge}/**/*",
-      unpackDir: "resources/memory-v3/models",
+      unpack: "**/node_modules/node-pty/**/*",
     },
     // Optional offline packaging path for a pre-downloaded Electron ZIP.
     electronZipDir: process.env.XEKUTE_ELECTRON_ZIP_DIR || undefined,

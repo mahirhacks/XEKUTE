@@ -80,11 +80,494 @@ test("runtime assigns stable H/C/E IDs, resolves refs, and rebuilds both indexes
   assert.equal(c.staged.assigned_ids.c, "C-0001");
   const e = commitOps(artifacts, root, "agent", [{ kind: "evidence.create", client_ref: "e", title: "Signal", checklist_refs: ["C-0001"], hypothesis_refs: ["H-0001"], source_refs: ["traffic:1"] }]);
   assert.equal(e.staged.assigned_ids.e, "E-0001");
-  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.evidenceDirectory, "E-0001.md")), false);
-  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.evidenceIndex)), false);
+  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.hypotheses)), true);
+  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.checklist)), true);
+  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.evidenceDirectory, "E-0001.md")), true);
+  assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.evidenceIndex)), true);
   assert.equal(e.inspect.evidence[0].id, "E-0001");
   assert.match(fs.readFileSync(path.join(root, Artifacts.PATHS.projectIndex), "utf8"), /Project Information Index/);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("committed H/C/E artifacts persist as canonical Markdown and survive a fresh service bootstrap", () => {
+  const { root, artifacts } = boot();
+  try {
+    const result = commitOps(artifacts, root, "agent", [
+      { kind: "project.upsert", document: "targets", key: "host", value: "app.example", source_refs: ["operator:1"], scope_decision: "in_scope" },
+      { kind: "hypothesis.create", client_ref: "h", title: "Profile authorization" },
+      { kind: "checklist.create", client_ref: "c", hypothesis_id: "h", title: "Compare identities", phase: "assessment_l1" },
+      {
+        kind: "evidence.create", client_ref: "e", title: "Baseline response observed", status: "verified", verifier: "hybrid-accept",
+        checklist_refs: ["c"], hypothesis_refs: ["h"], target_refs: ["app.example"], source_refs: ["traffic:source-1"],
+      },
+    ]);
+    assert.equal(result.ok, true, result.error);
+
+    const canonicalFiles = [
+      [Artifacts.PATHS.hypotheses, /H-0001: Profile authorization/],
+      [Artifacts.PATHS.checklist, /C-0001: Compare identities/],
+      [`${Artifacts.PATHS.evidenceDirectory}/E-0001.md`, /E-0001: Baseline response observed/],
+      [Artifacts.PATHS.evidenceIndex, /E-0001.*Baseline response observed/],
+    ];
+    for (const [relativePath, expected] of canonicalFiles) {
+      const file = path.join(root, relativePath);
+      assert.equal(fs.existsSync(file), true, `${relativePath} should be durable after commit`);
+      assert.match(fs.readFileSync(file, "utf8"), expected, relativePath);
+    }
+
+    const restarted = createProjectArtifactService({ fs, path, now: () => new Date("2026-08-30T00:00:00.000Z") });
+    const bootstrap = restarted.bootstrap(root);
+    assert.equal(bootstrap.ok, true, bootstrap.error);
+    const recovered = restarted.inspect(root);
+    assert.equal(recovered.ok, true, recovered.error);
+    assert.equal(recovered.hypotheses[0].title, "Profile authorization");
+    assert.equal(recovered.checklist[0].title, "Compare identities");
+    assert.equal(recovered.evidence[0].status, "verified");
+    assert.deepEqual(recovered.revisions, result.inspect.revisions);
+    assert.equal(recovered.project.documents.targets[0].value, "app.example");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("commit preflights persisted artifact conflicts before changing project documents and permits retry", () => {
+  const { root, artifacts } = boot();
+  try {
+    const snapshot = artifacts.inspect(root);
+    const targetFile = path.join(root, Artifacts.PATHS.projectTargets);
+    const originalTargets = fs.readFileSync(targetFile, "utf8");
+    const staged = artifacts.stage(root, {
+      mode: "agent",
+      expected_revisions: snapshot.revisions,
+      operations: [
+        { kind: "project.upsert", document: "targets", key: "host", value: "app.example", source_refs: ["operator:1"] },
+        { kind: "hypothesis.create", client_ref: "h", title: "Authorization boundary" },
+      ],
+    });
+    assert.equal(staged.ok, true, staged.error);
+
+    const hypothesesFile = path.join(root, Artifacts.PATHS.hypotheses);
+    fs.writeFileSync(hypothesesFile, "# External conflicting edit\n", "utf8");
+    const rejected = artifacts.commit(root, staged.staging_id);
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.code, "ARTIFACT_COMMIT_CONFLICT");
+    assert.equal(fs.readFileSync(targetFile, "utf8"), originalTargets);
+
+    fs.unlinkSync(hypothesesFile);
+    const retried = artifacts.commit(root, staged.staging_id);
+    assert.equal(retried.ok, true, retried.error);
+    const recovered = artifacts.inspect(root);
+    assert.equal(recovered.project.documents.targets[0].value, "app.example");
+    assert.equal(recovered.hypotheses[0].title, "Authorization boundary");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed staged write is recovered as one complete commit on bootstrap", () => {
+  const { root } = boot();
+  let failedHypothesisWrite = false;
+  const failingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "writeFileSync") {
+        return (file, ...args) => {
+          if (!failedHypothesisWrite && path.basename(String(file)).includes("hypotheses.md")) {
+            failedHypothesisWrite = true;
+            throw new Error("simulated hypothesis write failure");
+          }
+          return target.writeFileSync(file, ...args);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    const artifacts = createProjectArtifactService({ fs: failingFs, path });
+    const snapshot = artifacts.inspect(root);
+    const staged = artifacts.stage(root, {
+      mode: "agent",
+      expected_revisions: snapshot.revisions,
+      operations: [
+        { kind: "project.upsert", document: "targets", key: "host", value: "app.example", source_refs: ["operator:1"] },
+        { kind: "hypothesis.create", client_ref: "h", title: "Authorization boundary" },
+        { kind: "checklist.create", client_ref: "c", hypothesis_id: "h", title: "Compare roles", phase: "assessment_l1" },
+        { kind: "evidence.create", client_ref: "e", title: "Role baseline", status: "verified", verifier: "hybrid-accept", checklist_refs: ["c"], hypothesis_refs: ["h"], source_refs: ["traffic:source-1"] },
+      ],
+    });
+    assert.equal(staged.ok, true, staged.error);
+    const committed = artifacts.commit(root, staged.staging_id);
+    assert.equal(failedHypothesisWrite, true);
+    assert.equal(committed.ok, false);
+
+    const restarted = createProjectArtifactService({ fs, path });
+    const bootstrap = restarted.bootstrap(root);
+    assert.equal(bootstrap.ok, true, bootstrap.error);
+    const recovered = restarted.inspect(root);
+    assert.equal(recovered.project.documents.targets[0].value, "app.example");
+    assert.equal(recovered.hypotheses[0]?.title, "Authorization boundary");
+    assert.equal(recovered.checklist[0]?.title, "Compare roles");
+    assert.equal(recovered.evidence[0]?.title, "Role baseline");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("same-service recovery reloads cached H/C/E after a partially applied commit", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-artifact-overlay-recovery-"));
+  let failHypothesisWrite = false;
+  const failingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "writeFileSync") {
+        return (file, ...args) => {
+          if (failHypothesisWrite && path.basename(String(file)).includes("hypotheses.md")) {
+            failHypothesisWrite = false;
+            throw new Error("simulated hypothesis write failure");
+          }
+          return target.writeFileSync(file, ...args);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const artifacts = createProjectArtifactService({ fs: failingFs, path });
+  const workspace = createAssessmentWorkspace({ fs: failingFs, path, projectArtifacts: artifacts });
+  try {
+    assert.equal(workspace.repair(root).error, undefined);
+    assert.equal(artifacts.bootstrap(root).ok, true);
+    seedVerifiedEvidence(artifacts, root);
+    const before = artifacts.inspect(root);
+    const staged = artifacts.stage(root, {
+      mode: "agent",
+      expected_revisions: before.revisions,
+      operations: [
+        { kind: "project.upsert", document: "targets", key: "host", value: "recovered.example", source_refs: ["operator:2"] },
+        { kind: "hypothesis.create", client_ref: "h2", title: "Recovered after retry" },
+      ],
+    });
+    assert.equal(staged.ok, true, staged.error);
+
+    failHypothesisWrite = true;
+    const failed = artifacts.commit(root, staged.staging_id);
+    assert.equal(failed.ok, false);
+    assert.equal(failHypothesisWrite, false);
+
+    const recoveredTransaction = artifacts.recover(root);
+    assert.equal(recoveredTransaction.ok, true, recoveredTransaction.error);
+    assert.deepEqual(recoveredTransaction.recovered, [staged.staging_id]);
+    const recovered = artifacts.inspect(root);
+    assert.equal(recovered.project.documents.targets[0].value, "recovered.example");
+    assert.equal(recovered.hypotheses.some((item) => item.title === "Recovered after retry"), true);
+    assert.equal(recovered.evidence[0].status, "verified");
+    assert.notEqual(recovered.revisions.hypotheses, before.revisions.hypotheses);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("journal directory sync errors fail closed and leave the staged transaction recoverable", () => {
+  const { root } = boot();
+  const transactionDirectory = path.join(root, Artifacts.PATHS.transactionDirectory);
+  let transactionDirectoryDescriptor = null;
+  let failDirectorySync = true;
+  const failingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "openSync") {
+        return (file, ...args) => {
+          const descriptor = target.openSync(file, ...args);
+          if (path.resolve(String(file)) === path.resolve(transactionDirectory)) transactionDirectoryDescriptor = descriptor;
+          return descriptor;
+        };
+      }
+      if (property === "fsyncSync") {
+        return (descriptor) => {
+          if (failDirectorySync && descriptor === transactionDirectoryDescriptor) {
+            failDirectorySync = false;
+            const error = new Error("simulated transaction directory fsync failure");
+            error.code = "EIO";
+            throw error;
+          }
+          return target.fsyncSync(descriptor);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    const artifacts = createProjectArtifactService({ fs: failingFs, path });
+    const snapshot = artifacts.inspect(root);
+    const staged = artifacts.stage(root, {
+      mode: "agent",
+      expected_revisions: snapshot.revisions,
+      operations: [
+        { kind: "project.upsert", document: "targets", key: "host", value: "durable.example", source_refs: ["operator:3"] },
+        { kind: "hypothesis.create", client_ref: "h", title: "Durable journal" },
+      ],
+    });
+    assert.equal(staged.ok, true, staged.error);
+
+    const committed = artifacts.commit(root, staged.staging_id);
+    assert.equal(committed.ok, false);
+    assert.equal(committed.code, "EIO");
+    assert.equal(committed.retryable, true);
+    assert.equal(fs.existsSync(path.join(root, Artifacts.PATHS.hypotheses)), false);
+    assert.equal(fs.existsSync(path.join(transactionDirectory, `${staged.staging_id}.json`)), true);
+    const discarded = artifacts.discard(root, staged.staging_id);
+    assert.equal(discarded.ok, false);
+    assert.equal(discarded.code, "ARTIFACT_TRANSACTION_DURABLE");
+
+    const restarted = createProjectArtifactService({ fs, path });
+    assert.equal(restarted.bootstrap(root).ok, true);
+    const recovered = restarted.inspect(root);
+    assert.equal(recovered.project.documents.targets[0].value, "durable.example");
+    assert.equal(recovered.hypotheses[0].title, "Durable journal");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("project index publication participates in transaction recovery", () => {
+  const { root } = boot();
+  let failedIndexWrite = false;
+  const failingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "writeFileSync") return (file, ...args) => {
+        const name = path.basename(String(file));
+        if (!failedIndexWrite && name.includes("index.md") && name.endsWith(".tmp")) {
+          failedIndexWrite = true;
+          const error = new Error("simulated project index write failure"); error.code = "EIO"; throw error;
+        }
+        return target.writeFileSync(file, ...args);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    const artifacts = createProjectArtifactService({ fs: failingFs, path });
+    const staged = artifacts.stage(root, {
+      mode: "agent", expected_revisions: artifacts.inspect(root).revisions,
+      operations: [{ kind: "project.upsert", document: "targets", key: "host", value: "indexed.example", source_refs: ["operator:index"] }],
+    });
+    assert.equal(staged.ok, true, staged.error);
+    const committed = artifacts.commit(root, staged.staging_id);
+    assert.equal(failedIndexWrite, true);
+    assert.equal(committed.ok, false);
+    assert.equal(committed.retryable, true);
+
+    const restarted = createProjectArtifactService({ fs, path });
+    assert.equal(restarted.bootstrap(root).ok, true);
+    assert.match(restarted.context(root, { mode: "ask" }).content, /indexed\.example/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("transaction recovery quarantines journals that conflict with an outside edit", () => {
+  const { root } = boot();
+  const targetsFile = path.join(root, Artifacts.PATHS.projectTargets);
+  const originalTargets = fs.readFileSync(targetsFile, "utf8");
+  let failedHypothesisWrite = false;
+  const failingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "writeFileSync") {
+        return (file, ...args) => {
+          if (!failedHypothesisWrite && path.basename(String(file)).includes("hypotheses.md")) {
+            failedHypothesisWrite = true;
+            throw new Error("simulated hypothesis write failure");
+          }
+          return target.writeFileSync(file, ...args);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    const artifacts = createProjectArtifactService({ fs: failingFs, path });
+    const snapshot = artifacts.inspect(root);
+    const staged = artifacts.stage(root, {
+      mode: "agent",
+      expected_revisions: snapshot.revisions,
+      operations: [
+        { kind: "project.upsert", document: "targets", key: "host", value: "app.example", source_refs: ["operator:1"] },
+        { kind: "hypothesis.create", client_ref: "h", title: "Authorization boundary" },
+      ],
+    });
+    assert.equal(staged.ok, true, staged.error);
+    assert.equal(artifacts.commit(root, staged.staging_id).ok, false);
+    assert.equal(failedHypothesisWrite, true);
+
+    const hypothesesFile = path.join(root, Artifacts.PATHS.hypotheses);
+    fs.writeFileSync(hypothesesFile, "# External operator edit\n", "utf8");
+    const restarted = createProjectArtifactService({ fs, path });
+    const bootstrap = restarted.bootstrap(root);
+    assert.equal(bootstrap.ok, false);
+    assert.equal(bootstrap.code, "ARTIFACT_RECOVERY_CONFLICT");
+    assert.equal(fs.readFileSync(hypothesesFile, "utf8"), "# External operator edit\n");
+    assert.equal(fs.readFileSync(targetsFile, "utf8"), originalTargets, "recovery conflict rolls back files already published by the transaction");
+    assert.equal(bootstrap.recovery.quarantined.length, 1);
+    assert.equal(fs.existsSync(path.join(root, bootstrap.recovery.quarantined[0])), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("artifact commits reject destination and journal directory junction substitution", { skip: typeof fs.symlinkSync !== "function" }, () => {
+  const { root, artifacts } = boot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-artifacts-outside-"));
+  const projectDirectory = path.join(root, Artifacts.PATHS.projectDirectory);
+  const outsideProject = path.join(outside, "project_info");
+  try {
+    const snapshot = artifacts.inspect(root);
+    const staged = artifacts.stage(root, {
+      mode: "agent",
+      expected_revisions: snapshot.revisions,
+      operations: [{ kind: "project.upsert", document: "targets", key: "host", value: "escape.example", source_refs: ["operator:junction"] }],
+    });
+    assert.equal(staged.ok, true, staged.error);
+
+    fs.cpSync(projectDirectory, outsideProject, { recursive: true });
+    const outsideTargets = path.join(outsideProject, "targets.md");
+    const beforeOutside = fs.readFileSync(outsideTargets, "utf8");
+    fs.rmSync(projectDirectory, { recursive: true, force: true });
+    fs.symlinkSync(outsideProject, projectDirectory, process.platform === "win32" ? "junction" : "dir");
+    const escaped = artifacts.commit(root, staged.staging_id);
+    assert.equal(escaped.ok, false);
+    assert.match(escaped.code, /ARTIFACT_(?:COMMIT_CONFLICT|PATH_INVALID)/);
+    assert.equal(fs.readFileSync(outsideTargets, "utf8"), beforeOutside);
+
+    fs.unlinkSync(projectDirectory);
+    fs.cpSync(outsideProject, projectDirectory, { recursive: true });
+    const retried = artifacts.commit(root, staged.staging_id);
+    assert.equal(retried.ok, true, retried.error);
+
+    const second = artifacts.stage(root, {
+      mode: "agent",
+      expected_revisions: artifacts.inspect(root).revisions,
+      operations: [{ kind: "hypothesis.create", client_ref: "h", title: "Journal confinement" }],
+    });
+    assert.equal(second.ok, true, second.error);
+    const internal = path.join(root, ".xekute", ".internal");
+    const outsideInternal = path.join(outside, "internal");
+    fs.mkdirSync(outsideInternal, { recursive: true });
+    fs.rmSync(internal, { recursive: true, force: true });
+    fs.symlinkSync(outsideInternal, internal, process.platform === "win32" ? "junction" : "dir");
+    const journalEscape = artifacts.commit(root, second.staging_id);
+    assert.equal(journalEscape.ok, false);
+    assert.equal(journalEscape.code, "ARTIFACT_TRANSACTION_DIRECTORY_INVALID");
+    assert.equal(fs.existsSync(path.join(outsideInternal, "transactions")), false);
+    fs.unlinkSync(internal);
+  } finally {
+    try { if (fs.lstatSync(projectDirectory).isSymbolicLink()) fs.unlinkSync(projectDirectory); } catch { /* already restored */ }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("post-commit journal cleanup failure keeps committed overlay and the next artifact id", () => {
+  const { root } = boot();
+  const transactionDirectory = path.join(root, Artifacts.PATHS.transactionDirectory);
+  let transactionDescriptor = null;
+  let cleanupSyncFailed = false;
+  const failingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "openSync") return (file, ...args) => {
+        const descriptor = target.openSync(file, ...args);
+        if (path.resolve(String(file)) === path.resolve(transactionDirectory)) transactionDescriptor = descriptor;
+        return descriptor;
+      };
+      if (property === "fsyncSync") return (descriptor) => {
+        const journalPresent = fs.existsSync(transactionDirectory)
+          && fs.readdirSync(transactionDirectory).some(name => name.endsWith(".json"));
+        if (descriptor === transactionDescriptor && !journalPresent && !cleanupSyncFailed) {
+          cleanupSyncFailed = true;
+          const error = new Error("simulated cleanup fsync failure"); error.code = "EIO"; throw error;
+        }
+        return target.fsyncSync(descriptor);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    const artifacts = createProjectArtifactService({ fs: failingFs, path });
+    const first = artifacts.stage(root, {
+      mode: "agent", expected_revisions: artifacts.inspect(root).revisions,
+      operations: [{ kind: "hypothesis.create", client_ref: "h1", title: "First durable hypothesis" }],
+    });
+    assert.equal(first.ok, true, first.error);
+    const committed = artifacts.commit(root, first.staging_id);
+    assert.equal(committed.ok, true, committed.error);
+    assert.equal(cleanupSyncFailed, true);
+    assert.match(committed.warning || "", /cleanup/i);
+    assert.equal(artifacts.inspect(root).hypotheses[0].title, "First durable hypothesis");
+
+    const second = artifacts.stage(root, {
+      mode: "agent", expected_revisions: artifacts.inspect(root).revisions,
+      operations: [{ kind: "hypothesis.create", client_ref: "h2", title: "Second durable hypothesis" }],
+    });
+    assert.equal(second.ok, true, second.error);
+    assert.equal(second.assigned_ids.h2, "H-0002");
+    assert.equal(artifacts.commit(root, second.staging_id).ok, true);
+    assert.deepEqual(artifacts.inspect(root).hypotheses.map(item => item.id), ["H-0001", "H-0002"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("commit rechecks the destination after staging temp content and preserves an outside edit", () => {
+  const { root } = boot();
+  const hypothesesFile = path.join(root, Artifacts.PATHS.hypotheses);
+  let injectOutsideEdit = false;
+  let outsideEditInjected = false;
+  const racingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "writeFileSync") {
+        return (file, ...args) => {
+          const result = target.writeFileSync(file, ...args);
+          if (injectOutsideEdit && !outsideEditInjected && path.basename(String(file)).includes("hypotheses.md") && String(file).endsWith(".tmp")) {
+            outsideEditInjected = true;
+            fs.writeFileSync(hypothesesFile, "# External edit during commit\n", "utf8");
+          }
+          return result;
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    const artifacts = createProjectArtifactService({ fs: racingFs, path });
+    const snapshot = artifacts.inspect(root);
+    const staged = artifacts.stage(root, {
+      mode: "agent",
+      expected_revisions: snapshot.revisions,
+      operations: [
+        { kind: "project.upsert", document: "targets", key: "host", value: "commit-race.example", source_refs: ["operator:4"] },
+        { kind: "hypothesis.create", client_ref: "h", title: "Must not erase operator edit" },
+      ],
+    });
+    assert.equal(staged.ok, true, staged.error);
+
+    injectOutsideEdit = true;
+    const committed = artifacts.commit(root, staged.staging_id);
+    assert.equal(outsideEditInjected, true);
+    assert.equal(committed.ok, false);
+    assert.equal(committed.code, "ARTIFACT_COMMIT_CONFLICT");
+    assert.equal(fs.readFileSync(hypothesesFile, "utf8"), "# External edit during commit\n");
+
+    const restarted = createProjectArtifactService({ fs, path });
+    const bootstrap = restarted.bootstrap(root);
+    assert.equal(bootstrap.ok, false);
+    assert.equal(bootstrap.code, "ARTIFACT_RECOVERY_CONFLICT");
+    assert.equal(fs.readFileSync(hypothesesFile, "utf8"), "# External edit during commit\n");
+    assert.equal(bootstrap.recovery.quarantined.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("validated no-op stages without rewriting canonical sources", () => {
@@ -104,12 +587,52 @@ test("evidence severity, remediation, and retest fields change only E body and i
   const result = commitOps(artifacts, root, "agent", [{ kind: "evidence.update", id: "E-0001", severity: "critical", remediation: "Rotate and harden", retest_criteria: "No exposed cookie" }]);
   assert.equal(result.ok, true, result.error);
   assert.equal(result.inspect.evidence[0].severity, "critical");
-  assert.equal(fs.existsSync(path.join(root, ".xekute/evidence/E-0001.md")), false);
+  assert.match(fs.readFileSync(path.join(root, ".xekute/evidence/E-0001.md"), "utf8"), /- Severity: critical/);
+  assert.match(fs.readFileSync(path.join(root, Artifacts.PATHS.evidenceIndex), "utf8"), /E-0001.*critical/);
   assert.equal(fs.existsSync(path.join(root, ".xekute/evidence/E-0099.md")), false);
   const rename = commitOps(artifacts, root, "agent", [{ kind: "evidence.update", id: "E-0001", path: ".xekute/evidence/E-0099.md" }]);
   assert.equal(rename.ok, false);
   assert.equal(rename.code, "ARTIFACT_RENAME_FORBIDDEN");
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("verified evidence remains durable when its referenced traffic record is deleted", () => {
+  const { root, artifacts, workspace } = boot();
+  try {
+    const captured = workspace.appendTrafficRecord(root, {
+      requestId: "source-1",
+      method: "GET",
+      url: "https://authorized.example/",
+      statusCode: 200,
+      request: "GET / HTTP/1.1\r\nHost: authorized.example\r\n\r\n",
+      response: "HTTP/1.1 200 OK\r\n\r\n",
+    });
+    assert.equal(captured.ok, true, captured.error);
+
+    const result = commitOps(artifacts, root, "agent", [
+      { kind: "hypothesis.create", client_ref: "h", title: "Baseline behavior" },
+      { kind: "checklist.create", client_ref: "c", hypothesis_id: "h", title: "Record baseline", phase: "verification" },
+      {
+        kind: "evidence.create", client_ref: "e", title: "Baseline response", status: "verified", verifier: "hybrid-accept",
+        checklist_refs: ["c"], hypothesis_refs: ["h"], source_refs: ["traffic:source-1"], sanitized_excerpts: "HTTP 200 baseline",
+      },
+    ]);
+    assert.equal(result.ok, true, result.error);
+    assert.equal(artifacts.inspect(root).evidence[0].status, "verified");
+
+    const deleted = workspace.deleteTrafficRecords(root, { requestIds: ["source-1"] });
+    assert.equal(deleted.ok, true, deleted.error);
+    assert.equal(deleted.deleted, 1);
+    assert.equal(workspace.readTrafficHistory(root).records.length, 0);
+
+    const restarted = createProjectArtifactService({ fs, path });
+    assert.equal(restarted.bootstrap(root).ok, true);
+    const recovered = restarted.inspect(root);
+    assert.equal(recovered.evidence[0].status, "verified");
+    assert.deepEqual(recovered.evidence[0].source_refs, ["traffic:source-1"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("reference integrity rejects orphan checklist/evidence and unsupported hypotheses", () => {

@@ -49,6 +49,10 @@ function createIdentityVault({
     return { ok: false, error: { code, message, retryable: false, ...details } };
   }
 
+  function pendingWriteError(projectId) {
+    return error("IDENTITY_OPERATION_PENDING", "An encrypted identity update is still being written. Retry this operation after it completes.", { projectId, retryable: true });
+  }
+
   function projectIdFor(workspace, persist = true) {
     const root = String(workspace || "").trim();
     if (!root) return "";
@@ -204,6 +208,7 @@ function createIdentityVault({
   }
 
   function writeVault(projectId, vault) {
+    if (pendingSecretWrites.has(String(projectId || ""))) return pendingWriteError(projectId);
     if (!secureStorageAvailable()) return error("SECURE_STORAGE_UNAVAILABLE", "Secure identity storage is unavailable; authenticated state was not persisted.");
     try {
       const envelope = { version: VAULT_VERSION, encrypted: true, payload: encrypt({ ...vault, version: VAULT_VERSION, updated_at: timestamp() }) };
@@ -630,6 +635,7 @@ function createIdentityVault({
   function remove(workspace, identityId) {
     if (!validIdentityId(identityId)) return error("IDENTITY_INVALID_ID", "identityId is invalid.", { identityId });
     const projectId = projectIdFor(workspace, false);
+    if (projectId && pendingSecretWrites.has(projectId)) return pendingWriteError(projectId);
     const loaded = projectId ? readVault(projectId) : { ok: true, vault: emptyVault("") };
     if (!loaded.ok) return loaded;
     if (projectId && loaded.vault?.identities?.[identityId]) {

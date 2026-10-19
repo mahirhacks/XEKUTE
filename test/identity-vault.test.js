@@ -208,6 +208,61 @@ test("identity deletion removes encrypted current and backup records", () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("deleting an identity while an async secret save is pending cannot resurrect its secret", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-identity-delete-race-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+
+  let signalOpen;
+  let releaseOpen;
+  const openStarted = new Promise((resolve) => { signalOpen = resolve; });
+  const openGate = new Promise((resolve) => { releaseOpen = resolve; });
+  const gatedFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "promises") {
+        return Object.assign(Object.create(target.promises), {
+          open: async (...args) => {
+            signalOpen();
+            await openGate;
+            return target.promises.open(...args);
+          },
+        });
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const vault = createIdentityVault({
+    fs: gatedFs,
+    path,
+    crypto,
+    baseDir: path.join(root, "data"),
+    protector: protector(),
+    projectResolver: () => ({ projectId: "project-race" }),
+  });
+  assert.equal(vault.create(workspace, { identityId: "account-a" }).ok, true);
+
+  const pendingSave = vault.saveSecretAsync(workspace, "account-a", {
+    cookies: [{ name: "session", value: "late-secret", domain: "fixture.test", path: "/" }],
+  });
+  await openStarted;
+  let removed;
+  try {
+    removed = vault.remove(workspace, "account-a");
+  } finally {
+    releaseOpen();
+  }
+
+  const saved = await pendingSave;
+  assert.equal(removed.ok, false);
+  assert.equal(removed.error.code, "IDENTITY_OPERATION_PENDING");
+  assert.equal(removed.error.retryable, true);
+  assert.equal(saved.ok, true);
+  assert.equal(vault.remove(workspace, "account-a").ok, true);
+  assert.equal(vault.readSecret(workspace, "account-a").ok, false);
+});
+
 test("identity vault keeps client private keys encrypted while exposing only a safe certificate reference to working memory", () => {
   const { root, workspace, vault } = fixture();
   try {

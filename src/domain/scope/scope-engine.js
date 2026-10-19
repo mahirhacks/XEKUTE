@@ -40,6 +40,25 @@ function ipv4Number(ip) {
   return ip.split(".").reduce((value, part) => ((value << 8) | Number(part)) >>> 0, 0);
 }
 
+function normalizeIpv6Address(ip) {
+  if (net.isIP(ip) !== 6) return null;
+  try {
+    return new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+  } catch {
+    return null;
+  }
+}
+
+function ipv4FromMappedIpv6(ip) {
+  const hostname = normalizeIpv6Address(ip);
+  if (!hostname) return null;
+  const match = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(hostname);
+  if (!match) return null;
+  const high = Number.parseInt(match[1], 16);
+  const low = Number.parseInt(match[2], 16);
+  return `${high >>> 8}.${high & 255}.${low >>> 8}.${low & 255}`;
+}
+
 function cidrContains(cidr, hostname) {
   const match = String(cidr || "").trim().match(/^([^/]+)\/(\d{1,2})$/);
   if (!match || net.isIP(match[1]) !== 4 || net.isIP(hostname) !== 4) return false;
@@ -56,8 +75,14 @@ function isPrivateOrReservedIp(ip) {
     return ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4"].some(inCidr) || value == null;
   }
   if (net.isIP(ip) === 6) {
-    const normalized = ip.toLowerCase();
-    return normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || /^fe[89ab]/.test(normalized) || normalized.startsWith("ff");
+    const normalized = normalizeIpv6Address(ip) || ip.toLowerCase();
+    const mappedIpv4 = ipv4FromMappedIpv6(ip);
+    if (mappedIpv4) return isPrivateOrReservedIp(mappedIpv4);
+    const groups = normalized.split(":");
+    const secondHextet = Number.parseInt(groups[1] || "0", 16);
+    const documentation = normalized.startsWith("2001:db8:")
+      || (groups[0] === "3fff" && Number.isInteger(secondHextet) && secondHextet <= 0x0fff);
+    return normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || /^fe[89ab]/.test(normalized) || normalized.startsWith("ff") || documentation;
   }
   return true;
 }

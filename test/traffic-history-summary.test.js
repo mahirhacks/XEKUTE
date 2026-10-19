@@ -94,3 +94,82 @@ test("appendTrafficRecord creates traffic/raw.jsonl on an empty project folder",
     fs.rmSync(parent, { recursive: true, force: true });
   }
 });
+
+test("traffic writes do not recreate a missing project or follow a traffic-directory link", (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-traffic-boundary-"));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const workspace = createAssessmentWorkspace({ fs, path });
+  const missingRoot = path.join(parent, "missing-project");
+
+  const missing = workspace.appendTrafficRecord(missingRoot, { requestId: "late-write", url: "https://authorized.example/" });
+  assert.equal(typeof missing.error, "string");
+  assert.equal(fs.existsSync(missingRoot), false);
+
+  const root = path.join(parent, "project");
+  const outside = path.join(parent, "outside");
+  fs.mkdirSync(root);
+  fs.mkdirSync(outside);
+  workspace.repair(root);
+  fs.rmSync(path.join(root, "traffic"), { recursive: true, force: true });
+  fs.symlinkSync(outside, path.join(root, "traffic"), "junction");
+
+  const linked = workspace.appendTrafficRecord(root, { requestId: "linked-write", url: "https://authorized.example/" });
+  assert.equal(typeof linked.error, "string");
+  assert.equal(fs.existsSync(path.join(outside, "raw.jsonl")), false);
+});
+
+test("traffic history reads and deletes reject a linked raw log without touching its target", (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-traffic-linked-log-"));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "project");
+  const external = path.join(parent, "external.jsonl");
+  const workspace = createAssessmentWorkspace({ fs, path });
+  fs.mkdirSync(root);
+  workspace.repair(root);
+  const secretRecord = { recordType: "http-exchange", requestId: "outside-record", method: "GET", url: "https://outside.example/" };
+  const original = `${JSON.stringify(secretRecord)}\n`;
+  fs.writeFileSync(external, original, "utf8");
+  fs.rmSync(path.join(root, "traffic", "raw.jsonl"));
+  fs.symlinkSync(external, path.join(root, "traffic", "raw.jsonl"), "file");
+
+  const read = workspace.readTrafficHistory(root);
+  assert.equal(typeof read.error, "string");
+  const deleted = workspace.deleteTrafficRecords(root, { requestIds: ["outside-record"] });
+  assert.equal(typeof deleted.error, "string");
+  assert.equal(fs.readFileSync(external, "utf8"), original);
+});
+
+for (const operation of ["read", "delete", "append"]) {
+  test(`traffic ${operation} rejects a log replaced by a symlink at the I/O boundary`, (t) => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-traffic-race-"));
+    t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+    const root = path.join(parent, "project");
+    const target = path.join(root, "traffic", "raw.jsonl");
+    const external = path.join(parent, "external.jsonl");
+    const original = `${JSON.stringify({ recordType: "http-exchange", requestId: "outside-record" })}\n`;
+    createAssessmentWorkspace({ fs, path }).repair(root, { createRoot: true });
+    fs.writeFileSync(external, original);
+    let replaced = false;
+    const racingFs = new Proxy(fs, {
+      get(object, key) {
+        const method = object[key];
+        if (!["openSync", "readFileSync", "writeFileSync", "appendFileSync"].includes(key)) return method;
+        return (...args) => {
+          if (!replaced && args[0] === target && args[2]?.flag !== "wx") {
+            replaced = true;
+            fs.unlinkSync(target);
+            fs.symlinkSync(external, target, "file");
+          }
+          return method(...args);
+        };
+      },
+    });
+    const workspace = createAssessmentWorkspace({ fs: racingFs, path });
+    const result = operation === "read" ? workspace.readTrafficHistory(root)
+      : operation === "delete" ? workspace.deleteTrafficRecords(root, { requestIds: ["outside-record"] })
+        : workspace.appendTrafficRecord(root, { requestId: "new-record" });
+    assert.equal(replaced, true);
+    assert.equal(typeof result.error, "string");
+    assert.equal(fs.readFileSync(external, "utf8"), original);
+  });
+}

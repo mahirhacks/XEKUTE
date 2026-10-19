@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const {
   PROCESS_TREE_KILL_GRACE_MS,
   terminateProcessTree,
@@ -65,6 +66,70 @@ test("POSIX SIGTERM only when the child dies during the wait", async () => {
     pollMs: 5,
   });
   assert.deepEqual(signals, ["-4242:SIGTERM"]);
+});
+
+test("POSIX keeps killing a detached group after its root exits", async () => {
+  const signals = [];
+  let groupAlive = true;
+  const child = { pid: 4242, exitCode: null, signalCode: null };
+  await terminateProcessTree(child, null, {
+    platform: "linux",
+    processKill(pid, signal) {
+      if (signal === 0) {
+        if (pid === -4242 && groupAlive) return;
+        const error = new Error("ESRCH");
+        error.code = "ESRCH";
+        throw error;
+      }
+      signals.push(`${pid}:${signal}`);
+      if (signal === "SIGTERM") child.exitCode = 0;
+      if (signal === "SIGKILL") groupAlive = false;
+    },
+    isAlive: () => false,
+    sleep: async () => {},
+    graceMs: 5,
+    pollMs: 1,
+  });
+  assert.deepEqual(signals, ["-4242:SIGTERM", "-4242:SIGKILL"]);
+  assert.equal(groupAlive, false);
+});
+
+test("a detached descendant is killed when its root exits on SIGTERM", { skip: process.platform !== "linux" }, async () => {
+  const descendantScript = 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);';
+  const rootScript = `const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], { stdio: "ignore" }); process.stdout.write(String(child.pid) + "\\n"); setInterval(() => {}, 1000);`;
+  const root = spawn(process.execPath, ["-e", rootScript], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+  let descendantPid;
+  try {
+    const pidText = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("The child did not report its descendant PID.")), 2000);
+      root.once("error", reject);
+      root.stdout.once("data", (chunk) => {
+        clearTimeout(timer);
+        resolve(String(chunk).trim());
+      });
+    });
+    descendantPid = Number(pidText);
+    assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
+
+    await terminateProcessTree(root, null, { graceMs: 75, pollMs: 5 });
+
+    const deadline = Date.now() + 2000;
+    let descendantRunning = true;
+    while (descendantRunning && Date.now() < deadline) {
+      try {
+        process.kill(descendantPid, 0);
+        const stat = fs.readFileSync(`/proc/${descendantPid}/stat`, "utf8");
+        descendantRunning = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/)[0] !== "Z";
+      } catch {
+        descendantRunning = false;
+      }
+      if (descendantRunning) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(descendantRunning, false, `descendant ${descendantPid} was still running`);
+  } finally {
+    try { process.kill(-root.pid, "SIGKILL"); } catch { /* group is already gone */ }
+    if (descendantPid) try { process.kill(descendantPid, "SIGKILL"); } catch { /* descendant is already gone */ }
+  }
 });
 
 test("stale tree.alive does not pin the wait after isAlive is false", async () => {

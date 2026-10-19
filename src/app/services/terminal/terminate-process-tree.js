@@ -14,8 +14,8 @@ function defaultIsAlive(processKill, pid) {
   try {
     processKill(Number(pid), 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error?.code === "EPERM";
   }
 }
 
@@ -39,20 +39,22 @@ function sendPosixSignal(child, pid, signal, processKill) {
   try {
     if (Number.isInteger(pid) && pid > 0) {
       processKill(-pid, signal);
-      return;
+      return true;
     }
   } catch {
     /* No detached process group; fall back to the direct child. */
   }
   try { child?.kill?.(signal); } catch { /* Process already exited. */ }
+  return false;
 }
 
-async function waitUntilDead(child, pid, { isAlive, sleep, graceMs, pollMs }) {
+async function waitUntilDead(child, pid, { isAlive, isGroupAlive, sleep, graceMs, pollMs }) {
+  const isDead = () => isProcessDead(child, pid, isAlive) && (!isGroupAlive || !isGroupAlive(pid));
   const deadline = Date.now() + Math.max(0, Number(graceMs) || 0);
-  while (!isProcessDead(child, pid, isAlive) && Date.now() < deadline) {
+  while (!isDead() && Date.now() < deadline) {
     await sleep(Math.max(1, Number(pollMs) || PROCESS_TREE_KILL_POLL_MS));
   }
-  return isProcessDead(child, pid, isAlive);
+  return isDead();
 }
 
 async function terminateProcessTree(child, tree = null, options = {}) {
@@ -62,6 +64,7 @@ async function terminateProcessTree(child, tree = null, options = {}) {
     const processKill = options.processKill || process.kill.bind(process);
     const spawnImpl = options.spawnImpl || childProcess.spawn;
     const isAlive = options.isAlive || ((pid) => defaultIsAlive(processKill, pid));
+    const isGroupAlive = options.isGroupAlive || ((groupId) => defaultIsAlive(processKill, -groupId));
     const sleep = options.sleep || defaultSleep;
     const graceMs = options.graceMs == null ? PROCESS_TREE_KILL_GRACE_MS : Number(options.graceMs);
     const pollMs = options.pollMs == null ? PROCESS_TREE_KILL_POLL_MS : Number(options.pollMs);
@@ -84,8 +87,8 @@ async function terminateProcessTree(child, tree = null, options = {}) {
       return;
     }
 
-    sendPosixSignal(child, pid, "SIGTERM", processKill);
-    const dead = await waitUntilDead(child, pid, { isAlive, sleep, graceMs, pollMs });
+    const signaledGroup = sendPosixSignal(child, pid, "SIGTERM", processKill);
+    const dead = await waitUntilDead(child, pid, { isAlive, isGroupAlive: signaledGroup ? isGroupAlive : null, sleep, graceMs, pollMs });
     // tree.alive must not drive the wait. After the wait, SIGKILL if death was
     // not observed; a stale tree.alive is only a hint when isAlive/exit are
     // inconclusive (still not dead).

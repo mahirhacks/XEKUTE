@@ -26,7 +26,47 @@ function createWorkspaceFiles({ fs, path, workspaceSearch }) {
   }
 
   function resolveWorkspaceTarget(workspace, relativePath = "") {
-    return workspaceSearch.resolveWorkspaceTarget(workspace, relativePath);
+    const resolved = workspaceSearch.resolveWorkspaceTarget(workspace, relativePath);
+    if (resolved.error) return resolved;
+
+    let realRoot;
+    try {
+      realRoot = fs.realpathSync(resolved.root);
+    } catch (error) {
+      return { error: error.message || "Workspace root is unavailable" };
+    }
+
+    const isWithinRoot = (target) => {
+      const relative = path.relative(realRoot, target);
+      return !relative || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    };
+
+    const segments = resolved.relative ? resolved.relative.split(path.sep).filter(Boolean) : [];
+    let current = resolved.root;
+    let physicalCurrent = realRoot;
+    for (let index = 0; index < segments.length; index += 1) {
+      const candidate = path.join(current, segments[index]);
+      try {
+        fs.lstatSync(candidate);
+      } catch (error) {
+        if (error.code !== "ENOENT") return { error: error.message || "Unable to validate workspace path" };
+        const physicalTarget = path.resolve(physicalCurrent, ...segments.slice(index));
+        return isWithinRoot(physicalTarget) ? resolved : { error: "Path escapes workspace" };
+      }
+
+      let physicalTarget;
+      try {
+        physicalTarget = fs.realpathSync(candidate);
+      } catch (error) {
+        // A dangling symlink still redirects a later write outside the root.
+        return { error: error.code === "ENOENT" ? "Path escapes workspace" : error.message || "Unable to validate workspace path" };
+      }
+      if (!isWithinRoot(physicalTarget)) return { error: "Path escapes workspace" };
+      current = candidate;
+      physicalCurrent = physicalTarget;
+    }
+
+    return resolved;
   }
 
   function editFileInWorkspace(workspace, file, code) {

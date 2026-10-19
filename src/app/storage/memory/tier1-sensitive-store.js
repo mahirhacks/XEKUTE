@@ -40,6 +40,27 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   function sessionDir(projectId, sessionId) { return path.join(projectDir(projectId), "sessions", assertMemoryId(sessionId, "session")); }
   function transcriptFile(projectId, sessionId) { return path.join(sessionDir(projectId, sessionId), "transcript.enc.json"); }
   function checkpointFile(projectId, sessionId, which = "current") { return path.join(sessionDir(projectId, sessionId), which === "previous" ? "checkpoint-previous.enc.json" : "checkpoint-current.enc.json"); }
+  function checkpointTransitionFile(projectId, sessionId, checkpointId) {
+    const id = assertMemoryId(checkpointId, "checkpoint");
+    return path.join(sessionDir(projectId, sessionId), `checkpoint-transition-${id}.enc.json`);
+  }
+  function cleanupCheckpointTransitions(projectId, sessionId, keepCheckpointIds = []) {
+    const directory = sessionDir(projectId, sessionId);
+    const keep = new Set(Array.isArray(keepCheckpointIds) ? keepCheckpointIds : [keepCheckpointIds].filter(Boolean));
+    let entries;
+    try { entries = fs.readdirSync(directory); } catch { return; }
+    for (const entry of entries) {
+      const name = String(entry?.name || entry);
+      const prefix = "checkpoint-transition-";
+      const suffix = ".enc.json";
+      if (!name.startsWith(prefix) || !name.endsWith(suffix)) continue;
+      const id = name.slice(prefix.length, -suffix.length);
+      if (!id || keep.has(id)) continue;
+      const file = path.join(directory, name);
+      try { fs.rmSync(file, { force: true }); } catch { /* stale transition cleanup is best effort */ }
+      ephemeral.delete(key(file));
+    }
+  }
   function activeFile(projectId, sessionId) { return path.join(sessionDir(projectId, sessionId), "active.enc.json"); }
   function referenceFile(projectId, snapshotId) {
     if (!/^[a-f0-9]{64}$/.test(String(snapshotId))) throw new TypeError("Invalid chat snapshot identity.");
@@ -314,11 +335,38 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
       return operationFailure(error.code || "MEMORY_TIER1_INPUT_INVALID", error.message, {}, false);
     }
     const loaded = readFile(activeFile(project, session));
-    if (!loaded.ok || !loaded.exists) return loaded;
-    const checked = validateActiveValue(loaded.value, project, session);
-    return checked.ok ? { ...loaded, value: checked.value } : checked;
+    const checked = loaded.ok && loaded.exists ? validateActiveValue(loaded.value, project, session) : null;
+
+    // A checkpoint and its replacement active ledger live in separate files.
+    // The transition record bridges the crash window between them: if the new
+    // checkpoint (or its rollback checkpoint) is current, expose the ledger
+    // prepared for that checkpoint even when active.enc.json is unreadable.
+    const checkpoint = readCheckpoint(project, session, "current");
+    const currentId = checkpoint?.ok && checkpoint.exists ? String(checkpoint.value?.checkpoint_id || "") : "";
+    if (currentId) {
+      const pending = readFile(checkpointTransitionFile(project, session, currentId));
+      if (!pending.ok) return pending;
+      if (pending.exists) {
+        const transition = pending.value;
+        const active = validateActiveValue(transition?.active_after, project, session);
+        if (transition?.schema_version !== 1 || transition.project_id !== project || transition.session_id !== session
+          || transition.checkpoint_id !== currentId || !active.ok) {
+          return operationFailure("MEMORY_CHECKPOINT_TRANSITION_INVALID", "The encrypted Tier 1 checkpoint transition is invalid.", { project_id: project, session_id: session }, true);
+        }
+        if (checked?.ok && String(checked.value.checkpoint_id || "") === currentId) return { ...loaded, value: checked.value };
+        return { ...pending, exists: true, recovered: true, value: active.value };
+      }
+      if (checked?.ok && String(checked.value.checkpoint_id || "") === currentId) return { ...loaded, value: checked.value };
+      if (checked?.ok && !checked.value.checkpoint_id) return loaded;
+      if (checked?.ok && checked.value.checkpoint_id) return operationFailure("MEMORY_ACTIVE_CHECKPOINT_MISMATCH", "The encrypted Tier 1 active ledger belongs to a different checkpoint.", { project_id: project, session_id: session }, true);
+    }
+    if (checked && !checked.ok) return checked;
+    if (!loaded.ok) return loaded;
+    if (!checkpoint?.ok && checked?.ok && checked.value.checkpoint_id) return checkpoint;
+    if (!currentId && checked?.ok && checked.value.checkpoint_id) return operationFailure("MEMORY_ACTIVE_CHECKPOINT_MISMATCH", "The encrypted Tier 1 active ledger has no matching checkpoint.", { project_id: project, session_id: session }, true);
+    return loaded.exists ? { ...loaded, value: checked.value } : loaded;
   }
-  function writeActive(projectId, sessionId, messages, { nextBlockIndex = null, pinnedBlocks = null, operatorDirectives = null } = {}) {
+  function writeActive(projectId, sessionId, messages, { nextBlockIndex = null, pinnedBlocks = null, operatorDirectives = null, checkpointId = "" } = {}) {
     let project;
     let session;
     try {
@@ -335,10 +383,62 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
       ...(Number.isSafeInteger(nextBlockIndex) && nextBlockIndex >= 0 ? { next_block_index: nextBlockIndex } : {}),
       ...(Array.isArray(pinnedBlocks) ? { pinned_blocks: pinnedBlocks.filter((index) => Number.isSafeInteger(index) && index >= 0) } : {}),
       ...(Array.isArray(operatorDirectives) ? { operator_directives: operatorDirectives.slice(-50).map((entry) => ({ text: String(entry?.text || "").slice(0, 600), source_message_id: String(entry?.source_message_id || "").slice(0, 240), revision: Number(entry?.revision) || 0 })) } : {}),
+      ...(typeof checkpointId === "string" && checkpointId ? { checkpoint_id: checkpointId } : {}),
     };
     const checked = validateActiveValue(candidate, project, session);
     if (!checked.ok) return checked;
-    return writeFile(activeFile(project, session), candidate);
+    const written = writeFile(activeFile(project, session), candidate);
+    return written;
+  }
+
+  function writeCheckpointTransition(projectId, sessionId, checkpoint, activeAfter = {}) {
+    let project;
+    let session;
+    try {
+      project = assertMemoryId(projectId, "proj");
+      session = assertMemoryId(sessionId, "session");
+    } catch (error) {
+      return operationFailure(error.code || "MEMORY_TIER1_INPUT_INVALID", error.message, {}, false);
+    }
+    const candidate = { ...clone(checkpoint || {}), schema_version: 3, project_id: project, session_id: session };
+    const validation = schemas.validate("ConversationCheckpointV3", candidate);
+    if (!validation.ok) return operationFailure("MEMORY_CHECKPOINT_INVALID", "The encrypted Tier 1 checkpoint is invalid.", { details: validation.error.details });
+    const checkpointId = String(candidate.checkpoint_id || "");
+    if (!checkpointId) return operationFailure("MEMORY_CHECKPOINT_INVALID", "The checkpoint transition needs a checkpoint identity.");
+    const after = {
+      schema_version: 3,
+      project_id: project,
+      session_id: session,
+      active: (Array.isArray(activeAfter.active) ? activeAfter.active : []).slice(0, 2_000).map(clone),
+      ...(Number.isSafeInteger(activeAfter.nextBlockIndex) && activeAfter.nextBlockIndex >= 0 ? { next_block_index: activeAfter.nextBlockIndex } : {}),
+      ...(Array.isArray(activeAfter.pinnedBlocks) ? { pinned_blocks: activeAfter.pinnedBlocks.filter((index) => Number.isSafeInteger(index) && index >= 0) } : {}),
+      ...(Array.isArray(activeAfter.operatorDirectives) ? { operator_directives: activeAfter.operatorDirectives.slice(-50).map((entry) => ({ text: String(entry?.text || "").slice(0, 600), source_message_id: String(entry?.source_message_id || "").slice(0, 240), revision: Number(entry?.revision) || 0 })) } : {}),
+      checkpoint_id: checkpointId,
+    };
+    const checkedActive = validateActiveValue(after, project, session);
+    if (!checkedActive.ok) return checkedActive;
+    const transitionPath = checkpointTransitionFile(project, session, checkpointId);
+    const staged = writeFile(transitionPath, { schema_version: 1, project_id: project, session_id: session, checkpoint_id: checkpointId, active_after: after });
+    if (!staged.ok) return staged;
+    // Once this checkpoint is visible, readActive can recover the corresponding
+    // replacement ledger from the staged record until writeActive completes.
+    const saved = writeCheckpoint(project, session, candidate);
+    if (!saved.ok) {
+      // Keep a transition that may already have become current despite a
+      // late durability error. Otherwise discard only this uncommitted record;
+      // a prior committed checkpoint may still need its own recovery ledger.
+      const current = readCheckpoint(project, session, "current");
+      const currentId = current?.ok && current.exists ? String(current.value?.checkpoint_id || "") : "";
+      if (current?.ok && currentId !== checkpointId) {
+        try { fs.rmSync(transitionPath, { force: true }); } catch { /* failed checkpoint record is best-effort cleanup */ }
+        ephemeral.delete(key(transitionPath));
+      }
+      return saved;
+    }
+    const previous = readCheckpoint(project, session, "previous");
+    const previousId = previous?.ok && previous.exists ? String(previous.value?.checkpoint_id || "") : "";
+    cleanupCheckpointTransitions(project, session, [checkpointId, previousId]);
+    return saved;
   }
   // Released Active Conversation blocks keep their full messages here, encrypted
   // like the active ledger and inside the session directory, so deleting the
@@ -458,7 +558,7 @@ function createTier1SensitiveStore({ fs = nodeFs, path = nodePath, crypto = node
   }
   function clearEphemeral() { ephemeral.clear(); }
 
-  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, readCheckpoint, readActive, writeActive, writeReleasedBlock, readReleasedBlock, writeChatReferenceSnapshot, readChatReferenceSnapshot, writeChatImage, readChatImage, deleteSession, status, flush, resetProject, clearEphemeral });
+  return Object.freeze({ root, available, ephemeral: () => !available(), projectDir, sessionDir, transcriptFile, checkpointFile, activeFile, writeFile, readFile, readTranscript, writeTranscript, listSessionIds, writeCheckpoint, writeCheckpointTransition, readCheckpoint, readActive, writeActive, writeReleasedBlock, readReleasedBlock, writeChatReferenceSnapshot, readChatReferenceSnapshot, writeChatImage, readChatImage, deleteSession, status, flush, resetProject, clearEphemeral });
 }
 
 module.exports = Object.freeze({ createTier1SensitiveStore });

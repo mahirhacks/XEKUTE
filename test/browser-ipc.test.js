@@ -124,6 +124,43 @@ test("existing proxy configuration closes native views before moving the shared 
   assert.deepEqual(calls, ["closeNative", "configure"]);
 });
 
+test("a newer proxy configuration supersedes a request waiting for browser cleanup", async () => {
+  const handlers = new Map(), configureCalls = [];
+  const projectA = path.resolve("proxy-project-A"), projectB = path.resolve("proxy-project-B");
+  let activeProject = projectB;
+  let releaseClose, startedClose;
+  const closeGate = new Promise(resolve => { releaseClose = resolve; });
+  const closeStarted = new Promise(resolve => { startedClose = resolve; });
+  const proxyStatus = () => ({ running: true, assessmentPath: activeProject, host: "127.0.0.1", port: 8080 });
+  registerProjectIpc({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler), on: () => {} },
+    app: { getPath: () => path.resolve("unused-test-home") }, getMainWindow: () => null,
+    container: {
+      closeNativeBrowserProject: async () => { startedClose(); await closeGate; },
+      proxyBrowser: { status: () => ({ running: false }) },
+    },
+    proxyListener: {
+      getStatus: proxyStatus,
+      configure: async workspace => {
+        configureCalls.push(workspace);
+        activeProject = workspace;
+        return proxyStatus();
+      },
+    },
+    readProjectProfile: () => ({}),
+    effectiveOperatorRuntimeSettings: () => ({ listener: { enabled: true, bindAddress: "127.0.0.1", port: 8080 } }),
+  });
+
+  const configureA = handlers.get("proxy:configure")({}, { assessmentPath: projectA });
+  await closeStarted;
+  const configureB = handlers.get("proxy:configure")({}, { assessmentPath: projectB });
+  releaseClose();
+  await Promise.all([configureA, configureB]);
+
+  assert.deepEqual(configureCalls, [projectB]);
+  assert.equal(activeProject, projectB);
+});
+
 test("identity deletion closes native authenticated sessions before removing their vault record", async () => {
   const handlers = new Map(), calls = [];
   registerProjectIpc({

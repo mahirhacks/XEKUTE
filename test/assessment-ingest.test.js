@@ -53,6 +53,30 @@ test("typed assessment ingestion refuses scope, traffic, and finding buckets", (
   }
 });
 
+test("typed ingestion rejects an explicitly excluded target when no allowlist is configured", (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-ingest-excluded-only-"));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const root = path.join(parent, "assessment");
+  createAssessmentWorkspace({ fs, path }).repair(root, { createRoot: true });
+
+  const result = runIngest({
+    workspace: root,
+    resource: "active-recon",
+    projectProfile: { scope: { inScopeTargets: [], wildcardRules: [], outOfScopeTargets: ["blocked.example.test"] } },
+    records: [
+      { type: "domain", value: "blocked.example.test" },
+      { type: "domain", value: "otherwise-allowed.example.test" },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.accepted, 1);
+  assert.equal(result.rejected, 1);
+  assert.equal(result.scopeRejected, 1);
+  assert.equal(result.total, 1);
+  assert.equal(result.records[0].value, "otherwise-allowed.example.test");
+});
+
 test("list_datasets exposes canonical names, schemas, and provision state before ingest", () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pointer-list-"));
   const root = path.join(parent, "assessment");

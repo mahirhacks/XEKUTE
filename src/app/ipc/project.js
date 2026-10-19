@@ -66,6 +66,8 @@ function registerProjectIpc({
   if (typeof getMainWindow !== "function") throw new TypeError("registerProjectIpc requires getMainWindow");
   const mcpConfig = createMcpConfigService({ fs, path, home: () => app.getPath("home") });
   const kaliAccess = createKaliAccessService({ fs, path, home: () => app.getPath("home") });
+  let proxyConfigurationGeneration = 0;
+  let proxyConfigurationQueue = Promise.resolve();
 
   function protectedProjectId(workspace) {
     const resolved = container.memoryProjectIdentityStore?.resolveV3Project?.(workspace, { persist: false });
@@ -692,28 +694,40 @@ ipcMain.handle("security:buildIntruder", async (_event, payload = {}) => {
 });
 
 ipcMain.handle("proxy:configure", async (_event, { assessmentPath } = {}) => {
-  const previousProxy = proxyListener.getStatus();
-  const nextSettings = assessmentPath ? effectiveOperatorRuntimeSettings(assessmentPath) : null;
-  const listenerChanged = previousProxy.running && (previousProxy.host !== nextSettings?.listener?.bindAddress || previousProxy.port !== Number(nextSettings?.listener?.port));
-  if (!nextSettings?.listener?.enabled || listenerChanged || (previousProxy.assessmentPath && (!assessmentPath || path.resolve(previousProxy.assessmentPath) !== path.resolve(assessmentPath)))) {
-    await container.closeNativeBrowserProject?.();
-  }
-  const browserStatus = container.proxyBrowser.status();
-  if (browserStatus.running && (!assessmentPath || path.resolve(browserStatus.workspace) !== path.resolve(assessmentPath))) {
-    await container.proxyBrowser.close(browserStatus.workspace);
-  }
-  const project = readProjectProfile(assessmentPath);
-  const result = await proxyListener.configure(assessmentPath, {
-    settings: nextSettings,
-    targets: project?.profile?.scope?.inScopeTargets || null,
-  });
-  if (!result?.running && assessmentPath) {
-    const settings = effectiveOperatorRuntimeSettings(assessmentPath);
-    // Intercept On used to persist with listener.enabled=false. Reconfigure
-    // then stopped the listener and closed the just-opened proxied browser.
-    if (!settings?.interception?.enabled) await container.proxyBrowser.close(assessmentPath);
-  }
-  return result;
+  const requestGeneration = ++proxyConfigurationGeneration;
+  const configure = async () => {
+    if (requestGeneration !== proxyConfigurationGeneration) return proxyListener.getStatus();
+    const previousProxy = proxyListener.getStatus();
+    const nextSettings = assessmentPath ? effectiveOperatorRuntimeSettings(assessmentPath) : null;
+    const listenerChanged = previousProxy.running && (previousProxy.host !== nextSettings?.listener?.bindAddress || previousProxy.port !== Number(nextSettings?.listener?.port));
+    if (!nextSettings?.listener?.enabled || listenerChanged || (previousProxy.assessmentPath && (!assessmentPath || path.resolve(previousProxy.assessmentPath) !== path.resolve(assessmentPath)))) {
+      await container.closeNativeBrowserProject?.();
+      if (requestGeneration !== proxyConfigurationGeneration) return proxyListener.getStatus();
+    }
+    const browserStatus = container.proxyBrowser.status();
+    if (browserStatus.running && (!assessmentPath || path.resolve(browserStatus.workspace) !== path.resolve(assessmentPath))) {
+      await container.proxyBrowser.close(browserStatus.workspace);
+      if (requestGeneration !== proxyConfigurationGeneration) return proxyListener.getStatus();
+    }
+    if (requestGeneration !== proxyConfigurationGeneration) return proxyListener.getStatus();
+    const project = readProjectProfile(assessmentPath);
+    const result = await proxyListener.configure(assessmentPath, {
+      settings: nextSettings,
+      targets: project?.profile?.scope?.inScopeTargets || null,
+    });
+    if (requestGeneration !== proxyConfigurationGeneration) return proxyListener.getStatus();
+    if (!result?.running && assessmentPath) {
+      const settings = effectiveOperatorRuntimeSettings(assessmentPath);
+      // Intercept On used to persist with listener.enabled=false. Reconfigure
+      // then stopped the listener and closed the just-opened proxied browser.
+      if (!settings?.interception?.enabled) await container.proxyBrowser.close(assessmentPath);
+      if (requestGeneration !== proxyConfigurationGeneration) return proxyListener.getStatus();
+    }
+    return result;
+  };
+  const operation = proxyConfigurationQueue.then(configure, configure);
+  proxyConfigurationQueue = operation.catch(() => {});
+  return operation;
 });
 
 ipcMain.handle("proxy:status", async () => proxyListener.getStatus());

@@ -96,6 +96,13 @@ const CANONICAL_EXACT_PATHS = Object.freeze([
   PATHS.projectIndex,
 ]);
 
+const PERSISTED_EXACT_PATHS = Object.freeze([
+  ...CANONICAL_EXACT_PATHS,
+  PATHS.hypotheses,
+  PATHS.checklist,
+  PATHS.evidenceIndex,
+]);
+
 function cleanText(value, max = 12_000) {
   return String(value == null ? "" : value).replace(/\r/g, "").replace(/\u0000/g, "").trim().slice(0, max);
 }
@@ -153,7 +160,7 @@ function isCanonicalInvestigationPath(relativePath) {
 
 function isPersistedArtifactPath(relativePath) {
   const normalized = normalizeRelativePath(relativePath);
-  return CANONICAL_EXACT_PATHS.includes(normalized);
+  return PERSISTED_EXACT_PATHS.includes(normalized) || /^\.xekute\/evidence\/E-\d{4,}\.md$/i.test(normalized);
 }
 
 function gitignoreTemplate() {

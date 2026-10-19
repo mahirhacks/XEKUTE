@@ -341,7 +341,15 @@ function createProjectProfileStore({ fs, path, crypto, baseDirectory, now = () =
     try {
       stored = JSON.parse(fs.readFileSync(target, "utf8"));
     } catch (error) {
-      if (error.code !== "ENOENT") {
+      if (error.code === "ENOENT") {
+        try {
+          stored = JSON.parse(fs.readFileSync(`${target}.bak`, "utf8"));
+          recoveredFromBackup = true;
+        } catch (backupError) {
+          if (backupError.code === "ENOENT") stored = null;
+          else return { error: `Could not read project settings: ${backupError.message}`, code: "PROJECT_PROFILE_READ_FAILED" };
+        }
+      } else {
         try {
           stored = JSON.parse(fs.readFileSync(`${target}.bak`, "utf8"));
           recoveredFromBackup = true;
@@ -386,7 +394,9 @@ function createProjectProfileStore({ fs, path, crypto, baseDirectory, now = () =
     try {
       fs.mkdirSync(baseDirectory, { recursive: true, mode: 0o700 });
       fs.writeFileSync(temporary, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-      try { fs.copyFileSync(target, `${target}.bak`); } catch { /* First profile write. */ }
+      if (!current.recoveredFromBackup) {
+        try { fs.copyFileSync(target, `${target}.bak`); } catch { /* First profile write or no previous primary. */ }
+      }
       try {
         fs.renameSync(temporary, target);
       } catch {

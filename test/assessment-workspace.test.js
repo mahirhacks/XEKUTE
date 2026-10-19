@@ -258,7 +258,7 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.doesNotMatch(engagementMarkup, /identity-runtime-status|identity-list|credential-list|credential-new-|project-auth-source|Browser identity sessions|Import auth state/);
   assert.match(engagementMarkup, /data-project-field="engagement\.executionModel"/);
   assert.match(engagementMarkup, /Shared browser state is not exported to command-line scanners/);
-  assert.match(renderer, /function saveEngagementAccounts\(\)/);
+  assert.match(renderer, /async function saveEngagementAccounts\(/);
   assert.match(renderer, /window\.api\.credentialSave/);
   assert.doesNotMatch(renderer, /while \(engagementAccountList\.children\.length < 2\)/);
   assert.match(renderer, /engagementAccountAdd\?\.addEventListener\("click", \(\) => \{\s*appendEngagementAccountRow\(\)/);
@@ -563,7 +563,7 @@ test("professional assessment records preserve operational evidence hashes, cano
   });
   assert.equal(e.ok, true, e.error);
   assert.equal(artifacts.commit(root, e.staging_id).ok, true);
-  assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "E-0001.md")), false);
+  assert.equal(fs.existsSync(path.join(root, ".xekute", "evidence", "E-0001.md")), true);
   assert.equal(artifacts.inspect(root).evidence[0].id, "E-0001");
 
   const run = workspace.createRun(root, { profile: "agent", status: "running" });

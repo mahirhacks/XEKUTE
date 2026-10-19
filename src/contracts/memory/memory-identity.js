@@ -28,11 +28,15 @@ function canonicalize(value, depth = 0, seen = null) {
     const nextSeen = seen || new WeakSet();
     if (nextSeen.has(value)) return CIRCULAR;
     nextSeen.add(value);
-    if (Array.isArray(value)) return value.map((entry) => canonicalize(entry, depth + 1, nextSeen));
-    return Object.keys(value).sort().reduce((result, key) => {
-      result[String(key)] = canonicalize(value[key], depth + 1, nextSeen);
-      return result;
-    }, {});
+    try {
+      if (Array.isArray(value)) return value.map((entry) => canonicalize(entry, depth + 1, nextSeen));
+      return Object.keys(value).sort().reduce((result, key) => {
+        result[String(key)] = canonicalize(value[key], depth + 1, nextSeen);
+        return result;
+      }, {});
+    } finally {
+      nextSeen.delete(value);
+    }
   }
   assert(false, "MEMORY_CANONICAL_VALUE_INVALID", "Canonical values must contain only JSON-compatible data.");
 }

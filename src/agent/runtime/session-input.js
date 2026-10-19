@@ -64,7 +64,8 @@ function normalizeRunControl(value) {
       parentId = taskById.get(parentId)?.dependencyOfTaskId;
     }
     if (task.pendingPlan && (!id(task.pendingPlan.id) || task.pendingPlan.taskId !== task.id || task.pendingPlan.revision !== task.revision)) invalid("SESSION_PLAN_INVALID", "The saved plan belongs to an obsolete task revision or has no identity.");
-    if (task.pendingExecution && (!id(task.pendingExecution.id) || task.pendingExecution.taskId !== task.id || !integer(task.pendingExecution.revision) || task.pendingExecution.revision > task.revision)) invalid("SESSION_PLAN_INVALID", "The in-flight execution round has an invalid identity or revision.");
+    if (task.pendingExecution && (!id(task.pendingExecution.id) || task.pendingExecution.taskId !== task.id || !integer(task.pendingExecution.revision) || task.pendingExecution.revision > task.revision
+      || (task.pendingExecution.inputWatermark !== undefined && !integer(task.pendingExecution.inputWatermark)))) invalid("SESSION_PLAN_INVALID", "The in-flight execution round has an invalid identity or revision.");
   }
   const routedKeys = new Set();
   for (const [index, route] of state.routes.entries()) {
@@ -174,6 +175,11 @@ function acceptRoutes(state, { expectedRouted, cancellationEpoch, routes, tasks 
     state.routes.push({ messageId: input.id, sequence: input.sequence, taskId: primary.taskId, revision: primary.revision, settingsRevision, method: route.method || "orchestrator", ...(route.hint ? { hint: route.hint } : {}),
       ...(route.intents ? { intents: acceptedIntents.sort((left, right) => left.start - right.start) } : {}) });
     deliveries.push(...sourceDeliveries);
+    for (const owner of state.tasks) {
+      const execution = owner.pendingExecution;
+      if (execution && ((Number.isSafeInteger(execution.inputWatermark) && input.sequence > execution.inputWatermark)
+        || (execution.revision < owner.revision))) delete owner.pendingExecution;
+    }
     state.routed += 1;
   }
   if (plan) {
