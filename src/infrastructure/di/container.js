@@ -20,6 +20,7 @@ const { createProjectIdentityStore } = require("../../app/storage/memory/project
 const { createProjectArtifactService } = require("../../app/services/artifacts/project-artifact-service.js");
 const { createTier1SensitiveStore } = require("../../app/storage/memory/tier1-sensitive-store.js");
 const { createTier1ContextCoordinator } = require("../../app/services/memory/tier1-context-coordinator.js");
+const { resolveCheckpointPolicy } = require("../../app/services/memory/checkpoint-policy.js");
 const { getDefaultMemorySchemaRegistry } = require("../../contracts/memory/schema-registry.js");
 const { createMcpRuntime } = require("../../app/services/assessment/knowledge/mcp-runtime.js");
 const { createWorkspaceFiles } = require("../../app/services/workspace/workspace-files.js");
@@ -35,7 +36,8 @@ const { createActiveTerminalCatalog } = require("../../app/services/terminal/act
 const ContextBudget = require("../../agent/runtime/context-budget.js");
 
 // Tool registry + raw adapters (the canonical tools).
-const { createToolRegistry, registerAskQuestions, registerEndTurn, registerExecCommand, registerViewActiveTerminal, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerManageIdentity, registerReplayRequest, registerBrowserAction, registerDelegateAgent, registerWebResearch } = require("../../agent/tools/config/tool-registry.js");
+const { createToolRegistry, registerAskQuestions, registerEndTurn, registerExecCommand, registerViewActiveTerminal, registerReadFile, registerSearchWorkspace, registerApplyPatch, registerManageIdentity, registerReplayRequest, registerBrowserAction, registerDelegateAgent, registerWebResearch, registerReleaseBlocks, registerRecallBlock } = require("../../agent/tools/config/tool-registry.js");
+const { createReleaseBlocksTool, createRecallBlockTool } = require("../../agent/tools/process/context-blocks.js");
 const { createAskQuestionsTool } = require("../../agent/tools/process/ask-questions.js");
 const { createEndTurnTool } = require("../../agent/tools/process/end-turn.js");
 const { createExecCommandTool } = require("../../agent/tools/process/exec-command.js");
@@ -101,6 +103,7 @@ function createContainer({
   const tier1SensitiveStore = createTier1SensitiveStore({ fs, path, crypto, baseDir: config.memoryV3SensitiveDirectory(), protector: memoryProtector, schemaRegistry: memorySchemaRegistry });
   const v3SessionStore = createV3SessionStore({ sensitiveStore: tier1SensitiveStore, projectIdentityStore: memoryProjectIdentityStore, crypto });
   const memoryTier1Coordinator = createTier1ContextCoordinator({
+    policy: resolveCheckpointPolicy(process.env),
     sensitiveStore: tier1SensitiveStore,
     schemaRegistry: memorySchemaRegistry,
     crypto,
@@ -281,6 +284,8 @@ function createContainer({
   const toolRegistry = createToolRegistry();
   registerAskQuestions(toolRegistry, createAskQuestionsTool());
   registerEndTurn(toolRegistry, createEndTurnTool());
+  registerReleaseBlocks(toolRegistry, createReleaseBlocksTool());
+  registerRecallBlock(toolRegistry, createRecallBlockTool());
   registerExecCommand(toolRegistry, createExecCommandTool({ processManager: durableProcessManager }));
   registerViewActiveTerminal(toolRegistry, createViewActiveTerminalTool({ catalog: activeTerminalCatalog }));
   registerReadFile(toolRegistry, createReadFileTool());

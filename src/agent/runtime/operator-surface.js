@@ -17,6 +17,8 @@
     "browser_action",
     "delegate_agent",
     "web_research",
+    "release_blocks",
+    "recall_block",
     "end_turn",
   ];
   const TOOL_NAME_RE = new RegExp(`\\b(?:${TOOL_NAMES.join("|")})\\b`, "gi");

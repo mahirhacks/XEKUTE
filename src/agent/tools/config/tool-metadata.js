@@ -15,6 +15,8 @@ const TOOL_REGISTRY_NAMES = Object.freeze([
   "browser_action",
   "delegate_agent",
   "web_research",
+  "release_blocks",
+  "recall_block",
 ]);
 
 const TOOL_METADATA = Object.freeze({
@@ -35,10 +37,12 @@ const TOOL_METADATA = Object.freeze({
     operations: ["spawn", "follow_up", "steer", "stop", "list", "inspect", "resolve_question"],
   }),
   web_research: Object.freeze({ mutating: false, reversible: false, targetTypes: ["research", "public-web"] }),
+  release_blocks: Object.freeze({ mutating: false, reversible: true, targetTypes: ["context"] }),
+  recall_block: Object.freeze({ mutating: false, reversible: true, targetTypes: ["context"] }),
 });
 
 const ALL_MODE_TOOLS = Object.freeze([...TOOL_REGISTRY_NAMES]);
-const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal"]);
+const SAFE_READ_TOOLS = Object.freeze(["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal", "release_blocks", "recall_block"]);
 const MODE_TOOL_GROUPS = Object.freeze({
   ask: SAFE_READ_TOOLS,
   agent: ALL_MODE_TOOLS,

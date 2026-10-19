@@ -5478,6 +5478,58 @@ html.panel-resizing iframe {
   line-height: 14px;
 }
 
+.context-blocks {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}
+.context-blocks-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.context-block-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  font-size: 12px;
+}
+.context-block-row.released {
+  opacity: 0.45;
+}
+.context-block-index,
+.context-block-tokens {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+.context-block-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-block-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.45;
+}
+.context-block-pin:hover,
+.context-block-pin.pinned {
+  opacity: 1;
+}
 .context-usage-row-label {
   display: inline-flex;
   align-items: center;

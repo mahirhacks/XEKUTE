@@ -38,6 +38,9 @@ const { estimateBrowserImageTokens, retainBrowserScreenshotExchanges } = require
 // restart).
 const detachedDeliveries = new Map();
 const { END_TURN_TOOL_NAME, isEndTurnStop, executeEndTurn } = require("../tools/process/end-turn.js");
+const { pressureTriggersRelease, selectBlocksToRelease } = require("../runtime/context-release-policy.js");
+const { loadScopePolicy, evaluateNetworkTarget } = require("../authority/scope/network-scope.js");
+const { RELEASE_BLOCKS_TOOL_NAME, RECALL_BLOCK_TOOL_NAME, normalizeReleaseRequest, describeBlocks, sameMessages, renderReleasedBlock } = require("../tools/process/context-blocks.js");
 const { consumesCommandSlot } = require("../tools/process/command-queue.js");
 const { shouldReadLiveCommandState } = require("../runtime/operator-surface.js");
 
@@ -575,6 +578,8 @@ async function runAgentTurn({
   artifacts = null,
   projectId = "",
   precedingBlockId = "",
+  contextAutoRelease = true,
+  contextReleasePolicy = null,
   sessionId = "",
   dirMap = "",
   activeFile = null,
@@ -943,6 +948,15 @@ async function runAgentTurn({
     return next;
   };
   const browserImageTokens = (messages) => (contextPlan?.provider === "openrouter" ? estimateBrowserImageTokens(messages, { metadata: contextPlan?.metadata }) : 0);
+  // The meter lists the conversation's blocks. This is a read of the coordinator's
+  // ledger and must never fail or reassemble the prompt.
+  const contextBlocksForUsage = () => {
+    if (typeof tier1Context?.activeBlocks !== "function") return [];
+    try {
+      const blocks = tier1Context.activeBlocks(tier1ProjectId, resolvedTier1SessionId);
+      return describeBlocks(blocks, Math.max(0, blocks.length - 1));
+    } catch { return []; }
+  };
   const currentTier1Usage = ({ completionTokens = null } = {}) => {
     if (!useTier1 || !tier1Assembly) return null;
     const sections = tier1UsageSections(tier1Assembly);
@@ -961,6 +975,7 @@ async function runAgentTurn({
       localPromptTokens: promptTokens,
       approximate: true,
       sections,
+      blocks: contextBlocksForUsage(),
       toolNames: [...allowedNames],
       effectiveLimitTokens: effectiveContextLimit,
       contextWindow: effectiveContextLimit,
@@ -1034,18 +1049,30 @@ async function runAgentTurn({
     }
     return { ok: true, pressure };
   };
-  const checkpointTier1IfNeeded = async ({ force = false, reason = "iteration" } = {}) => {
+  // `midTask` marks a checkpoint that fires while the task is still running, as
+  // opposed to one at a real boundary (end of turn). It is reported so the timing
+  // of checkpoints can be measured before any new trigger is built.
+  // A lead that names a host the operator never mentioned is only kept as work to
+  // do when the project's scope covers it. No configured scope means no exception.
+  const tier1ScopeCheck = () => {
+    try {
+      const policy = loadScopePolicy(workspace, projectProfile);
+      return policy.configured ? (entity) => evaluateNetworkTarget(entity, policy).ok === true : null;
+    } catch { return null; }
+  };
+  const checkpointTier1IfNeeded = async ({ force = false, reason = "iteration", midTask = false } = {}) => {
     if (!useTier1 || tier1CheckpointInFlight) return tier1CheckpointInFlight || { ok: true, checkpointed: false, skipped: true };
     // Reassemble immediately before measuring pressure.  Tool results and
     // assistant messages are appended between model iterations; measuring the
     // previous assembly would checkpoint one iteration too late and could
     // cause the provider fitting helper to drop exact Block B messages.
+    maybeAutoReleaseContext();
     const refreshedBeforePressure = refreshTier1Prompt({ resetHistory: false });
     if (!refreshedBeforePressure) return { ok: false, code: "MEMORY_TIER1_REASSEMBLY_FAILED", error: "Tier 1 context could not be assembled for checkpoint pressure." };
     const pressure = tier1PressureFor(refreshedBeforePressure);
     if (!force && !pressure.shouldCheckpoint) return { ok: true, checkpointed: false, pressure };
     tier1CheckpointInFlight = (async () => {
-      sendEvent({ type: "context_checkpoint", status: "started", reason, threshold: pressure.threshold, totalTokens: pressure.totalTokens });
+      sendEvent({ type: "context_checkpoint", status: "started", reason, midTask, threshold: pressure.threshold, totalTokens: pressure.totalTokens });
       const checkpoint = await tier1Context.checkpoint({
         project_id: tier1ProjectId,
         session_id: resolvedTier1SessionId,
@@ -1062,6 +1089,10 @@ async function runAgentTurn({
         // reducer inside the coordinator.
         model: typeof tier1Model === "function" ? tier1Model : null,
         allow_model: typeof tier1Model === "function",
+        reason,
+        scope_check: tier1ScopeCheck(),
+        // How much of the summarizer's input window the request may use.
+        summarizer_input_tokens: contextPlan?.provider === "openrouter" ? 60_000 : 20_000,
       });
       if (checkpoint?.ok) {
         const screenshotExchanges = browserImageTokens(tier1Active) > 0
@@ -1079,6 +1110,12 @@ async function runAgentTurn({
           type: "context_checkpoint",
           status: "completed",
           reason,
+          midTask,
+          pressureTokens: pressure.totalTokens,
+          modelUsed: checkpoint.modelUsed || "",
+          fallbackCode: checkpoint.semanticCode || "",
+          modelStats: checkpoint.modelStats || null,
+          trimmed: checkpoint.trimmed || {},
           checkpointId: checkpoint.checkpoint?.checkpoint_id || "",
           checkpointRevision: checkpoint.checkpoint?.checkpoint_id || "",
           activeConversationTokens: usageSectionTokens(usage, "active_conversation"),
@@ -1088,11 +1125,106 @@ async function runAgentTurn({
         });
         if (usage) sendEvent({ type: "context_usage", usage });
       } else {
-        sendEvent({ type: "context_checkpoint", status: "failed", reason, code: checkpoint?.code || "MEMORY_CHECKPOINT_FAILED" });
+        sendEvent({ type: "context_checkpoint", status: "failed", reason, midTask, pressureTokens: pressure.totalTokens, code: checkpoint?.code || "MEMORY_CHECKPOINT_FAILED", trimmed: checkpoint?.trimmed || {} });
       }
       return { ...checkpoint, pressure };
     })().finally(() => { tier1CheckpointInFlight = null; });
     return tier1CheckpointInFlight;
+  };
+
+  // release_blocks and recall_block act on this run's own history. Only blocks
+  // from before the task in progress can be released, so the live task, its
+  // steering inputs and every open tool exchange always stay in context.
+  // The coordinator is injected and duck-typed, so a stand-in without block
+  // support simply has no context blocks to release.
+  const contextBlocksSupported = () => useTier1 && ["activeBlocks", "evictBlocks", "recallBlock"].every((method) => typeof tier1Context?.[method] === "function");
+  const taskInputMatches = (message) => inputMessages.some((input) => (input.source_message_id
+    ? input.source_message_id === message.source_message_id
+    : message.role === "user" && message.content === input.content));
+  const contextBlockView = () => {
+    refreshTier1Prompt({ resetHistory: false });
+    const blocks = tier1Context.activeBlocks(tier1ProjectId, resolvedTier1SessionId);
+    const taskStart = blocks.findIndex((block) => block.messages.some(taskInputMatches));
+    return { blocks, releasableBefore: taskStart >= 0 ? taskStart : Math.max(0, blocks.length - 1) };
+  };
+  const contextToolFailure = (error, errorCode) => ({ ok: false, error, errorCode, retryable: false });
+  const releaseContextBlocks = (requested, view = contextBlockView()) => {
+    const rejected = [];
+    const approved = [];
+    for (const entry of requested) {
+      const position = view.blocks.findIndex((block) => block.index === Number(entry.index));
+      const block = position >= 0 ? view.blocks[position] : null;
+      if (!block || block.state === "evicted") { approved.push({ index: entry.index, reason: entry.note }); continue; }
+      const end = block.start + block.messages.length;
+      if (position >= view.releasableBefore) { rejected.push({ index: block.index, code: "BLOCK_IN_CURRENT_TASK" }); continue; }
+      if (end > promptHistoryBaseline
+        || !sameMessages(tier1Active.slice(block.start, end), block.messages)
+        || !sameMessages(workingHistory.slice(block.start, end), block.messages)) { rejected.push({ index: block.index, code: "BLOCK_MISALIGNED" }); continue; }
+      approved.push({ index: entry.index, reason: entry.note });
+    }
+    const result = tier1Context.evictBlocks(tier1ProjectId, resolvedTier1SessionId, approved, { retainSecrets: projectProfile?.dataHandling?.redactSecrets === false });
+    if (result?.ok !== true) return contextToolFailure(result?.error || "Blocks could not be released.", result?.code || "BLOCK_RELEASE_FAILED");
+    const byIndex = new Map(view.blocks.map((block) => [block.index, block]));
+    for (const entry of [...result.evicted].sort((left, right) => byIndex.get(right.index).start - byIndex.get(left.index).start)) {
+      const block = byIndex.get(entry.index);
+      const tombstone = result.active.find((message) => message.block_tombstone === true && message.block_index === entry.index);
+      tier1Active.splice(block.start, block.messages.length, { ...tombstone });
+      workingHistory.splice(block.start, block.messages.length, { ...tombstone });
+      promptHistoryBaseline -= block.messages.length - 1;
+    }
+    if (result.evicted.length) {
+      refreshTier1Prompt({ resetHistory: false });
+      publishTier1Meter();
+    }
+    return {
+      ok: true,
+      value: {
+        operation: "release",
+        released: result.evicted.map((entry) => ({ index: entry.index, messages: entry.messages, tokensFreed: Math.max(0, entry.tokensBefore - entry.tokensAfter) })),
+        tokensFreed: result.evicted.reduce((sum, entry) => sum + Math.max(0, entry.tokensBefore - entry.tokensAfter), 0),
+        rejected: [...rejected, ...result.rejected],
+        note: "Released blocks can be restored with recall_block.",
+      },
+    };
+  };
+  const recallContextBlock = (args) => {
+    const result = tier1Context.recallBlock(tier1ProjectId, resolvedTier1SessionId, args?.index);
+    if (result?.ok !== true) return contextToolFailure(result?.error || "The block could not be recalled.", result?.code || "BLOCK_RECALL_FAILED");
+    const rendered = renderReleasedBlock(result.messages, { maxChars: Math.max(4_000, Math.floor(effectiveContextLimit * 0.2 * 3.6)) });
+    return { ok: true, value: { operation: "recall", index: result.index, messages: result.messages.length, tokens: result.tokens, truncated: rendered.truncated, transcript: rendered.text } };
+  };
+  // Runs before checkpointing: when the prompt crosses the release trigger, the
+  // oldest finished blocks are released in one batch so that the full checkpoint
+  // summary is needed far less often.
+  // It is an optimization: a failure here is noted and the run carries on to
+  // the checkpoint path exactly as it did before blocks existed.
+  const maybeAutoReleaseContext = () => {
+    if (!contextBlocksSupported() || contextAutoRelease === false || previewOnly) return null;
+    try {
+      const assembled = refreshTier1Prompt({ resetHistory: false });
+      if (!assembled) return null;
+      const pressure = tier1PressureFor(assembled);
+      if (!pressureTriggersRelease({ totalTokens: pressure.totalTokens, limit: effectiveContextLimit, policy: contextReleasePolicy || {} })) return null;
+      const view = contextBlockView();
+      const selected = selectBlocksToRelease({ blocks: view.blocks, releasableBefore: view.releasableBefore, totalTokens: pressure.totalTokens, limit: effectiveContextLimit, policy: contextReleasePolicy || {} });
+      if (!selected.length) return null;
+      sendEvent({ type: "context_release", status: "started", reason: "pressure", totalTokens: pressure.totalTokens, indices: selected.map((entry) => entry.index) });
+      const result = releaseContextBlocks(selected, view);
+      sendEvent({ type: "context_release", status: result.ok ? "completed" : "failed", reason: "pressure", indices: (result.value?.released || []).map((entry) => entry.index), tokensFreed: result.value?.tokensFreed || 0 });
+      return result;
+    } catch (error) {
+      noteLimitation(`Automatic context release failed: ${error?.message || error}`);
+      return null;
+    }
+  };
+  const executeContextBlockTool = (toolName, args) => {
+    if (!contextBlocksSupported()) return contextToolFailure("Context blocks need Tier 1 memory, which is off for this run.", "CONTEXT_BLOCKS_UNAVAILABLE");
+    if (toolName === RECALL_BLOCK_TOOL_NAME) return recallContextBlock(args);
+    const request = normalizeReleaseRequest(args);
+    if (request.ok !== true) return request;
+    if (request.operation === "release") return releaseContextBlocks(request.blocks);
+    const view = contextBlockView();
+    return { ok: true, value: { operation: "list", blocks: describeBlocks(view.blocks, view.releasableBefore), note: "Only blocks marked releasable can be released. Blocks from the current task stay in context." } };
   };
 
   const noteLimitation = (text) => {
@@ -1149,7 +1281,7 @@ async function runAgentTurn({
 
   const compactForNextRound = async ({ reason = "context_overflow" } = {}) => {
     if (useTier1) {
-      const checkpoint = await checkpointTier1IfNeeded({ force: true, reason });
+      const checkpoint = await checkpointTier1IfNeeded({ force: true, reason, midTask: true });
       if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
     }
     const dropUnusedMcpIfProtectedOverflow = () => {
@@ -1255,12 +1387,13 @@ async function runAgentTurn({
   async function prepareModelRequest() {
     await preparePendingChatReferences();
     if (useTier1) {
+      maybeAutoReleaseContext();
       const refreshed = refreshTier1Prompt({ resetHistory: false });
       if (!refreshed) throw Object.assign(new Error("Tier 1 context could not be assembled."), { code: "MEMORY_TIER1_REASSEMBLY_FAILED" });
       const pressure = tier1PressureFor(refreshed);
       if (pressure.protectedOverflow) applyToolCatalog(keepNativeAndRecentTools(availableTools, recentToolNames()));
       if (pressure.shouldCheckpoint && tier1Active.length) {
-        const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call" });
+        const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call", midTask: true });
         if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
       }
     }
@@ -1358,6 +1491,12 @@ async function runAgentTurn({
       inputMessages.push(message);
       appliedInputIds.add(delivery.id);
       appendTier1Messages(message);
+      // Steering from the operator is kept as a directive the moment it arrives; a
+      // late tool result arrives the same way and is not one.
+      if (useTier1 && !/^(?:result|execution):/.test(delivery.id)) {
+        try { tier1Context.recordDirective?.(tier1ProjectId, resolvedTier1SessionId, { text: scopedContent(message), sourceMessageId: delivery.id, revision: delivery.revision, retainSecrets: projectProfile?.dataHandling?.redactSecrets === false }); }
+        catch { /* the message stays in the ledger either way */ }
+      }
     }
     revision = response.revision;
     cancellationEpoch = response.cancellationEpoch ?? cancellationEpoch;
@@ -1705,7 +1844,7 @@ async function runAgentTurn({
         try { tier1Context.setActiveConversation(tier1ProjectId, resolvedTier1SessionId, tier1Active); } catch { /* local ledger remains authoritative */ }
         publishTier1Meter();
       }
-      const tier1Checkpoint = useTier1 ? await checkpointTier1IfNeeded({ reason: "block_complete" }) : null;
+      const tier1Checkpoint = useTier1 ? await checkpointTier1IfNeeded({ reason: "block_complete", midTask: true }) : null;
       if (tier1Checkpoint?.ok === false) noteLimitation(tier1Checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
       if (signal?.aborted) {
         AgentRuntime.finalize(runState, { status: "stopped", reason: "Aborted by operator." });
@@ -2034,6 +2173,12 @@ async function runAgentTurn({
       }
       seenThisRound.add(signature);
       executedTools = true;
+      if (toolName === RELEASE_BLOCKS_TOOL_NAME || toolName === RECALL_BLOCK_TOOL_NAME) {
+        let toolResult;
+        try { toolResult = executeContextBlockTool(toolName, tool.args || {}); }
+        catch (error) { toolResult = contextToolFailure(error.message, "CONTEXT_BLOCK_TOOL_FAILED"); }
+        return immediate(toolResult, true);
+      }
       const promise = (async () => {
         let toolResult;
         try {
@@ -2113,7 +2258,7 @@ async function runAgentTurn({
     await checkpointRun({ round, actionCount: actionResults.length, status: stoppedToolBatch ? "stopped" : "running", accounting: accounting.snapshot(), checkpoint: { phase: runState.phase, toolCount: runState.toolCount, failedToolCount: runState.failedToolCount, ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
     if (stoppedToolBatch) return abortTurnResult();
     if (useTier1 && tier1ExecutedThisRound) {
-      const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results" });
+      const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results", midTask: true });
       if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
     }
     if (signal?.aborted) return abortTurnResult();

@@ -72,7 +72,8 @@ const { createMainLog } = require("./main-log.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { isMemoryId } = require("../../contracts/memory/index.js");
-const { redactStructuredValue } = require("../../shared/secret-redaction.js");
+const { redactStructuredValue, redactToolCallMessages } = require("../../shared/secret-redaction.js");
+const { CHECKPOINT_REQUEST_CONTRACT, CHECKPOINT_SYSTEM_PROMPT, attachModelStats, checkpointContextSize, estimateTokens: estimateCheckpointTokens, promptWasTruncated } = require("../services/memory/tier1-checkpoint-request.js");
 
 // Build the model-facing catalog from the canonical tool registry.
 function toolCatalogFromRegistry(registry) {
@@ -3075,6 +3076,7 @@ async function runOllamaJson(payload) {
   });
   if (!response.ok) throw new Error(`Ollama error: ${response.status} ${response.statusText}`);
   const body = await response.json();
+  if (typeof payload.onStats === "function") payload.onStats({ promptEvalCount: Number(body?.prompt_eval_count) || 0, evalCount: Number(body?.eval_count) || 0 });
   return String(body?.message?.content || "");
 }
 
@@ -3368,7 +3370,9 @@ function tier1SessionIdForRun(rawSessionId, runKey = "") {
   return `session_${digest}`;
 }
 
-async function runTier1CheckpointModel({ context = {}, model = "", provider = "", reasoningEffort = null } = {}) {
+// `retainSecrets` mirrors the project setting "Redact secrets" being off. It is
+// passed in because this adapter has no project profile of its own.
+async function runTier1CheckpointModel({ context = {}, model = "", provider = "", reasoningEffort = null, retainSecrets = false } = {}) {
   // Checkpoint synthesis is a model boundary, not a trusted local call.
   // Keep Block C exact in the local coordinator while redacting credential
   // material from the provider payload (including nested tool/working-memory
@@ -3379,7 +3383,7 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
     required_contract: "ConversationCheckpointV3",
     previous_checkpoint: context.previous || null,
     deterministic_reduction: context.reduction || {},
-    active_conversation: Array.isArray(context.active) ? context.active.slice(0, 500) : [],
+    active_conversation: Array.isArray(context.active) ? redactToolCallMessages(context.active.slice(0, 500), { retainSecrets }) : [],
     current_prompt_context_only: String(context.currentPrompt || "").slice(0, 2_000),
     current_workflow: context.workflow || null,
     constraints: Array.isArray(context.constraints) ? context.constraints.slice(0, 200) : [],
@@ -3399,6 +3403,63 @@ async function runTier1CheckpointModel({ context = {}, model = "", provider = ""
     : await runOllamaJson({ model: selectedModel, messages, numCtx: 16_384, temperature: 0 });
   if (raw && typeof raw === "object") return raw;
   try { return JSON.parse(String(raw || "")); } catch { return null; }
+}
+
+// The Tier 1 coordinator sends a structured semantic-checkpoint request, while a few
+// injected test adapters pass the compact context shape directly. Accept both
+// without dropping the exact reduction or protected references. A request built by
+// the coordinator's v2 contract is handed to its own runner.
+function createTier1ModelCallback(payload = {}) {
+  return (input = {}) => {
+    const retainSecrets = readProjectProfile(payload.workspace)?.profile?.dataHandling?.redactSecrets === false;
+    const common = {
+      model: String(payload.model || ""),
+      provider: String(payload.provider || getActiveProvider() || "ollama"),
+      reasoningEffort: payload.reasoningEffort,
+    };
+    if (input?.contract === CHECKPOINT_REQUEST_CONTRACT) return runTier1CheckpointDelta({ request: input, ...common });
+    const context = input?.previous_checkpoint !== undefined || input?.deterministic_reduction !== undefined
+      ? {
+        previous: input.previous_checkpoint || null,
+        reduction: input.deterministic_reduction || {},
+        active: input.active_conversation || [],
+        currentPrompt: input.current_prompt_context_only || "",
+        workflow: input.current_workflow || input.workflow || null,
+        protectedRefs: input.authoritative_refs || [],
+        sourceBlocks: input.source_block_refs || input.sourceBlocks || [],
+        constraints: input.constraints || input.operator_constraints || input.operatorConstraints || [],
+        objective: input.objective || "",
+        decisions: input.decisions || [],
+      }
+      : input;
+    return runTier1CheckpointModel({ context, ...common, retainSecrets });
+  };
+}
+
+// Runs the v2 checkpoint request. The request is already projected and bounded by
+// the coordinator, so this only sizes the call, runs it, and reports how it went.
+async function runTier1CheckpointDelta({ request, model = "", provider = "", reasoningEffort = null } = {}) {
+  // Same unconditional provider boundary as the full request above.
+  const safeRequest = redactStructuredValue(request);
+  const messages = [
+    { role: "system", content: CHECKPOINT_SYSTEM_PROMPT },
+    { role: "user", content: JSON.stringify(safeRequest) },
+  ];
+  const inputTokens = estimateCheckpointTokens(messages);
+  const selectedProvider = String(provider || getActiveProvider() || "ollama").toLowerCase();
+  const selectedModel = String(model || "").trim();
+  const started = Date.now();
+  const stats = { inputTokens };
+  let raw;
+  if (selectedProvider === "openrouter") {
+    raw = await runOpenRouterJson({ model: selectedModel, messages, temperature: 0, maxCompletionTokens: 3_000, reasoningEffort, timeoutMs: 55_000, responseFormat: { type: "json_object" } });
+  } else {
+    stats.numCtx = checkpointContextSize(inputTokens);
+    raw = await runOllamaJson({ model: selectedModel, messages, numCtx: stats.numCtx, temperature: 0, onStats: (reported) => Object.assign(stats, reported) });
+    stats.truncated = promptWasTruncated(stats.promptEvalCount, stats.numCtx);
+  }
+  stats.modelMs = Date.now() - started;
+  return attachModelStats(raw, stats);
 }
 
 async function handleAgentRun(event, payload = {}, options = {}) {
@@ -3678,34 +3739,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     // supplied to delegated turns.
     tier1Context: tier1ProjectId ? container.memoryTier1Coordinator : null,
     loadChatReferenceSnapshot: (input) => agentSessionRuntime.loadChatReferenceSnapshot(input),
-    tier1Model: tier1ProjectId
-      ? (input = {}) => {
-        // The Tier 1 coordinator sends a structured semantic-checkpoint
-        // request, while a few injected test adapters pass the compact
-        // context shape directly. Accept both without dropping the exact
-        // reduction or protected references.
-        const context = input?.previous_checkpoint !== undefined || input?.deterministic_reduction !== undefined
-          ? {
-            previous: input.previous_checkpoint || null,
-            reduction: input.deterministic_reduction || {},
-            active: input.active_conversation || [],
-            currentPrompt: input.current_prompt_context_only || "",
-            workflow: input.current_workflow || input.workflow || null,
-            protectedRefs: input.authoritative_refs || [],
-            sourceBlocks: input.source_block_refs || input.sourceBlocks || [],
-            constraints: input.constraints || input.operator_constraints || input.operatorConstraints || [],
-            objective: input.objective || "",
-            decisions: input.decisions || [],
-          }
-          : input;
-        return runTier1CheckpointModel({
-          context,
-          model: String(payload.model || ""),
-          provider: String(payload.provider || getActiveProvider() || "ollama"),
-          reasoningEffort: payload.reasoningEffort,
-        });
-      }
-      : null,
+    tier1Model: tier1ProjectId ? createTier1ModelCallback(payload) : null,
     workingReferences: [],
     toolMetadataForName: (name, childSessionId = sessionId) => container.mcpRuntime?.metadata?.(name, {
       workspace: payload.workspace,
@@ -3898,30 +3932,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     projectId: tier1ProjectId,
     precedingBlockId: payload.precedingBlockId || payload.preceding_block_id || "",
     tier1Context: tier1ProjectId ? container.memoryTier1Coordinator : null,
-    tier1Model: tier1ProjectId
-      ? (input = {}) => {
-        const context = input?.previous_checkpoint !== undefined || input?.deterministic_reduction !== undefined
-          ? {
-            previous: input.previous_checkpoint || null,
-            reduction: input.deterministic_reduction || {},
-            active: input.active_conversation || [],
-            currentPrompt: input.current_prompt_context_only || "",
-            workflow: input.current_workflow || input.workflow || null,
-            protectedRefs: input.authoritative_refs || [],
-            sourceBlocks: input.source_block_refs || input.sourceBlocks || [],
-            objective: input.objective || "",
-            constraints: input.constraints || input.operator_constraints || input.operatorConstraints || [],
-            decisions: input.decisions || [],
-          }
-          : input;
-        return runTier1CheckpointModel({
-          context,
-          model: String(payload.model || ""),
-          provider: String(payload.provider || getActiveProvider() || "ollama"),
-          reasoningEffort: payload.reasoningEffort,
-        });
-      }
-      : null,
+    tier1Model: tier1ProjectId ? createTier1ModelCallback(payload) : null,
     memorySessionId: tier1ProjectId ? tier1SessionId : "",
     workingReferences,
     artifacts: container.projectArtifacts,
@@ -4279,6 +4290,27 @@ ipcMain.handle("context:forkTier1Session", async (_event, payload = {}) => {
   const copied = container.memoryTier1Coordinator.cloneSession(identity.projectId, sourceSessionId, destSessionId);
   if (!copied?.ok) return { ok: false, sessionId: "", reason: copied?.code || "clone_failed" };
   return { ok: true, projectId: identity.projectId, sessionId: destSessionId, activeCount: copied.activeCount || 0 };
+});
+
+// Pinning keeps a conversation block out of automatic and model-requested
+// release. It only edits the pin set for that block index, never the ledger.
+ipcMain.handle("context:pinBlock", async (_event, payload = {}) => {
+  const workspace = String(payload.workspace || "");
+  const sessionId = String(payload.memorySessionId || payload.sessionId || "");
+  const index = Number(payload.index);
+  if (!workspace || !isMemoryId(sessionId, "session") || !Number.isSafeInteger(index) || index < 0) {
+    return { ok: false, reason: "invalid_pin_request" };
+  }
+  const requestedProjectId = String(payload.projectId || payload.memoryProjectId || "").trim();
+  const identity = container.memoryProjectIdentityStore?.resolveV3Project?.(workspace, {
+    persist: true,
+    projectId: isMemoryId(requestedProjectId, "proj") ? requestedProjectId : "",
+  }) || null;
+  if (!identity?.ok || !isMemoryId(identity.projectId, "proj")) return { ok: false, reason: "no_project_identity" };
+  const coordinator = container.memoryTier1Coordinator;
+  if (typeof coordinator?.pinBlock !== "function") return { ok: false, reason: "pinning_unavailable" };
+  const pinned = coordinator.pinBlock(identity.projectId, sessionId, index, payload.pinned !== false);
+  return pinned?.ok ? { ok: true, index: pinned.index, pinned: pinned.pinned } : { ok: false, reason: pinned?.code || "pin_failed" };
 });
 
 // ── In-app updates (electron-updater / NSIS) ─────────────────────────────────

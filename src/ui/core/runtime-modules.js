@@ -13,6 +13,7 @@ import "../../prompts/instructions/initial-context.js";
 import "../../agent/runtime/prompt-compiler.js";
 import "../../agent/runtime/operator-surface.js";
 import "../features/toolbox/toolbox-controller.js";
+import "../features/chat/context-blocks-view.js";
 import "../../agent/runtime/context-budget.js";
 import "../features/editor/editor-controller.js";
 import "../features/project/seti-icon-theme.js";

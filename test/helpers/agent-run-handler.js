@@ -102,6 +102,7 @@ function createAgentRunHandlerFixture() {
     buildSubagentResultPrompt: (result) => `Child result ${result.resultId}`,
     buildSubagentQuestionHeadPrompt: () => "Child question",
     runTier1CheckpointModel: async () => ({}),
+    createTier1ModelCallback: () => async () => ({}),
     runOllamaAgentRound: async () => ({}),
     executeToolCall: async () => ({ ok: true }),
     requestToolApproval() {},

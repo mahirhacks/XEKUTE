@@ -4,6 +4,11 @@ const nodeCrypto = require("node:crypto");
 const { canonicalJson, canonicalKeyHash, isMemoryId } = require("../../../contracts/memory/index.js");
 const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/schema-registry.js");
 const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = require("../../storage/memory/memory-storage-utils.js");
+const { redactToolCallMessages } = require("../../../shared/secret-redaction.js");
+const { NON_OPERATOR_ID, isOperatorInput, messageOrigin, operatorText } = require("./message-provenance.js");
+const { resolveCheckpointPolicy } = require("./checkpoint-policy.js");
+const { buildSummarizerRequest } = require("./tier1-checkpoint-request.js");
+const { attemptFact, attemptsFromLedger, mergeAttemptEvents } = require("./checkpoint-attempts.js");
 
 const SUMMARY_MAX = 32_768;
 const SUMMARY_RATIO = 0.05;
@@ -17,7 +22,7 @@ const SEMANTIC_STOPWORDS = new Set([
   "the", "and", "that", "this", "with", "from", "for", "was", "were", "has", "have",
   "into", "then", "when", "will", "must", "should", "could", "would", "user", "agent",
 ]);
-const SECRET_TEXT = /(?:bearer\s+|basic\s+|(?:cookie|set-cookie|authorization|proxy-authorization)\s*:\s*|(?:password|passwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*|-----BEGIN [^-]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)[^\s,;]*/gi;
+const SECRET_TEXT = /(?:bearer\s+|basic\s+|(?:cookie|set-cookie|authorization|proxy-authorization)\s*:\s*(?:(?:bearer|basic)\s+)?|(?:password|passwd|token|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*|-----BEGIN [^-]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)[^\s,;]*/gi;
 
 function redactText(value, maximum = 8_000, retainSecrets = false) {
   const text = String(value == null ? "" : value);
@@ -27,7 +32,7 @@ function redactText(value, maximum = 8_000, retainSecrets = false) {
     .slice(0, maximum);
 }
 
-function sanitizeValue(value, key = "", depth = 0, seen = new WeakSet(), retainSecrets = false) {
+function sanitizeValue(value, key = "", depth = 0, seen = new WeakSet(), retainSecrets = false, maxItems = 100) {
   if (depth > 10) return "[OMITTED_TOO_DEEP]";
   if (!retainSecrets && /(?:cookie|authorization|access[_-]?token|refresh[_-]?token|csrf|secret|password|private[_-]?key|passphrase|credential|raw[_-]?value)/i.test(String(key))) return undefined;
   if (value == null || typeof value === "boolean" || typeof value === "number") return value;
@@ -35,10 +40,10 @@ function sanitizeValue(value, key = "", depth = 0, seen = new WeakSet(), retainS
   if (typeof value !== "object") return redactText(value, 2_000);
   if (seen.has(value)) return "[CIRCULAR]";
   seen.add(value);
-  if (Array.isArray(value)) return value.slice(0, 100).map((entry) => sanitizeValue(entry, "", depth + 1, seen, retainSecrets)).filter((entry) => entry !== undefined);
+  if (Array.isArray(value)) return value.slice(0, maxItems).map((entry) => sanitizeValue(entry, "", depth + 1, seen, retainSecrets, maxItems)).filter((entry) => entry !== undefined);
   const result = {};
   for (const [childKey, child] of Object.entries(value).slice(0, 100)) {
-    const safe = sanitizeValue(child, childKey, depth + 1, seen, retainSecrets);
+    const safe = sanitizeValue(child, childKey, depth + 1, seen, retainSecrets, maxItems);
     if (safe !== undefined) result[redactText(childKey, 120)] = safe;
   }
   return result;
@@ -61,6 +66,230 @@ function truncateText(value, maximum) {
   if (text.length <= maximum) return text;
   return `${text.slice(0, Math.max(0, maximum - 40))}\n[deterministically truncated]`;
 }
+// The objective is the run's inputs joined in time order, so the newest steering
+// sits at the end. Cutting only the tail of the text would remove exactly that.
+function truncateHeadTail(value, maximum) {
+  const text = String(value == null ? "" : value);
+  if (text.length <= maximum) return text;
+  const marker = "\n[middle deterministically truncated]\n";
+  const room = Math.max(0, maximum - marker.length);
+  const head = Math.ceil(room / 2);
+  return `${text.slice(0, head)}${marker}${text.slice(text.length - (room - head))}`;
+}
+// Chronological lists keep the newest entries. A value that is repeated moves to
+// the position of its last occurrence, so re-stating a fact keeps it fresh.
+function keepNewest(values, maximum) {
+  const limit = Math.floor(Number(maximum));
+  if (!Array.isArray(values) || !(limit > 0)) return [];
+  const seen = new Set();
+  const kept = [];
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (values[index] == null) continue;
+    const value = String(values[index]);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    kept.push(value);
+    if (kept.length === limit) break;
+  }
+  return kept.reverse();
+}
+// What one reduction adds to a checkpoint, apart from what the previous
+// checkpoint already holds.
+function freshRecords({ reduction, constraints, decisions, workflow } = {}) {
+  const list = (value) => (Array.isArray(value) ? value : []);
+  const facts = [];
+  for (const message of list(reduction?.messages)) {
+    if (message.tombstone && message.content) facts.push(`Released work: ${truncateText(message.content, 1_900)}`);
+    else if (message.role === "user" && message.content) {
+      // A late tool result and an internal notice are user-role messages too; they
+      // must not be recorded as something the operator asked for.
+      const label = message.origin === "tool_delivery" ? "Late tool result" : message.origin === "runtime" ? "Runtime note" : "User request";
+      facts.push(`${label}: ${truncateText(message.content, 1_900)}`);
+    }
+  }
+  const attempts = list(reduction?.attempts);
+  for (const attempt of attempts) facts.push(attemptFact(attempt));
+  // An event whose call is in the ledger is described by that call's attempt.
+  const explained = new Set(list(reduction?.ledger_call_ids));
+  const legacy = list(reduction?.tool_events).filter((event) => event.tool_name && !(event.call_id && explained.has(event.call_id)));
+  for (const event of legacy) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.${event.safe_excerpt ? ` Result: ${truncateText(event.safe_excerpt, 1_000)}` : ""}`);
+  return {
+    facts,
+    attempts,
+    legacyEvents: legacy.map((event) => `${event.tool_name}: ${event.outcome}`),
+    constraints: list(constraints).map(String),
+    decisions: list(decisions).map(String),
+    unresolved: workflow?.continuation_point?.next_action ? [workflow.continuation_point.next_action] : [],
+  };
+}
+
+const IPV4_PATTERN = /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g;
+const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>`\\)\]}]+/gi;
+const PORT_PATTERN = /\b(\d{1,5})\/(tcp|udp)\b/gi;
+const CVE_PATTERN = /\bCVE-\d{4}-\d{4,7}\b/gi;
+const FINDING_LIST_MAX = 6;
+const FINDINGS_MAX = 700;
+
+function messageText(message) {
+  const parts = [];
+  const content = message?.content;
+  if (typeof content === "string") parts.push(content);
+  else if (Array.isArray(content)) for (const part of content) parts.push(typeof part === "string" ? part : String(part?.text || ""));
+  if (Array.isArray(message?.tool_calls)) {
+    for (const call of message.tool_calls) {
+      const args = call?.function?.arguments;
+      parts.push(typeof args === "string" ? args : JSON.stringify(args ?? {}));
+    }
+  }
+  return parts.join("\n");
+}
+
+function touchedPaths(messages) {
+  const paths = [];
+  const visit = (value, key = "", depth = 0) => {
+    if (depth > 4 || value == null) return;
+    if (typeof value === "string") { if (/^(?:path|file|paths|files)$/i.test(key) && value.trim()) paths.push(value.trim()); return; }
+    if (Array.isArray(value)) { for (const entry of value) visit(entry, key, depth + 1); return; }
+    if (typeof value === "object") for (const [name, entry] of Object.entries(value)) visit(entry, name, depth + 1);
+  };
+  for (const message of messages) {
+    if (message?.role !== "assistant" || !Array.isArray(message.tool_calls)) continue;
+    for (const call of message.tool_calls) {
+      let args = call?.function?.arguments;
+      if (typeof args === "string") { try { args = JSON.parse(args); } catch { args = null; } }
+      visit(args);
+    }
+  }
+  return paths;
+}
+
+function uniqueMatches(text, pattern, normalize = (value) => value) {
+  return [...new Set((text.match(pattern) || []).map(normalize).filter(Boolean))];
+}
+
+// Durable engagement facts pulled from a block with plain pattern matching, so a
+// block released without a model-written note still leaves its hosts, ports,
+// URLs, CVEs and touched files behind. Credential-like values are only counted.
+function extractBlockFindings(messages, { retainSecrets = false } = {}) {
+  const list = (Array.isArray(messages) ? messages : []).filter(Boolean);
+  const text = list.map(messageText).join("\n");
+  const capped = (values) => values.slice(0, FINDING_LIST_MAX).join(", ") + (values.length > FINDING_LIST_MAX ? `, +${values.length - FINDING_LIST_MAX} more` : "");
+  const sections = [];
+  const hosts = uniqueMatches(text, IPV4_PATTERN);
+  const urls = uniqueMatches(text, URL_PATTERN, (url) => redactText(url.split(/[?#]/)[0].replace(/[.,;:!]+$/, ""), 160, retainSecrets));
+  const ports = uniqueMatches(text, PORT_PATTERN, (port) => port.toLowerCase());
+  const cves = uniqueMatches(text, CVE_PATTERN, (cve) => cve.toUpperCase());
+  const files = [...new Set(touchedPaths(list).map((file) => redactText(file, 160, retainSecrets)))];
+  if (hosts.length) sections.push(`hosts: ${capped(hosts)}`);
+  if (ports.length) sections.push(`ports: ${capped(ports)}`);
+  if (urls.length) sections.push(`urls: ${capped(urls)}`);
+  if (cves.length) sections.push(`cves: ${capped(cves)}`);
+  if (files.length) sections.push(`files: ${capped(files)}`);
+  const failed = list.filter((message) => message.role === "tool" && /"ok"\s*:\s*false/.test(messageText(message))).length;
+  if (failed) sections.push(`${failed} failed tool result${failed === 1 ? "" : "s"}`);
+  const secrets = retainSecrets ? 0 : (text.match(SECRET_TEXT) || []).filter((match) => !/\[REDACTED\]/.test(match)).length;
+  if (secrets) sections.push(`${secrets} credential-like value${secrets === 1 ? "" : "s"} not shown`);
+  return sections.join("; ").slice(0, FINDINGS_MAX);
+}
+
+const FILE_EXTENSIONS = new Set(["js", "mjs", "cjs", "json", "txt", "md", "py", "sh", "log", "yml", "yaml", "xml", "html", "htm", "css", "ts", "tsx", "jsx", "conf", "cfg", "ini", "env", "csv", "pdf", "png", "jpg", "jpeg", "gif", "svg", "ico", "zip", "gz", "tar", "bak", "sql", "exe", "dll", "so", "c", "h", "cpp", "java", "rb", "go", "rs", "php", "asp", "aspx", "jsp", "lock", "map", "woff", "ttf", "mp4", "mp3"]);
+const CIDR_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}\b/g;
+const HOSTNAME_PATTERN = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/gi;
+// Hosts, addresses and ranges a piece of text names. Used to tell a lead that
+// points at something the operator never mentioned from one that does.
+function ipv4ToNumber(value) {
+  const parts = String(value).split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return ((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256 + parts[3];
+}
+function ipv4InRange(address, range) {
+  const [base, bits] = String(range).split("/");
+  const value = ipv4ToNumber(address);
+  const start = ipv4ToNumber(base);
+  const width = Number(bits);
+  if (value === null || start === null || !Number.isInteger(width) || width < 0 || width > 32) return false;
+  const size = 2 ** (32 - width);
+  return Math.floor(value / size) === Math.floor(start / size);
+}
+function networkEntities(text) {
+  const value = String(text == null ? "" : text);
+  const entities = new Set();
+  for (const ip of value.match(IPV4_PATTERN) || []) entities.add(ip);
+  for (const cidr of value.match(CIDR_PATTERN) || []) entities.add(cidr);
+  for (const url of value.match(URL_PATTERN) || []) {
+    try { entities.add(new URL(url).hostname.toLowerCase()); } catch { /* not a URL after all */ }
+  }
+  for (const host of value.match(HOSTNAME_PATTERN) || []) {
+    const name = host.toLowerCase();
+    if (!FILE_EXTENSIONS.has(name.split(".").pop())) entities.add(name);
+  }
+  return entities;
+}
+
+// Active Conversation stays one flat chronological ledger. A block is one turn:
+// it opens at a `user` message (or at the first message) and runs through the
+// assistant and tool messages that answer it. Each opener carries a stable
+// `block_index` stamped once and never reused, so index 7 stays 7 after block 3
+// is released. Unstamped ledgers (previews, legacy files) fall back to
+// positional order until the coordinator stamps them.
+function ledgerOf(messages) { return (Array.isArray(messages) ? messages : []).filter(Boolean); }
+function isBlockOpener(message, position) { return position === 0 || String(message?.role || "") === "user"; }
+function blockOpeners(messages) { return ledgerOf(messages).filter((message, position) => isBlockOpener(message, position)); }
+function openerKey(message) {
+  const sourceId = String(message?.source_message_id || "").trim();
+  return sourceId || `content_${canonicalKeyHash({ role: message?.role || "", content: message?.content || "" })}`;
+}
+
+// Stamps `block_index` in place on every unstamped opener in `incoming` and
+// returns the next free index. Callers re-send whole ledgers whose objects are
+// not guaranteed to carry stamps yet, so an unstamped opener first re-adopts the
+// index of the matching opener in `previous` (same message, in order) before a
+// new one is issued.
+function stampBlocks(previousMessages, incomingMessages, nextIndex = 0) {
+  const previous = blockOpeners(previousMessages).filter((message) => Number.isSafeInteger(message.block_index));
+  let next = Number.isSafeInteger(nextIndex) && nextIndex >= 0 ? nextIndex : 0;
+  let cursor = 0;
+  for (const opener of blockOpeners(incomingMessages)) {
+    if (Number.isSafeInteger(opener.block_index)) {
+      next = Math.max(next, opener.block_index + 1);
+      const at = previous.findIndex((entry, position) => position >= cursor && entry.block_index === opener.block_index);
+      if (at >= 0) cursor = at + 1;
+      continue;
+    }
+    const key = openerKey(opener);
+    const at = previous.findIndex((entry, position) => position >= cursor && openerKey(entry) === key);
+    const assigned = at >= 0 ? previous[at].block_index : next;
+    if (at >= 0) cursor = at + 1;
+    if (!Object.isFrozen(opener)) opener.block_index = assigned;
+    next = Math.max(next, assigned + 1);
+  }
+  return next;
+}
+
+function blocksFromActive(messages, estimate = approximateTokens) {
+  const source = ledgerOf(messages);
+  const measure = typeof estimate === "function" ? estimate : approximateTokens;
+  const groups = [];
+  for (let position = 0; position < source.length; position += 1) {
+    if (isBlockOpener(source[position], position)) groups.push({ start: position, messages: [] });
+    groups[groups.length - 1].messages.push(source[position]);
+  }
+  return groups.map((group, ordinal) => {
+    const opener = group.messages[0];
+    const stamped = Number.isSafeInteger(opener.block_index);
+    const index = stamped ? opener.block_index : ordinal;
+    const sourceId = String(opener.source_message_id || opener.id || "").trim();
+    const blockId = sourceId || (stamped ? `block_${index}` : `block_${canonicalKeyHash({ role: opener.role || "", content: opener.content || "" }).slice(0, 32)}`);
+    return {
+      index,
+      blockId,
+      state: opener.block_tombstone === true ? "evicted" : "active",
+      start: group.start,
+      messages: group.messages,
+      tokenEstimate: group.messages.reduce((sum, message) => sum + Math.max(0, Number(measure(message)) || 0), 0),
+    };
+  });
+}
 
 function createTier1ContextCoordinator({
   sensitiveStore = null,
@@ -70,14 +299,16 @@ function createTier1ContextCoordinator({
   now = () => new Date(),
   crypto = nodeCrypto,
   onChange = null,
+  policy = null,
 } = {}) {
+  const checkpointPolicy = resolveCheckpointPolicy({}, policy);
   const schemas = schemaRegistry || getDefaultMemorySchemaRegistry();
   const sessions = new Map();
 
   function sessionKey(projectId, sessionId) { return `${String(projectId)}|${String(sessionId)}`; }
   function stateFor(projectId, sessionId) {
     const key = sessionKey(projectId, sessionId);
-    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false });
+    if (!sessions.has(key)) sessions.set(key, { summary: null, active: [], workflow: null, currentPrompt: "", checkpointRevision: 0, lastAssembly: null, blockA: null, activeHydrated: false, nextBlockIndex: 0, released: new Map(), pinned: new Set(), directives: [] });
     return sessions.get(key);
   }
   function hydrateActive(projectId, sessionId, state) {
@@ -88,6 +319,9 @@ function createTier1ContextCoordinator({
       const loaded = sensitiveStore.readActive(projectId, sessionId);
       if (loaded?.ok && loaded.exists && Array.isArray(loaded.value?.active)) {
         state.active = loaded.value.active.filter(Boolean).map(clone);
+        state.nextBlockIndex = stampBlocks([], state.active, Number(loaded.value.next_block_index));
+        state.pinned = new Set((Array.isArray(loaded.value.pinned_blocks) ? loaded.value.pinned_blocks : []).filter((index) => Number.isSafeInteger(index) && index >= 0));
+        state.directives = (Array.isArray(loaded.value.operator_directives) ? loaded.value.operator_directives : []).filter((entry) => entry && typeof entry.text === "string" && entry.text && typeof entry.source_message_id === "string" && entry.source_message_id).slice(-50).map((entry) => ({ text: entry.text, source_message_id: entry.source_message_id, revision: Number(entry.revision) || 0 }));
       }
     } catch { /* keep the in-memory ledger empty rather than injecting unsafe data */ }
     return state;
@@ -95,11 +329,26 @@ function createTier1ContextCoordinator({
   function persistActive(projectId, sessionId) {
     if (!sensitiveStore?.writeActive) return;
     const state = stateFor(projectId, sessionId);
-    try { sensitiveStore.writeActive(projectId, sessionId, state.active); } catch { /* in-memory ledger remains authoritative */ }
+    prunePins(state);
+    try { sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned], operatorDirectives: state.directives }); } catch { /* in-memory ledger remains authoritative */ }
+  }
+  // A pin only means something while its block is in the ledger; a checkpoint or
+  // a front trim removes the block and the pin goes with it.
+  function prunePins(state) {
+    if (!state.pinned.size) return;
+    const present = new Set(blockOpeners(state.active).map((opener) => opener.block_index));
+    for (const index of [...state.pinned]) if (!present.has(index)) state.pinned.delete(index);
   }
   function capActive(messages) {
     const source = (Array.isArray(messages) ? messages : []).filter(Boolean).map(clone);
     return source.length > ACTIVE_MAX ? source.slice(-ACTIVE_MAX) : source;
+  }
+  // Stamp block indexes in place on the caller's objects before cloning them, so
+  // a controller that keeps re-sending its own ledger keeps the same indexes.
+  function ingestActive(state, messages) {
+    const incoming = Array.isArray(messages) ? messages : [];
+    state.nextBlockIndex = stampBlocks(state.active, incoming, state.nextBlockIndex);
+    return capActive(incoming);
   }
   function emitChange(projectId, sessionId, changed, assembly) {
     if (typeof onChange !== "function" || !assembly || assembly.ok === false) return;
@@ -261,7 +510,7 @@ function createTier1ContextCoordinator({
     const preview = input.preview === true;
     const summary = input.summary === undefined ? state.summary : input.summary;
     if (input.active_conversation !== undefined && !preview) {
-      state.active = capActive(Array.isArray(input.active_conversation) ? input.active_conversation : []);
+      state.active = ingestActive(state, input.active_conversation);
     }
     const active = preview && input.active_conversation !== undefined
       ? capActive(Array.isArray(input.active_conversation) ? input.active_conversation : [])
@@ -328,18 +577,21 @@ function createTier1ContextCoordinator({
     for (const message of source) {
       const role = String(message?.role || "unknown");
       const content = redactText(message?.content || "", 4_000, retainSecrets);
-      normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80) });
+      // Where a user-role message came from decides how it may be described later.
+      const origin = messageOrigin(message) === "unattributed" ? "" : messageOrigin(message);
+      normalized.push({ id: String(message?.id || ""), role, content, tool_name: redactText(message?.tool_name || message?.toolName || "", 160), outcome: redactText(message?.outcome || "", 80), ...(message?.block_tombstone === true ? { tombstone: true } : {}), ...(origin ? { origin } : {}) });
     }
-    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || ""), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [] }));
-    return { messages: normalized, tool_events: eventSummary, message_count: normalized.length, event_count: eventSummary.length, digest: canonicalKeyHash({ messages: normalized, tool_events: eventSummary }) };
+    const eventSummary = events.map((event) => ({ id: String(event?.id || event?.event_id || ""), tool_name: String(event?.tool_name || event?.toolName || "").slice(0, 120), outcome: String(event?.outcome || event?.terminal_outcome || "unknown"), safe_excerpt: redactText(event?.safe_excerpt || event?.safeExcerpt || "", 1_000, retainSecrets), artifact_refs: Array.isArray(event?.artifact_refs) ? event.artifact_refs.slice(0, 20) : [], call_id: String(event?.call_id || "").slice(0, 200) }));
+    // Commands live in the assistant tool calls, which the normalized messages do
+    // not keep, so attempts are read from the raw ledger.
+    const ledger = attemptsFromLedger(source, events, { retainSecrets, redact: (text, maximum) => redactText(text, maximum, retainSecrets) });
+    return { messages: normalized, tool_events: eventSummary, attempts: ledger.attempts, ledger_call_ids: ledger.callIds, message_count: normalized.length, event_count: eventSummary.length, digest: canonicalKeyHash({ messages: normalized, tool_events: eventSummary }) };
   }
 
   function deterministicFallback({ projectId, sessionId, previous, reduction, workflow, objective, constraints, decisions, protectedRefs, sourceBlocks, limit }) {
     const max = summaryBudget(limit);
-    const facts = [];
-    for (const message of reduction.messages) if (message.role === "user" && message.content) facts.push(`User request: ${truncateText(message.content, 1_900)}`);
-    for (const event of reduction.tool_events) if (event.tool_name) facts.push(`Tool ${event.tool_name} completed with outcome ${event.outcome}.${event.safe_excerpt ? ` Result: ${truncateText(event.safe_excerpt, 1_000)}` : ""}`);
-    const previousFacts = Array.isArray(previous?.grounded_facts) ? previous.grounded_facts : [];
+    const fresh = freshRecords({ reduction, constraints, decisions, workflow });
+    const earlier = (field) => (Array.isArray(previous?.[field]) ? previous[field] : []);
     // A deterministic fallback is deliberately content addressed.  If the
     // provider is unavailable and the same ledger is retried, the checkpoint
     // identity must remain stable so a retry cannot create two semantic
@@ -366,13 +618,13 @@ function createTier1ContextCoordinator({
       session_id: sessionId,
       previous_checkpoint_id: previous?.checkpoint_id || null,
       transcript_boundary: Number(previous?.transcript_boundary || 0) + reduction.message_count,
-      objective: truncateText(objective || previous?.objective || "", 8_000),
-      constraints: [...new Set([...(Array.isArray(previous?.constraints) ? previous.constraints : []), ...(Array.isArray(constraints) ? constraints : [])].map(String))].slice(0, 200),
-      decisions: [...new Set([...(Array.isArray(previous?.decisions) ? previous.decisions : []), ...(Array.isArray(decisions) ? decisions : [])].map(String))].slice(0, 200),
-      grounded_facts: [...new Set([...previousFacts, ...facts].map(String))].slice(0, 300),
-      significant_events: reduction.tool_events.map((event) => `${event.tool_name}: ${event.outcome}`).slice(0, 300),
+      objective: truncateHeadTail(objective || previous?.objective || "", 8_000),
+      constraints: keepNewest([...earlier("constraints"), ...fresh.constraints], 200),
+      decisions: keepNewest([...earlier("decisions"), ...fresh.decisions], 200),
+      grounded_facts: keepNewest([...earlier("grounded_facts"), ...fresh.facts], 300),
+      significant_events: keepNewest(mergeAttemptEvents(earlier("significant_events"), fresh.attempts, fresh.legacyEvents), 300),
       unverified_claims: [],
-      unresolved_work: workflow?.continuation_point ? [workflow.continuation_point.next_action] : [],
+      unresolved_work: keepNewest([...earlier("unresolved_work"), ...fresh.unresolved], 200),
       workflow_continuity: workflow,
       protected_refs: [...new Set((Array.isArray(protectedRefs) ? protectedRefs : []).filter(Boolean))].slice(0, 500),
       source_block_refs: [...new Set((Array.isArray(sourceBlocks) ? sourceBlocks : []).filter(Boolean))].slice(0, 500),
@@ -382,9 +634,9 @@ function createTier1ContextCoordinator({
     };
     const rendered = JSON.stringify(summary);
     if (rendered.length > max * 4) {
-      summary.grounded_facts = summary.grounded_facts.slice(0, 100);
-      summary.significant_events = summary.significant_events.slice(0, 100);
-      summary.decisions = summary.decisions.slice(0, 80);
+      summary.grounded_facts = summary.grounded_facts.slice(-100);
+      summary.significant_events = summary.significant_events.slice(-100);
+      summary.decisions = summary.decisions.slice(-80);
     }
     const hashInput = { ...summary };
     delete hashInput.content_hash;
@@ -392,21 +644,32 @@ function createTier1ContextCoordinator({
     return summary;
   }
 
-  function fitCheckpointToBudget(value, limit) {
+  // Fits a checkpoint into its token budget. Historical detail goes first and the
+  // OLDEST entries go before the newest. Constraints are operator restrictions:
+  // they are shortened as a last resort and never removed, and a checkpoint that
+  // still does not fit is refused (null) so the caller keeps the live ledger.
+  // `stats` receives how much was removed so the loss is observable.
+  function fitCheckpointToBudget(value, limit, stats = null) {
     const maximum = summaryBudget(limit);
     const candidate = clone(value);
     const measured = () => approximateTokens(candidate);
-    // Remove low-value historical detail first.  Objective, decisions,
-    // unresolved work, workflow continuity, and protected references are
-    // retained until the last possible moment because they are the fields
-    // required to continue safely after a rotation.
-    const discardable = ["significant_events", "grounded_facts", "unverified_claims"];
-    for (const field of discardable) {
-      while (measured() > maximum && Array.isArray(candidate[field]) && candidate[field].length) candidate[field].pop();
-    }
-    for (const field of ["constraints", "decisions", "unresolved_work"]) {
-      while (measured() > maximum && Array.isArray(candidate[field]) && candidate[field].length > 1) candidate[field].pop();
-    }
+    const jsonBytes = (item) => Buffer.byteLength(JSON.stringify(item), "utf8");
+    let bytes = jsonBytes(candidate);
+    const over = () => Math.ceil(bytes / 3.6) > maximum;
+    const shedOldest = (field, floor) => {
+      const values = candidate[field];
+      if (!Array.isArray(values)) return;
+      let drop = 0;
+      while (over() && values.length - drop > floor) { bytes -= jsonBytes(values[drop]) + 1; drop += 1; }
+      if (!drop) return;
+      values.splice(0, drop);
+      if (stats) stats[field] = (stats[field] || 0) + drop;
+    };
+    shedOldest("unverified_claims", 0);
+    shedOldest("grounded_facts", 0);
+    shedOldest("significant_events", 0);
+    shedOldest("decisions", 1);
+    shedOldest("unresolved_work", 1);
     if (measured() > maximum && candidate.workflow_continuity) {
       const workflowValue = candidate.workflow_continuity;
       for (const step of Array.isArray(workflowValue.steps) ? workflowValue.steps : []) {
@@ -418,9 +681,14 @@ function createTier1ContextCoordinator({
       workflowValue.blockers = (workflowValue.blockers || []).slice(0, 10).map((entry) => truncateText(entry, 240));
     }
     if (measured() > maximum) {
-      candidate.objective = truncateText(candidate.objective, 1_000);
+      candidate.objective = truncateHeadTail(candidate.objective, 1_000);
       candidate.decisions = (candidate.decisions || []).map((entry) => truncateText(entry, 320));
       candidate.unresolved_work = (candidate.unresolved_work || []).map((entry) => truncateText(entry, 320));
+    }
+    for (const width of [240, 120]) {
+      if (measured() <= maximum) break;
+      candidate.constraints = (candidate.constraints || []).map((entry) => truncateText(entry, width));
+      if (stats) stats.constraintsTruncated = width;
     }
     return measured() <= maximum ? candidate : null;
   }
@@ -486,7 +754,7 @@ function createTier1ContextCoordinator({
   // returning a schema-valid string.  Keep values that have meaningful
   // lexical support in the deterministic source reduction; route unsupported
   // values to the explicitly non-authoritative unverified_claims field.
-  function semanticCorpus(context) {
+  function corpusFrom(sources) {
     const values = [];
     const add = (value) => {
       if (value == null) return;
@@ -494,21 +762,48 @@ function createTier1ContextCoordinator({
       if (Array.isArray(value)) { for (const item of value) add(item); return; }
       if (typeof value === "object") { for (const child of Object.values(value)) add(child); }
     };
-    add(context?.objective);
-    add(context?.constraints);
-    add(context?.decisions);
-    add(context?.currentPrompt);
-    add(context?.previous?.objective);
-    add(context?.previous?.decisions);
-    add(context?.previous?.constraints);
-    add(context?.previous?.grounded_facts);
-    add(context?.previous?.significant_events);
-    add(context?.reduction?.messages);
-    add(context?.reduction?.tool_events);
-    add(context?.workflow);
+    for (const source of sources) add(source);
     const text = values.join(" ");
     const words = new Set((text.match(/[a-z0-9][a-z0-9._:/-]{2,}/gi) || []).map((word) => word.toLowerCase()));
-    return { values, words };
+    return { values, words, entities: networkEntities(text) };
+  }
+
+  // What may vouch for a value depends on what the value is for. Fields that
+  // steer the next action are grounded only in what the operator said and in
+  // runtime state (`trusted`). A lead may also rest on the assistant's own
+  // words (`assistant`), but see the entity rule. Facts and events may rest on
+  // anything seen, tool output included (`full`). Text that only a tool or the
+  // assistant vouches for can therefore describe the engagement but never
+  // direct it.
+  function semanticCorpora(context) {
+    const messages = Array.isArray(context?.reduction?.messages) ? context.reduction.messages : [];
+    const trustedSources = [
+      context?.objective, context?.constraints, context?.decisions, context?.currentPrompt,
+      context?.previous?.objective, context?.previous?.constraints, context?.previous?.decisions, context?.previous?.unresolved_work,
+      context?.workflow, context?.operatorTexts,
+    ];
+    const assistantSources = [...trustedSources, messages.filter((message) => message.role === "assistant" && !message.tombstone).map((message) => message.content)];
+    const full = corpusFrom([...assistantSources, messages, context?.reduction?.tool_events, context?.reduction?.attempts, context?.previous?.grounded_facts, context?.previous?.significant_events]);
+    if (checkpointPolicy.trustTiers === false) return { trusted: full, assistant: full, full };
+    return {
+      trusted: corpusFrom(trustedSources),
+      assistant: corpusFrom(assistantSources),
+      full,
+    };
+  }
+
+  // A lead that names a host, address or range the operator never mentioned is
+  // not kept as work to do unless the project's scope covers it.
+  function entitiesAllowed(value, check) {
+    if (!check) return true;
+    for (const entity of networkEntities(value)) {
+      if (check.trusted.has(entity)) continue;
+      if (ipv4ToNumber(entity) !== null && [...check.trusted].some((known) => known.includes("/") && ipv4InRange(entity, known))) continue;
+      let inScope = false;
+      try { inScope = typeof check.scopeCheck === "function" && check.scopeCheck(entity) === true; } catch { inScope = false; }
+      if (!inScope) return false;
+    }
+    return true;
   }
 
   function semanticValueIsGrounded(value, corpus) {
@@ -525,48 +820,61 @@ function createTier1ContextCoordinator({
     return (words.length <= 3 && overlap >= 1) || (overlap >= 2 && overlap / words.length >= 0.34);
   }
 
-  function normalizeSemanticField(values, corpus, { fallback = [], allowUnsupported = false, retainSecrets = false } = {}) {
+  // Returns the model's values that have enough lexical support in the source
+  // reduction, and routes the rest to the non-authoritative unverified list.
+  function normalizeSemanticField(values, corpus, { allowUnsupported = false, retainSecrets = false, entityCheck = null } = {}) {
     const safe = [];
     const unsupported = [];
-    const source = Array.isArray(values) ? values : [];
-    for (const raw of source) {
+    for (const raw of Array.isArray(values) ? values : []) {
       const value = redactText(raw, 2_000, retainSecrets);
       if (!value) continue;
-      if (allowUnsupported || semanticValueIsGrounded(value, corpus)) safe.push(value);
+      if (allowUnsupported || (semanticValueIsGrounded(value, corpus) && entitiesAllowed(value, entityCheck))) safe.push(value);
       else unsupported.push(value);
     }
-    for (const raw of Array.isArray(fallback) ? fallback : []) {
-      const value = redactText(raw, 2_000, retainSecrets);
-      if (value) safe.push(value);
-    }
-    return { values: [...new Set(safe)].slice(0, 300), unsupported: [...new Set(unsupported)].slice(0, 200) };
+    return { values: [...new Set(safe)], unsupported: keepNewest(unsupported, 200) };
   }
 
   function checkpointCandidate(raw, context, generatedBy = "model") {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const fallback = deterministicFallback(context);
-    const safeRaw = sanitizeValue(raw, "", 0, new WeakSet(), context?.retainSecrets === true) || {};
+    // A model may return a full checkpoint, so its arrays get the largest cap any
+    // field has instead of the default 100 that would cut the newest entries.
+    const safeRaw = sanitizeValue(raw, "", 0, new WeakSet(), context?.retainSecrets === true, 300) || {};
+    // A delta answer may add facts, decisions, leads and unverified claims. The
+    // constraints, the events and the workflow are owned by code.
+    if (context?.deltaOutput === true) for (const key of ["constraints", "significant_events", "workflow_continuity"]) delete safeRaw[key];
     const candidate = { ...fallback, ...safeRaw, schema_version: 3, project_id: context.projectId, session_id: context.sessionId, generated_by: generatedBy };
-    const corpus = semanticCorpus(context);
+    const corpora = semanticCorpora(context);
     const retainSecrets = context?.retainSecrets === true;
-    const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpus, { fallback: fallback.grounded_facts, retainSecrets });
-    const constraints = normalizeSemanticField(candidate.constraints, corpus, { fallback: fallback.constraints, retainSecrets });
-    const decisions = normalizeSemanticField(candidate.decisions, corpus, { fallback: fallback.decisions, retainSecrets });
-    const significantEvents = normalizeSemanticField(candidate.significant_events, corpus, { fallback: fallback.significant_events, retainSecrets });
-    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpus, { fallback: fallback.unresolved_work, retainSecrets });
-    candidate.grounded_facts = groundedFacts.values;
-    candidate.constraints = constraints.values;
-    candidate.decisions = decisions.values;
-    candidate.significant_events = significantEvents.values;
-    candidate.unresolved_work = unresolvedWork.values;
-    candidate.unverified_claims = [...new Set([
+    const fresh = freshRecords(context);
+    const earlier = (field) => (Array.isArray(context.previous?.[field]) ? context.previous[field] : []);
+    const clean = (list) => list.map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean);
+    // Order is previous, then what only the model added, then this reduction's own
+    // records, so a trim by cap or budget always removes the oldest first.
+    const merge = (field, modelValues, freshValues, maximum) => {
+      const known = new Set([...clean(earlier(field)), ...clean(freshValues)]);
+      return keepNewest([...clean(earlier(field)), ...modelValues.filter((value) => !known.has(value)), ...clean(freshValues)], maximum);
+    };
+    const groundedFacts = normalizeSemanticField(candidate.grounded_facts, corpora.full, { retainSecrets });
+    const constraints = normalizeSemanticField(candidate.constraints, corpora.trusted, { retainSecrets });
+    const decisions = normalizeSemanticField(candidate.decisions, corpora.trusted, { retainSecrets });
+    const significantEvents = normalizeSemanticField(candidate.significant_events, corpora.full, { retainSecrets });
+    const unresolvedWork = normalizeSemanticField(candidate.unresolved_work, corpora.assistant, { retainSecrets, entityCheck: checkpointPolicy.trustTiers === false ? null : { trusted: corpora.trusted.entities, scopeCheck: context?.scopeCheck } });
+    candidate.grounded_facts = merge("grounded_facts", groundedFacts.values, fresh.facts, 300);
+    candidate.constraints = merge("constraints", constraints.values, fresh.constraints, 200);
+    candidate.decisions = merge("decisions", decisions.values, fresh.decisions, 200);
+    const mergedEvents = mergeAttemptEvents(earlier("significant_events"), fresh.attempts, fresh.legacyEvents);
+    const knownEvents = new Set(mergedEvents);
+    candidate.significant_events = keepNewest([...clean(significantEvents.values.filter((value) => !knownEvents.has(value))), ...clean(mergedEvents)], 300);
+    candidate.unresolved_work = merge("unresolved_work", unresolvedWork.values, fresh.unresolved, 200);
+    candidate.unverified_claims = keepNewest([
       ...(Array.isArray(candidate.unverified_claims) ? candidate.unverified_claims : []),
       ...groundedFacts.unsupported,
       ...constraints.unsupported,
       ...decisions.unsupported,
       ...significantEvents.unsupported,
       ...unresolvedWork.unsupported,
-    ].map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean))].slice(0, 200);
+    ].map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean), 200);
     // These fields are runtime continuity, not model prose.  Pin them to the
     // deterministic reduction so a model cannot move the transcript boundary,
     // replace the checkpoint lineage, drop protected references, or invent a
@@ -577,7 +885,6 @@ function createTier1ContextCoordinator({
     candidate.objective = fallback.objective;
     candidate.protected_refs = clone(fallback.protected_refs);
     candidate.source_block_refs = clone(fallback.source_block_refs);
-    candidate.unresolved_work = [...new Set([...(fallback.unresolved_work || []), ...(Array.isArray(candidate.unresolved_work) ? candidate.unresolved_work : [])].map(String))].slice(0, 200);
     // The structured workflow record is produced by the deterministic
     // reducer.  Preserve the model's semantic fields, but never allow it to
     // author an alternate execution state or continuation point.
@@ -595,10 +902,32 @@ function createTier1ContextCoordinator({
     // redacted, bounded projection to the semantic model.  This is enforced
     // here as well as in the Electron adapter so injected/provider-specific
     // model callbacks cannot accidentally receive raw credentials.
-    const payload = sanitizeValue({
-      previous_checkpoint: context.previous || null,
-      deterministic_reduction: context.reduction,
-      active_conversation: context.active,
+    // sanitizeValue caps every array, and it keeps the first entries. A long
+    // ledger would therefore reach the model as its oldest messages only, so the
+    // newest window is cut first and the omitted count is stated.
+    const newest = (list, count = 100) => {
+      const items = Array.isArray(list) ? list : [];
+      return items.length > count ? { items: items.slice(-count), omitted: items.length - count } : { items, omitted: 0 };
+    };
+    const messageWindow = newest(context.reduction?.messages);
+    const eventWindow = newest(context.reduction?.tool_events);
+    const attemptWindow = newest(context.reduction?.attempts);
+    const activeWindow = newest(context.active);
+    const previousWindow = context.previous ? { ...context.previous } : null;
+    if (previousWindow) for (const field of ["grounded_facts", "significant_events", "constraints", "decisions", "unresolved_work", "unverified_claims"]) previousWindow[field] = newest(previousWindow[field]).items;
+    const useRequestV2 = checkpointPolicy.requestV2 === true;
+    if (useRequestV2) context = { ...context, deltaOutput: true };
+    const requestV2 = useRequestV2 ? buildSummarizerRequest({
+      context,
+      fresh: freshRecords(context),
+      redact: (text, maximum) => redactText(text, maximum, context?.retainSecrets === true),
+      budgetTokens: Math.max(2_000, Math.min(Math.floor(Number(context.limit) * 0.6) || 20_000, Number(context.summarizerInputTokens) || 20_000)),
+    }) : null;
+    const payload = requestV2 ? sanitizeValue(requestV2.request, "", 0, new WeakSet(), context?.retainSecrets === true, 400) || {} : sanitizeValue({
+      previous_checkpoint: previousWindow,
+      deterministic_reduction: context.reduction ? { ...context.reduction, ledger_call_ids: undefined, messages: messageWindow.items, tool_events: eventWindow.items, attempts: attemptWindow.items } : context.reduction,
+      active_conversation: redactToolCallMessages(activeWindow.items, { retainSecrets: context?.retainSecrets === true }),
+      omitted_before: { messages: messageWindow.omitted, tool_events: eventWindow.omitted, attempts: attemptWindow.omitted, active_conversation: activeWindow.omitted },
       current_prompt_context_only: context.currentPrompt,
       current_workflow: context.workflow || null,
       objective: context.objective || "",
@@ -631,6 +960,8 @@ function createTier1ContextCoordinator({
     });
     let raw;
     try { raw = await callModel(payload); } catch (error) { return operationFailure(error.code || "MEMORY_CHECKPOINT_MODEL_FAILED", error.message, {}, true); }
+    // The adapter may attach how the call went as a non-enumerable `stats`.
+    const modelStats = raw && typeof raw === "object" && raw.stats && typeof raw.stats === "object" ? { ...raw.stats, ...(requestV2 ? { omittedBefore: requestV2.omittedBefore } : {}) } : (requestV2 ? { omittedBefore: requestV2.omittedBefore } : null);
     let candidate = checkpointCandidate(raw, context, "model");
     let grounding = candidate ? validateCheckpointGrounding(candidate, context) : { ok: false, details: [{ instancePath: "", message: "checkpoint output must be an object" }] };
     let validation = candidate ? schemas.validate("ConversationCheckpointV3", candidate) : { ok: false, error: { details: [{ instancePath: "", message: "checkpoint output must be an object" }] } };
@@ -657,7 +988,7 @@ function createTier1ContextCoordinator({
       if (!grounding.ok) validation = { ok: false, error: grounding };
       if (!validation.ok || !fitCheckpointToBudget(candidate, context.limit)) return { ok: false, code: "MEMORY_CHECKPOINT_OUTPUT_INVALID", details: validation.error?.details || [] };
     } else {
-      candidate = fitCheckpointToBudget(candidate, context.limit);
+      candidate = fitCheckpointToBudget(candidate, context.limit, context.trimStats);
     }
     if (!candidate) return { ok: false, code: "MEMORY_CHECKPOINT_OUTPUT_INVALID", details: [] };
     // Fitting changes the serialized content, so recalculate the content
@@ -669,7 +1000,7 @@ function createTier1ContextCoordinator({
     grounding = validateCheckpointGrounding(candidate, context);
     if (!grounding.ok) return { ok: false, code: "MEMORY_CHECKPOINT_OUTPUT_INVALID", details: grounding.details || [] };
     if (!validation.ok) return { ok: false, code: "MEMORY_CHECKPOINT_OUTPUT_INVALID", details: validation.error.details };
-    return { ok: true, checkpoint: candidate };
+    return { ok: true, checkpoint: candidate, modelStats };
   }
 
   async function checkpoint(input = {}) {
@@ -690,6 +1021,11 @@ function createTier1ContextCoordinator({
       : active;
     const retainSecrets = input.retain_secrets === true || input.retainSecrets === true;
     const reduction = reduceConversation(reductionMessages, input.tool_events || input.toolEvents || [], retainSecrets);
+    const operatorTexts = reductionMessages.filter(isOperatorInput).map((message) => redactText(operatorText(message), 4_000, retainSecrets)).filter(Boolean);
+    // Steering recorded as it arrived. It survives the block it arrived in being
+    // released, which the ledger alone would not.
+    const consumedDirectives = state.directives.map((entry) => entry.source_message_id);
+    const directiveConstraints = state.directives.map((entry) => `Operator: ${entry.text.slice(0, 300)}`);
     let previous = state.summary;
     if (!previous && sensitiveStore?.readCheckpoint) {
       // A checkpoint can race with a secure-store restart while the session
@@ -706,7 +1042,8 @@ function createTier1ContextCoordinator({
     const rawProtectedRefs = input.protected_refs || input.protectedRefs || [];
     const rawSourceBlocks = input.source_block_refs || input.sourceBlockRefs || [];
     const rawConstraints = input.constraints || input.operator_constraints || input.operatorConstraints || [];
-    const objective = redactText(input.objective || "", 8_000, retainSecrets);
+    // The objective keeps its head and its tail: its tail holds the newest steering.
+    const objective = truncateHeadTail(redactText(input.objective || "", 100_000, retainSecrets), 8_000);
     const suppliedWorkflow = input.current_workflow === undefined ? state.workflow : input.current_workflow;
     const workflow = normalizeWorkflow(suppliedWorkflow || {
       state: objective ? "active" : "idle",
@@ -722,7 +1059,9 @@ function createTier1ContextCoordinator({
       active,
       currentPrompt,
       objective,
-      constraints: (Array.isArray(rawConstraints) ? rawConstraints : [rawConstraints]).map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean).slice(0, 200),
+      constraints: keepNewest([...(Array.isArray(rawConstraints) ? rawConstraints : [rawConstraints]).map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean), ...directiveConstraints], 200),
+      operatorTexts,
+      scopeCheck: typeof input.scope_check === "function" ? input.scope_check : null,
       decisions: (Array.isArray(input.decisions) ? input.decisions : [input.decisions]).map((value) => redactText(value, 2_000, retainSecrets)).filter(Boolean).slice(0, 200),
       // Checkpoint references are identifiers, not arbitrary caller-provided
       // strings. Invalid values are replaced with deterministic opaque handles
@@ -732,11 +1071,17 @@ function createTier1ContextCoordinator({
       limit: Number(input.effective_context_limit || input.effectiveContextLimit || 1_000_000),
       model: input.model,
       retainSecrets,
+      trimStats: {},
+      summarizerInputTokens: Number(input.summarizer_input_tokens ?? input.summarizerInputTokens) || 0,
     };
     let semantic = null;
     if (input.allow_model !== false && input.reason !== "emergency") semantic = await semanticCheckpoint(context);
     let checkpointValue = semantic?.ok ? semantic.checkpoint : deterministicFallback(context);
-    checkpointValue = fitCheckpointToBudget(checkpointValue, context.limit);
+    checkpointValue = fitCheckpointToBudget(checkpointValue, context.limit, context.trimStats);
+    // A summary that cannot fit its budget is refused and the live ledger is
+    // kept. Silently dropping an operator restriction to make it fit would be
+    // worse than failing this checkpoint.
+    if (!checkpointValue) return { ok: false, code: "MEMORY_CHECKPOINT_BUDGET_EXCEEDED", error: "The checkpoint exceeds its adaptive budget.", details: [], activePreserved: true, trimmed: context.trimStats };
     if (checkpointValue) {
       const hashInput = { ...checkpointValue };
       delete hashInput.content_hash;
@@ -758,26 +1103,42 @@ function createTier1ContextCoordinator({
     if (!stored.ok) return { ...stored, checkpointed: false, activePreserved: true };
     state.summary = checkpointValue;
     state.checkpointRevision += 1;
+    state.directives = state.directives.filter((entry) => !consumedDirectives.includes(entry.source_message_id));
     state.active = [];
     state.currentPrompt = "";
     // The workflow visible in Tier 1 changes only at this checkpoint boundary.
     state.workflow = checkpointValue.workflow_continuity?.state === "completed" ? null : clone(checkpointValue.workflow_continuity);
     syncMeter(projectId, sessionId, ["Summarized Conversation", "Active Conversation", "Current Workflow"]);
-    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic" };
+    return { ok: true, checkpointed: true, checkpoint: clone(checkpointValue), active: [], currentWorkflow: state.workflow, stored, summaryBudget: summaryBudget(context.limit), reduction, modelUsed: semantic?.ok === true ? "model" : "deterministic", semanticCode: semantic && semantic.ok !== true ? String(semantic.code || "") : "", modelStats: semantic?.ok === true ? semantic.modelStats || null : null, trimmed: context.trimStats };
+  }
+
+  // Operator steering is recorded when it arrives and folded into the
+  // checkpoint's constraints at the next checkpoint. Only the operator's own words
+  // belong here, so a late tool result is refused.
+  function recordDirective(projectId, sessionId, { text = "", sourceMessageId = "", revision = 0, retainSecrets = false } = {}) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "A directive needs opaque project and session IDs.");
+    const id = String(sourceMessageId || "").trim().slice(0, 240);
+    if (!id || NON_OPERATOR_ID.test(id)) return operationFailure("MEMORY_DIRECTIVE_NOT_OPERATOR", "Only operator messages can be recorded as directives.");
+    const clean = redactText(text, 600, retainSecrets);
+    if (!clean) return operationFailure("MEMORY_DIRECTIVE_EMPTY", "A directive needs text.");
+    const state = hydrateSession(projectId, sessionId);
+    state.directives = [...state.directives.filter((entry) => entry.source_message_id !== id), { text: clean, source_message_id: id, revision: Number(revision) || 0 }].slice(-50);
+    persistActive(projectId, sessionId);
+    return { ok: true, count: state.directives.length };
   }
 
   function appendConversation(projectId, sessionId, messages) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 conversation state requires opaque project and session IDs.");
     const state = hydrateSession(projectId, sessionId);
     const list = Array.isArray(messages) ? messages : [messages];
-    state.active = capActive([...state.active, ...list.filter(Boolean).map(clone)]);
+    state.active = ingestActive(state, [...state.active, ...list.filter(Boolean).map(clone)]);
     syncMeter(projectId, sessionId, ["Active Conversation"]);
     return { ok: true, active: clone(state.active), count: state.active.length };
   }
   function setActiveConversation(projectId, sessionId, messages) {
     if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Tier 1 conversation state requires opaque project and session IDs.");
     const state = hydrateSession(projectId, sessionId);
-    state.active = capActive(messages);
+    state.active = ingestActive(state, messages);
     syncMeter(projectId, sessionId, ["Active Conversation"]);
     return { ok: true, active: clone(state.active), count: state.active.length };
   }
@@ -802,6 +1163,18 @@ function createTier1ContextCoordinator({
     dest.blockA = source.blockA ? clone(source.blockA) : null;
     dest.lastAssembly = null;
     dest.activeHydrated = true;
+    dest.nextBlockIndex = source.nextBlockIndex;
+    dest.pinned = new Set(source.pinned);
+    dest.directives = clone(source.directives);
+    dest.released = new Map();
+    for (const message of dest.active) {
+      if (message.block_tombstone !== true || !Number.isSafeInteger(message.block_index)) continue;
+      const entry = loadReleased(projectId, sourceSessionId, source, message.block_index);
+      if (!entry) continue;
+      let stored = false;
+      try { stored = sensitiveStore?.writeReleasedBlock?.(projectId, destSessionId, message.block_index, { block_id: entry.blockId, messages: entry.messages })?.ok === true; } catch { stored = false; }
+      if (!stored) dest.released.set(message.block_index, { blockId: entry.blockId, messages: entry.messages.map(clone) });
+    }
     persistActive(projectId, destSessionId);
     if (dest.summary && sensitiveStore?.writeCheckpoint) {
       try { sensitiveStore.writeCheckpoint(projectId, destSessionId, dest.summary); } catch { /* in-memory summary remains */ }
@@ -810,7 +1183,118 @@ function createTier1ContextCoordinator({
   }
   function state(projectId, sessionId) {
     const value = hydrateSession(projectId, sessionId);
-    return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly) };
+    return { summary: clone(value.summary), active: clone(value.active), workflow: clone(value.workflow), checkpointRevision: value.checkpointRevision, lastAssembly: clone(value.lastAssembly), directives: clone(value.directives) };
+  }
+  function tokenCount(message) { return count(message).tokens; }
+  function tombstoneText(block, reason, retainSecrets) {
+    const opener = block.messages.find((message) => message.role === "user" && message.block_tombstone !== true);
+    const prompt = redactText(opener?.content || "", 160, retainSecrets);
+    const tools = new Map();
+    for (const message of block.messages) {
+      if (message.role !== "assistant" || !Array.isArray(message.tool_calls)) continue;
+      for (const call of message.tool_calls) {
+        const name = String(call?.function?.name || call?.name || "").trim();
+        if (name) tools.set(name, (tools.get(name) || 0) + 1);
+      }
+    }
+    const toolText = [...tools].map(([name, calls]) => (calls > 1 ? `${name} x${calls}` : name)).join(", ");
+    const note = redactText(reason || "", 240, retainSecrets);
+    const findings = extractBlockFindings(block.messages, { retainSecrets });
+    // The full arguments of this block's tool calls are about to leave the ledger,
+    // so what was run is written into the tombstone while it can still be read.
+    const ran = attemptsFromLedger(block.messages, [], { retainSecrets, redact: (text, maximum) => redactText(text, maximum, retainSecrets) }).attempts
+      .slice(-6).map((attempt) => `${attempt.tool} ${attempt.digest} -> ${attempt.outcome}${attempt.count > 1 ? ` x${attempt.count}` : ""}`).join("; ").slice(0, 480);
+    return `[Block ${block.index} released from context: ${block.messages.length} messages${prompt ? `, started by "${prompt}"` : ""}${toolText ? `, tools: ${toolText}` : ""}${findings ? `. Findings: ${findings}` : ""}${ran ? `. Ran: ${ran}` : ""}${note ? `. Note: ${note}` : ""}. Call recall_block with index ${block.index} to read it again.]`;
+  }
+  function loadReleased(projectId, sessionId, state, index) {
+    const cached = state.released.get(index);
+    if (cached) return cached;
+    if (!sensitiveStore?.readReleasedBlock) return null;
+    try {
+      const loaded = sensitiveStore.readReleasedBlock(projectId, sessionId, index);
+      if (!loaded?.ok || !loaded.exists) return null;
+      return { blockId: loaded.blockId, messages: loaded.messages.map(clone) };
+    } catch { return null; }
+  }
+  // Releases whole finished blocks from the Active Conversation. The full
+  // messages are written to the encrypted session store first; only then is the
+  // block replaced in place by one tombstone that keeps its block_index. A block
+  // is never half released, so every tool_call keeps its tool result. The newest
+  // block is the live turn and is never released.
+  function evictBlocks(projectId, sessionId, requested = [], { retainSecrets = false } = {}) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Releasing blocks requires opaque project and session IDs.");
+    const state = hydrateSession(projectId, sessionId);
+    const blocks = blocksFromActive(state.active, tokenCount);
+    const newest = blocks.at(-1);
+    const rejected = [];
+    const plan = [];
+    const seen = new Set();
+    for (const entry of Array.isArray(requested) ? requested : [requested]) {
+      const request = entry && typeof entry === "object" ? entry : { index: entry };
+      const index = typeof request.index === "string" && request.index.trim() !== "" ? Number(request.index) : request.index;
+      if (!Number.isSafeInteger(index) || index < 0) { rejected.push({ index: request.index, code: "BLOCK_INDEX_INVALID" }); continue; }
+      if (seen.has(index)) continue;
+      seen.add(index);
+      const block = blocks.find((candidate) => candidate.index === index);
+      if (!block) rejected.push({ index, code: "BLOCK_NOT_FOUND" });
+      else if (block.state === "evicted") rejected.push({ index, code: "BLOCK_ALREADY_RELEASED" });
+      else if (state.pinned.has(block.index)) rejected.push({ index, code: "BLOCK_PINNED" });
+      else if (block === newest) rejected.push({ index, code: "BLOCK_IN_FLIGHT" });
+      else plan.push({ block, reason: request.reason });
+    }
+    const stored = [];
+    for (const item of plan) {
+      const messages = item.block.messages.map(clone);
+      let saved;
+      try { saved = sensitiveStore?.writeReleasedBlock ? sensitiveStore.writeReleasedBlock(projectId, sessionId, item.block.index, { block_id: item.block.blockId, messages }) : { ok: true }; }
+      catch (error) { saved = { ok: false, code: "MEMORY_RELEASED_BLOCK_WRITE_FAILED", error: error.message }; }
+      if (saved?.ok !== true) { rejected.push({ index: item.block.index, code: saved?.code || "BLOCK_PERSIST_FAILED" }); continue; }
+      // With a store the encrypted copy is the source of truth; keeping every
+      // released block in memory as well would defeat the point of releasing it.
+      if (!sensitiveStore?.writeReleasedBlock) state.released.set(item.block.index, { blockId: item.block.blockId, messages });
+      stored.push(item);
+    }
+    const evicted = [];
+    for (const item of [...stored].sort((left, right) => right.block.start - left.block.start)) {
+      const content = tombstoneText(item.block, item.reason, retainSecrets);
+      const tombstone = { role: "user", content, block_index: item.block.index, block_tombstone: true, released_tokens: item.block.tokenEstimate };
+      state.active.splice(item.block.start, item.block.messages.length, tombstone);
+      evicted.unshift({ index: item.block.index, blockId: item.block.blockId, messages: item.block.messages.length, tokensBefore: item.block.tokenEstimate, tokensAfter: tokenCount(tombstone), tombstone: content });
+    }
+    if (evicted.length) syncMeter(projectId, sessionId, ["Active Conversation"]);
+    return { ok: true, evicted, rejected, active: clone(state.active), count: state.active.length };
+  }
+  // Reads a released block back. The ledger is not touched: the caller returns
+  // the messages as the tool result of the current turn, which is the "new
+  // block" and keeps the provider prefix append-only.
+  function recallBlock(projectId, sessionId, index) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Recalling a block requires opaque project and session IDs.");
+    const number = typeof index === "string" && index.trim() !== "" ? Number(index) : index;
+    if (!Number.isSafeInteger(number) || number < 0) return operationFailure("MEMORY_BLOCK_INDEX_INVALID", "A block index must be a non-negative integer.");
+    const state = hydrateSession(projectId, sessionId);
+    const live = blocksFromActive(state.active, tokenCount).find((block) => block.index === number);
+    if (live && live.state === "active") return operationFailure("MEMORY_BLOCK_ACTIVE", `Block ${number} is still in context.`);
+    const entry = loadReleased(projectId, sessionId, state, number);
+    if (!entry) return operationFailure("MEMORY_BLOCK_NOT_RELEASED", `Block ${number} was not released or its stored copy is unavailable.`);
+    const messages = entry.messages.map(clone);
+    return { ok: true, index: number, blockId: entry.blockId, messages, tokens: count(messages).tokens };
+  }
+  function activeBlocks(projectId, sessionId) {
+    const value = hydrateSession(projectId, sessionId);
+    return blocksFromActive(value.active, tokenCount).map((block) => ({ ...block, pinned: value.pinned.has(block.index) }));
+  }
+  // Pinned blocks are skipped by automatic release and refused by release_blocks.
+  function pinBlock(projectId, sessionId, index, pinned = true) {
+    if (!isMemoryId(projectId, "proj") || !isMemoryId(sessionId, "session")) return operationFailure("MEMORY_TIER1_INPUT_INVALID", "Pinning a block requires opaque project and session IDs.");
+    const number = typeof index === "string" && index.trim() !== "" ? Number(index) : index;
+    if (!Number.isSafeInteger(number) || number < 0) return operationFailure("MEMORY_BLOCK_INDEX_INVALID", "A block index must be a non-negative integer.");
+    const state = hydrateSession(projectId, sessionId);
+    const block = blocksFromActive(state.active, tokenCount).find((candidate) => candidate.index === number);
+    if (!block) return operationFailure("MEMORY_BLOCK_NOT_FOUND", `Block ${number} is not in the conversation.`);
+    if (block.state === "evicted") return operationFailure("MEMORY_BLOCK_RELEASED", `Block ${number} was already released.`);
+    if (pinned === false) state.pinned.delete(number); else state.pinned.add(number);
+    persistActive(projectId, sessionId);
+    return { ok: true, index: number, pinned: state.pinned.has(number), pinnedBlocks: [...state.pinned].sort((left, right) => left - right) };
   }
   function clear(projectId, sessionId) { sessions.delete(sessionKey(projectId, sessionId)); return { ok: true }; }
   function clearProject(projectId) {
@@ -820,7 +1304,7 @@ function createTier1ContextCoordinator({
     return { ok: true, project_id: String(projectId), cleared_sessions: cleared };
   }
 
-  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, clear, clearProject });
+  return Object.freeze({ CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, METER_ROWS, summaryBudget, approximateTokens, assemble, pressure, reduceConversation, deterministicFallback, semanticCheckpoint, checkpoint, appendConversation, setActiveConversation, setWorkflow, cloneSession, state, activeBlocks, evictBlocks, recallBlock, pinBlock, recordDirective, clear, clearProject });
 }
 
-module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, METER_ROWS });
+module.exports = Object.freeze({ createTier1ContextCoordinator, CHECKPOINT_RATIO, SUMMARY_MAX, ACTIVE_MAX, summaryBudget, approximateTokens, blocksFromActive, extractBlockFindings, isOperatorInput, keepNewest, networkEntities, operatorText, METER_ROWS });

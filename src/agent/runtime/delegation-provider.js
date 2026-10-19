@@ -8,6 +8,8 @@ const crypto = require("node:crypto");
 const { redactStructuredValue, redactSecrets } = require("../../shared/secret-redaction.js");
 const { requireReceipt } = require("./delegated-child-store.js");
 const { identifyToolCalls } = require("./tool-protocol.js");
+const { spillChildReport } = require("./child-report-spill.js");
+const { archetypeFor, narrowToolsForArchetype } = require("./child-archetypes.js");
 
 const MAX_TASK_CHARS = 12_000;
 const MAX_CONTEXT_CHARS = 32_000;
@@ -74,6 +76,7 @@ function buildChildContextText(input, executionContext, steeringSections = []) {
     ? { ...input.contextPackage }
     : {};
   const task = String(input?.task || "").slice(0, MAX_TASK_CHARS);
+  const archetype = archetypeFor(contextPackage.role);
   const expectedOutput = input?.expectedOutput && typeof input.expectedOutput === "object"
     ? input.expectedOutput
     : {};
@@ -85,6 +88,7 @@ function buildChildContextText(input, executionContext, steeringSections = []) {
     "## Objective",
     task,
     "",
+    ...(archetype ? ["## Role", archetype.guidance, ""] : []),
     "## Authority",
     String(contextPackage.authority || executionContext?.authority || "").slice(0, 500),
     "",
@@ -129,15 +133,32 @@ function parseChildFinding(text = "") {
       summary: raw.slice(0, MAX_SUMMARY_CHARS),
       evidenceRefs: [],
       unverified: raw ? [raw.slice(0, MAX_SUMMARY_CHARS)] : ["The child did not return the required JSON object."],
+      ...(raw.length > MAX_SUMMARY_CHARS ? { truncated: true, fullText: raw } : {}),
     };
   }
   const refs = Array.isArray(parsed.evidenceRefs) ? parsed.evidenceRefs.map((item) => String(item || "").slice(0, 300)).filter(Boolean).slice(0, 40) : [];
   const unverified = Array.isArray(parsed.unverified) ? parsed.unverified.map((item) => String(item || "").slice(0, 500)).filter(Boolean).slice(0, 40) : [];
+  const fullSummary = String(parsed.summary || raw);
   return {
     status,
-    summary: String(parsed.summary || raw).slice(0, MAX_SUMMARY_CHARS),
+    summary: fullSummary.slice(0, MAX_SUMMARY_CHARS),
     evidenceRefs: refs,
     unverified,
+    ...(fullSummary.length > MAX_SUMMARY_CHARS ? { truncated: true, fullText: raw } : {}),
+  };
+}
+
+// A report that does not fit the summary is saved in full and the summary ends
+// with a pointer to it. The returned finding never carries the full text.
+function boundChildFinding(finding, { workspace, childInvocationId } = {}) {
+  const { truncated, fullText, ...kept } = finding;
+  if (!truncated) return kept;
+  const spilled = spillChildReport({ workspace, childInvocationId, text: fullText });
+  const pointer = spilled.ok ? `\n[Summary shortened. Full report: ${spilled.relativePath}]` : "\n[Summary shortened. The full report could not be saved.]";
+  return {
+    ...kept,
+    summary: kept.summary.slice(0, MAX_SUMMARY_CHARS - pointer.length) + pointer,
+    evidenceRefs: spilled.ok ? [...kept.evidenceRefs, spilled.relativePath].slice(0, 40) : kept.evidenceRefs,
   };
 }
 
@@ -427,7 +448,7 @@ function createRuntimeDelegationProvider({
     const inheritedContext = executionContext || { mode, role: mode, workspace: { root: workspace }, invocationId: childInvocationId };
     const contextText = buildChildContextText(input, inheritedContext, steeringSections);
     const childModel = String(model || subagentModel || parentModel || "").trim();
-    const childTools = currentTools();
+    const childTools = narrowToolsForArchetype(currentTools(), archetypeFor(input?.contextPackage?.role));
     const childActions = [];
     const delegatedQuestionProvider = typeof registerDelegatedQuestion === "function"
       ? async (proposal) => {
@@ -683,7 +704,7 @@ function createRuntimeDelegationProvider({
       const status = childController.signal.aborted
         ? "stopped"
         : childResultStatus(result);
-      let finding = parseChildFinding(result?.finalText || "");
+      let finding = boundChildFinding(parseChildFinding(result?.finalText || ""), { workspace, childInvocationId });
       const childSummary = finding.summary.slice(0, MAX_SUMMARY_CHARS);
       const error = String(result?.error || result?.runState?.stopReason || "").slice(0, MAX_SUMMARY_CHARS);
       const terminalType = status === "completed" ? "subagent_completed" : status === "stopped" ? "subagent_stopped" : "subagent_failed";
@@ -1198,6 +1219,7 @@ module.exports = {
   isModelAvailabilityFailure,
   childResultStatus,
   parseChildFinding,
+  boundChildFinding,
   isRetryableChildFailure,
   createRuntimeDelegationProvider,
 };

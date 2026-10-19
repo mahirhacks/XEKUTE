@@ -32,6 +32,8 @@ const READ_ONLY_TOOL_NAMES = new Set([
   "browser_action",
   "delegate_agent",
   "web_research",
+  "release_blocks",
+  "recall_block",
 ]);
 
 const TOOL_META = TOOL_METADATA;

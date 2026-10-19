@@ -65,7 +65,7 @@ test("Agent turns expose probe tools without a first-turn strip", async () => {
 
 test("Ask catalog is the local read surface", () => {
   assert.deepEqual([...ModeRegistry.MODE_TOOL_GROUPS.ask], [
-    "ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal",
+    "ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal", "release_blocks", "recall_block",
   ]);
   assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("exec_command"), false);
   assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("query_knowledge"), false);

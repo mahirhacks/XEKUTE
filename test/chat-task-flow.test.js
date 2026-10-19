@@ -16,7 +16,7 @@ test("Agent tasks keep the two-mode catalog without a temporary checklist tool",
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_list"/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
   assert.match(modes, /const AGENT_TOOLS = Object\.freeze\(\[/);
-  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal"\]\)/);
+  assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal", "release_blocks", "recall_block"\]\)/);
   assert.match(modes, /const MODE_TOOL_GROUPS = Object\.freeze\(\{ ask: SAFE_READ_TOOLS, agent: AGENT_TOOLS \}\)/);
   assert.doesNotMatch(modes, /"update_project_artifacts"/);
   assert.doesNotMatch(modes, /"query_knowledge"/);

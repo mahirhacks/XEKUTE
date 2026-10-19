@@ -229,6 +229,25 @@ function registerDelegateAgent(toolRegistry, adapter) {
   });
 }
 
+function registerContextBlockTool(toolRegistry, name, adapter) {
+  if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
+  return toolRegistry.register({
+    name,
+    adapter,
+    inputSchema: adapter.inputSchema,
+    description: adapter.description,
+    metadata: { mutating: false, reversible: true, targetTypes: ["context"] },
+  });
+}
+
+function registerReleaseBlocks(toolRegistry, adapter) {
+  return registerContextBlockTool(toolRegistry, "release_blocks", adapter);
+}
+
+function registerRecallBlock(toolRegistry, adapter) {
+  return registerContextBlockTool(toolRegistry, "recall_block", adapter);
+}
+
 function registerWebResearch(toolRegistry, adapter) {
   if (!toolRegistry || typeof toolRegistry.register !== "function") throw new TypeError("toolRegistry must support register");
   return toolRegistry.register({
@@ -257,4 +276,6 @@ module.exports = {
   registerBrowserAction,
   registerDelegateAgent,
   registerWebResearch,
+  registerReleaseBlocks,
+  registerRecallBlock,
 };

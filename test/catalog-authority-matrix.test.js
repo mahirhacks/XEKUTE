@@ -23,6 +23,7 @@ const { REPLAY_REQUEST_INPUT_SCHEMA } = require("../src/agent/tools/assessment/r
 const { BROWSER_ACTION_INPUT_SCHEMA } = require("../src/agent/tools/assessment/browser-action.js");
 const { DELEGATE_AGENT_INPUT_SCHEMA } = require("../src/agent/tools/process/delegate-agent.js");
 const { WEB_RESEARCH_INPUT_SCHEMA } = require("../src/agent/tools/assessment/web-research.js");
+const { RELEASE_BLOCKS_INPUT_SCHEMA, RECALL_BLOCK_INPUT_SCHEMA } = require("../src/agent/tools/process/context-blocks.js");
 
 const SCHEMAS = Object.freeze({
   ask_questions: ASK_QUESTIONS_INPUT_SCHEMA,
@@ -37,6 +38,8 @@ const SCHEMAS = Object.freeze({
   browser_action: BROWSER_ACTION_INPUT_SCHEMA,
   delegate_agent: DELEGATE_AGENT_INPUT_SCHEMA,
   web_research: WEB_RESEARCH_INPUT_SCHEMA,
+  release_blocks: RELEASE_BLOCKS_INPUT_SCHEMA,
+  recall_block: RECALL_BLOCK_INPUT_SCHEMA,
 });
 
 const VALID_ARGS = Object.freeze({
@@ -58,6 +61,8 @@ const VALID_ARGS = Object.freeze({
     expectedOutput: { description: "short summary", format: "text" },
   },
   web_research: { operation: "search", query: "public docs" },
+  release_blocks: { operation: "list" },
+  recall_block: { index: 0 },
 });
 
 function entryFor(name) {
@@ -149,7 +154,7 @@ test("agent full_authority executes local catalog tools and hard-denies unscoped
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "README.md"), "# Catalog\n");
 
-  for (const toolName of ["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal", "apply_patch", "exec_command", "manage_identity", "delegate_agent", "web_research"]) {
+  for (const toolName of ["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal", "apply_patch", "exec_command", "manage_identity", "delegate_agent", "web_research", "release_blocks", "recall_block"]) {
     const { result, executions } = await invoke(root, { toolName, args: VALID_ARGS[toolName], authority: "full_authority" });
     assert.equal(result.ok, true, `${toolName} should succeed: ${result.code || result.error || ""}`);
     assert.equal(executions, 1, toolName);
