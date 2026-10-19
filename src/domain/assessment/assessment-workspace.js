@@ -171,9 +171,25 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
     }
     return { target };
   }
-  function regularFileStat(target) {
-    const stat = fs.lstatSync(target);
-    return stat.isFile() && !stat.isSymbolicLink() ? stat : null;
+  function openRegularFile(root, target, flags) {
+    const descriptor = fs.openSync(target, flags | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+    try {
+      const opened = fs.fstatSync(descriptor);
+      const current = fs.lstatSync(target);
+      if (!opened.isFile() || !current.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
+        throw new Error("Traffic log path changed or is not a regular file");
+      }
+      for (let directory = path.dirname(target); ; directory = path.dirname(directory)) {
+        const stat = fs.lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Traffic log directory is not a regular folder");
+        if (directory === root) break;
+        if (directory === path.dirname(directory)) throw new Error("Traffic log path is outside the assessment folder");
+      }
+      return { descriptor, stat: opened };
+    } catch (error) {
+      fs.closeSync(descriptor);
+      throw error;
+    }
   }
   function expectedEntries() {
     return [
@@ -245,10 +261,18 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
     const safePath = workspaceFile(verification.root, relativePath); if (safePath.error) return safePath;
     const { target } = safePath, boundedLimit = Math.max(1, Math.min(Number(limit) || 500, 2000)), boundedBytes = Math.max(1024 * 1024, Math.min(Number(maxBytes) || 20 * 1024 * 1024, 50 * 1024 * 1024));
     try {
-      if (!fs.existsSync(target)) return { ok: true, path: relativePath, records: [], invalidCount: 0, truncated: false };
-      const fileStat = regularFileStat(target);
-      if (!fileStat) return { error: "JSONL path is not a regular file", code: "JSONL_PATH_INVALID" };
-      const size = fileStat.size, start = Math.max(0, size - boundedBytes), buffer = Buffer.alloc(size - start), descriptor = fs.openSync(target, "r"); try { fs.readSync(descriptor, buffer, 0, buffer.length, start); } finally { fs.closeSync(descriptor); }
+      let opened;
+      try { opened = openRegularFile(verification.root, target, fs.constants.O_RDONLY); } catch (error) {
+        if (error.code === "ENOENT") return { ok: true, path: relativePath, records: [], invalidCount: 0, truncated: false };
+        throw error;
+      }
+      let buffer, start;
+      try {
+        const size = opened.stat.size;
+        start = Math.max(0, size - boundedBytes);
+        buffer = Buffer.alloc(size - start);
+        fs.readSync(opened.descriptor, buffer, 0, buffer.length, start);
+      } finally { fs.closeSync(opened.descriptor); }
       let text = buffer.toString("utf8"); if (start > 0) { const newline = text.indexOf("\n"); text = newline >= 0 ? text.slice(newline + 1) : ""; }
       const records = []; let invalidCount = 0; for (const line of text.split(/\r?\n/)) { if (!line.trim()) continue; try { records.push(JSON.parse(line)); } catch { invalidCount += 1; } }
       return { ok: true, path: relativePath, records: records.slice(-boundedLimit).reverse(), invalidCount, truncated: start > 0 || records.length > boundedLimit };
@@ -282,7 +306,11 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
     const fitted = serializeTrafficRecord({ recordType: "http-exchange", schemaVersion: ASSESSMENT_VERSION, timestamp: formatTrafficTimestamp(date), isoTimestamp: date.toISOString(), ...record, redacted: false }, 1_500_000);
     if (fitted.error) return fitted;
     const relativePath = filtered ? "traffic/filtered.jsonl" : "traffic/raw.jsonl";
-    try { fs.appendFileSync(path.join(prepared.root, ...relativePath.split("/")), `${fitted.serialized}\n`, "utf8"); return { ok: true, path: relativePath, timestamp: fitted.record.timestamp, record: fitted.record }; } catch (error) { return { error: error.message, code: "TRAFFIC_LOG_FAILED" }; }
+    try {
+      const { descriptor } = openRegularFile(prepared.root, path.join(prepared.root, ...relativePath.split("/")), fs.constants.O_WRONLY | fs.constants.O_APPEND);
+      try { fs.appendFileSync(descriptor, `${fitted.serialized}\n`, "utf8"); } finally { fs.closeSync(descriptor); }
+      return { ok: true, path: relativePath, timestamp: fitted.record.timestamp, record: fitted.record };
+    } catch (error) { return { error: error.message, code: "TRAFFIC_LOG_FAILED" }; }
   }
   function readTrafficHistory(rawRoot, options = {}) {
     const read = readJsonl(rawRoot, "traffic/raw.jsonl", { limit: Math.min(Number(options.limit) || 500, 1000), maxBytes: options.maxBytes });
@@ -302,7 +330,28 @@ function createAssessmentWorkspace({ fs, path, now = () => new Date(), projectAr
   }
   function deleteTrafficRecords(rawRoot, { requestIds = [] } = {}) {
     const verification = verify(rawRoot); if (verification.error) return verification; const ids = new Set((Array.isArray(requestIds) ? requestIds : []).map(String).filter(Boolean)); if (!ids.size) return { ok: true, deleted: 0 }; const target = path.join(verification.root, "traffic", "raw.jsonl");
-    try { if (!fs.existsSync(target)) return { ok: true, deleted: 0 }; if (!regularFileStat(target)) return { error: "Traffic log path is not a regular file", code: "TRAFFIC_PATH_INVALID" }; let deleted = 0; const kept = fs.readFileSync(target, "utf8").split(/\r?\n/).filter(Boolean).filter((line) => { try { const record = JSON.parse(line); if (record?.recordType === "http-exchange" && ids.has(String(record.requestId))) { deleted += 1; return false; } } catch { /* Preserve malformed rows. */ } return true; }); fs.writeFileSync(target, kept.length ? `${kept.join("\n")}\n` : "", "utf8"); return { ok: true, deleted }; } catch (error) { return { error: error.message, code: "TRAFFIC_DELETE_FAILED" }; }
+    try {
+      let opened;
+      try { opened = openRegularFile(verification.root, target, fs.constants.O_RDWR); } catch (error) {
+        if (error.code === "ENOENT") return { ok: true, deleted: 0 };
+        throw error;
+      }
+      try {
+        let deleted = 0;
+        const kept = fs.readFileSync(opened.descriptor, "utf8").split(/\r?\n/).filter(Boolean).filter((line) => {
+          try {
+            const record = JSON.parse(line);
+            if (record?.recordType === "http-exchange" && ids.has(String(record.requestId))) { deleted += 1; return false; }
+          } catch { /* Preserve malformed rows. */ }
+          return true;
+        });
+        const content = Buffer.from(kept.length ? `${kept.join("\n")}\n` : "");
+        let offset = 0;
+        while (offset < content.length) offset += fs.writeSync(opened.descriptor, content, offset, content.length - offset, offset);
+        fs.ftruncateSync(opened.descriptor, content.length);
+        return { ok: true, deleted };
+      } finally { fs.closeSync(opened.descriptor); }
+    } catch (error) { return { error: error.message, code: "TRAFFIC_DELETE_FAILED" }; }
   }
   function projectProfile(root) { try { return typeof projectProfileProvider === "function" ? projectProfileProvider(root) || null : null; } catch { return null; } }
   function createRun(rawRoot, input = {}) {

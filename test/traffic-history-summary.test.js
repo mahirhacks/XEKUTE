@@ -138,3 +138,38 @@ test("traffic history reads and deletes reject a linked raw log without touching
   assert.equal(typeof deleted.error, "string");
   assert.equal(fs.readFileSync(external, "utf8"), original);
 });
+
+for (const operation of ["read", "delete", "append"]) {
+  test(`traffic ${operation} rejects a log replaced by a symlink at the I/O boundary`, (t) => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-traffic-race-"));
+    t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+    const root = path.join(parent, "project");
+    const target = path.join(root, "traffic", "raw.jsonl");
+    const external = path.join(parent, "external.jsonl");
+    const original = `${JSON.stringify({ recordType: "http-exchange", requestId: "outside-record" })}\n`;
+    createAssessmentWorkspace({ fs, path }).repair(root, { createRoot: true });
+    fs.writeFileSync(external, original);
+    let replaced = false;
+    const racingFs = new Proxy(fs, {
+      get(object, key) {
+        const method = object[key];
+        if (!["openSync", "readFileSync", "writeFileSync", "appendFileSync"].includes(key)) return method;
+        return (...args) => {
+          if (!replaced && args[0] === target && args[2]?.flag !== "wx") {
+            replaced = true;
+            fs.unlinkSync(target);
+            fs.symlinkSync(external, target, "file");
+          }
+          return method(...args);
+        };
+      },
+    });
+    const workspace = createAssessmentWorkspace({ fs: racingFs, path });
+    const result = operation === "read" ? workspace.readTrafficHistory(root)
+      : operation === "delete" ? workspace.deleteTrafficRecords(root, { requestIds: ["outside-record"] })
+        : workspace.appendTrafficRecord(root, { requestId: "new-record" });
+    assert.equal(replaced, true);
+    assert.equal(typeof result.error, "string");
+    assert.equal(fs.readFileSync(external, "utf8"), original);
+  });
+}

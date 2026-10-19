@@ -32,6 +32,8 @@ persistence, filesystem access, and proxy lifecycle behavior.
 - Reject symlink and junction escapes in workspace file mutations, WebClone
   reads and builds, traffic storage, artifact destinations, and artifact
   transaction directories.
+- Bind traffic reads, appends, and deletions to a validated open file
+  descriptor so a swapped log path cannot redirect access to a symlink target.
 - Apply assessment exclusions even when no positive allowlist is configured.
   Late traffic writes no longer recreate a project that has been removed.
 - Prevent an asynchronous credential save from resurrecting an identity
