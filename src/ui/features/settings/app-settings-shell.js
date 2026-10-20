@@ -9,11 +9,13 @@ import {
 import { appState } from "../../core/app-state.js";
 import { loadGuidanceSettings } from "./guidance-settings.js";
 import {
-  loadProjectProfile, renderExploreSubagentSelect, initModelsSettingsPanel, loadLlmSettings,
-  loadOllamaSettings, loadMcpSettings, projectName, openTabs, showCodeEditorWorkspace, renderTabs,
+  loadProjectProfile, loadMcpSettings, projectName, openTabs, showCodeEditorWorkspace, renderTabs,
   syncWorkspaceActivity, commitActiveTab, setTerminalMaximized, renderEditor,
   refreshAssessmentSettingsCache,
 } from "../../bootstrap.js";
+import {
+  renderExploreSubagentSelect, initModelsSettingsPanel, loadLlmSettings, loadOllamaSettings,
+} from "./llm-provider-settings.js";
 import { addErrorMessage } from "../chat/chat-messages.js";
 import { loadAuthoritySettings } from "./authority-settings.js";
 

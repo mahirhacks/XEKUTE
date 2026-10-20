@@ -1,4 +1,4 @@
-import { selectedLlmProvider, isOpenRouterProvider } from "../../bootstrap.js";
+import { selectedLlmProvider, isOpenRouterProvider } from "../settings/llm-provider-settings.js";
 import {
   normalizeModelNames, syncModelLabel, syncModelControlsSummary, renderReasoningOptions,
   renderContextOptions, updateModelRuntimeNote,

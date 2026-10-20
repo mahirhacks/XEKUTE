@@ -16,7 +16,7 @@ import {
 } from "./model-settings.js";
 import {
   isOpenRouterProvider, renderExploreSubagentSelect, renderModelsSettingsList,
-} from "../../bootstrap.js";
+} from "../settings/llm-provider-settings.js";
 import { closeAuthorityMenu } from "../settings/authority-settings.js";
 import { closeChatModeMenu } from "../chat/chat-mode.js";
 import { ContextBudget } from "../../core/runtime-globals.js";

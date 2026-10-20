@@ -48,13 +48,9 @@ import {
   kaliAccessFields, kaliAccessHost, kaliAccessPort, kaliAccessUsername, kaliAccessKey,
   kaliAccessAcceptHostKey, kaliAccessKeyBrowse, kaliAccessOpenMcp, kaliAccessTest,
   kaliAccessStatus, guidanceScopeTabs, guidanceNew, guidanceEmptyNew, guidanceImport, llmProvider,
-  llmProviderOllama, llmProviderOpenRouter, llmOllamaConfig, llmOpenRouterConfig,
-  openRouterBaseUrl, openRouterModel, openRouterApiKey, llmSettingsTest, llmSettingsStatus,
-  llmOpenRouterKeyToggle, llmOpenRouterKeyStatus, llmOpenRouterKeyFields, llmOpenRouterBaseToggle,
-  llmOpenRouterBaseFields, llmOllamaEnableToggle, llmOllamaEndpointToggle,
-  llmOllamaEndpointStatus, llmOllamaEndpointFields, modelsSettingsSearch, modelsSettingsRefresh,
-  modelsSettingsList, modelsViewAllBtn, modelsExploreSubagent, ollamaHostInput,
-  ollamaLocationBadge, ollamaActiveEndpoint, ollamaConnectionStatus, ollamaHostTest,
+  openRouterBaseUrl, openRouterApiKey, llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle,
+  llmOpenRouterBaseToggle, llmOllamaEnableToggle, llmOllamaEndpointToggle, modelsSettingsSearch,
+  modelsSettingsRefresh, modelsViewAllBtn, modelsExploreSubagent, ollamaHostInput, ollamaHostTest,
   ollamaHostReset, certificateBrowse, certificateOpenFolder, certificateReset,
   identityRuntimeStatus, identityRefresh, identityNewId, identityNewName, identityNewRole,
   identityCreate, identityList, identityImportTarget, identityImportFormat, identityImportData,
@@ -175,17 +171,13 @@ import {
   finalizeCommandTimeline,
 } from "./features/agents/background-waits.js";
 import {
-  AUTO_CONTEXT_ESTIMATE, EXPLORE_SUBAGENT_MODEL_KEY, isModelEnabled, setModelEnabled,
-  syncSelectedModelFromEnabled, isCustomModelName, addCustomModelName, removeCustomModelName,
-  getExploreSubagentModel, modelsSettingsCatalog, enabledModelsFirst, modelsVisibleInPicker,
-  loadModelSettings, getModelSettings, modelThinkingEnabled, saveModelSettings,
-  refreshModelContextCapacity,
+  AUTO_CONTEXT_ESTIMATE, EXPLORE_SUBAGENT_MODEL_KEY, addCustomModelName, loadModelSettings,
+  getModelSettings, modelThinkingEnabled, saveModelSettings, refreshModelContextCapacity,
 } from "./features/models/model-settings.js";
 import {
-  modelDisplayName, syncModelLabel, syncModelControlsSummary, openModelControlsMenu,
-  positionModelPanel, positionModelMenu, closeModelEditMenu, closeModelMenu,
-  positionModelEditMenu, openModelEditMenu, loadModels, renderModelList, openModelMenu,
-  addCustomModel,
+  syncModelLabel, syncModelControlsSummary, openModelControlsMenu, positionModelPanel,
+  positionModelMenu, closeModelEditMenu, closeModelMenu, positionModelEditMenu, openModelEditMenu,
+  loadModels, renderModelList, openModelMenu, addCustomModel,
 } from "./features/models/model-picker.js";
 import {
   AUTHORITY_SETTINGS_KEY, normalizeAuthoritySettings, loadAuthoritySettings,
@@ -199,6 +191,12 @@ import {
   chooseCertificateDirectory, resetCertificateDirectory, openAppSettings, switchToSettingsTab,
   loadSettingsWorkspace,
 } from "./features/settings/app-settings-shell.js";
+import {
+  OLLAMA_PORT, syncLlmProviderUi, MODELS_SETTINGS_PAGE_SIZE, queueLlmSettingsAutosave,
+  syncOpenRouterApiFieldsUi, syncOllamaApiFieldsUi, renderExploreSubagentSelect,
+  renderModelsSettingsList, refreshModelsSettingsPanel, isOpenRouterProvider, testLlmSettings,
+  testOllamaSettings, resetOllamaSettings,
+} from "./features/settings/llm-provider-settings.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -309,7 +307,6 @@ appState.resourceWrapLines = localStorage.getItem("xekute.resourceWrapLines") ==
 appState.resourceSettingsSaveChain = Promise.resolve();
 const selectedCustomEntries = new Set();
 
-const OLLAMA_PORT = 11435;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const selectedExplorerPaths = new Set();
@@ -939,38 +936,6 @@ async function saveProjectProfile({ autoSave = false, revision = appState.projec
 
 
 
-function syncLlmProviderUi(provider = "ollama") {
-  const active = provider === "openrouter" ? "openrouter" : "ollama";
-  if (llmProvider) llmProvider.value = active;
-  if (llmProviderOllama) llmProviderOllama.checked = active === "ollama";
-  if (llmProviderOpenRouter) llmProviderOpenRouter.checked = active === "openrouter";
-  if (llmOllamaConfig) llmOllamaConfig.hidden = active !== "ollama";
-  if (llmOpenRouterConfig) llmOpenRouterConfig.hidden = active !== "openrouter";
-  if (llmOllamaEnableToggle) llmOllamaEnableToggle.checked = active === "ollama";
-}
-
-const MODELS_SETTINGS_PAGE_SIZE = 10;
-
-function queueLlmSettingsAutosave(delay = 500) {
-  clearTimeout(appState.llmAutosaveTimer);
-  appState.llmAutosavePending = true;
-  if (llmSettingsStatus) llmSettingsStatus.textContent = "Saving automatically…";
-  appState.llmAutosaveTimer = setTimeout(() => { void flushLlmSettingsAutosave(); }, delay);
-}
-
-async function flushLlmSettingsAutosave() {
-  clearTimeout(appState.llmAutosaveTimer);
-  appState.llmAutosaveTimer = null;
-  if (appState.llmAutosaveRunning) return;
-  appState.llmAutosaveRunning = true;
-  appState.llmAutosavePending = false;
-  try {
-    await saveLlmSettings();
-  } finally {
-    appState.llmAutosaveRunning = false;
-    if (appState.llmAutosavePending) queueLlmSettingsAutosave(0);
-  }
-}
 
 
 
@@ -986,326 +951,23 @@ async function flushLlmSettingsAutosave() {
 
 
 
-function syncOpenRouterApiFieldsUi() {
-  const showKeyFields = Boolean(llmOpenRouterKeyToggle?.checked);
-  if (llmOpenRouterKeyFields) llmOpenRouterKeyFields.hidden = !showKeyFields;
-  if (llmOpenRouterKeyStatus) llmOpenRouterKeyStatus.hidden = !appState.llmOpenRouterHasSavedKey || showKeyFields;
-  const showBaseFields = Boolean(llmOpenRouterBaseToggle?.checked);
-  if (llmOpenRouterBaseFields) llmOpenRouterBaseFields.hidden = !showBaseFields;
-}
 
-function syncOllamaApiFieldsUi() {
-  const envLocked = Boolean(appState.ollamaSettingsData?.usingEnvironment);
-  const hasCustomEndpoint = Boolean(appState.ollamaSettingsData?.host);
-  const showEndpointFields = Boolean(llmOllamaEndpointToggle?.checked) && !envLocked;
-  if (llmOllamaEndpointFields) llmOllamaEndpointFields.hidden = !showEndpointFields;
-  if (llmOllamaEndpointStatus) {
-    llmOllamaEndpointStatus.hidden = !hasCustomEndpoint || showEndpointFields || envLocked;
-  }
-  if (llmOllamaEndpointToggle) llmOllamaEndpointToggle.disabled = envLocked;
-  if (ollamaHostInput) ollamaHostInput.disabled = envLocked;
-}
 
-function renderExploreSubagentSelect() {
-  if (!modelsExploreSubagent) return;
-  const catalog = modelsVisibleInPicker();
-  const current = getExploreSubagentModel();
-  modelsExploreSubagent.innerHTML = "";
-  if (!catalog.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "Enable a model in Models";
-    modelsExploreSubagent.appendChild(option);
-    modelsExploreSubagent.disabled = true;
-    return;
-  }
-  modelsExploreSubagent.disabled = false;
-  for (const name of catalog) {
-    const option = document.createElement("option");
-    option.value = name;
-    option.textContent = name;
-    modelsExploreSubagent.appendChild(option);
-  }
-  if (current && catalog.includes(current)) modelsExploreSubagent.value = current;
-}
 
-function renderModelsSettingsList() {
-  if (!modelsSettingsList) return;
-  const query = modelsSettingsSearch?.value.trim().toLowerCase() || "";
-  const catalog = enabledModelsFirst(modelsSettingsCatalog());
-  const filtered = catalog.filter((name) => !query || name.toLowerCase().includes(query));
-  const visible = filtered.slice(0, appState.modelsSettingsDisplayLimit);
 
-  modelsSettingsList.innerHTML = "";
-  if (!visible.length) {
-    modelsSettingsList.innerHTML = `<div class="models-settings-empty">${query ? "No models match your search" : "No models loaded. Refresh or add a model ID above."}</div>`;
-    if (modelsViewAllBtn) modelsViewAllBtn.hidden = true;
-    return;
-  }
 
-  for (const name of visible) {
-    const row = document.createElement("div");
-    row.className = "models-settings-row";
-    row.dataset.model = name;
 
-    const nameEl = document.createElement("span");
-    nameEl.className = "models-settings-name";
-    nameEl.textContent = name;
-    nameEl.title = name;
 
-    const actions = document.createElement("div");
-    actions.className = "models-settings-row-actions";
 
-    if (isCustomModelName(name)) {
-      const deleteBtn = document.createElement("button");
-      deleteBtn.type = "button";
-      deleteBtn.className = "models-delete-btn";
-      deleteBtn.title = "Remove custom model";
-      deleteBtn.setAttribute("aria-label", `Remove ${name}`);
-      deleteBtn.innerHTML = '<span class="codicon codicon-trash"></span>';
-      deleteBtn.addEventListener("click", () => {
-        removeCustomModelName(name);
-        renderModelsSettingsList();
-        renderExploreSubagentSelect();
-        renderModelList();
-      });
-      actions.appendChild(deleteBtn);
-    }
 
-    const toggleLabel = document.createElement("label");
-    toggleLabel.className = "general-toggle";
-    toggleLabel.setAttribute("aria-label", `Enable ${name}`);
-    const toggleInput = document.createElement("input");
-    toggleInput.type = "checkbox";
-    toggleInput.checked = isModelEnabled(name);
-    toggleInput.addEventListener("change", () => {
-      setModelEnabled(name, toggleInput.checked);
-      renderModelsSettingsList();
-      renderExploreSubagentSelect();
-      renderModelList();
-      if (!toggleInput.checked && appState.selectedModel === name) {
-        syncSelectedModelFromEnabled();
-        syncModelLabel();
-      }
-    });
-    const toggleSpan = document.createElement("span");
-    toggleSpan.setAttribute("aria-hidden", "true");
-    toggleLabel.appendChild(toggleInput);
-    toggleLabel.appendChild(toggleSpan);
-    actions.appendChild(toggleLabel);
 
-    row.appendChild(nameEl);
-    row.appendChild(actions);
-    modelsSettingsList.appendChild(row);
-  }
 
-  if (modelsViewAllBtn) {
-    modelsViewAllBtn.hidden = filtered.length <= appState.modelsSettingsDisplayLimit;
-    modelsViewAllBtn.textContent = "View more";
-  }
-}
 
-async function refreshModelsSettingsPanel() {
-  appState.modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
-  await loadModels({ showLoading: false });
-  renderExploreSubagentSelect();
-  renderModelsSettingsList();
-}
 
-function initModelsSettingsPanel() {
-  appState.modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
-  refreshModelsSettingsPanel();
-}
 
-function selectedLlmProvider() {
-  if (llmProviderOpenRouter?.checked) return "openrouter";
-  if (llmProvider?.value === "openrouter") return "openrouter";
-  return appState.activeLlmProvider === "openrouter" ? "openrouter" : "ollama";
-}
 
-function isOpenRouterProvider() {
-  return selectedLlmProvider() === "openrouter";
-}
 
-function renderOllamaSettings(snapshot = appState.ollamaSettingsData) {
-  if (!snapshot) return;
-  appState.ollamaSettingsData = snapshot;
-  if (ollamaHostInput) ollamaHostInput.value = snapshot.host || "";
-  if (llmOllamaEndpointToggle) {
-    llmOllamaEndpointToggle.checked = Boolean(snapshot.host) && !snapshot.usingEnvironment;
-  }
-  if (ollamaLocationBadge) {
-    ollamaLocationBadge.textContent = snapshot.usingEnvironment ? "Environment" : snapshot.usingDefault ? "Default" : "Remote";
-  }
-  if (ollamaActiveEndpoint) ollamaActiveEndpoint.textContent = snapshot.activeBaseUrl || "";
-  if (statusOllamaPort && snapshot.activeHost && selectedLlmProvider() === "ollama") {
-    statusOllamaPort.textContent = `Ollama :${snapshot.activeHost}`;
-  }
-  if (ollamaHostReset) ollamaHostReset.disabled = Boolean(snapshot.usingDefault && !snapshot.host);
-  if (ollamaConnectionStatus && !ollamaConnectionStatus.dataset.testing) {
-    if (snapshot.usingEnvironment) ollamaConnectionStatus.textContent = "Controlled by OLLAMA_HOST environment variable";
-    else if (snapshot.usingDefault) ollamaConnectionStatus.textContent = "Using local default endpoint";
-    else ollamaConnectionStatus.textContent = "Saved remote endpoint";
-  }
-  syncOllamaApiFieldsUi();
-}
 
-async function loadLlmSettings() {
-  const result = await window.api.llmSettings?.();
-  if (result?.error) {
-    if (llmSettingsStatus) llmSettingsStatus.textContent = result.error;
-    return;
-  }
-  syncLlmProviderUi(result.provider || "ollama");
-  appState.activeLlmProvider = result.provider || "ollama";
-  appState.llmOpenRouterHasSavedKey = Boolean(result.hasApiKey);
-  const defaultBaseUrl = result.openrouter?.baseUrl || "https://openrouter.ai/api/v1";
-  if (openRouterBaseUrl) openRouterBaseUrl.value = defaultBaseUrl;
-  if (openRouterModel) openRouterModel.value = result.openrouter?.model || "";
-  if (openRouterApiKey) openRouterApiKey.value = "";
-  if (llmOpenRouterKeyToggle) llmOpenRouterKeyToggle.checked = false;
-  if (llmOpenRouterBaseToggle) {
-    llmOpenRouterBaseToggle.checked = defaultBaseUrl !== "https://openrouter.ai/api/v1";
-  }
-  syncOpenRouterApiFieldsUi();
-  if (statusOllamaPort) {
-    if (result.provider === "openrouter") {
-      statusOllamaPort.textContent = result.openrouter?.model
-        ? `OpenRouter · ${modelDisplayName(result.openrouter.model)}`
-        : "OpenRouter";
-    } else if (result.ollama?.activeBaseUrl) {
-      try {
-        const url = new URL(result.ollama.activeBaseUrl);
-        statusOllamaPort.textContent = `Ollama :${url.port || (url.protocol === "https:" ? "443" : "80")}`;
-      } catch {
-        statusOllamaPort.textContent = "Ollama";
-      }
-    }
-  }
-  if (llmSettingsStatus) {
-    if (result.provider === "openrouter") {
-      llmSettingsStatus.textContent = result.hasApiKey
-        ? "OpenRouter active · encrypted API key configured"
-        : "OpenRouter active · API key required";
-    } else {
-      llmSettingsStatus.textContent = "Ollama active";
-    }
-  }
-  if (window.api.ollamaSettings) {
-    const ollama = await window.api.ollamaSettings();
-    if (!ollama?.error) renderOllamaSettings(ollama);
-  }
-  void refreshModelContextCapacity();
-}
-
-async function saveLlmSettings() {
-  const provider = selectedLlmProvider();
-  syncLlmProviderUi(provider);
-  if (llmSettingsStatus) llmSettingsStatus.textContent = "Saving…";
-  const ollamaHostPayload = llmOllamaEndpointToggle?.checked && !appState.ollamaSettingsData?.usingEnvironment
-    ? (ollamaHostInput?.value?.trim() || "")
-    : "";
-  const ollamaResult = await window.api.setOllamaHost?.({ host: ollamaHostPayload });
-  if (ollamaResult?.error) {
-    if (llmSettingsStatus) llmSettingsStatus.textContent = ollamaResult.error;
-    if (commandSettingsStatus) commandSettingsStatus.textContent = ollamaResult.error;
-    return;
-  }
-  if (ollamaResult) renderOllamaSettings(ollamaResult);
-  const openRouterModelId = provider === "openrouter"
-    ? (appState.selectedModel || openRouterModel?.value || "")
-    : openRouterModel?.value;
-  const result = await window.api.setLlmSettings?.({
-    provider,
-    baseUrl: llmOpenRouterBaseToggle?.checked ? openRouterBaseUrl?.value : "https://openrouter.ai/api/v1",
-    model: openRouterModelId,
-    ...(openRouterApiKey?.value ? { apiKey: openRouterApiKey.value } : {}),
-  });
-  if (result?.error) {
-    if (llmSettingsStatus) llmSettingsStatus.textContent = result.error;
-    if (commandSettingsStatus) commandSettingsStatus.textContent = result.error;
-    return;
-  }
-  if (openRouterApiKey) openRouterApiKey.value = "";
-  appState.llmOpenRouterHasSavedKey = Boolean(result.hasApiKey);
-  appState.activeLlmProvider = result.provider || provider;
-  syncLlmProviderUi(result.provider || provider);
-  if (llmOpenRouterKeyToggle) llmOpenRouterKeyToggle.checked = false;
-  syncOpenRouterApiFieldsUi();
-  if (result.provider === "openrouter" && result.openrouter?.model) {
-    appState.selectedModel = result.openrouter.model;
-    localStorage.setItem("pointer:model", appState.selectedModel);
-  }
-  if (llmSettingsStatus) {
-    llmSettingsStatus.textContent = result.provider === "openrouter"
-      ? (result.hasApiKey ? "Saved · OpenRouter active" : "Saved · OpenRouter active, but API key still required")
-      : "Saved · Ollama active";
-  }
-  if (commandSettingsStatus) commandSettingsStatus.textContent = `Active provider: ${result.provider}`;
-  await loadModels({ showLoading: true });
-}
-
-async function testLlmSettings() {
-  if (appState.llmAutosaveTimer || appState.llmAutosavePending) await flushLlmSettingsAutosave();
-  if (llmSettingsStatus) llmSettingsStatus.textContent = "Testing active provider…";
-  const result = await window.api.testLlmConnection?.();
-  if (result?.error) {
-    if (llmSettingsStatus) llmSettingsStatus.textContent = result.error;
-    return;
-  }
-  const count = Number(result?.modelCount);
-  if (llmSettingsStatus) {
-    llmSettingsStatus.textContent = Number.isFinite(count)
-      ? `Connected · ${result.provider || "provider"} · ${count} model${count === 1 ? "" : "s"}`
-      : `Connected · ${result.provider || "provider"}`;
-  }
-}
-
-async function loadOllamaSettings() {
-  if (!window.api.ollamaSettings) return;
-  if (ollamaConnectionStatus) {
-    ollamaConnectionStatus.dataset.testing = "";
-    ollamaConnectionStatus.textContent = "Loading…";
-  }
-  const result = await window.api.ollamaSettings();
-  if (result?.error) {
-    if (ollamaConnectionStatus) ollamaConnectionStatus.textContent = result.error;
-    return;
-  }
-  renderOllamaSettings(result);
-}
-
-async function testOllamaSettings() {
-  if (ollamaConnectionStatus) {
-    ollamaConnectionStatus.dataset.testing = "1";
-    ollamaConnectionStatus.textContent = "Testing connection…";
-  }
-  const result = await window.api.testOllamaConnection?.();
-  delete ollamaConnectionStatus?.dataset.testing;
-  if (result?.error) {
-    if (ollamaConnectionStatus) ollamaConnectionStatus.textContent = result.error;
-    return;
-  }
-  if (ollamaConnectionStatus) {
-    ollamaConnectionStatus.textContent = result.modelCount
-      ? `Connected · ${result.modelCount} model${result.modelCount === 1 ? "" : "s"} available`
-      : "Connected · no models returned";
-  }
-}
-
-async function resetOllamaSettings() {
-  if (ollamaConnectionStatus) ollamaConnectionStatus.textContent = "Resetting…";
-  if (llmOllamaEndpointToggle) llmOllamaEndpointToggle.checked = false;
-  if (ollamaHostInput) ollamaHostInput.value = "";
-  const result = await window.api.setOllamaHost?.({ host: "" });
-  if (result?.error) {
-    if (ollamaConnectionStatus) ollamaConnectionStatus.textContent = result.error;
-    return;
-  }
-  renderOllamaSettings(result);
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Local Ollama default restored";
-  await loadModels({ showLoading: true });
-}
 
 
 
@@ -10897,11 +10559,9 @@ loadUpdateSettings().then(() => runUpdateCheck(false));
 
 export {
   CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SYSTEM_SKILL_COMMANDS, ToolMap, chatScroller,
-  closeTab, commitActiveTab, composerEl, explorerPathKey, initModelsSettingsPanel,
-  isMarkdownFileName, isOpenRouterProvider, liveInputController, loadLlmSettings, loadMcpSettings,
-  loadOllamaSettings, loadProjectProfile, openFile, openTabs, projectName,
+  closeTab, commitActiveTab, composerEl, explorerPathKey, isMarkdownFileName, liveInputController,
+  loadMcpSettings, loadProjectProfile, openFile, openTabs, projectName,
   reconcileDeletedWorkspacePath, refreshAssessmentSettingsCache, refreshWorkspaceUi, renderEditor,
-  renderExploreSubagentSelect, renderModelsSettingsList, renderTabs,
-  restoreChatComposerAfterUiAction, scoreQuickMatch, selectedLlmProvider, setTerminalMaximized,
+  renderTabs, restoreChatComposerAfterUiAction, scoreQuickMatch, setTerminalMaximized,
   showCodeEditorWorkspace, syncOpenSettingsTabContent, syncWorkspaceActivity,
 };
