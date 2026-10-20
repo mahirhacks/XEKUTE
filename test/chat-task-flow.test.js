@@ -55,12 +55,12 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(styles, /\.notification-count\[hidden\] \{ display:none; \}/);
   assert.match(styles, /\.notification-panel \{[\s\S]*?position:fixed;[\s\S]*?border:1px solid #303030;[\s\S]*?border-radius:10px;[\s\S]*?background:#181818;/);
   assert.match(styles, /\.notification-item \{[\s\S]*?border:1px solid #2d2d2d;[\s\S]*?border-radius:8px;[\s\S]*?background:#1d1d1d;/);
-  assert.match(styles, /\.update-toast \{[\s\S]*?left: 44px;[\s\S]*?width: 465px;[\s\S]*?height: 61px;[\s\S]*?padding: 12px 13px;[\s\S]*?gap: 48px;[\s\S]*?border: 1px solid #282828;[\s\S]*?border-radius: 31px;/);
-  assert.match(styles, /\.update-toast-install \{[\s\S]*?background:#2f8cf4/);
-  assert.match(styles, /\.update-toast-btn \{[\s\S]*?min-width:88px;[\s\S]*?height:32px;[\s\S]*?font:400 14px/);
+  assert.match(styles, /\.update-toast \{[\s\S]*?width: 440px;[\s\S]*?gap: 16px;[\s\S]*?padding: 10px 10px 10px 14px;[\s\S]*?border: 1px solid #2f2f2f;[\s\S]*?border-radius: 6px;/);
+  assert.match(styles, /\.update-toast-install \{ background:#d4d4d4; color:#141414; \}/);
+  assert.match(styles, /\.update-toast-btn \{[\s\S]*?height:26px;[\s\S]*?border-radius:4px;[\s\S]*?font:500 12px/);
   assert.match(styles, /\.update-toast-icon \{[\s\S]*?width:16px;[\s\S]*?height:16px;/);
-  assert.match(styles, /\.update-toast-actions \{[\s\S]*?transform:translateX\(8px\)/);
-  assert.match(html, /id="update-toast"[\s\S]*?gift_update_icon\.svg[\s\S]*?New version is available[\s\S]*?id="update-toast-ignore"[\s\S]*?id="update-toast-install"/);
+  assert.doesNotMatch(styles, /\.update-toast[^{]*\{[^}]*border-radius:\s*(?:999px|31px)/, "update toast corners stay square-ish");
+  assert.match(html, /id="update-toast"[\s\S]*?gift_update_icon\.svg[\s\S]*?Update available[\s\S]*?id="update-toast-ignore"[\s\S]*?id="update-toast-install"[\s\S]*?id="update-toast-close"/);
   assert.match(renderer, /function positionNotificationPanel\(\)[\s\S]*?btnNotifications\.getBoundingClientRect\(\)/);
   assert.match(renderer, /updateToastInstall\?\.addEventListener\("click", beginUpdateInstall\)/);
   assert.match(renderer, /updateToastIgnore\?\.addEventListener\("click", ignoreCurrentUpdate\)/);

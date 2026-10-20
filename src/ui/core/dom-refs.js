@@ -202,6 +202,7 @@ export const updateToast = $("update-toast");
 export const updateToastVersion = $("update-toast-version");
 export const updateToastInstall = $("update-toast-install");
 export const updateToastIgnore = $("update-toast-ignore");
+export const updateToastClose = $("update-toast-close");
 export const appSettingsProjectPanel = $("app-settings-project-panel");
 export const projectSettingsUnavailable = $("project-settings-unavailable");
 export const projectSettingsShell = $("project-settings-shell");

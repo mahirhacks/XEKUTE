@@ -1165,9 +1165,10 @@ export default memo(function AppShell() {
     
       <div id="update-toast" className="update-toast" role="status" aria-label="Update available" hidden>
         <div className="update-toast-body">
-          <img className="update-toast-icon" src="assets/icons/gift_update_icon.svg" alt="" aria-hidden="true" />
+          <img className="update-toast-icon update-toast-gift" src="assets/icons/gift_update_icon.svg" alt="" aria-hidden="true" />
+          <svg className="update-toast-icon update-toast-check" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M4.8 8.2l2.1 2.1 4.3-4.6" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></svg>
           <div className="update-toast-text">
-            <strong className="update-toast-title">New version is available</strong>
+            <strong className="update-toast-title">Update available</strong>
             <p className="update-toast-version"></p>
             <span id="update-toast-version" hidden></span>
           </div>
@@ -1176,6 +1177,9 @@ export default memo(function AppShell() {
           <button type="button" id="update-toast-ignore" className="update-toast-btn update-toast-ignore">Ignore</button>
           <button type="button" id="update-toast-install" className="update-toast-btn update-toast-install">Install</button>
         </div>
+        <button type="button" id="update-toast-close" className="update-toast-close" aria-label="Dismiss" hidden>
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+        </button>
       </div>
     
       <footer id="statusbar">

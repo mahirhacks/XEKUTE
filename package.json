@@ -1,6 +1,6 @@
 {
   "name": "xekute-app",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
   "main": "src/app/electron/main.js",
@@ -17,6 +17,8 @@
     "verify:checkpoint-interrupt": "npm run build:ui && node scripts/browser-dev/verify-checkpoint-interrupt.cjs",
     "verify:memory-save": "npm run build:ui && node scripts/browser-dev/verify-memory-save.cjs",
     "verify:account-variables": "npm run build:ui && node scripts/browser-dev/verify-account-variables.cjs",
+    "verify:update-toast": "npm run build:ui && node scripts/browser-dev/verify-update-toast.cjs",
+    "verify:file-menu": "npm run build:ui && node scripts/browser-dev/verify-file-menu.cjs",
     "dev:electron": "npm run build:ui && electronmon --inspect=5858 . --dev",
     "dev:ui": "vite --config src/ui/vite.config.mjs",
     "build:ui": "vite build --config src/ui/vite.config.mjs && node scripts/copy-ui-assets.mjs",

@@ -58,6 +58,25 @@ export function toggleAppMenu(name) {
   button.classList.toggle("active", opening);
   button.setAttribute("aria-expanded", String(opening));
   if (name === "run") updateRunMenuState();
+  if (name === "files") updateFileMenuState();
+}
+
+// File items that need a project or an open editor are disabled until one
+// exists, instead of opening an alert or doing nothing.
+export function updateFileMenuState() {
+  const panel = appMenu?.querySelector('[data-menu-panel="files"]');
+  if (!panel) return;
+  const resourceOpen = Boolean(appState.resourceCurrentFilePath && resourceViewer && !resourceViewer.hidden);
+  const enabled = {
+    "new-file": Boolean(appState.rootPath),
+    "new-folder": Boolean(appState.rootPath),
+    "save-file": Boolean(appState.activeTabPath) || resourceOpen,
+    "close-editor": Boolean(appState.activeTabPath),
+  };
+  for (const [action, on] of Object.entries(enabled)) {
+    const item = panel.querySelector(`[data-action="${action}"]`);
+    if (item) item.disabled = !on;
+  }
 }
 
 export async function runMenuAction(action) {

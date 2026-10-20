@@ -31,7 +31,7 @@ import {
   chatResize, terminalPane, terminalResize, centerPanel, btnTerminalMaximize, btnTerminalClose,
   editorPane, resourceViewer, resourceViewerMeta, resourceViewerContent, resourceLineNumbers,
   resourceViewerSave, resourceViewerCopy, resourceViewerActions, appSettingsSearch,
-  generalStatusBarToggle, generalUpdatesToggle, updateToastInstall, updateToastIgnore,
+  generalStatusBarToggle, generalUpdatesToggle, updateToastInstall, updateToastIgnore, updateToastClose,
   projectSettingsForm, projectSettingsName, projectSettingsCreate, projectSettingsOpen,
   projectSettingsNav, projectSettingsNavButtons, commandSettingsStatus, mcpSettingsTabs,
   kaliAccessForm, kaliAccessEnabled, kaliAccessFields, kaliAccessKey, kaliAccessAcceptHostKey,
@@ -265,6 +265,7 @@ import {
 } from "./features/search/workspace-search.js";
 import {
   loadUpdateSettings, runUpdateCheck, beginUpdateInstall, ignoreCurrentUpdate, handleUpdateEvent,
+  dismissUpdateToast,
 } from "./features/updates/update-flow.js";
 import {
   setNotifications, positionNotificationPanel,
@@ -1505,6 +1506,7 @@ document.addEventListener("click", (event) => {
 // In-app update wiring
 updateToastInstall?.addEventListener("click", beginUpdateInstall);
 updateToastIgnore?.addEventListener("click", ignoreCurrentUpdate);
+updateToastClose?.addEventListener("click", dismissUpdateToast);
 generalUpdatesToggle?.addEventListener("change", () => {
   window.api.updatesSettingsSet?.({ checkOnLaunch: Boolean(generalUpdatesToggle.checked) }).catch(() => {});
 });
