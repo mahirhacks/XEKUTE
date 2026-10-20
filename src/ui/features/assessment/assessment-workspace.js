@@ -8,10 +8,10 @@ import {
 import { appState } from "../../core/app-state.js";
 import { escapeHtml } from "../../core/text-format.js";
 import { projectName, loadWorkspace } from "../project/project-activation.js";
+import { setNotifications, refreshSecurityHistoryIfVisible } from "../../bootstrap.js";
 import {
-  setNotifications, syncInterceptorToggleUi, configureProxyListener,
-  refreshSecurityHistoryIfVisible,
-} from "../../bootstrap.js";
+  syncInterceptorToggleUi, configureProxyListener,
+} from "../interceptor/interceptor-controls.js";
 import { refreshCustomEntries, selectedCustomEntries } from "./custom-entries.js";
 import { refreshAssessmentSettingsCache } from "../settings/settings-tab-editor.js";
 

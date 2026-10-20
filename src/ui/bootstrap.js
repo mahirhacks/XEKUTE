@@ -17,29 +17,28 @@ import {
   bugBountyRepair, assessmentRepairOverlay, assessmentRepairClose, assessmentRepairCancel,
   assessmentRepairConfirm, editorTabBar, editorTabContextMenu, editorPathBar, editorPathLabel,
   editorBody, editorEmpty, editorView, editorError, monacoContainer, markdownPreview,
-  settingsEditorToolbar, settingsUIView, settingsViewJson, settingsViewUi, proxyListenerStatus,
-  proxyCaPath, btnShowProxyCa, messages, chatInput, sendBtn, attachImageBtn, attachImageInput,
-  chatModeToggle, chatModeButton, chatModeMenu, appMenu, helpGuideOverlay, helpGuideClose,
-  commandCenter, quickOverlay, quickPanel, quickIcon, quickInput, quickMeta, quickResults,
-  quickSearchHelp, quickSearchAssist, quickSearchSuggestions, quickSearchChips, chatHeader,
-  btnTopFileTree, btnTopTerminal, btnTopChat, btnTopSettings, btnNotifications, notificationCount,
-  notificationPanel, notificationList, notificationClear, btnWindowMinimize, btnWindowMaximize,
-  btnWindowClose, chatSessionSelect, btnChatNew, btnChatDelete, btnChatHistory,
-  chatHistoryPopover, chatHistoryBody, chatHistorySearch, btnChatMore, btnChatCollapse,
-  contextUsageBtn, contextUsagePopover, inputBar, memorySaveBanner, composerTaskListEl,
-  slashCommandSuggestions, contextUsageClose, contextUsageMenu, contextWindowTrigger,
-  contextBlocksTrigger, contextBlocksPanel, contextBlocksList, modelPicker, authorityPicker,
-  authorityMenu, modelMenu, modelControlsMenu, modelContextTrigger, modelEffortTrigger,
-  modelBrowseTrigger, modelSearch, modelAddBtn, modelCustom, modelCustomAdd, modelEditMenu,
-  thinkingToggle, sidebar, sidebarResize, chatPane, chatResize, terminalPane, terminalResize,
-  centerPanel, btnTerminalMaximize, btnTerminalClose, editorPane, resourceViewer,
-  resourceViewerMeta, resourceViewerContent, resourceLineNumbers, resourceViewerSave,
-  resourceViewerCopy, resourceViewerActions, appSettingsWorkspace, appSettingsSearch,
-  generalStatusBarToggle, generalUpdatesToggle, generalCurrentVersion, updateToast,
-  updateToastVersion, updateToastInstall, updateToastIgnore, projectSettingsForm,
-  projectSettingsName, projectSettingsCreate, projectSettingsOpen, projectSettingsNav,
-  projectSettingsNavButtons, commandSettingsStatus, mcpSettingsTabs, kaliAccessForm,
-  kaliAccessEnabled, kaliAccessFields, kaliAccessKey, kaliAccessAcceptHostKey,
+  settingsEditorToolbar, settingsUIView, settingsViewJson, settingsViewUi, btnShowProxyCa,
+  messages, chatInput, sendBtn, attachImageBtn, attachImageInput, chatModeToggle, chatModeButton,
+  chatModeMenu, appMenu, helpGuideOverlay, helpGuideClose, commandCenter, quickOverlay,
+  quickPanel, quickIcon, quickInput, quickMeta, quickResults, quickSearchHelp, quickSearchAssist,
+  quickSearchSuggestions, quickSearchChips, chatHeader, btnTopFileTree, btnTopTerminal,
+  btnTopChat, btnTopSettings, btnNotifications, notificationCount, notificationPanel,
+  notificationList, notificationClear, btnWindowMinimize, btnWindowMaximize, btnWindowClose,
+  chatSessionSelect, btnChatNew, btnChatDelete, btnChatHistory, chatHistoryPopover,
+  chatHistoryBody, chatHistorySearch, btnChatMore, btnChatCollapse, contextUsageBtn,
+  contextUsagePopover, inputBar, memorySaveBanner, composerTaskListEl, slashCommandSuggestions,
+  contextUsageClose, contextUsageMenu, contextWindowTrigger, contextBlocksTrigger,
+  contextBlocksPanel, contextBlocksList, modelPicker, authorityPicker, authorityMenu, modelMenu,
+  modelControlsMenu, modelContextTrigger, modelEffortTrigger, modelBrowseTrigger, modelSearch,
+  modelAddBtn, modelCustom, modelCustomAdd, modelEditMenu, thinkingToggle, sidebar, sidebarResize,
+  chatPane, chatResize, terminalPane, terminalResize, centerPanel, btnTerminalMaximize,
+  btnTerminalClose, editorPane, resourceViewer, resourceViewerMeta, resourceViewerContent,
+  resourceLineNumbers, resourceViewerSave, resourceViewerCopy, resourceViewerActions,
+  appSettingsWorkspace, appSettingsSearch, generalStatusBarToggle, generalUpdatesToggle,
+  generalCurrentVersion, updateToast, updateToastVersion, updateToastInstall, updateToastIgnore,
+  projectSettingsForm, projectSettingsName, projectSettingsCreate, projectSettingsOpen,
+  projectSettingsNav, projectSettingsNavButtons, commandSettingsStatus, mcpSettingsTabs,
+  kaliAccessForm, kaliAccessEnabled, kaliAccessFields, kaliAccessKey, kaliAccessAcceptHostKey,
   kaliAccessKeyBrowse, kaliAccessOpenMcp, kaliAccessTest, guidanceScopeTabs, guidanceNew,
   guidanceEmptyNew, guidanceImport, llmProvider, openRouterBaseUrl, openRouterApiKey,
   llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle, llmOpenRouterBaseToggle,
@@ -56,26 +55,26 @@ import {
   commandRegistryInput, securityWorkspaceTools, securityWorkspaceBody, securityToolSwitcher,
   securityToolButton, securityToolMenu, securityToolIcon, securityToolLabel,
   securityHistoryAnalyzeButton, securityWorkbench, securityWorkbenchMode, securityWorkbenchStatus,
-  securityProxyBrowser, securityProxyBrowserWrap, securityProxyBrowserMenu, securityHistoryToggle,
-  securityHistoryPanel, securityHistoryRefresh, securityHistorySummary, securityHistoryRows,
-  securityHistoryEmpty, securityHistoryMenu, securityHistoryDeleteLabel,
-  securityHistoryRepeaterLabel, securityHistoryIntruderLabel, securityHistorySortHeaders,
-  securityRepeaterTabs, securityRepeaterTabList, securityRepeaterAdd, securityRepeaterHistoryNav,
-  securityRepeaterPrev, securityRepeaterNext, securityRepeaterPosition, securityIntruderPanel,
+  securityProxyBrowserWrap, securityProxyBrowserMenu, securityHistoryToggle, securityHistoryPanel,
+  securityHistoryRefresh, securityHistorySummary, securityHistoryRows, securityHistoryEmpty,
+  securityHistoryMenu, securityHistoryDeleteLabel, securityHistoryRepeaterLabel,
+  securityHistoryIntruderLabel, securityHistorySortHeaders, securityRepeaterTabs,
+  securityRepeaterTabList, securityRepeaterAdd, securityRepeaterHistoryNav, securityRepeaterPrev,
+  securityRepeaterNext, securityRepeaterPosition, securityIntruderPanel,
   securityIntruderTabButtons, securityIntruderSections, securityAttackButtons,
   securityPositionsCount, securityPayloadsCount, securityResultsCount, securityPositionChips,
   securityPositionMark, securityPositionAuto, securityPositionClear, securityPayloadSetsEl,
   securityPayloadHint, securityPayloadJsonToggle, securityResultsRows, securityResultsEmpty,
-  securityClearButton, securityDropButton, securityInterceptToggle, securityInterceptToggleIcon,
-  securityInterceptToggleLabel, securityRunButton, securityRunLabel, securityRequestEditor,
-  securityResponseEditor, securityRequestSize, securityResponseSize, securityPayloadPanel,
-  securityPayloadEditor, securityInspector, securityInspectorToggle, securityInspectorPanel,
-  securityInspectorClose, securityInspectorContext, securityInspectorStatus,
-  securityInspectorTabs, securityInspectorPanels, inspectorDecoderFormat, inspectorDecoderInput,
-  inspectorDecoderOutput, inspectorJwtToken, inspectorJwtHeader, inspectorJwtPayload,
-  inspectorJwtAlg, inspectorJwtSecret, inspectorJwtAnalysis, inspectorCookieInput,
-  inspectorCookieOutput, inspectorCookieResults, terminalShellTab, securityExchangeEl,
-  securityExchangeSash, securityWorkbenchResize, statusLnCol, statusOllamaPort,
+  securityClearButton, securityDropButton, securityInterceptToggle, securityRunButton,
+  securityRunLabel, securityRequestEditor, securityResponseEditor, securityRequestSize,
+  securityResponseSize, securityPayloadPanel, securityPayloadEditor, securityInspector,
+  securityInspectorToggle, securityInspectorPanel, securityInspectorClose,
+  securityInspectorContext, securityInspectorStatus, securityInspectorTabs,
+  securityInspectorPanels, inspectorDecoderFormat, inspectorDecoderInput, inspectorDecoderOutput,
+  inspectorJwtToken, inspectorJwtHeader, inspectorJwtPayload, inspectorJwtAlg, inspectorJwtSecret,
+  inspectorJwtAnalysis, inspectorCookieInput, inspectorCookieOutput, inspectorCookieResults,
+  terminalShellTab, securityExchangeEl, securityExchangeSash, securityWorkbenchResize,
+  statusLnCol, statusOllamaPort,
 } from "./core/dom-refs.js";
 import { SetiIconTheme, EditorManager, TerminalManager } from "./core/runtime-globals.js";
 import { escapeHtml, formatWaitClock } from "./core/text-format.js";
@@ -183,15 +182,14 @@ import {
   testKaliAccess, saveKaliAccess,
 } from "./features/settings/mcp-settings.js";
 import {
-  setIdentitySettingsStatus, identityRecordList, markAuthenticationSourceChanged,
-  appendEngagementAccountRow, deleteEngagementAccountRow, renderIdentitySettings,
-  loadIdentitySettings, createIdentityFromSettings, createCredentialFromSettings,
-  handleCredentialAction, handleIdentityAction, importIdentityStateFromSettings,
+  setIdentitySettingsStatus, markAuthenticationSourceChanged, appendEngagementAccountRow,
+  deleteEngagementAccountRow, renderIdentitySettings, loadIdentitySettings,
+  createIdentityFromSettings, createCredentialFromSettings, handleCredentialAction,
+  handleIdentityAction, importIdentityStateFromSettings,
 } from "./features/settings/identity-settings.js";
 import {
   SETTINGS_EDITOR_MODE_KEY, isAssessmentSettingsTab, isSettingsTab, setNestedSettingValue,
   renderSettingsForm, syncSettingsEditorButtons, setSettingsEditorMode, updateSettingFromInput,
-  refreshAssessmentSettingsCache, saveAssessmentSettings,
 } from "./features/settings/settings-tab-editor.js";
 import {
   scheduleProjectProfileAutosave, setProjectSettingsTarget,
@@ -234,6 +232,11 @@ import {
   buildWebClone, setWebCloneFilesCollapsed, syncWebClonePreviewBounds, toggleWebClonePreview,
   showWebCloneWorkspace,
 } from "./features/assessment/webclone-view.js";
+import {
+  openInterceptorTab, switchToInterceptorTab, isInterceptorTab, syncInterceptorToggleUi,
+  toggleInterceptorCapture, syncProxyListenerUi, configureProxyListener, syncProxyBrowserUi,
+  closeProxyBrowserMenu, chooseProxyBrowserIdentity, launchProxyBrowser, handleProxyCapture,
+} from "./features/interceptor/interceptor-controls.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -353,7 +356,6 @@ appState.chatPersistenceQueue = Promise.resolve();
 appState.chatHistoryWriteQueue = Promise.resolve();
 
 
-const INTERCEPTOR_TAB_PATH = "xekute:interceptor";
 const BROWSER_TAB_PATH = "xekute:browser";
 /** @type {Map<string, { path: string, diskPath: string, name: string, content: string | null, savedContent: string, dirty: boolean, error: string | null, preview?: boolean, special?: string, securityTool?: string }>} */
 const openTabs      = new Map();
@@ -3054,29 +3056,6 @@ activityChat?.addEventListener("click", () => {
 });
 
 
-function openInterceptorTab(tool = "") {
-  showCodeEditorWorkspace();
-  const requestedTool = SECURITY_TOOL_META[tool] ? tool : "";
-  const existingTab = openTabs.get(INTERCEPTOR_TAB_PATH);
-  if (existingTab) {
-    if (requestedTool) existingTab.securityTool = requestedTool;
-    switchToInterceptorTab();
-    return;
-  }
-  openTabs.set(INTERCEPTOR_TAB_PATH, {
-    path: INTERCEPTOR_TAB_PATH,
-    diskPath: INTERCEPTOR_TAB_PATH,
-    name: "Interceptor",
-    content: null,
-    savedContent: "",
-    dirty: false,
-    error: null,
-    special: "interceptor",
-    securityTool: requestedTool,
-  });
-  renderTabs();
-  switchToInterceptorTab();
-}
 
 function openBrowserTab() {
   if (!openTabs.has(BROWSER_TAB_PATH)) openTabs.set(BROWSER_TAB_PATH, {
@@ -3118,14 +3097,6 @@ function showBrowserWorkspaceContent() {
 }
 
 
-function switchToInterceptorTab() {
-  if (appState.terminalMaximized) setTerminalMaximized(false);
-  commitActiveTab();
-  appState.activeTabPath = INTERCEPTOR_TAB_PATH;
-  appState.editorLoadedPath = null;
-  renderTabs();
-  renderEditor({ focusEditor: false });
-}
 
 
 activitySettings?.addEventListener("click", openAppSettings);
@@ -4643,9 +4614,6 @@ function closeTabsUnderWorkspacePath(absPath, { force = false } = {}) {
 
 
 
-function isInterceptorTab(tab) {
-  return tab?.path === INTERCEPTOR_TAB_PATH || tab?.special === "interceptor";
-}
 
 function isBrowserTab(tab) {
   return tab?.path === BROWSER_TAB_PATH || tab?.special === "browser";
@@ -4659,225 +4627,21 @@ function isBrowserTab(tab) {
 
 
 
-function isInterceptionActive(settings = appState.assessmentSettingsCache) {
-  return Boolean(settings?.interception?.enabled && settings?.interception?.interceptRequests);
-}
-
-function syncInterceptorToggleUi(settings = appState.assessmentSettingsCache) {
-  if (!securityInterceptToggle) return;
-  const active = isInterceptionActive(settings);
-  securityInterceptToggle.classList.toggle("active", active);
-  securityInterceptToggle.setAttribute("aria-pressed", String(active));
-  securityInterceptToggle.disabled = !appState.assessmentPath;
-  if (securityInterceptToggleLabel) {
-    securityInterceptToggleLabel.textContent = active ? "Intercept On" : "Intercept Off";
-  }
-  if (securityInterceptToggleIcon) {
-    securityInterceptToggleIcon.classList.toggle("codicon-debug-pause", active);
-    securityInterceptToggleIcon.classList.toggle("codicon-debug-start", !active);
-  }
-}
 
 
 
 
-async function toggleInterceptorCapture() {
-  if (!appState.assessmentPath) {
-    setSecurityStatus("Create or open a project first", "error");
-    return;
-  }
-  const requestedAssessment = appState.assessmentPath;
-  const requestedWorkspace = appState.rootPath;
-  const current = appState.assessmentSettingsCache || (await refreshAssessmentSettingsCache())?.settings;
-  if (appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return;
-  if (!current) {
-    setSecurityStatus("Could not read project runtime settings", "error");
-    return;
-  }
-  const nextSettings = JSON.parse(JSON.stringify(current));
-  if (!nextSettings.interception || typeof nextSettings.interception !== "object") nextSettings.interception = {};
-  const turningOn = !isInterceptionActive(nextSettings);
-  nextSettings.interception.enabled = turningOn;
-  nextSettings.interception.interceptRequests = turningOn;
-  if (turningOn) {
-    if (!nextSettings.listener || typeof nextSettings.listener !== "object") nextSettings.listener = {};
-    nextSettings.listener.enabled = true;
-  }
-  const result = await saveAssessmentSettings(nextSettings);
-  if (appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return;
-  if (result?.error) {
-    setSecurityStatus(result.error, "error");
-    return;
-  }
-  setSecurityStatus(turningOn ? "Request interception enabled" : "Request interception disabled — traffic passes through");
-}
 
 
-function syncProxyListenerUi(nextState = {}) {
-  appState.proxyListenerState = { ...appState.proxyListenerState, ...nextState };
-  if (proxyListenerStatus) {
-    proxyListenerStatus.classList.toggle("running", Boolean(appState.proxyListenerState.running && !appState.proxyListenerState.warning));
-    proxyListenerStatus.classList.toggle("error", Boolean(appState.proxyListenerState.error || appState.proxyListenerState.warning));
-    proxyListenerStatus.textContent = appState.proxyListenerState.error
-      ? appState.proxyListenerState.error
-      : appState.proxyListenerState.running
-        ? appState.proxyListenerState.warning || `Listening on ${appState.proxyListenerState.host}:${appState.proxyListenerState.port} - ${appState.proxyListenerState.targetCount ?? 0} scoped target${appState.proxyListenerState.targetCount === 1 ? "" : "s"}`
-        : "Stopped";
-  }
-  if (proxyCaPath) proxyCaPath.value = appState.proxyListenerState.caCertPath || "Generated when the listener starts";
-  if (appState.selectedSecurityTool === "interceptor" && appState.proxyListenerState.running && !appState.currentProxyCaptureId) {
-    setSecurityStatus(appState.proxyListenerState.warning || `Listening on ${appState.proxyListenerState.host}:${appState.proxyListenerState.port}`,
-      appState.proxyListenerState.warning ? "error" : "");
-  }
-}
-
-async function configureProxyListener() {
-  const requestGeneration = ++appState.proxyConfigurationGeneration;
-  const requestedAssessment = appState.assessmentPath;
-  const requestedWorkspace = appState.rootPath;
-  try {
-    const result = await window.api.proxyConfigure({
-      assessmentPath: requestedAssessment,
-    });
-    if (requestGeneration !== appState.proxyConfigurationGeneration || appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return result;
-    syncProxyListenerUi(result || {});
-    return result;
-  } catch (error) {
-    const result = { error: error?.message || "Proxy listener configuration failed", running: false };
-    if (requestGeneration !== appState.proxyConfigurationGeneration || appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return result;
-    syncProxyListenerUi(result);
-    return result;
-  }
-}
-
-function syncProxyBrowserUi(status = {}) {
-  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
-  if (!button) return;
-  const running = Boolean(status.running);
-  button.classList.toggle("active", running);
-  button.setAttribute("aria-pressed", String(running));
-  button.title = running
-    ? `${status.browser === "edge" ? "Edge" : "Chrome"} is open through ${status.proxyHost || "127.0.0.1"}:${status.proxyPort || "proxy"}${status.agentShareAvailable ? "; matching agent browser actions can share it" : ""}`
-    : "Open browser. Right-click to open a tab with an identity.";
-}
-
-function closeProxyBrowserMenu() {
-  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
-  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
-  if (menu) {
-    menu.hidden = true;
-    menu.style.position = "";
-    menu.style.top = "";
-    menu.style.right = "";
-    menu.style.left = "";
-    menu.style.zIndex = "";
-    if (appState.proxyBrowserMenuHome && menu.parentElement !== appState.proxyBrowserMenuHome) appState.proxyBrowserMenuHome.appendChild(menu);
-  }
-  button?.setAttribute("aria-expanded", "false");
-}
-
-function positionProxyBrowserMenu() {
-  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
-  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
-  if (!menu || !button) return;
-  if (!appState.proxyBrowserMenuHome) appState.proxyBrowserMenuHome = menu.parentElement;
-  document.body.appendChild(menu);
-  const rect = button.getBoundingClientRect();
-  menu.style.position = "fixed";
-  menu.style.top = `${Math.round(rect.bottom + 4)}px`;
-  menu.style.right = `${Math.round(Math.max(8, window.innerWidth - rect.right))}px`;
-  menu.style.left = "auto";
-  menu.style.zIndex = "12000";
-}
-
-async function chooseProxyBrowserIdentity() {
-  if (!appState.assessmentPath) return launchProxyBrowser("");
-  let identities = [];
-  try {
-    const snapshot = await window.api.identitiesGet?.({ workspace: appState.assessmentPath });
-    identities = identityRecordList(snapshot);
-  } catch { identities = []; }
-  if (!identities.length) return launchProxyBrowser("");
-  const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
-  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
-  if (!menu || !button) return launchProxyBrowser("");
-  menu.innerHTML = `
-    <button type="button" role="menuitem" data-proxy-identity=""><span class="codicon codicon-globe"></span><strong>Anonymous browser</strong><small>Separate unlabeled capture profile</small></button>
-    ${identities.map((identity) => `<button type="button" role="menuitem" data-proxy-identity="${escapeHtml(identity.identityId)}"><span class="codicon codicon-account"></span><strong>${escapeHtml(identity.name || identity.identityId)}</strong><small>${escapeHtml(identity.role || "user")} · ${escapeHtml(identity.authStatus || "manual browser session")}</small></button>`).join("")}`;
-  menu.hidden = false;
-  button.setAttribute("aria-expanded", "true");
-  positionProxyBrowserMenu();
-  setSecurityStatus("Choose Anonymous or an identity for the proxied browser.");
-  menu.querySelector("button")?.focus();
-}
-
-async function launchProxyBrowser(identityId = "") {
-  if (!appState.assessmentPath) {
-    setSecurityStatus("Create or open a project first", "error");
-    return;
-  }
-  const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
-  if (!window.api.browserOpen || button?.disabled) return;
-  const icon = button?.querySelector(".codicon");
-  if (button) button.disabled = true;
-  if (icon) icon.className = "codicon codicon-loading codicon-modifier-spin";
-  setSecurityStatus("Opening browser workspace…");
-  try {
-    closeProxyBrowserMenu();
-    openBrowserTab();
-    await appState.browserWorkspace?.open({ identityId: String(identityId || ""), purpose: "assessment" });
-  } catch (error) {
-    setSecurityStatus(error?.message || "The browser could not be opened.", "error");
-  } finally {
-    if (icon) icon.className = "codicon codicon-globe";
-    if (button) button.disabled = false;
-  }
-}
 
 
-function handleProxyCapture(payload = {}) {
-  const phase = payload.phase;
-  if (phase === "error") {
-    if (payload.id === appState.currentProxyCaptureId) setSecurityStatus(payload.error || "Proxy capture failed", "error");
-    return;
-  }
-  if (phase === "status") {
-    if (payload.id === appState.currentProxyCaptureId) setSecurityStatus(payload.status || "Updated");
-    return;
-  }
 
-  const intercepting = Boolean(payload.paused) || Boolean(appState.currentProxyCaptureId) || isInterceptionActive();
-  if (intercepting) {
-    const draft = securityDrafts.get("interceptor") || {};
-    if (payload.request != null) draft.request = String(payload.request);
-    if (payload.response != null) draft.response = String(payload.response);
-    securityDrafts.set("interceptor", draft);
 
-    if (appState.currentSidebarView === "project") {
-      if (appState.selectedSecurityTool !== "interceptor") setSecurityTool("interceptor");
-      if (payload.request != null) securityRequestEditor.value = String(payload.request);
-      if (payload.response != null) securityResponseEditor.value = String(payload.response);
-      syncSecurityExchangeSizes();
-    }
-  }
 
-  if (phase === "request") {
-    appState.currentProxyCaptureId = payload.paused ? String(payload.id || "") : "";
-    securityDropButton.hidden = !payload.paused;
-    setSecurityStatus(payload.paused ? `Intercepted ${payload.url} - waiting for Forward or Drop` : `Captured ${payload.url}`);
-  } else if (phase === "request-complete") {
-    setSecurityStatus(`Request body captured for ${payload.url}`);
-  } else if (phase === "response-headers") {
-    setSecurityStatus(`Receiving ${payload.url}`);
-  } else if (phase === "response") {
-    appState.currentProxyCaptureId = "";
-    securityDropButton.hidden = true;
-    appState.lastLoggedSecuritySignature = securityExchangeSignature();
-    setSecurityStatus(`Captured and logged ${payload.logged?.timestamp || ""}`, payload.logged?.error ? "error" : "success");
-    if (payload.history) ingestLiveSecurityHistory(payload.history);
-    else refreshSecurityHistoryIfVisible();
-  }
-}
+
+
+
+
 
 function clearEditorTabDropIndicators() {
   editorTabBar?.querySelectorAll(".tab-drop-before, .tab-drop-after")
@@ -7162,11 +6926,12 @@ window.api.onUpdateEvent?.(handleUpdateEvent);
 loadUpdateSettings().then(() => runUpdateCheck(false));
 
 export {
-  CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SYSTEM_SKILL_COMMANDS, ToolMap, appController,
-  chatScroller, closeTab, closeTabsUnderWorkspacePath, commitActiveTab, composerEl,
-  configureProxyListener, isMarkdownFileName, liveInputController, openFile, openTabs,
-  refreshSecurityHistoryIfVisible, remapOpenTabsUnderWorkspacePath, renderEditor, renderTabs,
-  saveActiveTab, scoreQuickMatch, setCodeEditorVisible, setNotifications, setTerminalMaximized,
-  settingsViewSwitch, showCodeEditorWorkspace, showResourceWorkspace, syncInterceptorToggleUi,
-  syncWorkspaceActivity, updateTabDirtyIndicator,
+  CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SECURITY_TOOL_META, SYSTEM_SKILL_COMMANDS, ToolMap,
+  appController, chatScroller, closeTab, closeTabsUnderWorkspacePath, commitActiveTab, composerEl,
+  ingestLiveSecurityHistory, isMarkdownFileName, liveInputController, openBrowserTab, openFile,
+  openTabs, refreshSecurityHistoryIfVisible, remapOpenTabsUnderWorkspacePath, renderEditor,
+  renderTabs, saveActiveTab, scoreQuickMatch, securityDrafts, securityExchangeSignature,
+  setCodeEditorVisible, setNotifications, setSecurityStatus, setSecurityTool,
+  setTerminalMaximized, settingsViewSwitch, showCodeEditorWorkspace, showResourceWorkspace,
+  syncSecurityExchangeSizes, syncWorkspaceActivity, updateTabDirtyIndicator,
 };

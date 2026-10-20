@@ -4,9 +4,11 @@ import {
 } from "../../core/dom-refs.js";
 import { appState } from "../../core/app-state.js";
 import {
-  openTabs, commitActiveTab, renderEditor, syncInterceptorToggleUi, updateTabDirtyIndicator,
-  configureProxyListener, saveActiveTab,
+  openTabs, commitActiveTab, renderEditor, updateTabDirtyIndicator, saveActiveTab,
 } from "../../bootstrap.js";
+import {
+  syncInterceptorToggleUi, configureProxyListener,
+} from "../interceptor/interceptor-controls.js";
 import { normalizeAuthoritySettings, AUTHORITY_SETTINGS_KEY } from "./authority-settings.js";
 
 export const SETTINGS_EDITOR_MODE_KEY = "pointer:settingsEditorMode";
