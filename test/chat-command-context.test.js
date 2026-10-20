@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -7,18 +8,18 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
 
-const source = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8").replace(/\r\n/g, "\n");
+const source = rendererSource().replace(/\r\n/g, "\n");
 
 function setup() {
   const dom = new JSDOM('<div id="messages"><div class="chat-exchange"><div class="chat-exchange-body"><div class="agent-response-host"><div class="chat-turn assistant"></div></div></div></div></div>');
   const document = dom.window.document;
-  const context = vm.createContext({
+  const context = vm.createContext(withAppState({
     document, Date, ToolMap: {}, activeChatRuns: new Map(), activeChatSessionId: "",
     commandTimelineTickers: new Map(), clearInterval,
     TOOL_STATUS_VERBS: ["Running Command", "Ran Command", "Command failed"],
     toolCardKey: (tool) => tool.args.command,
     markActivityNode: () => {}, persistCommandTimelineRowState: () => {},
-  });
+  }));
   for (const name of [
     "isStubToolStatusLabel", "splitToolStatusLabel", "renderToolStatusLabel", "renderToolStatusLabelFromText", "toolFromTranscriptItem",
     "agentCommandContextForTool", "agentTerminalCommandForTool", "commandToolFromHistoryCall",

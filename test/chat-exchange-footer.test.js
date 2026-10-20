@@ -1,9 +1,10 @@
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const bootstrapSource = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+const bootstrapSource = rendererSource();
 const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
 const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
 
@@ -80,7 +81,7 @@ test("assistant footer keeps copy visible and always shows time on the latest ex
   assert.match(source, /justify-content: flex-start/);
   assert.match(bootstrapSource, /footer\.appendChild\(button\);\s*footer\.appendChild\(forkButton\);\s*footer\.appendChild\(timeLabel\)/);
   assert.match(bootstrapSource, /assets\/icons\/fork\.svg/);
-  assert.match(bootstrapSource, /function forkChatSession\(sourceId = activeChatSessionId\)/);
+  assert.match(bootstrapSource, /function forkChatSession\(sourceId = appState\.activeChatSessionId\)/);
   assert.match(bootstrapSource, /fork\.memorySessionId = ""/);
   assert.match(bootstrapSource, /fork\.forkedFromSessionId = forkRootSessionId\(source\)/);
   assert.match(

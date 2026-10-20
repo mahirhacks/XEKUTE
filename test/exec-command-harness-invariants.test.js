@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -10,7 +11,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 
 test("exec_command harness invariants keep review timer, PTY channels, and checkpoint copy", () => {
   const durableSource = read("src/app/services/terminal/durable-process-manager.js");
-  const bootstrap = read("src/ui/bootstrap.js");
+  const bootstrap = rendererSource();
   const main = read("src/app/electron/main.js");
 
   assert.match(durableSource, /DEFAULT_REVIEW_INTERVAL_MS = 15 \* 60 \* 1000/);

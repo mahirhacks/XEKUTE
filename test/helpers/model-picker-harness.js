@@ -1,13 +1,14 @@
 "use strict";
+const { rendererSource } = require("./renderer-source.js");
 const fs = require("node:fs");
 const path = require("node:path");
-const source = fs.readFileSync(path.join(__dirname, "../../src/ui/bootstrap.js"), "utf8");
+const source = rendererSource();
 const shell = fs.readFileSync(path.join(__dirname, "../../src/ui/index.legacy.html"), "utf8");
 const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const markup = '<button id="model-picker"><span id="model-label">reasoner</span></button><button id="outside">Outside</button>'
   + shell.slice(shell.indexOf('  <div id="model-controls-menu"'), shell.indexOf('  <div id="app-dialog-overlay"'));
 const script = `
-var $=id=>document.getElementById(id);
+var $=id=>document.getElementById(id),appState=globalThis;
 ${slice('const modelPicker      =', 'const sidebar          =')}
 var selectedModel='acme/reasoner',activeLlmProvider='openrouter',editingModel=null,modelEditRequest=0;
 var allModels=['acme/reasoner','acme/fast','local-model'],modelSettings={},ollamaRuntimeContext={},AUTO_CONTEXT='Auto',MODEL_SETTINGS_KEY='models';

@@ -1,4 +1,5 @@
 "use strict";
+const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -6,7 +7,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
 
-const source = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8");
+const source = rendererSource();
 function definition(start, end) {
   const from = source.indexOf(start);
   assert.ok(from >= 0, `missing ${start}`);
@@ -38,7 +39,7 @@ async function renderer(html = '<div id="messages"></div>') {
     },
     syncChatStickyMask() {}, syncChatEmptyState() {}, scrollMessages() {},
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   for (const [start, end] of [
     ["function isAgentResponseChild(", "\nfunction markActivityNode("],
     ["function turnHasWorkVerdict(", "\nfunction wrapAssistantInRunChunk("],

@@ -1,12 +1,13 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
 test("context meter uses the nine Tier 1 sections and current usage snapshots", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const controller = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "controller", "agent-controller.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "react", "AppShell.jsx"), "utf8");
   const runtimeModules = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "core", "runtime-modules.js"), "utf8");
@@ -47,7 +48,7 @@ test("context meter uses the nine Tier 1 sections and current usage snapshots", 
 });
 
 test("the meter reads Tier 1 for an idle chat instead of waiting for the first send", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const controller = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "controller", "agent-controller.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
   const preload = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "preload.js"), "utf8");
@@ -74,7 +75,7 @@ test("the meter reads Tier 1 for an idle chat instead of waiting for the first s
 });
 
 test("context checkpointing is automatic and renderer-owned compaction is absent", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "react", "AppShell.jsx"), "utf8");
 

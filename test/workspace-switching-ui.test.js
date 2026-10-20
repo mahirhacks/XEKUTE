@@ -1,16 +1,17 @@
 "use strict";
 
+const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8");
+const source = rendererSource();
 const start = source.indexOf("async function loadWorkspace(folder)");
 const end = source.indexOf("\nasync function restoreLastWorkspace()", start);
 const loadWorkspaceDefinition = source.slice(start, end);
-const projectActivationStart = source.indexOf("let projectActivationGeneration = 0;");
+const projectActivationStart = source.indexOf("async function activateProjectWorkspace(folder)");
 const projectActivationEnd = source.indexOf("\nasync function createProject", projectActivationStart);
 const projectActivationDefinition = source.slice(projectActivationStart, projectActivationEnd);
 const treeStart = source.indexOf("const treeRenderGenerations = new WeakMap();");
@@ -28,7 +29,7 @@ const identitySettingsDefinition = source.slice(identitySettingsStart, identityS
 const engagementAccountsStart = source.indexOf("function collectEngagementAccountSnapshots()");
 const engagementAccountsEnd = source.indexOf("\nasync function handleCredentialAction", engagementAccountsStart);
 const engagementAccountsDefinition = source.slice(engagementAccountsStart, engagementAccountsEnd);
-const guidanceStart = source.indexOf("let guidanceEntriesRequestGeneration = 0;");
+const guidanceStart = source.indexOf("async function refreshCustomSkillCatalog()");
 const guidanceEnd = source.indexOf("\nasync function loadAuthoritySettings", guidanceStart);
 const guidanceDefinitions = source.slice(guidanceStart, guidanceEnd);
 const deferred = () => {
@@ -71,7 +72,7 @@ function workspaceLoader({ watchWorkspace }) {
     setAssessmentUiState(_mode, state) { visibleTitles.push(state.title); },
     projectName: folder => folder.split(/[\\/]/).pop(),
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(loadWorkspaceDefinition, context);
   return { load: context.loadWorkspace, visibleTitles, context };
 }
@@ -125,7 +126,7 @@ test("a delayed project preflight cannot override a newer project selection", as
     projectName: folder => folder.split("/").pop(),
     setAssessmentUiState(_mode, details) { errorTitles.push(details.title); },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(projectActivationDefinition, context);
 
   const previousActivation = context.activateProjectWorkspace("G:/A");
@@ -167,7 +168,7 @@ test("a slow file-tree response cannot append the previous project's files to th
     selectItem() {},
     openFile() {},
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(renderTreeDefinition, context);
 
   const previousTree = context.renderTree("G:/A", container, 0);
@@ -200,7 +201,7 @@ test("a slow directory-map response cannot replace the active project's file con
       },
     },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(refreshDirMapDefinition, context);
 
   const previousMap = context.refreshDirMap();
@@ -246,7 +247,7 @@ test("a delayed project profile response cannot replace the active project's set
     setProjectSettingsTarget() {},
     loadIdentitySettings: async () => {},
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(projectProfileDefinitions, context);
 
   const previousLoad = context.loadProjectProfile();
@@ -291,7 +292,7 @@ test("saving project A settings during a switch keeps A's path and form snapshot
     loadIdentitySettings: async () => {},
     configureProxyListener: async () => { visible.proxyConfiguredFor = context.rootPath; },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(projectProfileDefinitions, context);
 
   const saveA = context.saveProjectProfile();
@@ -350,7 +351,7 @@ test("an older manual save response cannot replace a newer save in the same work
     loadIdentitySettings: async () => { identityRefreshes += 1; },
     configureProxyListener: async () => { proxyRefreshes += 1; },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(projectProfileDefinitions, context);
 
   const oldManualSave = context.saveProjectProfile();
@@ -395,7 +396,7 @@ test("a delayed identity response cannot render into the active project's settin
       return {};
     },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(identitySettingsDefinition, context);
 
   const previousLoad = context.loadIdentitySettings();
@@ -443,7 +444,7 @@ test("switching projects during account save cannot save the new project's rows 
       return Promise.resolve({ value: { credential: { credentialId: "saved-A2" } } });
     } } },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(engagementAccountsDefinition, context);
 
   const saving = context.saveEngagementAccounts();
@@ -494,7 +495,7 @@ test("a superseded account save stops before starting later credential writes", 
       return firstSave.promise;
     } } },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(engagementAccountsDefinition, context);
 
   const saving = context.saveEngagementAccounts({ workspace: "G:/A", accounts, isCurrent: () => current });
@@ -540,9 +541,9 @@ test("a pending autosave keeps its original workspace and form snapshot after a 
     loadIdentitySettings: async () => {},
     configureProxyListener: async () => {},
   };
-  const autosaveStart = source.indexOf("let projectAutosaveTimer = null;");
+  const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
   const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}`, context);
 
   context.scheduleProjectProfileAutosave();
@@ -604,9 +605,9 @@ for (const rejectedOperation of ["credentialSave", "projectProfileSave"]) {
         },
       } },
     };
-    const autosaveStart = source.indexOf("let projectAutosaveTimer = null;");
+    const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
     const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
-    vm.createContext(context);
+    vm.createContext(withAppState(context));
     vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}\n${engagementAccountsDefinition}`, context);
 
     context.scheduleProjectProfileAutosave();
@@ -655,9 +656,9 @@ test("a project B autosave queued during project A's save still runs afterward",
     loadIdentitySettings: async () => {},
     configureProxyListener: async () => {},
   };
-  const autosaveStart = source.indexOf("let projectAutosaveTimer = null;");
+  const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
   const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}`, context);
 
   context.scheduleProjectProfileAutosave();
@@ -720,9 +721,9 @@ test("an older A autosave cannot overwrite a newer manual save after switching A
     loadIdentitySettings: async () => {},
     configureProxyListener: async () => {},
   };
-  const autosaveStart = source.indexOf("let projectAutosaveTimer = null;");
+  const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
   const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}`, context);
 
   context.scheduleProjectProfileAutosave();
@@ -786,9 +787,9 @@ test("autosave queue drains each workspace's latest snapshot across A to B to A"
     loadIdentitySettings: async () => {},
     configureProxyListener: async () => {},
   };
-  const autosaveStart = source.indexOf("let projectAutosaveTimer = null;");
+  const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
   const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}`, context);
 
   context.scheduleProjectProfileAutosave();
@@ -853,7 +854,7 @@ test("a delayed guidance list cannot render entries from a previous project", as
     guidanceEntryKey: entry => `workspace:${entry.name}`,
     renderGuidanceSettings() { visibleEntries.push(context.customGuidanceEntries.map(entry => entry.name)); },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(guidanceDefinitions, context);
 
   const previousLoad = context.loadGuidanceSettings();
@@ -884,7 +885,7 @@ test("a delayed guidance error cannot clear the active project's context", async
       return Promise.resolve({ context: "B project instructions" });
     } } },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(guidanceDefinitions, context);
 
   const previousLoad = context.loadGuidanceContext();
@@ -915,7 +916,7 @@ test("a stale guidance context cannot replace the newest request after switching
       return Promise.resolve({ context: workspace === "G:/A" ? "Latest A instructions" : "B instructions" });
     } } },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(guidanceDefinitions, context);
 
   const oldARequest = context.loadGuidanceContext();

@@ -1,12 +1,13 @@
 "use strict";
 
+const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8");
+const source = rendererSource();
 const settingsStart = source.indexOf("async function refreshAssessmentSettingsCache()");
 const settingsEnd = source.indexOf("\nasync function saveAssessmentSettings", settingsStart);
 const refreshSettingsDefinition = source.slice(settingsStart, settingsEnd);
@@ -17,12 +18,12 @@ const refreshStateStart = source.indexOf("async function refreshAssessmentState(
 const refreshStateEnd = source.indexOf("\nasync function createAssessmentFolder", refreshStateStart);
 const refreshStateDefinition = source.slice(refreshStateStart, refreshStateEnd);
 const toggleStart = source.indexOf("async function toggleInterceptorCapture()");
-const toggleEnd = source.indexOf("\nlet proxyConfigurationGeneration = 0;", toggleStart);
+const toggleEnd = source.indexOf("\nfunction syncProxyListenerUi(", toggleStart);
 const toggleDefinition = source.slice(toggleStart, toggleEnd);
 const proxyConfigureStart = source.indexOf("async function configureProxyListener()");
 const proxyConfigureEnd = source.indexOf("\nfunction syncProxyBrowserUi", proxyConfigureStart);
 const proxyConfigureDefinition = source.slice(proxyConfigureStart, proxyConfigureEnd);
-const authoritySettingsStart = source.indexOf("let authoritySettingsLoadGeneration = 0;");
+const authoritySettingsStart = source.indexOf("async function loadAuthoritySettings()");
 const authoritySettingsEnd = source.indexOf("\nfunction syncAuthorityLabel()", authoritySettingsStart);
 const authoritySettingsDefinition = source.slice(authoritySettingsStart, authoritySettingsEnd);
 const persistAuthorityStart = source.indexOf("async function persistAuthoritySettings()");
@@ -59,7 +60,7 @@ test("a delayed assessment-settings read cannot replace active interception stat
       visibleInterceptOn = Boolean(settings?.interception?.enabled && settings?.interception?.interceptRequests);
     },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(refreshSettingsDefinition, context);
 
   const previousRead = context.refreshAssessmentSettingsCache();
@@ -100,7 +101,7 @@ test("a delayed assessment-settings save cannot replace active project state", a
     syncOpenSettingsTabContent() {},
     configureProxyListener: async () => { proxyRefreshCount += 1; },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(saveSettingsDefinition, context);
 
   const saveARequest = context.saveAssessmentSettings({ interception: { enabled: true, interceptRequests: true } });
@@ -147,7 +148,7 @@ test("superseded assessment refresh cannot reconfigure the active project's prox
     syncInterceptorToggleUi() {},
     configureProxyListener: async () => { proxyRefreshCount += 1; },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(`${refreshSettingsDefinition}\n${refreshStateDefinition}`, context);
 
   const previousRefresh = context.refreshAssessmentState();
@@ -180,7 +181,7 @@ test("a delayed proxy response cannot replace the active project's listener stat
     } } },
     syncProxyListenerUi(status) { visibleProxyStatus = status.label; },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(proxyConfigureDefinition, context);
 
   const previousConfiguration = context.configureProxyListener();
@@ -213,7 +214,7 @@ test("a project switch during interceptor refresh does not show an old error in 
     isInterceptionActive: () => false,
     saveAssessmentSettings: async () => ({ settings: {} }),
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(toggleDefinition, context);
 
   const previousToggle = context.toggleInterceptorCapture();
@@ -250,7 +251,7 @@ test("a delayed authority-settings read cannot replace the active project's auth
     normalizeAuthoritySettings: value => value,
     syncAuthorityLabel() { visibleAuthority.push(context.authoritySettingsData.superMode); },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(authoritySettingsDefinition, context);
 
   const previousLoad = context.loadAuthoritySettings();
@@ -293,7 +294,7 @@ test("a delayed authority write cannot replace the new project's visible or loca
     syncOpenSettingsTabContent(settings) { visible.settings = settings.marker; },
     addErrorMessage(message) { visible.error = message; },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(persistAuthorityDefinition, context);
 
   const previousWrite = context.persistAuthoritySettings();

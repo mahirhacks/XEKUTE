@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -10,7 +11,7 @@ const { readUiShell } = require("./helpers/ui-shell.js");
 
 test("Tools and MCP settings keep generic MCP configuration separate from optional Kali access", () => {
   const html = readUiShell();
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const preload = read("src/app/electron/preload.js");
   for (const id of ["mcp-settings-list", "kali-access-panel", "kali-access-enabled", "kali-access-host", "kali-access-key", "kali-access-test"]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));

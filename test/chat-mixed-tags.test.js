@@ -1,12 +1,13 @@
 "use strict";
 
+const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
-const source = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8");
+const source = rendererSource();
 const definition = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 
 async function fileCollector(paths, activePath = "") {
@@ -15,7 +16,7 @@ async function fileCollector(paths, activePath = "") {
   const context = { ...tags, rootPath: "G:/workspace", dirMapCache: "ready",
     ToolParser: { parseProjectFiles: () => paths }, getActiveFileContext: () => ({ path: activePath }),
     readWorkspaceFile: async path => { reads.push(path); return { path, content: `Contents of ${path}` }; } };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(definition("async function collectMentionedFiles(", "function renderMarkdown("), context);
   return { collect: text => context.collectMentionedFiles(text), reads };
 }
@@ -57,8 +58,8 @@ async function composer(t) {
     hideSlashCommandOverview() {}, showSlashCommandOverview() {},
     availableSlashCommands: () => [{ name: "/report", description: "Write a report", group: "system-command" },
       { name: "/create-skill", description: "Create a skill", group: "system-command" }] };
-  vm.createContext(context);
-  vm.runInContext(definition("function closeSlashSuggestions()", "let fileTagSuggestions ="), context);
+  vm.createContext(withAppState(context));
+  vm.runInContext(definition("function closeSlashSuggestions()", "function refreshTerminalsForTags("), context);
   context.installChatInputEditorAdapter();
   function enter(text, offset) {
     input.value = text;

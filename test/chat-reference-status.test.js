@@ -1,11 +1,12 @@
 "use strict";
+const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
-const renderer = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8");
+const renderer = rendererSource();
 const notices = renderer.slice(renderer.indexOf("const CONTEXT_SUMMARIZING_NOTICE ="), renderer.indexOf("function setContextCheckpointUi("));
 
 function fixture() {
@@ -17,7 +18,7 @@ function fixture() {
     appendChatStreamNode: (host, node) => host.append(node), setContextCheckpointUi() {},
     setAgentStatus: value => labels.push(value), modeLabel: () => "Agent", scrollMessages() {}, syncChatRunSession() {}, updateContextUsage() {},
   };
-  vm.createContext(context); vm.runInContext(notices, context);
+  vm.createContext(withAppState(context)); vm.runInContext(notices, context);
   return { context, labels, document: dom.window.document, run: { session: { id: "destination" }, mode: "agent", container: dom.window.document.querySelector("#destination") } };
 }
 

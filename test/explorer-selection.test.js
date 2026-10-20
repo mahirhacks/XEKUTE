@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -41,7 +42,7 @@ test("batch operations omit descendants when their selected parent is included",
 });
 
 test("the project explorer wires modifier clicks, accessible multi-selection, and batch deletion", () => {
-  const bootstrap = fs.readFileSync(path.join(__dirname, "..", "src/ui/bootstrap.js"), "utf8");
+  const bootstrap = rendererSource();
   const index = readUiShell();
   assert.match(index, /id="file-tree" role="tree" aria-multiselectable="true"/);
   assert.match(bootstrap, /selectItem\(item, \{ ctrlKey: e\.ctrlKey, metaKey: e\.metaKey, shiftKey: e\.shiftKey \}\)/);

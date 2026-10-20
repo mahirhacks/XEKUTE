@@ -50,6 +50,7 @@ import {
   projectChatsForTags,
   splitFileTags,
 } from "./features/chat/file-tags.js";
+import { appState } from "./core/app-state.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
 const SetiIconTheme = globalThis.XekuteSetiIconTheme;
@@ -208,7 +209,6 @@ const attachImageBtn   = $("attach-image-btn");
 const attachImageInput = $("attach-image-input");
 const composerAttachmentsEl = $("composer-attachments");
 // Declared with the elements: updateSendBtn reads it during startup.
-let composerImages = [];
 const chatModeToggle   = $("chat-mode-toggle");
 const chatModeButton   = $("chat-mode-button");
 const chatModeIcon     = $("chat-mode-icon");
@@ -266,7 +266,6 @@ const composerQuestionsEl = $("composer-questions");
 const composerTaskListEl = $("composer-task-list");
 const pendingComposerQuestionsBySession = new Map();
 const pendingOrchestratorEscalatedQuestions = new Map();
-let activeComposerTaskList = null;
 const slashCommandSuggestions = $("slash-command-suggestions");
 const selectedSlashCommandEl = $("selected-slash-command");
 const contextUsageFill = $("context-usage-fill");
@@ -552,7 +551,7 @@ const securityWorkbenchStatus = $("security-workbench-status");
 const securityProxyBrowser = $("security-proxy-browser");
 const securityProxyBrowserWrap = $("security-proxy-browser-wrap");
 const securityProxyBrowserMenu = $("security-proxy-browser-menu");
-let proxyBrowserMenuHome = securityProxyBrowserMenu?.parentElement || null;
+appState.proxyBrowserMenuHome = securityProxyBrowserMenu?.parentElement || null;
 const securityHistoryToggle = $("security-history-toggle");
 const securityHistoryPanel = $("security-history-panel");
 const securityHistoryRefresh = $("security-history-refresh");
@@ -635,37 +634,9 @@ const TERMINAL_MIN_EXPANDED = 80;
 const EDITOR_MIN_HEIGHT = 120;
 const WORKBENCH_MIN_H = 80;  // min height for history panel when dragging
 const WORKBENCH_TOOL_MIN_H = 120; // min height for the tool panel (interceptor etc.)
-let terminalSavedHeight = 220;
-let terminalCollapsed = false;
-let terminalMaximized = false;
-let chatCollapsed = false;
-let sidebarCollapsed = false;
-let explorerRootExpanded = true;
-let currentSidebarView = "project";
-let currentWorkspaceMode = "resource";
-let resourcePreviewText = "";
-let resourceCurrentFilePath = "";
-let resourceSavedText = "";
-let resourceDirty = false;
-let resourceWrapLines = localStorage.getItem("xekute.resourceWrapLines") === "true";
-let resourceSettingsActive = false;
-let resourceSettingsData = null;
-let resourceSettingsSaveTimer = null;
-let resourceSettingsSaveChain = Promise.resolve();
-let resourceChecklistActive = false;
-let resourceChecklistType = "";
-let resourceChecklistData = null;
-let resourceChecklistSaveTimer = null;
-let resourceScopeActive = false;
-let resourceScopeData = null;
-let resourceScopeRelativePath = "";
-let resourceScopeSaveTimer = null;
-let webcloneManifest = null;
-let webcloneSelectedFile = "";
-let webcloneFilesCollapsed = false;
-let selectedCustomFolder = "";
+appState.resourceWrapLines = localStorage.getItem("xekute.resourceWrapLines") === "true";
+appState.resourceSettingsSaveChain = Promise.resolve();
 const selectedCustomEntries = new Set();
-let customSelectionAnchor = "";
 const statusLnCol      = $("status-ln-col");
 const statusOllamaPort = $("status-ollama-port");
 const statusWorkspace  = $("status-workspace");
@@ -674,40 +645,23 @@ const statusAgent      = $("status-agent");
 const OLLAMA_PORT = 11435;
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let rootPath     = null;
-let dirMapCache  = "";
-let selectedItem = null;
 const selectedExplorerPaths = new Set();
-let explorerSelectionAnchorPath = "";
-let workspaceClipboard = null;
-let workspaceContextTarget = null;
 const expandedTreePaths = new Set();
-let workspaceUiRefreshQueue = Promise.resolve();
-let deletingExplorerItem = false;
-let deletingCustomEntries = false;
-let chatHistory  = [];
+appState.workspaceUiRefreshQueue = Promise.resolve();
 const activeChatRuns = new Map();
 const chatSessionsStoppedByOperator = new Set();
 const chatSendInFlight = new Set();
 const hiddenAgentRuntimeQueues = new Map();
 const chatSessionsNeedingAttention = new Set();
-  let subagentCompletionPending = false;
-  let pendingBackgroundWaitEvents = [];
-  let pendingSubagentResults = [];
   const subagentContinuationRuns = new Set();
   const seenSubagentResultIds = new Set();
-  let subagentDrainRetryTimer = null;
 const waitCardTickers = new Map();
 const commandTimelineTickers = new Map();
 const completedCommandLifecycles = new Map();
 const completedAgentProcessIds = new Set();
-let activeStreamContent = "";
-let contextFilesCache = [];
-let chatSessionCounter = 0;
-let activeChatSessionId = "";
 const chatSessions = [];
 function paintLiveInputRecord(session, record) {
-  const host = activeChatRuns.get(session.id)?.viewHost || (activeChatSessionId === session.id ? messages : null);
+  const host = activeChatRuns.get(session.id)?.viewHost || (appState.activeChatSessionId === session.id ? messages : null);
   const turn = [...(host?.querySelectorAll(".chat-turn.user") || [])].find((node) => node.dataset.sourceMessageId === record.id);
   turn?.querySelector(".chat-input-status")?.remove();
   if (turn && record.taskId) turn.dataset.taskId = record.taskId;
@@ -721,19 +675,9 @@ const liveInputController = createLiveInputController({ api: window.api, onChang
 const queueMigrationInFlight = new Set();
 const closedChatSessions = [];
 const archivedChatSessions = [];
-let chatHistoryShowAllRecent = false;
-let chatHistoryArchivedOpen = false;
-let activeChatPersistenceScope = "";
 const chatPersistenceTimers = new Map();
-let chatPersistenceQueue = Promise.resolve();
-let chatHistoryWriteQueue = Promise.resolve();
-let chatHistoryWarning = "";
-let contextCheckpointing = false;
-let contextCheckpointingSessionId = "";
-let contextCheckpointNotice = null;
-let tier1PreviewTimer = 0;
-let tier1PreviewSignatureValue = "";
-let tier1PreviewInFlight = false;
+appState.chatPersistenceQueue = Promise.resolve();
+appState.chatHistoryWriteQueue = Promise.resolve();
 
 const CONTEXT_RING_R = 8;
 const CONTEXT_RING_C = 2 * Math.PI * CONTEXT_RING_R;
@@ -746,27 +690,9 @@ const LEGACY_DEFAULT_CONTEXT = "8K";
 const SETTINGS_TAB_PATH = "xekute:settings";
 const INTERCEPTOR_TAB_PATH = "xekute:interceptor";
 const BROWSER_TAB_PATH = "xekute:browser";
-let browserWorkspace = null;
 /** @type {Map<string, { path: string, diskPath: string, name: string, content: string | null, savedContent: string, dirty: boolean, error: string | null, preview?: boolean, special?: string, securityTool?: string }>} */
 const openTabs      = new Map();
-let activeTabPath   = null;
-let editorLoadedPath = null;
-let draggedEditorTabPath = null;
-let markdownViewMode = localStorage.getItem("pointer:markdownViewMode") === "md" ? "md" : "text";
-let quickMode = "command";
-let quickSelection = 0;
-let quickItems = [];
-let quickSearchSeq = 0;
-let quickSearchTimer = null;
-let quickSearchRequestId = "";
-let quickSearchRenderFrame = 0;
-let quickSearchScrollFrame = 0;
-let quickSearchPendingRows = [];
-let quickSearchPendingTotal = 0;
-let quickSearchSourceCounts = {};
-let quickSearchSuggestionItems = [];
-let quickSearchSuggestionSelection = 0;
-let quickSearchSuggestionRange = null;
+appState.markdownViewMode = localStorage.getItem("pointer:markdownViewMode") === "md" ? "md" : "text";
 const QUICK_SEARCH_DEBOUNCE_MS = 225;
 const QUICK_SEARCH_ROW_HEIGHT = 53;
 const QUICK_SEARCH_OVERSCAN = 8;
@@ -850,22 +776,14 @@ const CHAT_ROLE_ALIASES = Object.freeze({
   planner: "ask",
   agent: "agent",
 });
-let selectedModel = localStorage.getItem("pointer:model") || "";
-let allModels     = [];
-let activeLlmProvider = "ollama";
-let openRouterModelMeta = {};
+appState.selectedModel = localStorage.getItem("pointer:model") || "";
 const openRouterContextLengthsCache = new Map();
 const ollamaRuntimeContext = {};
-let resolvedContextCapacity = {
+appState.resolvedContextCapacity = {
   tokens: AUTO_CONTEXT_ESTIMATE,
   source: "fallback",
   approximate: true,
 };
-let contextCapacitySeq = 0;
-let editingModel  = null;
-let modelEditRequest = 0;
-let modelLoadSeq  = 0;
-let modelLoadInFlight = null;
 function canonicalChatMode(value) {
   const raw = String(value || "").toLowerCase();
   const aliased = CHAT_ROLE_ALIASES[raw] || raw;
@@ -876,94 +794,34 @@ function canonicalChatMode(value) {
 }
 
 const storedChatMode = localStorage.getItem(CHAT_MODE_KEY) || "agent";
-let chatFamily = "xekute";
-let chatMode = canonicalChatMode(storedChatMode);
-let assessmentPath = localStorage.getItem(BUG_BOUNTY_PATH_KEY) || "";
-if (editorPane) browserWorkspace = createBrowserWorkspace({
+appState.chatMode = canonicalChatMode(storedChatMode);
+appState.assessmentPath = localStorage.getItem(BUG_BOUNTY_PATH_KEY) || "";
+if (editorPane) appState.browserWorkspace = createBrowserWorkspace({
   document,
   api: window.api,
   host: editorPane,
-  getAssessmentPath: () => assessmentPath,
-  getSessionId: () => activeChatSessionId,
+  getAssessmentPath: () => appState.assessmentPath,
+  getSessionId: () => appState.activeChatSessionId,
   onError: message => setSecurityStatus(message, "error"),
 });
-appLifecycle.add(() => browserWorkspace?.dispose());
-let assessmentRefreshSequence = 0;
-let assessmentVerification = null;
-let assessmentModuleActive = false;
-let assessmentModulePath = "";
-let assessmentModuleData = null;
-let selectedSecurityTool = "interceptor";
-let securityHistoryRecords = [];
-let selectedSecurityHistoryIndices = new Set();
-let selectedSecurityHistoryRequestIds = new Set();
-let securityHistoryAnchorIndex = -1;
-let securityHistoryMenuIndex = -1;
-let interceptorHistoryWanted = false;
-let securityHistoryLoading = false;
-let securityHistoryRefreshTimer = null;
-let securityHistoryRefreshFirstAt = 0;
-let securityHistoryReloadQueued = false;
-let securityHistoryLoadToken = 0;
+appLifecycle.add(() => appState.browserWorkspace?.dispose());
 const SECURITY_HISTORY_LIMIT = 500;
 const SECURITY_HISTORY_REFRESH_MS = 350;
 const SECURITY_HISTORY_REFRESH_MAX_MS = 1000;
-let securityHistorySort = { key: "time", direction: "desc" };
-let securityInspectorTab = localStorage.getItem(SECURITY_INSPECTOR_TAB_KEY) || "decoder";
-let securityBusy = false;
-let lastLoggedSecuritySignature = "";
+appState.securityInspectorTab = localStorage.getItem(SECURITY_INSPECTOR_TAB_KEY) || "decoder";
 const securityDrafts = new Map();
 const DEFAULT_SECURITY_REQUEST = "GET / HTTP/1.1\nHost: authorized.example\nAccept: */*";
 const INTRUDER_ATTACK_TYPES = ["sniper", "battering-ram", "pitchfork", "cluster-bomb"];
-let securityAttackTypeValue = "sniper";
-let securityIntruderTab = "positions";
-let securityIntruderResults = [];
-let securitySelectedResult = -1;
-let securityIntruderTemplate = "";
-let securityRepeaterTabState = [];
-let securityActiveRepeaterTab = "";
-let securityRepeaterSeq = 0;
-let securityIntruderTabState = [];
-let securityActiveIntruderTab = "";
-let securityIntruderSeq = 0;
 const DEFAULT_INTRUDER_PAYLOADS = '{"value":["test"]}';
-let settingsEditorMode = localStorage.getItem(SETTINGS_EDITOR_MODE_KEY) === "ui" ? "ui" : "json";
-let settingsAutoSaveTimer = null;
-let currentProxyCaptureId = "";
-let proxyListenerState = { running: false };
-let assessmentSettingsCache = null;
-let assessmentSettingsVirtual = false;
-let slashSuggestionItems = [];
-let slashSuggestionIndex = -1;
-let selectedSlashCommand = "";
+appState.settingsEditorMode = localStorage.getItem(SETTINGS_EDITOR_MODE_KEY) === "ui" ? "ui" : "json";
 installChatInputEditorAdapter();
-let appSettingsSection = "general";
-let projectProfileData = null;
-let projectProfileExists = false;
-let projectProfileWorkspace = "";
-let projectProfileLoadGeneration = 0;
-let projectProfileWorkspaceGenerations = new Map();
-let projectProfileWriteGenerations = new Map();
-let authoritySettingsData = null;
-let customGuidanceEntries = [];
-let selectedGuidancePath = "";
-let selectedGuidanceScope = "project";
-let guidanceScope = localStorage.getItem("pointer:guidanceScope") || "all";
-let mcpScope = localStorage.getItem("pointer:mcpScope") || "all";
-let mcpServersCache = [];
-let selectedGuidanceContent = "";
-let guidanceDraft = null;
-let guidanceContext = "";
-let guidanceContextPromise = null;
-let guidanceContextRequestPath = "";
-let certificateSettingsData = null;
-let ollamaSettingsData = null;
-let notificationItems = [];
+appState.guidanceScope = localStorage.getItem("pointer:guidanceScope") || "all";
+appState.mcpScope = localStorage.getItem("pointer:mcpScope") || "all";
 const UI_ZOOM_KEY = "pointer:uiZoom";
-let uiZoom = Number(localStorage.getItem(UI_ZOOM_KEY)) || 1;
+appState.uiZoom = Number(localStorage.getItem(UI_ZOOM_KEY)) || 1;
 
 function createChatSession(title = "New Agent") {
-  const id = `chat-${Date.now()}-${++chatSessionCounter}`;
+  const id = `chat-${Date.now()}-${++appState.chatSessionCounter}`;
   const now = new Date().toISOString();
   return {
     id,
@@ -990,9 +848,9 @@ function createChatSession(title = "New Agent") {
     messagesHtml: "",
     transcript: { version: 1, runs: [] },
     activeStreamContent: "",
-    chatMode,
-    chatFamily,
-    selectedModel,
+    chatMode: appState.chatMode,
+    chatFamily: appState.chatFamily,
+    selectedModel: appState.selectedModel,
     draftText: "",
     draftSlashCommand: "",
   };
@@ -1100,7 +958,7 @@ function clearChatSessionState(session) {
 }
 
 function currentChatPersistenceScope() {
-  return assessmentPath || rootPath || "";
+  return appState.assessmentPath || appState.rootPath || "";
 }
 
 function redactThinkingDisclosures(root) {
@@ -1354,9 +1212,9 @@ function serializeChatSession(session) {
     memory: memoryRecord(session),
     lastContextUsage: session.lastContextUsage,
     currentWorkflow: session.currentWorkflow || null,
-    mode: session.chatMode || chatMode,
-    safetyFamily: session.chatFamily || chatFamily,
-    model: session.selectedModel || selectedModel,
+    mode: session.chatMode || appState.chatMode,
+    safetyFamily: session.chatFamily || appState.chatFamily,
+    model: session.selectedModel || appState.selectedModel,
     kind: session.kind || "chat",
     orchestratorPrompt: String(session.orchestratorPrompt || "").slice(0, 12_000),
     parentSessionId: session.parentSessionId || "",
@@ -1378,7 +1236,7 @@ function serializeChatSession(session) {
 
 function chatPersistenceState() {
   return {
-    activeSessionId: activeChatSessionId,
+    activeSessionId: appState.activeChatSessionId,
     sessions: chatSessions.map(serializeChatSession),
     closedSessions: closedChatSessions.map(serializeChatSession),
     archivedSessions: archivedChatSessions.map(serializeChatSession),
@@ -1386,10 +1244,10 @@ function chatPersistenceState() {
 }
 
 function reportChatHistoryWarning(error) {
-  chatHistoryWarning = String(error?.message || error || "Chat history could not be saved.");
-  console.warn("Could not save chat history:", chatHistoryWarning);
+  appState.chatHistoryWarning = String(error?.message || error || "Chat history could not be saved.");
+  console.warn("Could not save chat history:", appState.chatHistoryWarning);
   if (chatHistorySecurityWarning) {
-    chatHistorySecurityWarning.textContent = chatHistoryWarning;
+    chatHistorySecurityWarning.textContent = appState.chatHistoryWarning;
     chatHistorySecurityWarning.hidden = false;
   }
   if (!isRunningChatActive()) setAgentStatus("Chat save delayed");
@@ -1397,17 +1255,17 @@ function reportChatHistoryWarning(error) {
 
 function reportChatHistoryDurability(result) {
   if (result?.durable !== false && result?.encrypted !== false) {
-    chatHistoryWarning = "";
+    appState.chatHistoryWarning = "";
     if (chatHistorySecurityWarning) {
       chatHistorySecurityWarning.textContent = "";
       chatHistorySecurityWarning.hidden = true;
     }
     return false;
   }
-  chatHistoryWarning = "Secure storage is unavailable; chat history will remain only until this process exits.";
-  console.warn("Chat history is process-only:", chatHistoryWarning);
+  appState.chatHistoryWarning = "Secure storage is unavailable; chat history will remain only until this process exits.";
+  console.warn("Chat history is process-only:", appState.chatHistoryWarning);
   if (chatHistorySecurityWarning) {
-    chatHistorySecurityWarning.textContent = chatHistoryWarning;
+    chatHistorySecurityWarning.textContent = appState.chatHistoryWarning;
     chatHistorySecurityWarning.hidden = false;
   }
   if (!isRunningChatActive()) setAgentStatus("Chat history not durable");
@@ -1415,9 +1273,9 @@ function reportChatHistoryDurability(result) {
 }
 
 function activeChatHistoryContext(session = activeChatSession()) {
-  if (!session?.memorySessionId || !rootPath) return null;
+  if (!session?.memorySessionId || !appState.rootPath) return null;
   return {
-    workspace: rootPath,
+    workspace: appState.rootPath,
     projectId: session.memoryProjectId || "",
     sessionId: session.memorySessionId,
     blockId: session.memoryBlockId || "",
@@ -1428,9 +1286,9 @@ function chatHistoryMeta(session) {
   if (!session) return {};
   return {
     title: session.title,
-    model: session.selectedModel || selectedModel,
-    mode: session.chatMode || chatMode,
-    family: session.chatFamily || chatFamily,
+    model: session.selectedModel || appState.selectedModel,
+    mode: session.chatMode || appState.chatMode,
+    family: session.chatFamily || appState.chatFamily,
     memory: memoryRecord(session),
     lastContextUsage: session.lastContextUsage,
     currentWorkflow: session.currentWorkflow || null,
@@ -1461,7 +1319,7 @@ function queueChatHistoryEvent(event = {}, { session = activeChatSession(), imme
     blockId: event.blockId || context.blockId,
     ...event,
   };
-  chatHistoryWriteQueue = chatHistoryWriteQueue
+  appState.chatHistoryWriteQueue = appState.chatHistoryWriteQueue
     .catch(() => {})
     .then(() => window.api.recordChatEvent(payload))
     .then((result) => {
@@ -1471,13 +1329,13 @@ function queueChatHistoryEvent(event = {}, { session = activeChatSession(), imme
     })
     .catch((error) => {
       reportChatHistoryWarning(error);
-      return { ok: false, error: chatHistoryWarning };
+      return { ok: false, error: appState.chatHistoryWarning };
     });
-  if (immediate) return chatHistoryWriteQueue;
+  if (immediate) return appState.chatHistoryWriteQueue;
   return Promise.resolve({ ok: true, queued: true });
 }
 
-function persistChatHistorySnapshot(scope = activeChatPersistenceScope, session = activeChatSession()) {
+function persistChatHistorySnapshot(scope = appState.activeChatPersistenceScope, session = activeChatSession()) {
   if (!scope || !session?.memorySessionId || !session.memoryBlockId) return Promise.resolve({ ok: true, skipped: true });
   return queueChatHistoryEvent({
     type: "snapshot",
@@ -1491,11 +1349,11 @@ function persistChatHistorySnapshot(scope = activeChatPersistenceScope, session 
 }
 
 function beginChatHistoryBlock(text, session = activeChatSession()) {
-  if (!session || !rootPath || !String(text || "").trim() || !window.api.beginChatBlock) return Promise.resolve(null);
+  if (!session || !appState.rootPath || !String(text || "").trim() || !window.api.beginChatBlock) return Promise.resolve(null);
   const history = Array.isArray(session.history) ? session.history : [];
   const message = history.at(-1);
   return window.api.beginChatBlock({
-    workspace: rootPath,
+    workspace: appState.rootPath,
     sessionId: session.memorySessionId || "",
     title: session.title,
     userPrompt: text,
@@ -1568,8 +1426,8 @@ function scheduleLiveChatSnapshot(run) {
 }
 
 function schedulePersistChatSessions(session = activeChatSession()) {
-  if (!activeChatPersistenceScope || !session) return;
-  const scope = activeChatPersistenceScope;
+  if (!appState.activeChatPersistenceScope || !session) return;
+  const scope = appState.activeChatPersistenceScope;
   const key = String(session.id || session.memorySessionId || "active");
   if (chatPersistenceTimers.has(key)) return;
   const timer = setTimeout(() => {
@@ -1580,7 +1438,7 @@ function schedulePersistChatSessions(session = activeChatSession()) {
 }
 
 function flushChatSessionsBeforeClose() {
-  if (!activeChatPersistenceScope || !window.api.saveChatHistoryBeforeClose) return;
+  if (!appState.activeChatPersistenceScope || !window.api.saveChatHistoryBeforeClose) return;
   clearScheduledChatPersistence();
   for (const run of activeChatRuns.values()) syncChatRunSession(run, { persist: false });
   syncActiveChatSession({ persist: false });
@@ -3006,7 +2864,7 @@ function runWorkRoot(run) {
   if (run.viewHost) return run.viewHost;
   const turns = run.assistant?.assistantTurns?.() || [];
   if (turns.length) return turns[0].closest(".chat-exchange") || turns[0].parentElement || turns[0];
-  if (activeChatSessionId === run.sessionId) return messages;
+  if (appState.activeChatSessionId === run.sessionId) return messages;
   return null;
 }
 
@@ -3039,10 +2897,10 @@ function settleVisibleParentRun(run) {
   if (activeChatRuns.get(run.sessionId) === run) activeChatRuns.delete(run.sessionId);
   updateSendBtn();
   renderChatSessionSelect();
-  if (activeChatSessionId === run.sessionId) {
-    activeStreamContent = "";
+  if (appState.activeChatSessionId === run.sessionId) {
+    appState.activeStreamContent = "";
     setAgentStatus(`${modeLabel()} ready`);
-    if (!contextCheckpointing) {
+    if (!appState.contextCheckpointing) {
       chatInput.disabled = false;
       chatInput.readOnly = false;
       chatInput.removeAttribute("aria-disabled");
@@ -3063,7 +2921,7 @@ function keepParentRunOpen(run, { continuation = false } = {}) {
   run.assistant?.turn?.closest?.(".chat-exchange")?.querySelectorAll(".assistant-reply-footer").forEach((node) => node.remove());
   syncSubagentOrchestrationWaitStatus(run);
   updateSendBtn();
-  if (activeChatSessionId === run.sessionId) setAgentStatus(`${modeLabel()} orchestrating…`);
+  if (appState.activeChatSessionId === run.sessionId) setAgentStatus(`${modeLabel()} orchestrating…`);
 }
 
 function noteParentContinuationStarted(payload = {}) {
@@ -3086,7 +2944,7 @@ function noteParentRunSettled(payload = {}) {
     activeChatRuns.set(run.sessionId, run);
     syncSubagentOrchestrationWaitStatus(run);
     updateSendBtn();
-    if (activeChatSessionId === run.sessionId) setAgentStatus(`${modeLabel()} orchestrating…`);
+    if (appState.activeChatSessionId === run.sessionId) setAgentStatus(`${modeLabel()} orchestrating…`);
     return;
   }
   settleVisibleParentRun(run);
@@ -3094,11 +2952,11 @@ function noteParentRunSettled(payload = {}) {
 }
 
 function isRunningChatActive() {
-  return isChatSessionRunning(activeChatSessionId);
+  return isChatSessionRunning(appState.activeChatSessionId);
 }
 
 function activeSessionRun() {
-  return activeChatRuns.get(String(activeChatSessionId || "")) || null;
+  return activeChatRuns.get(String(appState.activeChatSessionId || "")) || null;
 }
 
 function anyChatSessionRunning() {
@@ -3108,7 +2966,7 @@ function anyChatSessionRunning() {
 function chatRunContainer(run = activeSessionRun()) {
   if (!run) return messages;
   if (run.viewHost) return run.viewHost;
-  if (activeChatSessionId === run.sessionId) return messages;
+  if (appState.activeChatSessionId === run.sessionId) return messages;
   const host = document.createElement("div");
   host.innerHTML = run.session?.messagesHtml || "";
   run.viewHost = host;
@@ -3172,7 +3030,7 @@ function syncAssistantDraftToHistory(run, assistant = run?.assistant, { persist 
   }
   run.history = history;
   session.history = history;
-  if (activeChatSessionId === session.id) chatHistory = history;
+  if (appState.activeChatSessionId === session.id) appState.chatHistory = history;
   if (persist) schedulePersistChatSessions(session);
   return message;
 }
@@ -3239,16 +3097,16 @@ function syncChatRunSession(run = activeSessionRun(), { persist = true } = {}) {
   // would snap back when the current turn finishes.
   session.chatFamily = run.family;
   session.selectedModel = run.model;
-  const container = run.viewHost || (activeChatSessionId === session.id ? messages : null);
+  const container = run.viewHost || (appState.activeChatSessionId === session.id ? messages : null);
   if (container) {
     captureSessionTranscript(session, container);
     session.messagesHtml = sanitizePersistedChatHtml(container.innerHTML || "");
   }
   session.updatedAt = new Date().toISOString();
-  if (activeChatSessionId === session.id) {
-    chatHistory = session.history;
-    contextFilesCache = session.contextFilesCache;
-    activeStreamContent = session.activeStreamContent;
+  if (appState.activeChatSessionId === session.id) {
+    appState.chatHistory = session.history;
+    appState.contextFilesCache = session.contextFilesCache;
+    appState.activeStreamContent = session.activeStreamContent;
   }
   if (persist) schedulePersistChatSessions(session);
 }
@@ -3258,7 +3116,7 @@ function prepareActiveChatSessionForSwitch(nextSessionId = "") {
   if (!current || current.id === nextSessionId) return;
 
   current.draftText = chatInput?.value || "";
-  current.draftSlashCommand = selectedSlashCommand;
+  current.draftSlashCommand = appState.selectedSlashCommand;
   syncActiveChatSession();
   stashActiveChatRunView(current);
 }
@@ -3267,33 +3125,33 @@ function applyActiveChatSession(session) {
   hideChatErrorToast();
   prepareActiveChatSessionForSwitch(session?.id || "");
   if (!session) {
-    activeChatSessionId = "";
-    browserWorkspace?.chatChanged();
-    chatHistory = [];
-    contextFilesCache = [];
-    activeStreamContent = "";
+    appState.activeChatSessionId = "";
+    appState.browserWorkspace?.chatChanged();
+    appState.chatHistory = [];
+    appState.contextFilesCache = [];
+    appState.activeStreamContent = "";
     messages.innerHTML = "";
     clearComposerTaskList();
     syncComposerQuestionsForActiveSession();
     setChatCollapsed(true);
     return;
   }
-  activeChatSessionId = session.id;
-  browserWorkspace?.chatChanged();
+  appState.activeChatSessionId = session.id;
+  appState.browserWorkspace?.chatChanged();
   renderMemorySaveBanner();
   session.history = MessageIdentity?.ensureMessageIdentity
     ? MessageIdentity.ensureMessageIdentity(session.history, session.id)
     : (Array.isArray(session.history) ? session.history : []);
   memoryRecord(session);
-  chatHistory = session.history;
-  contextFilesCache = [];
-  activeStreamContent = "";
-  chatFamily = CHAT_FAMILIES.has(session.chatFamily) ? session.chatFamily : chatFamily;
-  chatMode = canonicalChatMode(session.chatMode);
-  if (session.selectedModel) selectedModel = session.selectedModel;
-  localStorage.setItem(CHAT_MODE_KEY, chatMode);
-  localStorage.setItem(CHAT_FAMILY_KEY, chatFamily);
-  if (selectedModel) localStorage.setItem("pointer:model", selectedModel);
+  appState.chatHistory = session.history;
+  appState.contextFilesCache = [];
+  appState.activeStreamContent = "";
+  appState.chatFamily = CHAT_FAMILIES.has(session.chatFamily) ? session.chatFamily : appState.chatFamily;
+  appState.chatMode = canonicalChatMode(session.chatMode);
+  if (session.selectedModel) appState.selectedModel = session.selectedModel;
+  localStorage.setItem(CHAT_MODE_KEY, appState.chatMode);
+  localStorage.setItem(CHAT_FAMILY_KEY, appState.chatFamily);
+  if (appState.selectedModel) localStorage.setItem("pointer:model", appState.selectedModel);
   const liveRun = activeChatRuns.get(session.id) || null;
   if (liveRun?.taskList) renderComposerTaskList(liveRun.taskList);
   else clearComposerTaskList();
@@ -3335,7 +3193,7 @@ function applyActiveChatSession(session) {
     chatInput.readOnly = false;
     chatInput.removeAttribute("aria-disabled");
   }
-  activeStreamContent = liveRun?.activeStreamContent || "";
+  appState.activeStreamContent = liveRun?.activeStreamContent || "";
   resizeChatInput();
   syncChatModeUi();
   updateSendBtn();
@@ -3384,10 +3242,10 @@ async function recoverPendingSubagentResults() {
 
 async function restoreChatSessionsForCurrentWorkspace() {
   const scope = currentChatPersistenceScope();
-  if (scope === activeChatPersistenceScope) return;
+  if (scope === appState.activeChatPersistenceScope) return;
   clearScheduledChatPersistence();
-  if (activeChatPersistenceScope) await persistChatHistorySnapshot(activeChatPersistenceScope);
-  activeChatPersistenceScope = scope;
+  if (appState.activeChatPersistenceScope) await persistChatHistorySnapshot(appState.activeChatPersistenceScope);
+  appState.activeChatPersistenceScope = scope;
 
   let saved;
   try {
@@ -3395,7 +3253,7 @@ async function restoreChatSessionsForCurrentWorkspace() {
   } catch (error) {
     console.warn("Could not load chat history:", error);
   }
-  if (scope !== activeChatPersistenceScope) return;
+  if (scope !== appState.activeChatPersistenceScope) return;
 
   const restored = saved?.exists
     ? (saved.sessions || []).map(normalizePersistedChatSession).filter(Boolean)
@@ -3433,11 +3291,11 @@ async function restoreChatSessionsForCurrentWorkspace() {
 }
 
 function activeChatSession() {
-  return chatSessions.find((session) => session.id === activeChatSessionId) || null;
+  return chatSessions.find((session) => session.id === appState.activeChatSessionId) || null;
 }
 
 function setChatCollapsed(collapsed) {
-  chatCollapsed = collapsed;
+  appState.chatCollapsed = collapsed;
   chatPane?.classList.toggle("collapsed", collapsed);
   chatResize?.classList.toggle("collapsed", collapsed);
   btnTopChat?.classList.toggle("active", !collapsed);
@@ -3457,11 +3315,11 @@ function ensureChatSession() {
   const session = createChatSession("New Agent");
   clearChatSessionState(session);
   chatSessions.push(session);
-  activeChatSessionId = session.id;
-  browserWorkspace?.chatChanged();
-  chatHistory = session.history;
-  contextFilesCache = session.contextFilesCache;
-  activeStreamContent = "";
+  appState.activeChatSessionId = session.id;
+  appState.browserWorkspace?.chatChanged();
+  appState.chatHistory = session.history;
+  appState.contextFilesCache = session.contextFilesCache;
+  appState.activeStreamContent = "";
   messages.innerHTML = "";
   syncChatEmptyState();
   return session;
@@ -3475,8 +3333,8 @@ function openChatPane({ createIfEmpty = true } = {}) {
 }
 
 function syncWorkspaceActivity() {
-  const securityActive = currentWorkspaceMode === "security";
-  const settingsActive = currentWorkspaceMode === "settings";
+  const securityActive = appState.currentWorkspaceMode === "security";
+  const settingsActive = appState.currentWorkspaceMode === "settings";
   activitySecurity?.classList.toggle("active", securityActive);
   activitySecurity?.setAttribute("aria-pressed", String(securityActive));
   activitySettings?.classList.toggle("active", settingsActive);
@@ -3491,11 +3349,11 @@ function setCodeEditorVisible(visible) {
 }
 
 function showCodeEditorWorkspace() {
-  browserWorkspace?.setVisible(false);
-  if (terminalMaximized) setTerminalMaximized(false);
-  currentWorkspaceMode = "editor";
+  appState.browserWorkspace?.setVisible(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
+  appState.currentWorkspaceMode = "editor";
   if (assessmentModuleView) assessmentModuleView.hidden = true;
-  assessmentModuleActive = false;
+  appState.assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
@@ -3507,12 +3365,12 @@ function showCodeEditorWorkspace() {
 }
 
 function showResourceWorkspace({ focus = false } = {}) {
-  browserWorkspace?.setVisible(false);
-  if (terminalMaximized) setTerminalMaximized(false);
-  currentWorkspaceMode = "resource";
+  appState.browserWorkspace?.setVisible(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
+  appState.currentWorkspaceMode = "resource";
   setCodeEditorVisible(false);
   if (assessmentModuleView) assessmentModuleView.hidden = true;
-  assessmentModuleActive = false;
+  appState.assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = false;
   if (securityWorkspace) securityWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
@@ -3528,14 +3386,14 @@ function showSecurityWorkspace(tool = "") {
 }
 
 function showSecurityWorkspaceContent(tool = "") {
-  browserWorkspace?.setVisible(false);
-  if (terminalMaximized) setTerminalMaximized(false);
-  currentWorkspaceMode = "security";
+  appState.browserWorkspace?.setVisible(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
+  appState.currentWorkspaceMode = "security";
   if (editorTabBar) editorTabBar.hidden = false;
   if (editorBody) editorBody.hidden = true;
   updateEditorPathBar();
   if (assessmentModuleView) assessmentModuleView.hidden = true;
-  assessmentModuleActive = false;
+  appState.assessmentModuleActive = false;
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = false;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
@@ -3598,34 +3456,31 @@ const GUIDANCE_KIND_DESCRIPTIONS = Object.freeze({
   skills: "Skills add focused workflows and domain knowledge the agent can use when relevant.",
   subagents: "Subagents are specialized agents for focused tasks that can be handled in parallel.",
 });
-let guidanceAutosaveTimer = null;
-let guidanceAutosavePromise = null;
-let guidanceAutosavePending = false;
 
 function queueGuidanceAutosave(delay = 650) {
-  clearTimeout(guidanceAutosaveTimer);
-  guidanceAutosavePending = true;
+  clearTimeout(appState.guidanceAutosaveTimer);
+  appState.guidanceAutosavePending = true;
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Saving automatically…";
-  guidanceAutosaveTimer = setTimeout(() => { void flushGuidanceAutosave(); }, delay);
+  appState.guidanceAutosaveTimer = setTimeout(() => { void flushGuidanceAutosave(); }, delay);
 }
 
 async function flushGuidanceAutosave() {
-  clearTimeout(guidanceAutosaveTimer);
-  guidanceAutosaveTimer = null;
-  if (guidanceAutosavePromise) {
-    guidanceAutosavePending = true;
-    await guidanceAutosavePromise;
-    return guidanceAutosavePending ? flushGuidanceAutosave() : true;
+  clearTimeout(appState.guidanceAutosaveTimer);
+  appState.guidanceAutosaveTimer = null;
+  if (appState.guidanceAutosavePromise) {
+    appState.guidanceAutosavePending = true;
+    await appState.guidanceAutosavePromise;
+    return appState.guidanceAutosavePending ? flushGuidanceAutosave() : true;
   }
   if (!guidanceDetailIsDirty()) {
-    guidanceAutosavePending = false;
+    appState.guidanceAutosavePending = false;
     return true;
   }
-  guidanceAutosavePending = false;
-  guidanceAutosavePromise = saveGuidanceFile({ autoSave: true });
-  const saved = await guidanceAutosavePromise;
-  guidanceAutosavePromise = null;
-  if (guidanceAutosavePending) return flushGuidanceAutosave();
+  appState.guidanceAutosavePending = false;
+  appState.guidanceAutosavePromise = saveGuidanceFile({ autoSave: true });
+  const saved = await appState.guidanceAutosavePromise;
+  appState.guidanceAutosavePromise = null;
+  if (appState.guidanceAutosavePending) return flushGuidanceAutosave();
   return saved;
 }
 
@@ -3650,7 +3505,7 @@ function guidanceEntryKey(entry) {
 }
 
 function guidanceDetailIsDirty() {
-  return Boolean(guidanceDraft?.dirty || guidanceSettingsDetail?.querySelector("textarea")?.dataset.dirty === "true");
+  return Boolean(appState.guidanceDraft?.dirty || guidanceSettingsDetail?.querySelector("textarea")?.dataset.dirty === "true");
 }
 
 function setGuidanceEmptyState(message = "Create a rule, skill, or subagent with the AI.") {
@@ -3661,8 +3516,8 @@ function setGuidanceEmptyState(message = "Create a rule, skill, or subagent with
 }
 
 function renderGuidanceScopeTabs() {
-  const selected = ["all", "project", "global"].includes(guidanceScope) ? guidanceScope : "all";
-  guidanceScope = selected;
+  const selected = ["all", "project", "global"].includes(appState.guidanceScope) ? appState.guidanceScope : "all";
+  appState.guidanceScope = selected;
   guidanceScopeTabs?.querySelectorAll("[data-guidance-scope]").forEach((button) => {
     const active = button.dataset.guidanceScope === selected;
     button.classList.toggle("active", active);
@@ -3674,16 +3529,16 @@ function renderGuidanceList() {
   if (!guidanceSettingsList) return;
   if (guidanceSettingsEmpty?.querySelector("#guidance-empty-new")) guidanceSettingsEmpty.innerHTML = "";
   renderGuidanceScopeTabs();
-  const visible = customGuidanceEntries.filter((entry) => guidanceScope === "all" || String(entry.scope || "project") === guidanceScope);
+  const visible = appState.customGuidanceEntries.filter((entry) => appState.guidanceScope === "all" || String(entry.scope || "project") === appState.guidanceScope);
   const categories = ["rules", "skills", "subagents"];
-  const projectNotice = guidanceScope === "project" && !rootPath
+  const projectNotice = appState.guidanceScope === "project" && !appState.rootPath
     ? `<div class="guidance-scope-notice"><span class="codicon codicon-folder-library"></span><span>Open a project to create project guidance. Global guidance remains available.</span></div>`
     : "";
   guidanceSettingsList.innerHTML = projectNotice + categories.map((kind) => {
     const entries = visible.filter((entry) => guidanceEntryKind(entry) === kind);
     const cards = entries.length
       ? entries.map((entry) => {
-        const selected = guidanceEntryKey(entry) === `${selectedGuidanceScope}:${selectedGuidancePath}`;
+        const selected = guidanceEntryKey(entry) === `${appState.selectedGuidanceScope}:${appState.selectedGuidancePath}`;
         const summary = entry.summary || `Open this ${guidanceKindLabel(kind).toLowerCase().replace(/s$/, "")} to view its instructions.`;
         const entryName = entry.name || entry.relativePath.split("/").pop() || "guidance";
         const entryPath = escapeHtml(entry.relativePath);
@@ -3691,7 +3546,7 @@ function renderGuidanceList() {
         return `<div class="guidance-entry-row"><button type="button" class="guidance-entry${selected ? " active" : ""}" data-guidance-path="${entryPath}" data-guidance-scope="${entryScope}" aria-pressed="${selected}"><span class="guidance-entry-copy"><strong>${escapeHtml(entryName)}</strong><small>${escapeHtml(summary)}</small></span></button><button type="button" class="guidance-entry-delete" data-guidance-delete-path="${entryPath}" data-guidance-delete-scope="${entryScope}" aria-label="Delete ${escapeHtml(entryName)}" title="Delete ${escapeHtml(entryName)}"><span class="codicon codicon-trash" aria-hidden="true"></span></button></div>`;
       }).join("")
       : `<div class="guidance-category-empty">No ${guidanceKindLabel(kind).toLowerCase()} yet.</div>`;
-    return `<section class="guidance-category" data-guidance-kind="${kind}"><header class="guidance-category-header"><div><span class="codicon ${GUIDANCE_KIND_ICONS[kind]}" aria-hidden="true"></span><div><h3>${guidanceKindLabel(kind)}</h3><p>${GUIDANCE_KIND_DESCRIPTIONS[kind]}</p></div></div><button type="button" class="guidance-new-button" data-guidance-new-kind="${kind}" ${!rootPath && guidanceScope === "project" ? "disabled" : ""}><span class="codicon codicon-add" aria-hidden="true"></span>New</button></header><div class="guidance-category-list">${cards}</div></section>`;
+    return `<section class="guidance-category" data-guidance-kind="${kind}"><header class="guidance-category-header"><div><span class="codicon ${GUIDANCE_KIND_ICONS[kind]}" aria-hidden="true"></span><div><h3>${guidanceKindLabel(kind)}</h3><p>${GUIDANCE_KIND_DESCRIPTIONS[kind]}</p></div></div><button type="button" class="guidance-new-button" data-guidance-new-kind="${kind}" ${!appState.rootPath && appState.guidanceScope === "project" ? "disabled" : ""}><span class="codicon codicon-add" aria-hidden="true"></span>New</button></header><div class="guidance-category-list">${cards}</div></section>`;
   }).join("");
   guidanceSettingsList.querySelectorAll("[data-guidance-path]").forEach((button) => button.addEventListener("click", () => selectGuidanceEntry(button.dataset.guidancePath, button.dataset.guidanceScope)));
   guidanceSettingsList.querySelectorAll("[data-guidance-delete-path]").forEach((button) => button.addEventListener("click", (event) => {
@@ -3700,15 +3555,15 @@ function renderGuidanceList() {
     deleteGuidanceEntry(button.dataset.guidanceDeletePath, button.dataset.guidanceDeleteScope);
   }));
   guidanceSettingsList.querySelectorAll("[data-guidance-new-kind]").forEach((button) => button.addEventListener("click", () => beginGuidanceCreate(button.dataset.guidanceNewKind)));
-  if (!visible.length && guidanceScope !== "all") setGuidanceEmptyState(guidanceScope === "project" && !rootPath ? "Open a project to add project guidance, or switch to Global." : "Create your first rule, skill, or subagent with the AI.");
+  if (!visible.length && appState.guidanceScope !== "all") setGuidanceEmptyState(appState.guidanceScope === "project" && !appState.rootPath ? "Open a project to add project guidance, or switch to Global." : "Create your first rule, skill, or subagent with the AI.");
   else if (guidanceSettingsEmpty) guidanceSettingsEmpty.hidden = true;
-  if (selectedGuidancePath && customGuidanceEntries.some((entry) => guidanceEntryKey(entry) === `${selectedGuidanceScope}:${selectedGuidancePath}`)) renderGuidanceDetail();
+  if (appState.selectedGuidancePath && appState.customGuidanceEntries.some((entry) => guidanceEntryKey(entry) === `${appState.selectedGuidanceScope}:${appState.selectedGuidancePath}`)) renderGuidanceDetail();
   else if (guidanceSettingsDetail) guidanceSettingsDetail.hidden = true;
 }
 
 function renderGuidanceDetail() {
   if (!guidanceSettingsDetail) return;
-  const existing = customGuidanceEntries.find((entry) => guidanceEntryKey(entry) === `${selectedGuidanceScope}:${selectedGuidancePath}`);
+  const existing = appState.customGuidanceEntries.find((entry) => guidanceEntryKey(entry) === `${appState.selectedGuidanceScope}:${appState.selectedGuidancePath}`);
   if (!existing) {
     guidanceSettingsDetail.hidden = true;
     return;
@@ -3716,19 +3571,19 @@ function renderGuidanceDetail() {
   const kind = guidanceEntryKind(existing);
   guidanceSettingsEmpty.hidden = true;
   guidanceSettingsDetail.hidden = false;
-  guidanceSettingsDetail.innerHTML = `<article class="guidance-detail-card"><header class="guidance-detail-header"><div><span class="codicon ${GUIDANCE_KIND_ICONS[kind]}" aria-hidden="true"></span><div><span class="guidance-detail-eyebrow">${escapeHtml(guidanceScopeLabel(existing.scope))} ${guidanceKindLabel(kind).slice(0, -1)}</span><h2>${escapeHtml(existing.name || "Guidance")}</h2><p>${escapeHtml(existing.relativePath)}</p></div></div><span class="guidance-kind-badge">${escapeHtml(guidanceKindLabel(kind).slice(0, -1))}</span></header><label class="guidance-detail-content-label">Instructions<textarea id="guidance-file-content" spellcheck="false">${escapeHtml(selectedGuidanceContent)}</textarea></label><aside class="guidance-protection-note"><span class="codicon codicon-shield" aria-hidden="true"></span><p>Additive context only. It cannot grant permissions, bypass authorization, change scope, or override runtime guardrails.</p></aside><footer class="guidance-detail-actions"><button type="button" id="guidance-cancel-file" class="secondary-button">Close</button><button type="button" id="guidance-delete-file" class="secondary-button"><span class="codicon codicon-trash" aria-hidden="true"></span>Delete</button></footer></article>`;
+  guidanceSettingsDetail.innerHTML = `<article class="guidance-detail-card"><header class="guidance-detail-header"><div><span class="codicon ${GUIDANCE_KIND_ICONS[kind]}" aria-hidden="true"></span><div><span class="guidance-detail-eyebrow">${escapeHtml(guidanceScopeLabel(existing.scope))} ${guidanceKindLabel(kind).slice(0, -1)}</span><h2>${escapeHtml(existing.name || "Guidance")}</h2><p>${escapeHtml(existing.relativePath)}</p></div></div><span class="guidance-kind-badge">${escapeHtml(guidanceKindLabel(kind).slice(0, -1))}</span></header><label class="guidance-detail-content-label">Instructions<textarea id="guidance-file-content" spellcheck="false">${escapeHtml(appState.selectedGuidanceContent)}</textarea></label><aside class="guidance-protection-note"><span class="codicon codicon-shield" aria-hidden="true"></span><p>Additive context only. It cannot grant permissions, bypass authorization, change scope, or override runtime guardrails.</p></aside><footer class="guidance-detail-actions"><button type="button" id="guidance-cancel-file" class="secondary-button">Close</button><button type="button" id="guidance-delete-file" class="secondary-button"><span class="codicon codicon-trash" aria-hidden="true"></span>Delete</button></footer></article>`;
   const contentInput = guidanceSettingsDetail.querySelector("#guidance-file-content");
   contentInput?.addEventListener("input", () => {
-    selectedGuidanceContent = contentInput.value;
-    if (guidanceDraft) guidanceDraft.dirty = true;
+    appState.selectedGuidanceContent = contentInput.value;
+    if (appState.guidanceDraft) appState.guidanceDraft.dirty = true;
     contentInput.dataset.dirty = "true";
     queueGuidanceAutosave();
   });
   guidanceSettingsDetail.querySelector("#guidance-cancel-file")?.addEventListener("click", async () => {
     if (!await flushGuidanceAutosave()) return;
-    guidanceDraft = null;
-    selectedGuidancePath = "";
-    selectedGuidanceContent = "";
+    appState.guidanceDraft = null;
+    appState.selectedGuidancePath = "";
+    appState.selectedGuidanceContent = "";
     renderGuidanceList();
   });
   guidanceSettingsDetail.querySelector("#guidance-delete-file")?.addEventListener("click", deleteGuidanceFile);
@@ -3737,19 +3592,19 @@ function renderGuidanceDetail() {
 async function selectGuidanceEntry(relativePath, scope = "project") {
   if (guidanceDetailIsDirty() && !await flushGuidanceAutosave()) return;
   const selectedScope = String(scope || "project").toLowerCase() === "global" ? "global" : "project";
-  const result = await window.api.guidanceRead?.({ workspace: rootPath, relativePath, scope: selectedScope });
+  const result = await window.api.guidanceRead?.({ workspace: appState.rootPath, relativePath, scope: selectedScope });
   if (result?.error) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = result.error;
     return;
   }
-  selectedGuidancePath = result.relativePath || relativePath;
-  selectedGuidanceScope = selectedScope;
-  selectedGuidanceContent = String(result.content || "");
-  guidanceDraft = null;
+  appState.selectedGuidancePath = result.relativePath || relativePath;
+  appState.selectedGuidanceScope = selectedScope;
+  appState.selectedGuidanceContent = String(result.content || "");
+  appState.guidanceDraft = null;
 
   const filePath = String(result.path || "").trim();
   if (filePath) {
-    const fileName = filePath.replace(/\\/g, "/").split("/").pop() || selectedGuidancePath;
+    const fileName = filePath.replace(/\\/g, "/").split("/").pop() || appState.selectedGuidancePath;
     await openFile(filePath, fileName);
     if (commandSettingsStatus) commandSettingsStatus.textContent = `Opened ${fileName}`;
     return;
@@ -3761,21 +3616,21 @@ async function selectGuidanceEntry(relativePath, scope = "project") {
 }
 
 function guidanceCreationScope() {
-  if (guidanceScope === "global") return "global";
-  if (guidanceScope === "project" && rootPath) return "project";
-  return rootPath ? "project" : "global";
+  if (appState.guidanceScope === "global") return "global";
+  if (appState.guidanceScope === "project" && appState.rootPath) return "project";
+  return appState.rootPath ? "project" : "global";
 }
 
 function beginGuidanceCreate(kind = "skills") {
   const scope = guidanceCreationScope();
-  if (scope === "project" && !rootPath) {
+  if (scope === "project" && !appState.rootPath) {
     setGuidanceEmptyState("Open a project before creating project guidance, or switch to Global.");
     return;
   }
   const commandKind = kind === "subagents" ? "subagent" : kind === "rules" ? "rule" : "skill";
   const label = commandKind === "subagent" ? "subagent" : commandKind;
   const prompt = `/create-${commandKind} Help me create this ${label} for XEKUTE:\n\nScope: ${guidanceScopeLabel(scope)}\n\nDescribe what you want this ${label} to do. The AI will infer a kebab-case filename and create a detailed Markdown file under .xekute/${kind}/ in the selected scope.`;
-  guidanceDraft = { isNew: true, kind, scope, dirty: false };
+  appState.guidanceDraft = { isNew: true, kind, scope, dirty: false };
   setChatMode("agent");
   openChatPane({ createIfEmpty: true });
   chatInput.value = prompt;
@@ -3787,20 +3642,20 @@ function beginGuidanceCreate(kind = "skills") {
 }
 
 async function saveGuidanceFile({ autoSave = false } = {}) {
-  const existing = customGuidanceEntries.find((entry) => guidanceEntryKey(entry) === `${selectedGuidanceScope}:${selectedGuidancePath}`);
+  const existing = appState.customGuidanceEntries.find((entry) => guidanceEntryKey(entry) === `${appState.selectedGuidanceScope}:${appState.selectedGuidancePath}`);
   if (!existing) return false;
   const content = guidanceSettingsDetail?.querySelector("#guidance-file-content")?.value || "";
-  const result = await window.api.guidanceSave?.({ workspace: rootPath, relativePath: selectedGuidancePath, content, scope: selectedGuidanceScope });
+  const result = await window.api.guidanceSave?.({ workspace: appState.rootPath, relativePath: appState.selectedGuidancePath, content, scope: appState.selectedGuidanceScope });
   if (result?.error) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = result.error;
     return false;
   }
   const contentInput = guidanceSettingsDetail?.querySelector("#guidance-file-content");
   if (contentInput?.value === content) {
-    guidanceDraft = null;
-    selectedGuidanceContent = content;
+    appState.guidanceDraft = null;
+    appState.selectedGuidanceContent = content;
     contentInput.dataset.dirty = "false";
-    if (commandSettingsStatus) commandSettingsStatus.textContent = autoSave ? "All changes saved" : `Saved ${selectedGuidancePath}`;
+    if (commandSettingsStatus) commandSettingsStatus.textContent = autoSave ? "All changes saved" : `Saved ${appState.selectedGuidancePath}`;
   }
   if (!autoSave) await loadGuidanceSettings({ preserveSelection: true });
   else await refreshCustomSkillCatalog();
@@ -3812,19 +3667,19 @@ async function saveGuidanceFile({ autoSave = false } = {}) {
 
 async function deleteGuidanceEntry(relativePath, scope = "project") {
   const normalizedScope = String(scope || "project").toLowerCase() === "global" ? "global" : "project";
-  const entry = customGuidanceEntries.find((candidate) => guidanceEntryKey(candidate) === `${normalizedScope}:${relativePath}`);
+  const entry = appState.customGuidanceEntries.find((candidate) => guidanceEntryKey(candidate) === `${normalizedScope}:${relativePath}`);
   if (!entry || !window.api.guidanceDelete) return false;
   const label = entry.name || String(relativePath || "guidance").split("/").pop() || "guidance";
   if (!await AppDialog.confirm(`Delete ${label}?`, { title: "Delete guidance", confirmLabel: "Delete", tone: "danger" })) return false;
-  const result = await window.api.guidanceDelete({ workspace: rootPath, relativePath, scope: normalizedScope });
+  const result = await window.api.guidanceDelete({ workspace: appState.rootPath, relativePath, scope: normalizedScope });
   if (result?.error) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = result.error;
     return false;
   }
-  if (selectedGuidanceScope === normalizedScope && selectedGuidancePath === relativePath) {
-    selectedGuidancePath = "";
-    selectedGuidanceContent = "";
-    guidanceDraft = null;
+  if (appState.selectedGuidanceScope === normalizedScope && appState.selectedGuidancePath === relativePath) {
+    appState.selectedGuidancePath = "";
+    appState.selectedGuidanceContent = "";
+    appState.guidanceDraft = null;
   }
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Guidance deleted";
   await loadGuidanceSettings();
@@ -3833,24 +3688,22 @@ async function deleteGuidanceEntry(relativePath, scope = "project") {
 }
 
 async function deleteGuidanceFile() {
-  await deleteGuidanceEntry(selectedGuidancePath, selectedGuidanceScope);
+  await deleteGuidanceEntry(appState.selectedGuidancePath, appState.selectedGuidanceScope);
 }
 
 function renderGuidanceSettings() {
   renderGuidanceList();
-  if (guidanceDraft && !guidanceDraft.isNew) renderGuidanceDetail();
+  if (appState.guidanceDraft && !appState.guidanceDraft.isNew) renderGuidanceDetail();
 }
 
-let guidanceEntriesRequestGeneration = 0;
-let guidanceContextRequestGeneration = 0;
 
 async function refreshCustomSkillCatalog() {
-  const requestedWorkspace = rootPath || "";
-  const requestGeneration = ++guidanceEntriesRequestGeneration;
+  const requestedWorkspace = appState.rootPath || "";
+  const requestGeneration = ++appState.guidanceEntriesRequestGeneration;
   const catalog = await window.api.guidanceEntries?.({ workspace: requestedWorkspace, scope: "all" });
-  if (rootPath !== requestedWorkspace || requestGeneration !== guidanceEntriesRequestGeneration) return false;
+  if (appState.rootPath !== requestedWorkspace || requestGeneration !== appState.guidanceEntriesRequestGeneration) return false;
   if (!Array.isArray(catalog?.entries)) return false;
-  customGuidanceEntries = catalog.entries;
+  appState.customGuidanceEntries = catalog.entries;
   syncCustomSkillSlashCommands();
   await loadGuidanceContext();
   return true;
@@ -3858,85 +3711,83 @@ async function refreshCustomSkillCatalog() {
 
 async function loadGuidanceContext() {
   if (!window.api.guidanceContext) {
-    guidanceContextRequestGeneration += 1;
-    guidanceContext = "";
-    return guidanceContext;
+    appState.guidanceContextRequestGeneration += 1;
+    appState.guidanceContext = "";
+    return appState.guidanceContext;
   }
-  const requestedWorkspace = rootPath || "__global__";
-  const workspace = rootPath || "";
-  if (guidanceContextPromise && guidanceContextRequestPath === requestedWorkspace) return guidanceContextPromise;
-  const requestGeneration = ++guidanceContextRequestGeneration;
-  guidanceContext = "";
-  guidanceContextRequestPath = requestedWorkspace;
-  guidanceContextPromise = window.api.guidanceContext({ workspace })
+  const requestedWorkspace = appState.rootPath || "__global__";
+  const workspace = appState.rootPath || "";
+  if (appState.guidanceContextPromise && appState.guidanceContextRequestPath === requestedWorkspace) return appState.guidanceContextPromise;
+  const requestGeneration = ++appState.guidanceContextRequestGeneration;
+  appState.guidanceContext = "";
+  appState.guidanceContextRequestPath = requestedWorkspace;
+  appState.guidanceContextPromise = window.api.guidanceContext({ workspace })
     .then((result) => {
-      if (requestGeneration === guidanceContextRequestGeneration && (rootPath || "__global__") === requestedWorkspace) guidanceContext = result?.context || "";
-      return guidanceContext;
+      if (requestGeneration === appState.guidanceContextRequestGeneration && (appState.rootPath || "__global__") === requestedWorkspace) appState.guidanceContext = result?.context || "";
+      return appState.guidanceContext;
     })
     .catch(() => {
-      if (requestGeneration === guidanceContextRequestGeneration && (rootPath || "__global__") === requestedWorkspace) guidanceContext = "";
-      return guidanceContext;
+      if (requestGeneration === appState.guidanceContextRequestGeneration && (appState.rootPath || "__global__") === requestedWorkspace) appState.guidanceContext = "";
+      return appState.guidanceContext;
     })
     .finally(() => {
-      if (requestGeneration === guidanceContextRequestGeneration && guidanceContextRequestPath === requestedWorkspace) {
-        guidanceContextPromise = null;
-        guidanceContextRequestPath = "";
+      if (requestGeneration === appState.guidanceContextRequestGeneration && appState.guidanceContextRequestPath === requestedWorkspace) {
+        appState.guidanceContextPromise = null;
+        appState.guidanceContextRequestPath = "";
       }
     });
-  return guidanceContextPromise;
+  return appState.guidanceContextPromise;
 }
 
 async function loadGuidanceSettings({ preserveSelection = false } = {}) {
-  const requestedWorkspace = rootPath || "";
-  const requestGeneration = ++guidanceEntriesRequestGeneration;
-  const previousSelection = selectedGuidancePath;
-  const previousScope = selectedGuidanceScope;
-  if (!preserveSelection) guidanceDraft = null;
+  const requestedWorkspace = appState.rootPath || "";
+  const requestGeneration = ++appState.guidanceEntriesRequestGeneration;
+  const previousSelection = appState.selectedGuidancePath;
+  const previousScope = appState.selectedGuidanceScope;
+  if (!preserveSelection) appState.guidanceDraft = null;
   if (!window.api.guidanceEntries) {
-    customGuidanceEntries = [];
+    appState.customGuidanceEntries = [];
     syncCustomSkillSlashCommands();
-    selectedGuidancePath = "";
-    selectedGuidanceContent = "";
+    appState.selectedGuidancePath = "";
+    appState.selectedGuidanceContent = "";
     renderGuidanceSettings();
     return;
   }
   const result = await window.api.guidanceEntries({ workspace: requestedWorkspace, scope: "all" });
-  if (rootPath !== requestedWorkspace || requestGeneration !== guidanceEntriesRequestGeneration) return;
-  customGuidanceEntries = Array.isArray(result?.entries) ? result.entries : [];
+  if (appState.rootPath !== requestedWorkspace || requestGeneration !== appState.guidanceEntriesRequestGeneration) return;
+  appState.customGuidanceEntries = Array.isArray(result?.entries) ? result.entries : [];
   syncCustomSkillSlashCommands();
-  if (preserveSelection && previousSelection && customGuidanceEntries.some((entry) => guidanceEntryKey(entry) === `${previousScope}:${previousSelection}`)) {
-    selectedGuidancePath = previousSelection;
-    selectedGuidanceScope = previousScope;
-  } else if (!customGuidanceEntries.some((entry) => guidanceEntryKey(entry) === `${selectedGuidanceScope}:${selectedGuidancePath}`)) {
-    selectedGuidancePath = "";
-    selectedGuidanceContent = "";
+  if (preserveSelection && previousSelection && appState.customGuidanceEntries.some((entry) => guidanceEntryKey(entry) === `${previousScope}:${previousSelection}`)) {
+    appState.selectedGuidancePath = previousSelection;
+    appState.selectedGuidanceScope = previousScope;
+  } else if (!appState.customGuidanceEntries.some((entry) => guidanceEntryKey(entry) === `${appState.selectedGuidanceScope}:${appState.selectedGuidancePath}`)) {
+    appState.selectedGuidancePath = "";
+    appState.selectedGuidanceContent = "";
   }
   renderGuidanceSettings();
   await loadGuidanceContext();
 }
 
-let authoritySettingsLoadGeneration = 0;
-let authoritySettingsWriteGeneration = 0;
 async function loadAuthoritySettings() {
-  const loadGeneration = ++authoritySettingsLoadGeneration;
-  const stateGeneration = ++authoritySettingsWriteGeneration;
-  const requestedWorkspace = rootPath;
-  const requestedAssessment = assessmentPath;
+  const loadGeneration = ++appState.authoritySettingsLoadGeneration;
+  const stateGeneration = ++appState.authoritySettingsWriteGeneration;
+  const requestedWorkspace = appState.rootPath;
+  const requestedAssessment = appState.assessmentPath;
   let stored = {};
   try { stored = JSON.parse(localStorage.getItem(AUTHORITY_SETTINGS_KEY) || "{}"); } catch { stored = {}; }
-  if (assessmentPath && !assessmentSettingsVirtual) {
-    const settings = assessmentSettingsCache || (await refreshAssessmentSettingsCache())?.settings;
-    if (loadGeneration !== authoritySettingsLoadGeneration || stateGeneration !== authoritySettingsWriteGeneration || rootPath !== requestedWorkspace || assessmentPath !== requestedAssessment) return authoritySettingsData;
+  if (appState.assessmentPath && !appState.assessmentSettingsVirtual) {
+    const settings = appState.assessmentSettingsCache || (await refreshAssessmentSettingsCache())?.settings;
+    if (loadGeneration !== appState.authoritySettingsLoadGeneration || stateGeneration !== appState.authoritySettingsWriteGeneration || appState.rootPath !== requestedWorkspace || appState.assessmentPath !== requestedAssessment) return appState.authoritySettingsData;
     if (settings?.authority) stored = settings.authority;
   }
-  authoritySettingsData = normalizeAuthoritySettings(stored);
+  appState.authoritySettingsData = normalizeAuthoritySettings(stored);
   syncAuthorityLabel();
-  return authoritySettingsData;
+  return appState.authoritySettingsData;
 }
 
 function syncAuthorityLabel() {
   if (!authorityLabel) return;
-  const settings = normalizeAuthoritySettings(authoritySettingsData);
+  const settings = normalizeAuthoritySettings(appState.authoritySettingsData);
   const mode = settings.superMode;
   const label = AUTHORITY_SUPER_LABELS[mode] || AUTHORITY_SUPER_LABELS.ask;
   authorityLabel.textContent = label;
@@ -3955,33 +3806,33 @@ function syncAuthorityLabel() {
 }
 
 async function persistAuthoritySettings() {
-  const stateGeneration = ++authoritySettingsWriteGeneration;
-  const requestedWorkspace = rootPath;
-  const requestedAssessment = assessmentPath;
+  const stateGeneration = ++appState.authoritySettingsWriteGeneration;
+  const requestedWorkspace = appState.rootPath;
+  const requestedAssessment = appState.assessmentPath;
   try {
-    authoritySettingsData = normalizeAuthoritySettings(authoritySettingsData);
-    const requestedAuthority = { ...authoritySettingsData, permissions: { ...authoritySettingsData.permissions } };
-    localStorage.setItem(AUTHORITY_SETTINGS_KEY, JSON.stringify(authoritySettingsData));
-    if (assessmentSettingsCache && assessmentPath && !assessmentSettingsVirtual) {
-      const nextSettings = { ...assessmentSettingsCache, authority: requestedAuthority };
-      assessmentSettingsCache = nextSettings;
+    appState.authoritySettingsData = normalizeAuthoritySettings(appState.authoritySettingsData);
+    const requestedAuthority = { ...appState.authoritySettingsData, permissions: { ...appState.authoritySettingsData.permissions } };
+    localStorage.setItem(AUTHORITY_SETTINGS_KEY, JSON.stringify(appState.authoritySettingsData));
+    if (appState.assessmentSettingsCache && appState.assessmentPath && !appState.assessmentSettingsVirtual) {
+      const nextSettings = { ...appState.assessmentSettingsCache, authority: requestedAuthority };
+      appState.assessmentSettingsCache = nextSettings;
       const result = await window.api.assessmentWriteSettings?.({ path: requestedAssessment, settings: nextSettings });
-      if (stateGeneration !== authoritySettingsWriteGeneration || rootPath !== requestedWorkspace || assessmentPath !== requestedAssessment) return result;
+      if (stateGeneration !== appState.authoritySettingsWriteGeneration || appState.rootPath !== requestedWorkspace || appState.assessmentPath !== requestedAssessment) return result;
       if (result?.error) {
         addErrorMessage(result.error);
       } else if (result?.settings) {
-        assessmentSettingsCache = result.settings;
+        appState.assessmentSettingsCache = result.settings;
         if (result.settings.authority) {
-          authoritySettingsData = normalizeAuthoritySettings(result.settings.authority);
-          localStorage.setItem(AUTHORITY_SETTINGS_KEY, JSON.stringify(authoritySettingsData));
+          appState.authoritySettingsData = normalizeAuthoritySettings(result.settings.authority);
+          localStorage.setItem(AUTHORITY_SETTINGS_KEY, JSON.stringify(appState.authoritySettingsData));
         }
         syncOpenSettingsTabContent(result.settings);
       }
     }
-    if (stateGeneration !== authoritySettingsWriteGeneration || rootPath !== requestedWorkspace || assessmentPath !== requestedAssessment) return;
+    if (stateGeneration !== appState.authoritySettingsWriteGeneration || appState.rootPath !== requestedWorkspace || appState.assessmentPath !== requestedAssessment) return;
     syncAuthorityLabel();
   } catch (error) {
-    if (stateGeneration === authoritySettingsWriteGeneration && rootPath === requestedWorkspace && assessmentPath === requestedAssessment) {
+    if (stateGeneration === appState.authoritySettingsWriteGeneration && appState.rootPath === requestedWorkspace && appState.assessmentPath === requestedAssessment) {
       addErrorMessage(error?.message || "Failed to save authority settings");
     }
   }
@@ -3990,7 +3841,7 @@ async function persistAuthoritySettings() {
 async function setAuthoritySuperMode(mode) {
   if (!["full", "ask", "approve"].includes(mode)) return;
   try {
-    authoritySettingsData = normalizeAuthoritySettings({ ...(authoritySettingsData || {}), superMode: mode });
+    appState.authoritySettingsData = normalizeAuthoritySettings({ ...(appState.authoritySettingsData || {}), superMode: mode });
     await persistAuthoritySettings();
   } finally {
     restoreChatComposerAfterUiAction();
@@ -4055,7 +3906,7 @@ function setProjectFieldValue(object, dottedPath, value) {
   });
 }
 
-function populateProjectSettings(profile = projectProfileData) {
+function populateProjectSettings(profile = appState.projectProfileData) {
   if (!projectSettingsForm || !profile) return;
   projectSettingsForm.querySelectorAll("[data-project-field]").forEach((field) => {
     const value = projectFieldValue(profile, field.dataset.projectField);
@@ -4063,10 +3914,10 @@ function populateProjectSettings(profile = projectProfileData) {
     else if (field.dataset.projectKind === "array") field.value = Array.isArray(value) ? value.join("\n") : "";
     else field.value = value == null ? "" : String(value);
   });
-  if (projectSettingsName) projectSettingsName.textContent = profile.project?.name || (rootPath ? projectName(rootPath) : "Project");
+  if (projectSettingsName) projectSettingsName.textContent = profile.project?.name || (appState.rootPath ? projectName(appState.rootPath) : "Project");
   if (projectSettingsRoot) {
-    projectSettingsRoot.textContent = rootPath || "";
-    projectSettingsRoot.title = rootPath || "";
+    projectSettingsRoot.textContent = appState.rootPath || "";
+    projectSettingsRoot.title = appState.rootPath || "";
   }
   if (projectAuthSource) {
     const selection = profile.engagement?.authenticationSelection || { kind: "none", id: "" };
@@ -4075,7 +3926,7 @@ function populateProjectSettings(profile = projectProfileData) {
 }
 
 function collectProjectSettings() {
-  const profile = JSON.parse(JSON.stringify(projectProfileData || {}));
+  const profile = JSON.parse(JSON.stringify(appState.projectProfileData || {}));
   projectSettingsForm?.querySelectorAll("[data-project-field]").forEach((field) => {
     let value = field.value;
     if (field.dataset.projectKind === "boolean") value = Boolean(field.checked);
@@ -4093,46 +3944,41 @@ function collectProjectSettings() {
   return profile;
 }
 
-let projectAutosaveTimer = null;
-let projectAutosaveRevision = 0;
-let projectAutosaveRunning = false;
-let projectAutosavePending = new Map();
-let projectAutosaveLatestRevisionByWorkspace = new Map();
 
 function queueProjectProfileAutosave(delay = 650) {
-  clearTimeout(projectAutosaveTimer);
-  projectAutosaveTimer = setTimeout(() => { void flushProjectProfileAutosave(); }, delay);
+  clearTimeout(appState.projectAutosaveTimer);
+  appState.projectAutosaveTimer = setTimeout(() => { void flushProjectProfileAutosave(); }, delay);
 }
 
 function scheduleProjectProfileAutosave({ immediate = false } = {}) {
-  if (!rootPath || projectProfileWorkspace !== rootPath || !projectProfileData || !projectSettingsForm) return;
-  projectAutosaveRevision += 1;
+  if (!appState.rootPath || appState.projectProfileWorkspace !== appState.rootPath || !appState.projectProfileData || !projectSettingsForm) return;
+  appState.projectAutosaveRevision += 1;
   const pending = {
-    workspace: rootPath,
-    revision: projectAutosaveRevision,
-    profileGeneration: projectProfileWorkspaceGenerations.get(rootPath) ?? projectProfileLoadGeneration,
-    writeGeneration: projectProfileWriteGenerations.get(rootPath) || 0,
+    workspace: appState.rootPath,
+    revision: appState.projectAutosaveRevision,
+    profileGeneration: appState.projectProfileWorkspaceGenerations.get(appState.rootPath) ?? appState.projectProfileLoadGeneration,
+    writeGeneration: appState.projectProfileWriteGenerations.get(appState.rootPath) || 0,
     profile: collectProjectSettings(),
     accounts: collectEngagementAccountSnapshots(),
   };
-  projectAutosavePending.set(rootPath, pending);
-  projectAutosaveLatestRevisionByWorkspace.set(rootPath, pending.revision);
+  appState.projectAutosavePending.set(appState.rootPath, pending);
+  appState.projectAutosaveLatestRevisionByWorkspace.set(appState.rootPath, pending.revision);
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Saving automatically…";
   queueProjectProfileAutosave(immediate ? 0 : 650);
 }
 
 function isCurrentProjectProfileAutosave({ workspace, revision, profileGeneration, writeGeneration }) {
-  return projectAutosaveLatestRevisionByWorkspace.get(workspace) === revision
-    && projectProfileWorkspaceGenerations.get(workspace) === profileGeneration
-    && (projectProfileWriteGenerations.get(workspace) || 0) === writeGeneration;
+  return appState.projectAutosaveLatestRevisionByWorkspace.get(workspace) === revision
+    && appState.projectProfileWorkspaceGenerations.get(workspace) === profileGeneration
+    && (appState.projectProfileWriteGenerations.get(workspace) || 0) === writeGeneration;
 }
 
 async function flushProjectProfileAutosave() {
-  projectAutosaveTimer = null;
-  if (projectAutosaveRunning || !projectAutosavePending.size) return;
-  const pending = projectAutosavePending.values().next().value;
-  if (projectAutosavePending.get(pending.workspace) === pending) projectAutosavePending.delete(pending.workspace);
-  projectAutosaveRunning = true;
+  appState.projectAutosaveTimer = null;
+  if (appState.projectAutosaveRunning || !appState.projectAutosavePending.size) return;
+  const pending = appState.projectAutosavePending.values().next().value;
+  if (appState.projectAutosavePending.get(pending.workspace) === pending) appState.projectAutosavePending.delete(pending.workspace);
+  appState.projectAutosaveRunning = true;
   try {
     await saveProjectProfile({
       autoSave: true,
@@ -4145,14 +3991,14 @@ async function flushProjectProfileAutosave() {
     });
   } catch (error) {
     if (isCurrentProjectProfileAutosave(pending)
-      && rootPath === pending.workspace
-      && projectProfileWorkspace === pending.workspace
+      && appState.rootPath === pending.workspace
+      && appState.projectProfileWorkspace === pending.workspace
       && commandSettingsStatus) {
       commandSettingsStatus.textContent = error?.message || "Could not save project settings";
     }
   } finally {
-    projectAutosaveRunning = false;
-    if (projectAutosavePending.size) queueProjectProfileAutosave(0);
+    appState.projectAutosaveRunning = false;
+    if (appState.projectAutosavePending.size) queueProjectProfileAutosave(0);
   }
 }
 
@@ -4200,63 +4046,63 @@ function setProjectSettingsTarget(targetId, { scroll = false } = {}) {
 }
 
 async function loadProjectProfile() {
-  const loadGeneration = ++projectProfileLoadGeneration;
-  if (!projectAutosavePending?.size) {
-    clearTimeout(projectAutosaveTimer);
-    projectAutosaveTimer = null;
+  const loadGeneration = ++appState.projectProfileLoadGeneration;
+  if (!appState.projectAutosavePending?.size) {
+    clearTimeout(appState.projectAutosaveTimer);
+    appState.projectAutosaveTimer = null;
   }
-  projectAutosaveRevision += 1;
-  const workspace = rootPath;
-  if (workspace) projectProfileWorkspaceGenerations.set(workspace, loadGeneration);
-  projectProfileWorkspace = "";
+  appState.projectAutosaveRevision += 1;
+  const workspace = appState.rootPath;
+  if (workspace) appState.projectProfileWorkspaceGenerations.set(workspace, loadGeneration);
+  appState.projectProfileWorkspace = "";
   const hasProject = Boolean(workspace);
   if (projectSettingsUnavailable) projectSettingsUnavailable.hidden = hasProject;
   if (projectSettingsShell) projectSettingsShell.hidden = !hasProject;
   if (!hasProject) {
-    projectProfileData = null;
-    projectProfileExists = false;
+    appState.projectProfileData = null;
+    appState.projectProfileExists = false;
     if (commandSettingsStatus) commandSettingsStatus.textContent = "Open a project to configure it";
     return null;
   }
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Loading project settingsâ€¦";
   const result = await window.api.projectProfileGet?.({ path: workspace });
-  if (rootPath !== workspace || loadGeneration !== projectProfileLoadGeneration) return null;
+  if (appState.rootPath !== workspace || loadGeneration !== appState.projectProfileLoadGeneration) return null;
   if (result?.error || !result?.profile) {
-    projectProfileData = null;
-    projectProfileExists = false;
+    appState.projectProfileData = null;
+    appState.projectProfileExists = false;
     if (commandSettingsStatus) commandSettingsStatus.textContent = result?.error || "Project settings unavailable";
     return result;
   }
-  projectProfileData = result.profile;
-  projectProfileExists = Boolean(result.exists);
-  projectProfileWorkspace = workspace;
-  populateProjectSettings(projectProfileData);
+  appState.projectProfileData = result.profile;
+  appState.projectProfileExists = Boolean(result.exists);
+  appState.projectProfileWorkspace = workspace;
+  populateProjectSettings(appState.projectProfileData);
   const activeTarget = projectSettingsNavButtons.find((button) => button.classList.contains("active"))?.dataset.projectSettingsTarget;
   setProjectSettingsTarget(activeTarget);
   if (commandSettingsStatus) {
-    commandSettingsStatus.textContent = projectProfileExists
+    commandSettingsStatus.textContent = appState.projectProfileExists
       ? "Project settings loaded"
       : "New profile â€” project folder remains untouched";
   }
   await loadIdentitySettings();
-  if (rootPath !== workspace || loadGeneration !== projectProfileLoadGeneration) return null;
+  if (appState.rootPath !== workspace || loadGeneration !== appState.projectProfileLoadGeneration) return null;
   return result;
 }
 
-async function saveProjectProfile({ autoSave = false, revision = projectAutosaveRevision, profileGeneration = projectProfileLoadGeneration, writeGeneration: requestedWriteGeneration = null, workspace: requestedWorkspace = rootPath, profile: requestedProfile = null, accounts = null } = {}) {
+async function saveProjectProfile({ autoSave = false, revision = appState.projectAutosaveRevision, profileGeneration = appState.projectProfileLoadGeneration, writeGeneration: requestedWriteGeneration = null, workspace: requestedWorkspace = appState.rootPath, profile: requestedProfile = null, accounts = null } = {}) {
   const workspace = requestedWorkspace;
   if (!workspace || !projectSettingsForm) {
-    if (rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Open a project first";
+    if (appState.rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Open a project first";
     return;
   }
-  if (!autoSave && (projectProfileWorkspace !== workspace || profileGeneration !== projectProfileLoadGeneration)) {
-    if (rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Project settings are still loading";
+  if (!autoSave && (appState.projectProfileWorkspace !== workspace || profileGeneration !== appState.projectProfileLoadGeneration)) {
+    if (appState.rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Project settings are still loading";
     return;
   }
   const profile = requestedProfile || collectProjectSettings();
   if (!profile.project?.name?.trim()) {
-    if (rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Project name is required";
-    if (rootPath === workspace) projectSettingsForm.querySelector('[data-project-field="project.name"]')?.focus();
+    if (appState.rootPath === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Project name is required";
+    if (appState.rootPath === workspace) projectSettingsForm.querySelector('[data-project-field="project.name"]')?.focus();
     return;
   }
   let writeGeneration = requestedWriteGeneration;
@@ -4264,20 +4110,20 @@ async function saveProjectProfile({ autoSave = false, revision = projectAutosave
     const snapshot = { workspace, revision, profileGeneration, writeGeneration };
     if (!isCurrentProjectProfileAutosave(snapshot)) return;
   } else {
-    writeGeneration = (projectProfileWriteGenerations.get(workspace) || 0) + 1;
-    projectProfileWriteGenerations.set(workspace, writeGeneration);
+    writeGeneration = (appState.projectProfileWriteGenerations.get(workspace) || 0) + 1;
+    appState.projectProfileWriteGenerations.set(workspace, writeGeneration);
   }
-  const currentWorkspaceProfileGeneration = projectProfileWorkspaceGenerations.get(workspace);
+  const currentWorkspaceProfileGeneration = appState.projectProfileWorkspaceGenerations.get(workspace);
   const isCurrentWrite = () => autoSave
     ? isCurrentProjectProfileAutosave({ workspace, revision, profileGeneration, writeGeneration })
-    : (projectProfileWriteGenerations.get(workspace) || 0) === writeGeneration
+    : (appState.projectProfileWriteGenerations.get(workspace) || 0) === writeGeneration
       && (currentWorkspaceProfileGeneration === undefined
-        ? projectProfileWorkspaceGenerations.get(workspace) === undefined
-        : projectProfileWorkspaceGenerations.get(workspace) === profileGeneration);
-  if (rootPath === workspace && projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Saving authentication accounts…";
+        ? appState.projectProfileWorkspaceGenerations.get(workspace) === undefined
+        : appState.projectProfileWorkspaceGenerations.get(workspace) === profileGeneration);
+  if (appState.rootPath === workspace && appState.projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Saving authentication accounts…";
   const accountsResult = await saveEngagementAccounts({ workspace, accounts, isCurrent: isCurrentWrite });
   if (!accountsResult.ok) {
-    if (isCurrentWrite() && rootPath === workspace && projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = accountsResult.error || "Authentication accounts could not be saved";
+    if (isCurrentWrite() && appState.rootPath === workspace && appState.projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = accountsResult.error || "Authentication accounts could not be saved";
     return;
   }
   if (!isCurrentWrite()) return;
@@ -4285,25 +4131,25 @@ async function saveProjectProfile({ autoSave = false, revision = projectAutosave
   if (currentAuthentication.kind === "none" && accountsResult.credentialIds[0]) {
     setProjectFieldValue(profile, "engagement.authenticationSelection", { kind: "credential", id: accountsResult.credentialIds[0] });
   }
-  if (rootPath === workspace && projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Saving project settingsâ€¦";
+  if (appState.rootPath === workspace && appState.projectProfileWorkspace === workspace && commandSettingsStatus) commandSettingsStatus.textContent = "Saving project settingsâ€¦";
   const result = await window.api.projectProfileSave?.({ path: workspace, profile });
-  if (!isCurrentWrite() || rootPath !== workspace || projectProfileWorkspace !== workspace || profileGeneration !== projectProfileLoadGeneration) return result;
+  if (!isCurrentWrite() || appState.rootPath !== workspace || appState.projectProfileWorkspace !== workspace || profileGeneration !== appState.projectProfileLoadGeneration) return result;
   if (result?.error || !result?.profile) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = result?.error || "Could not save project settings";
     return;
   }
-  projectProfileData = result.profile;
-  projectProfileExists = true;
-  if (!autoSave) populateProjectSettings(projectProfileData);
-  if (commandSettingsStatus && (!autoSave || revision === projectAutosaveRevision)) {
+  appState.projectProfileData = result.profile;
+  appState.projectProfileExists = true;
+  if (!autoSave) populateProjectSettings(appState.projectProfileData);
+  if (commandSettingsStatus && (!autoSave || revision === appState.projectAutosaveRevision)) {
     commandSettingsStatus.textContent = autoSave ? "All changes saved" : "Saved outside the project folder";
   }
   if (!autoSave) {
     if (!isCurrentWrite()) return result;
     await loadIdentitySettings();
-    if (!isCurrentWrite() || rootPath !== workspace || projectProfileWorkspace !== workspace || profileGeneration !== projectProfileLoadGeneration) return result;
+    if (!isCurrentWrite() || appState.rootPath !== workspace || appState.projectProfileWorkspace !== workspace || profileGeneration !== appState.projectProfileLoadGeneration) return result;
   }
-  if (!isCurrentWrite() || rootPath !== workspace || projectProfileWorkspace !== workspace || profileGeneration !== projectProfileLoadGeneration) return result;
+  if (!isCurrentWrite() || appState.rootPath !== workspace || appState.projectProfileWorkspace !== workspace || profileGeneration !== appState.projectProfileLoadGeneration) return result;
   await configureProxyListener();
 }
 
@@ -4347,41 +4193,41 @@ function filterAppSettingsNavigation(query = "") {
 }
 
 function setAppSettingsSection(section) {
-  appSettingsSection = ["general", "project", "commands", "authority", "prompts", "llm", "ollama", "certificates", "knowledge"].includes(section) ? (section === "ollama" ? "llm" : section) : "general";
-  const sectionMeta = APP_SETTINGS_SECTION_META[appSettingsSection] || APP_SETTINGS_SECTION_META.general;
+  appState.appSettingsSection = ["general", "project", "commands", "authority", "prompts", "llm", "ollama", "certificates", "knowledge"].includes(section) ? (section === "ollama" ? "llm" : section) : "general";
+  const sectionMeta = APP_SETTINGS_SECTION_META[appState.appSettingsSection] || APP_SETTINGS_SECTION_META.general;
   if (appSettingsPageTitle) appSettingsPageTitle.textContent = sectionMeta.title;
   if (appSettingsPageSubtitle) appSettingsPageSubtitle.textContent = sectionMeta.subtitle;
   if (appSettingsProfileName) appSettingsProfileName.textContent = "Local workspace";
-  if (appSettingsProfilePlan) appSettingsProfilePlan.textContent = rootPath ? projectName(rootPath) : "XEKUTE";
-  if (appSettingsGeneralPanel) appSettingsGeneralPanel.hidden = appSettingsSection !== "general";
-  appSettingsProjectPanel.hidden = appSettingsSection !== "project";
-  appSettingsCommandsPanel.hidden = appSettingsSection !== "commands";
-  appSettingsAuthorityPanel.hidden = appSettingsSection !== "authority";
-  appSettingsPromptsPanel.hidden = appSettingsSection !== "prompts";
-  appSettingsLlmPanel.hidden = appSettingsSection !== "llm";
-  appSettingsCertificatesPanel.hidden = appSettingsSection !== "certificates";
-  if (appSettingsKnowledgePanel) appSettingsKnowledgePanel.hidden = appSettingsSection !== "knowledge";
-  if (commandSettingsStatus) commandSettingsStatus.hidden = appSettingsSection !== "project";
+  if (appSettingsProfilePlan) appSettingsProfilePlan.textContent = appState.rootPath ? projectName(appState.rootPath) : "XEKUTE";
+  if (appSettingsGeneralPanel) appSettingsGeneralPanel.hidden = appState.appSettingsSection !== "general";
+  appSettingsProjectPanel.hidden = appState.appSettingsSection !== "project";
+  appSettingsCommandsPanel.hidden = appState.appSettingsSection !== "commands";
+  appSettingsAuthorityPanel.hidden = appState.appSettingsSection !== "authority";
+  appSettingsPromptsPanel.hidden = appState.appSettingsSection !== "prompts";
+  appSettingsLlmPanel.hidden = appState.appSettingsSection !== "llm";
+  appSettingsCertificatesPanel.hidden = appState.appSettingsSection !== "certificates";
+  if (appSettingsKnowledgePanel) appSettingsKnowledgePanel.hidden = appState.appSettingsSection !== "knowledge";
+  if (commandSettingsStatus) commandSettingsStatus.hidden = appState.appSettingsSection !== "project";
   appSettingsSectionButtons.forEach((button) => {
-    const active = button.dataset.appSettingsSection === appSettingsSection;
+    const active = button.dataset.appSettingsSection === appState.appSettingsSection;
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  if (appSettingsSection === "general") {
+  if (appState.appSettingsSection === "general") {
     renderGeneralSettings();
   }
-  if (appSettingsSection === "project") loadProjectProfile();
-  if (appSettingsSection === "commands") loadMcpSettings();
-  if (appSettingsSection === "authority") {
+  if (appState.appSettingsSection === "project") loadProjectProfile();
+  if (appState.appSettingsSection === "commands") loadMcpSettings();
+  if (appState.appSettingsSection === "authority") {
     renderExploreSubagentSelect();
   }
-  if (appSettingsSection === "prompts") loadGuidanceSettings({ preserveSelection: true });
-  if (appSettingsSection === "llm") {
+  if (appState.appSettingsSection === "prompts") loadGuidanceSettings({ preserveSelection: true });
+  if (appState.appSettingsSection === "llm") {
     loadOllamaSettings();
     loadLlmSettings();
     initModelsSettingsPanel();
   }
-  if (appSettingsSection === "certificates") {
+  if (appState.appSettingsSection === "certificates") {
     loadCertificateSettings();
   }
 }
@@ -4396,31 +4242,26 @@ function syncLlmProviderUi(provider = "ollama") {
   if (llmOllamaEnableToggle) llmOllamaEnableToggle.checked = active === "ollama";
 }
 
-let modelsSettingsDisplayLimit = 10;
 const MODELS_SETTINGS_PAGE_SIZE = 10;
-let llmOpenRouterHasSavedKey = false;
-let llmAutosaveTimer = null;
-let llmAutosaveRunning = false;
-let llmAutosavePending = false;
 
 function queueLlmSettingsAutosave(delay = 500) {
-  clearTimeout(llmAutosaveTimer);
-  llmAutosavePending = true;
+  clearTimeout(appState.llmAutosaveTimer);
+  appState.llmAutosavePending = true;
   if (llmSettingsStatus) llmSettingsStatus.textContent = "Saving automatically…";
-  llmAutosaveTimer = setTimeout(() => { void flushLlmSettingsAutosave(); }, delay);
+  appState.llmAutosaveTimer = setTimeout(() => { void flushLlmSettingsAutosave(); }, delay);
 }
 
 async function flushLlmSettingsAutosave() {
-  clearTimeout(llmAutosaveTimer);
-  llmAutosaveTimer = null;
-  if (llmAutosaveRunning) return;
-  llmAutosaveRunning = true;
-  llmAutosavePending = false;
+  clearTimeout(appState.llmAutosaveTimer);
+  appState.llmAutosaveTimer = null;
+  if (appState.llmAutosaveRunning) return;
+  appState.llmAutosaveRunning = true;
+  appState.llmAutosavePending = false;
   try {
     await saveLlmSettings();
   } finally {
-    llmAutosaveRunning = false;
-    if (llmAutosavePending) queueLlmSettingsAutosave(0);
+    appState.llmAutosaveRunning = false;
+    if (appState.llmAutosavePending) queueLlmSettingsAutosave(0);
   }
 }
 
@@ -4475,10 +4316,10 @@ function setModelEnabled(name, enabled) {
 }
 
 function syncSelectedModelFromEnabled() {
-  if (selectedModel && isModelEnabled(selectedModel)) return;
+  if (appState.selectedModel && isModelEnabled(appState.selectedModel)) return;
   const next = modelsVisibleInPicker()[0] || "";
-  selectedModel = next;
-  if (selectedModel) localStorage.setItem("pointer:model", selectedModel);
+  appState.selectedModel = next;
+  if (appState.selectedModel) localStorage.setItem("pointer:model", appState.selectedModel);
   else localStorage.removeItem("pointer:model");
   void refreshModelContextCapacity();
 }
@@ -4494,8 +4335,8 @@ function addCustomModelName(name) {
   if (!custom.includes(trimmed)) {
     saveCustomModels([...custom, trimmed]);
   }
-  if (!allModels.includes(trimmed)) {
-    allModels = normalizeModelNames([trimmed, ...allModels]);
+  if (!appState.allModels.includes(trimmed)) {
+    appState.allModels = normalizeModelNames([trimmed, ...appState.allModels]);
   }
   return trimmed;
 }
@@ -4508,8 +4349,8 @@ function removeCustomModelName(name) {
     enabled.delete(name);
     saveEnabledModels(enabled);
   }
-  allModels = normalizeModelNames(allModels.filter((entry) => entry !== name));
-  if (selectedModel === name) {
+  appState.allModels = normalizeModelNames(appState.allModels.filter((entry) => entry !== name));
+  if (appState.selectedModel === name) {
     syncSelectedModelFromEnabled();
     syncModelLabel();
   }
@@ -4519,12 +4360,12 @@ function getExploreSubagentModel() {
   const stored = localStorage.getItem(EXPLORE_SUBAGENT_MODEL_KEY);
   const enabledPicker = modelsVisibleInPicker();
   if (stored && enabledPicker.includes(stored)) return stored;
-  if (selectedModel && isModelEnabled(selectedModel)) return selectedModel;
+  if (appState.selectedModel && isModelEnabled(appState.selectedModel)) return appState.selectedModel;
   return enabledPicker[0] || "";
 }
 
 function modelsSettingsCatalog() {
-  return normalizeModelNames([...loadCustomModels(), ...allModels]);
+  return normalizeModelNames([...loadCustomModels(), ...appState.allModels]);
 }
 
 function enabledModelsFirst(models, enabled = loadEnabledModels()) {
@@ -4545,14 +4386,14 @@ function modelsVisibleInPicker() {
 function syncOpenRouterApiFieldsUi() {
   const showKeyFields = Boolean(llmOpenRouterKeyToggle?.checked);
   if (llmOpenRouterKeyFields) llmOpenRouterKeyFields.hidden = !showKeyFields;
-  if (llmOpenRouterKeyStatus) llmOpenRouterKeyStatus.hidden = !llmOpenRouterHasSavedKey || showKeyFields;
+  if (llmOpenRouterKeyStatus) llmOpenRouterKeyStatus.hidden = !appState.llmOpenRouterHasSavedKey || showKeyFields;
   const showBaseFields = Boolean(llmOpenRouterBaseToggle?.checked);
   if (llmOpenRouterBaseFields) llmOpenRouterBaseFields.hidden = !showBaseFields;
 }
 
 function syncOllamaApiFieldsUi() {
-  const envLocked = Boolean(ollamaSettingsData?.usingEnvironment);
-  const hasCustomEndpoint = Boolean(ollamaSettingsData?.host);
+  const envLocked = Boolean(appState.ollamaSettingsData?.usingEnvironment);
+  const hasCustomEndpoint = Boolean(appState.ollamaSettingsData?.host);
   const showEndpointFields = Boolean(llmOllamaEndpointToggle?.checked) && !envLocked;
   if (llmOllamaEndpointFields) llmOllamaEndpointFields.hidden = !showEndpointFields;
   if (llmOllamaEndpointStatus) {
@@ -4590,7 +4431,7 @@ function renderModelsSettingsList() {
   const query = modelsSettingsSearch?.value.trim().toLowerCase() || "";
   const catalog = enabledModelsFirst(modelsSettingsCatalog());
   const filtered = catalog.filter((name) => !query || name.toLowerCase().includes(query));
-  const visible = filtered.slice(0, modelsSettingsDisplayLimit);
+  const visible = filtered.slice(0, appState.modelsSettingsDisplayLimit);
 
   modelsSettingsList.innerHTML = "";
   if (!visible.length) {
@@ -4639,7 +4480,7 @@ function renderModelsSettingsList() {
       renderModelsSettingsList();
       renderExploreSubagentSelect();
       renderModelList();
-      if (!toggleInput.checked && selectedModel === name) {
+      if (!toggleInput.checked && appState.selectedModel === name) {
         syncSelectedModelFromEnabled();
         syncModelLabel();
       }
@@ -4656,36 +4497,36 @@ function renderModelsSettingsList() {
   }
 
   if (modelsViewAllBtn) {
-    modelsViewAllBtn.hidden = filtered.length <= modelsSettingsDisplayLimit;
+    modelsViewAllBtn.hidden = filtered.length <= appState.modelsSettingsDisplayLimit;
     modelsViewAllBtn.textContent = "View more";
   }
 }
 
 async function refreshModelsSettingsPanel() {
-  modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
+  appState.modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
   await loadModels({ showLoading: false });
   renderExploreSubagentSelect();
   renderModelsSettingsList();
 }
 
 function initModelsSettingsPanel() {
-  modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
+  appState.modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
   refreshModelsSettingsPanel();
 }
 
 function selectedLlmProvider() {
   if (llmProviderOpenRouter?.checked) return "openrouter";
   if (llmProvider?.value === "openrouter") return "openrouter";
-  return activeLlmProvider === "openrouter" ? "openrouter" : "ollama";
+  return appState.activeLlmProvider === "openrouter" ? "openrouter" : "ollama";
 }
 
 function isOpenRouterProvider() {
   return selectedLlmProvider() === "openrouter";
 }
 
-function renderOllamaSettings(snapshot = ollamaSettingsData) {
+function renderOllamaSettings(snapshot = appState.ollamaSettingsData) {
   if (!snapshot) return;
-  ollamaSettingsData = snapshot;
+  appState.ollamaSettingsData = snapshot;
   if (ollamaHostInput) ollamaHostInput.value = snapshot.host || "";
   if (llmOllamaEndpointToggle) {
     llmOllamaEndpointToggle.checked = Boolean(snapshot.host) && !snapshot.usingEnvironment;
@@ -4713,8 +4554,8 @@ async function loadLlmSettings() {
     return;
   }
   syncLlmProviderUi(result.provider || "ollama");
-  activeLlmProvider = result.provider || "ollama";
-  llmOpenRouterHasSavedKey = Boolean(result.hasApiKey);
+  appState.activeLlmProvider = result.provider || "ollama";
+  appState.llmOpenRouterHasSavedKey = Boolean(result.hasApiKey);
   const defaultBaseUrl = result.openrouter?.baseUrl || "https://openrouter.ai/api/v1";
   if (openRouterBaseUrl) openRouterBaseUrl.value = defaultBaseUrl;
   if (openRouterModel) openRouterModel.value = result.openrouter?.model || "";
@@ -4758,7 +4599,7 @@ async function saveLlmSettings() {
   const provider = selectedLlmProvider();
   syncLlmProviderUi(provider);
   if (llmSettingsStatus) llmSettingsStatus.textContent = "Saving…";
-  const ollamaHostPayload = llmOllamaEndpointToggle?.checked && !ollamaSettingsData?.usingEnvironment
+  const ollamaHostPayload = llmOllamaEndpointToggle?.checked && !appState.ollamaSettingsData?.usingEnvironment
     ? (ollamaHostInput?.value?.trim() || "")
     : "";
   const ollamaResult = await window.api.setOllamaHost?.({ host: ollamaHostPayload });
@@ -4769,7 +4610,7 @@ async function saveLlmSettings() {
   }
   if (ollamaResult) renderOllamaSettings(ollamaResult);
   const openRouterModelId = provider === "openrouter"
-    ? (selectedModel || openRouterModel?.value || "")
+    ? (appState.selectedModel || openRouterModel?.value || "")
     : openRouterModel?.value;
   const result = await window.api.setLlmSettings?.({
     provider,
@@ -4783,14 +4624,14 @@ async function saveLlmSettings() {
     return;
   }
   if (openRouterApiKey) openRouterApiKey.value = "";
-  llmOpenRouterHasSavedKey = Boolean(result.hasApiKey);
-  activeLlmProvider = result.provider || provider;
+  appState.llmOpenRouterHasSavedKey = Boolean(result.hasApiKey);
+  appState.activeLlmProvider = result.provider || provider;
   syncLlmProviderUi(result.provider || provider);
   if (llmOpenRouterKeyToggle) llmOpenRouterKeyToggle.checked = false;
   syncOpenRouterApiFieldsUi();
   if (result.provider === "openrouter" && result.openrouter?.model) {
-    selectedModel = result.openrouter.model;
-    localStorage.setItem("pointer:model", selectedModel);
+    appState.selectedModel = result.openrouter.model;
+    localStorage.setItem("pointer:model", appState.selectedModel);
   }
   if (llmSettingsStatus) {
     llmSettingsStatus.textContent = result.provider === "openrouter"
@@ -4802,7 +4643,7 @@ async function saveLlmSettings() {
 }
 
 async function testLlmSettings() {
-  if (llmAutosaveTimer || llmAutosavePending) await flushLlmSettingsAutosave();
+  if (appState.llmAutosaveTimer || appState.llmAutosavePending) await flushLlmSettingsAutosave();
   if (llmSettingsStatus) llmSettingsStatus.textContent = "Testing active provider…";
   const result = await window.api.testLlmConnection?.();
   if (result?.error) {
@@ -4863,9 +4704,9 @@ async function resetOllamaSettings() {
   await loadModels({ showLoading: true });
 }
 
-function renderCertificateSettings(snapshot = certificateSettingsData) {
+function renderCertificateSettings(snapshot = appState.certificateSettingsData) {
   if (!snapshot) return;
-  certificateSettingsData = snapshot;
+  appState.certificateSettingsData = snapshot;
   if (certificateDirectory) certificateDirectory.value = snapshot.directory || "";
   if (certificateLocationBadge) certificateLocationBadge.textContent = snapshot.usingDefault ? "Default" : "Custom";
   if (certificateReset) certificateReset.disabled = Boolean(snapshot.usingDefault);
@@ -4882,7 +4723,7 @@ async function loadCertificateSettings() {
 }
 
 async function chooseCertificateDirectory() {
-  const result = await window.api.chooseCertificateDirectory?.({ assessmentPath });
+  const result = await window.api.chooseCertificateDirectory?.({ assessmentPath: appState.assessmentPath });
   if (!result || result.canceled) return;
   if (result.error) return addErrorMessage(result.error);
   renderCertificateSettings(result);
@@ -4890,7 +4731,7 @@ async function chooseCertificateDirectory() {
 }
 
 async function resetCertificateDirectory() {
-  const result = await window.api.resetCertificateDirectory?.({ assessmentPath });
+  const result = await window.api.resetCertificateDirectory?.({ assessmentPath: appState.assessmentPath });
   if (result?.error) return addErrorMessage(result.error);
   renderCertificateSettings(result);
   if (commandSettingsStatus) commandSettingsStatus.textContent = "Default CA location restored";
@@ -4899,7 +4740,7 @@ async function resetCertificateDirectory() {
 const MCP_KIND_DESCRIPTION = "Configure standard MCP servers using the same command, arguments, and environment fields used by other MCP clients.";
 const MCP_KIND_ICON = "codicon-plug";
 
-function mcpWorkspacePath() { return rootPath || assessmentPath || ""; }
+function mcpWorkspacePath() { return appState.rootPath || appState.assessmentPath || ""; }
 function mcpErrorMessage(result, fallback) { return result?.error?.message || result?.error || result?.message || fallback; }
 
 function setKaliAccessStatus(message, tone = "") {
@@ -4913,8 +4754,8 @@ function mcpScopeLabel(scope) {
 }
 
 function renderMcpScopeTabs() {
-  const selected = ["all", "project", "global"].includes(mcpScope) ? mcpScope : "all";
-  mcpScope = selected;
+  const selected = ["all", "project", "global"].includes(appState.mcpScope) ? appState.mcpScope : "all";
+  appState.mcpScope = selected;
   mcpSettingsTabs?.querySelectorAll("[data-mcp-scope]").forEach((button) => {
     const active = button.dataset.mcpScope === selected;
     button.classList.toggle("active", active);
@@ -4934,12 +4775,11 @@ function kaliAccessFormValue() {
   };
 }
 
-let kaliAccessAutosaveTimer = null;
 function queueKaliAccessAutosave(delay = 650) {
-  clearTimeout(kaliAccessAutosaveTimer);
+  clearTimeout(appState.kaliAccessAutosaveTimer);
   setKaliAccessStatus("Saving automatically…", "testing");
-  kaliAccessAutosaveTimer = setTimeout(() => {
-    kaliAccessAutosaveTimer = null;
+  appState.kaliAccessAutosaveTimer = setTimeout(() => {
+    appState.kaliAccessAutosaveTimer = null;
     void saveKaliAccess();
   }, delay);
 }
@@ -4960,21 +4800,21 @@ function renderKaliAccess(profile = {}) {
 function renderMcpSettings() {
   if (!mcpSettingsList) return;
   renderMcpScopeTabs();
-  const entries = mcpServersCache.filter((entry) => mcpScope === "all" || String(entry.scope || "global") === mcpScope);
+  const entries = appState.mcpServersCache.filter((entry) => appState.mcpScope === "all" || String(entry.scope || "global") === appState.mcpScope);
   const cards = entries.length
     ? entries.map((entry) => {
       const summary = entry.summary || "MCP server";
       return `<div class="guidance-entry-row"><button type="button" class="guidance-entry" data-mcp-entry-scope="${escapeHtml(entry.scope)}" aria-pressed="false" title="${escapeHtml(summary)}"><span class="guidance-entry-copy"><strong>${escapeHtml(entry.name)}</strong><small>${escapeHtml(summary)}</small></span><span class="guidance-entry-meta"><span class="guidance-entry-scope">${escapeHtml(mcpScopeLabel(entry.scope))}</span><span class="guidance-entry-type">${escapeHtml(entry.type === "kali" ? "Kali" : entry.type)}</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span></span></button></div>`;
     }).join("")
     : "";
-  const addDisabled = mcpScope === "project" && !mcpWorkspacePath();
+  const addDisabled = appState.mcpScope === "project" && !mcpWorkspacePath();
   const addRow = `<button type="button" class="mcp-add-row" data-mcp-add title="Open MCP configuration" ${addDisabled ? "disabled" : ""}><span class="mcp-add-icon"><span class="codicon codicon-add" aria-hidden="true"></span></span><span class="mcp-add-copy"><strong>Add MCP server</strong><small>Open the standard mcp.json configuration</small></span></button>`;
   mcpSettingsList.innerHTML = `<section class="guidance-category" data-mcp-kind="mcp"><header class="guidance-category-header"><div><span class="codicon ${MCP_KIND_ICON}" aria-hidden="true"></span><div><h3>MCP</h3><p>${MCP_KIND_DESCRIPTION}</p></div></div></header><div class="guidance-category-list">${cards}${addRow}</div></section>`;
   mcpSettingsList.querySelectorAll("[data-mcp-entry-scope]").forEach((button) => button.addEventListener("click", () => openMcpConfig(button.dataset.mcpEntryScope || "global")));
-  mcpSettingsList.querySelectorAll("[data-mcp-add]").forEach((button) => button.addEventListener("click", () => openMcpConfig(mcpScope === "project" ? "project" : "global")));
+  mcpSettingsList.querySelectorAll("[data-mcp-add]").forEach((button) => button.addEventListener("click", () => openMcpConfig(appState.mcpScope === "project" ? "project" : "global")));
 }
 
-async function openMcpConfig(scope = mcpScope === "project" ? "project" : "global") {
+async function openMcpConfig(scope = appState.mcpScope === "project" ? "project" : "global") {
   const result = await window.api.mcpEnsure?.({ workspace: mcpWorkspacePath(), scope });
   if (result?.ok === false || result?.error) {
     if (commandSettingsStatus) commandSettingsStatus.textContent = mcpErrorMessage(result, "MCP configuration could not be opened.");
@@ -4986,11 +4826,11 @@ async function openMcpConfig(scope = mcpScope === "project" ? "project" : "globa
 }
 
 async function loadMcpSettings() {
-  mcpServersCache = [];
+  appState.mcpServersCache = [];
   if (!window.api.mcpRead) { renderMcpSettings(); await loadKaliAccess(); return; }
   const result = await window.api.mcpRead({ workspace: mcpWorkspacePath() });
   if (result?.warnings?.length && commandSettingsStatus) commandSettingsStatus.textContent = result.warnings[0];
-  mcpServersCache = Array.isArray(result?.entries)
+  appState.mcpServersCache = Array.isArray(result?.entries)
     ? result.entries
     : [];
   renderMcpSettings();
@@ -5032,8 +4872,7 @@ async function saveKaliAccess(event, { quiet = false } = {}) {
   if (!quiet) setKaliAccessStatus(result.value?.enabled ? "Kali access saved. Add Kali-hosted servers through the normal MCP configuration." : "Local Kali access is disabled.", "success");
 }
 
-let identitySettingsSnapshot = null;
-function identityWorkspacePath() { return rootPath || assessmentPath || ""; }
+function identityWorkspacePath() { return appState.rootPath || appState.assessmentPath || ""; }
 function setIdentitySettingsStatus(message, tone = "") {
   if (!identitySettingsStatus) return;
   identitySettingsStatus.textContent = String(message || "Ready");
@@ -5041,12 +4880,12 @@ function setIdentitySettingsStatus(message, tone = "") {
   identitySettingsStatus.classList.toggle("success", tone === "success");
 }
 
-function identityRecordList(snapshot = identitySettingsSnapshot) {
+function identityRecordList(snapshot = appState.identitySettingsSnapshot) {
   const value = snapshot?.value || snapshot || {};
   return Array.isArray(value.identities) ? value.identities : [];
 }
 
-function credentialRecordList(snapshot = identitySettingsSnapshot) {
+function credentialRecordList(snapshot = appState.identitySettingsSnapshot) {
   const value = snapshot?.value || snapshot || {};
   return Array.isArray(value.credentials) ? value.credentials : [];
 }
@@ -5140,8 +4979,8 @@ function selectAuthenticationSource(kind, id) {
   markAuthenticationSourceChanged();
 }
 
-function renderIdentitySettings(snapshot = identitySettingsSnapshot) {
-  identitySettingsSnapshot = snapshot;
+function renderIdentitySettings(snapshot = appState.identitySettingsSnapshot) {
+  appState.identitySettingsSnapshot = snapshot;
   const value = snapshot?.value || snapshot || {};
   const identityListError = snapshot?.ok === false ? (snapshot.error?.message || snapshot.error || "Browser identities are unavailable.") : "";
   const credentialListError = value.credentialsError?.message || "";
@@ -5167,7 +5006,7 @@ function renderIdentitySettings(snapshot = identitySettingsSnapshot) {
     if (identities.some((identity) => identity.identityId === current)) identityImportTarget.value = current;
   }
   if (projectAuthSource) {
-    const current = projectAuthSource.value || authenticationSourceValue(projectProfileData?.engagement?.authenticationSelection?.kind, projectProfileData?.engagement?.authenticationSelection?.id);
+    const current = projectAuthSource.value || authenticationSourceValue(appState.projectProfileData?.engagement?.authenticationSelection?.kind, appState.projectProfileData?.engagement?.authenticationSelection?.id);
     const identityOptions = identities.map((identity) => `<option value="identity:${escapeHtml(identity.identityId)}">Browser: ${escapeHtml(identity.name || identity.identityId)}</option>`).join("");
     const credentialOptions = credentials.map((credential) => `<option value="credential:${escapeHtml(credential.credentialId)}">Credential: ${escapeHtml(credential.label || credential.credentialId)} (${escapeHtml(credential.username || "username hidden")})</option>`).join("");
     projectAuthSource.innerHTML = `<option value="none">None (anonymous)</option>${identityOptions ? `<optgroup label="Browser sessions">${identityOptions}</optgroup>` : ""}${credentialOptions ? `<optgroup label="Test credentials">${credentialOptions}</optgroup>` : ""}`;
@@ -5182,7 +5021,7 @@ function renderIdentitySettings(snapshot = identitySettingsSnapshot) {
       } else {
         projectAuthSource.value = "none";
         if (current !== "none") {
-          setProjectFieldValue(projectProfileData || {}, "engagement.authenticationSelection", { kind: "none", id: "" });
+          setProjectFieldValue(appState.projectProfileData || {}, "engagement.authenticationSelection", { kind: "none", id: "" });
           markAuthenticationSourceChanged();
           missingSelectionReset = true;
         }
@@ -5209,10 +5048,9 @@ function renderIdentitySettings(snapshot = identitySettingsSnapshot) {
   return { identityListError, credentialListError, secureStorageUnavailable, missingSelectionReset };
 }
 
-let identitySettingsLoadGeneration = 0;
 
 async function loadIdentitySettings() {
-  const loadGeneration = ++identitySettingsLoadGeneration;
+  const loadGeneration = ++appState.identitySettingsLoadGeneration;
   const workspace = identityWorkspacePath();
   if (!workspace || !window.api.identitiesGet) {
     renderIdentitySettings({ identities: [], runtime: { available: false } });
@@ -5221,7 +5059,7 @@ async function loadIdentitySettings() {
   setIdentitySettingsStatus("Loading…");
   try {
     const result = await window.api.identitiesGet({ workspace });
-    if (identityWorkspacePath() !== workspace || loadGeneration !== identitySettingsLoadGeneration) return;
+    if (identityWorkspacePath() !== workspace || loadGeneration !== appState.identitySettingsLoadGeneration) return;
     const rendered = renderIdentitySettings(result);
     if (result?.ok === false || result?.error) {
       setIdentitySettingsStatus(result.error?.message || result.error || "Identity settings unavailable", "error");
@@ -5241,7 +5079,7 @@ async function loadIdentitySettings() {
     }
     setIdentitySettingsStatus("Ready");
   } catch (error) {
-    if (identityWorkspacePath() !== workspace || loadGeneration !== identitySettingsLoadGeneration) return;
+    if (identityWorkspacePath() !== workspace || loadGeneration !== appState.identitySettingsLoadGeneration) return;
     renderIdentitySettings({ identities: [], credentials: [], runtime: { available: false } });
     setIdentitySettingsStatus(error?.message || "Identity settings unavailable", "error");
   }
@@ -5455,7 +5293,7 @@ async function importIdentityStateFromSettings() {
 
 function webcloneTargetFromScope() {
   try {
-    const raw = resourcePreviewText || "";
+    const raw = appState.resourcePreviewText || "";
     const parsed = JSON.parse(raw);
     const values = Array.isArray(parsed?.targets) ? parsed.targets : [];
     const first = values.find((value) => typeof value === "string" ? /^https?:\/\//i.test(value) : /^https?:\/\//i.test(String(value?.value || "")));
@@ -5465,21 +5303,20 @@ function webcloneTargetFromScope() {
 
 function renderWebCloneFiles() {
   if (!webcloneFileList) return;
-  const files = Array.isArray(webcloneManifest?.files) ? webcloneManifest.files : [];
+  const files = Array.isArray(appState.webcloneManifest?.files) ? appState.webcloneManifest.files : [];
   if (webcloneFileCount) webcloneFileCount.textContent = String(files.length);
-  webcloneFileList.innerHTML = files.length ? files.map((file, index) => `<button type="button" class="webclone-file-item${file.path === webcloneSelectedFile ? " selected" : ""}" data-webclone-file="${escapeHtml(file.path)}" role="treeitem" aria-selected="${file.path === webcloneSelectedFile}"><span class="codicon ${String(file.path).endsWith(".html") ? "codicon-file-code" : String(file.path).endsWith(".css") ? "codicon-symbol-color" : String(file.path).endsWith(".js") ? "codicon-symbol-event" : "codicon-file"}"></span><span>${escapeHtml(file.path.replace(/^WebClone\//, ""))}</span><small>${Math.ceil(Number(file.bytes || 0) / 1024)} KB</small></button>`).join("") : '<div class="webclone-file-empty">Build a clone to populate files.</div>';
+  webcloneFileList.innerHTML = files.length ? files.map((file, index) => `<button type="button" class="webclone-file-item${file.path === appState.webcloneSelectedFile ? " selected" : ""}" data-webclone-file="${escapeHtml(file.path)}" role="treeitem" aria-selected="${file.path === appState.webcloneSelectedFile}"><span class="codicon ${String(file.path).endsWith(".html") ? "codicon-file-code" : String(file.path).endsWith(".css") ? "codicon-symbol-color" : String(file.path).endsWith(".js") ? "codicon-symbol-event" : "codicon-file"}"></span><span>${escapeHtml(file.path.replace(/^WebClone\//, ""))}</span><small>${Math.ceil(Number(file.bytes || 0) / 1024)} KB</small></button>`).join("") : '<div class="webclone-file-empty">Build a clone to populate files.</div>';
   webcloneFileList.querySelectorAll("[data-webclone-file]").forEach((button) => button.addEventListener("click", () => openWebCloneFile(button.dataset.webcloneFile)));
 }
 
-let webcloneFileRequestGeneration = 0;
 async function openWebCloneFile(relativePath) {
-  if (!relativePath || !assessmentPath) return;
-  const requestedAssessment = assessmentPath;
-  const requestGeneration = ++webcloneFileRequestGeneration;
+  if (!relativePath || !appState.assessmentPath) return;
+  const requestedAssessment = appState.assessmentPath;
+  const requestGeneration = ++appState.webcloneFileRequestGeneration;
   const file = await window.api.webCloneReadFile?.({ path: requestedAssessment, relativePath });
-  if (assessmentPath !== requestedAssessment || requestGeneration !== webcloneFileRequestGeneration) return;
+  if (appState.assessmentPath !== requestedAssessment || requestGeneration !== appState.webcloneFileRequestGeneration) return;
   if (!file || file?.error) return addErrorMessage(file?.error || "WebClone file reader is unavailable.");
-  webcloneSelectedFile = relativePath;
+  appState.webcloneSelectedFile = relativePath;
   if (webcloneFileTitle) webcloneFileTitle.textContent = relativePath.replace(/^WebClone\//, "");
   if (webcloneFileMeta) webcloneFileMeta.textContent = `${file.content?.length || 0} characters`;
   if (webcloneFileContent) webcloneFileContent.textContent = String(file.content || "");
@@ -5487,47 +5324,46 @@ async function openWebCloneFile(relativePath) {
   if (webclonePreviewAction) webclonePreviewAction.disabled = !String(relativePath).endsWith("index.html");
 }
 
-let webcloneManifestRequestGeneration = 0;
 async function loadWebCloneManifest() {
-  if (!assessmentPath) return;
-  const requestedAssessment = assessmentPath;
-  const requestGeneration = ++webcloneManifestRequestGeneration;
+  if (!appState.assessmentPath) return;
+  const requestedAssessment = appState.assessmentPath;
+  const requestGeneration = ++appState.webcloneManifestRequestGeneration;
   const result = await window.api.webCloneManifest?.({ path: requestedAssessment });
-  if (assessmentPath !== requestedAssessment || requestGeneration !== webcloneManifestRequestGeneration) return;
-  webcloneManifest = result?.ok === false ? null : result;
-  const files = webcloneManifest?.files || [];
+  if (appState.assessmentPath !== requestedAssessment || requestGeneration !== appState.webcloneManifestRequestGeneration) return;
+  appState.webcloneManifest = result?.ok === false ? null : result;
+  const files = appState.webcloneManifest?.files || [];
   if (webcloneEmpty) webcloneEmpty.hidden = files.length > 0;
   if (webcloneContent) webcloneContent.hidden = files.length === 0;
-  if (webcloneStatus) webcloneStatus.textContent = files.length ? `${files.length} files · ${webcloneManifest.builtAt ? new Date(webcloneManifest.builtAt).toLocaleString() : "ready"}` : "No clone built";
-  if (webcloneTarget && webcloneManifest?.target) webcloneTarget.value = webcloneManifest.target;
+  if (webcloneStatus) webcloneStatus.textContent = files.length ? `${files.length} files · ${appState.webcloneManifest.builtAt ? new Date(appState.webcloneManifest.builtAt).toLocaleString() : "ready"}` : "No clone built";
+  if (webcloneTarget && appState.webcloneManifest?.target) webcloneTarget.value = appState.webcloneManifest.target;
   if (files.length) {
-    webcloneSelectedFile = files.some((file) => file.path === webcloneSelectedFile) ? webcloneSelectedFile : files[0].path;
+    appState.webcloneSelectedFile = files.some((file) => file.path === appState.webcloneSelectedFile) ? appState.webcloneSelectedFile : files[0].path;
     renderWebCloneFiles();
-    await openWebCloneFile(webcloneSelectedFile);
+    await openWebCloneFile(appState.webcloneSelectedFile);
   } else renderWebCloneFiles();
 }
 
 async function buildWebClone() {
-  if (!assessmentPath) return addErrorMessage("Open an assessment before building WebClone.");
-  let target = String(webcloneTarget?.value || webcloneManifest?.target || webcloneTargetFromScope()).trim();
+  if (!appState.assessmentPath) return addErrorMessage("Open an assessment before building WebClone.");
+  let target = String(webcloneTarget?.value || appState.webcloneManifest?.target || webcloneTargetFromScope()).trim();
   if (!target) return;
   webcloneBuildAction.disabled = true;
   if (webcloneStatus) webcloneStatus.textContent = "Building…";
   try {
-    const result = await window.api.webCloneBuild?.({ path: assessmentPath, target, maxAssets: 80 });
+    const result = await window.api.webCloneBuild?.({ path: appState.assessmentPath, target, maxAssets: 80 });
     if (result?.error) return addErrorMessage(result.error);
-    webcloneManifest = result;
-    webcloneSelectedFile = "WebClone/index.html";
+    appState.webcloneManifest = result;
+    appState.webcloneSelectedFile = "WebClone/index.html";
     await loadWebCloneManifest();
   } finally { webcloneBuildAction.disabled = false; }
 }
 
 function setWebCloneFilesCollapsed(collapsed) {
-  webcloneFilesCollapsed = Boolean(collapsed);
-  webcloneContent?.classList.toggle("files-collapsed", webcloneFilesCollapsed);
-  webcloneFilesToggle?.setAttribute("aria-label", webcloneFilesCollapsed ? "Expand files" : "Collapse files");
-  webcloneFilesToggle?.setAttribute("title", webcloneFilesCollapsed ? "Expand files" : "Collapse files");
-  if (webcloneFilesToggle) webcloneFilesToggle.innerHTML = `<span class="codicon codicon-chevron-${webcloneFilesCollapsed ? "left" : "right"}"></span>`;
+  appState.webcloneFilesCollapsed = Boolean(collapsed);
+  webcloneContent?.classList.toggle("files-collapsed", appState.webcloneFilesCollapsed);
+  webcloneFilesToggle?.setAttribute("aria-label", appState.webcloneFilesCollapsed ? "Expand files" : "Collapse files");
+  webcloneFilesToggle?.setAttribute("title", appState.webcloneFilesCollapsed ? "Expand files" : "Collapse files");
+  if (webcloneFilesToggle) webcloneFilesToggle.innerHTML = `<span class="codicon codicon-chevron-${appState.webcloneFilesCollapsed ? "left" : "right"}"></span>`;
 }
 
 function getWebClonePreviewBounds() {
@@ -5536,12 +5372,11 @@ function getWebClonePreviewBounds() {
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 }
 
-let webClonePreviewResizeFrame = 0;
 function syncWebClonePreviewBounds() {
   if (webclonePreviewPane?.hidden !== false || !webclonePreviewFrame) return;
-  if (webClonePreviewResizeFrame) cancelAnimationFrame(webClonePreviewResizeFrame);
-  webClonePreviewResizeFrame = requestAnimationFrame(() => {
-    webClonePreviewResizeFrame = 0;
+  if (appState.webClonePreviewResizeFrame) cancelAnimationFrame(appState.webClonePreviewResizeFrame);
+  appState.webClonePreviewResizeFrame = requestAnimationFrame(() => {
+    appState.webClonePreviewResizeFrame = 0;
     const bounds = getWebClonePreviewBounds();
     if (bounds) window.api.webClonePreviewBounds?.({ bounds });
   });
@@ -5557,7 +5392,7 @@ async function toggleWebClonePreview(show = true) {
     await window.api.webCloneHidePreview?.();
     return;
   }
-  if (show && webcloneFileContent && webcloneSelectedFile.endsWith("index.html")) {
+  if (show && webcloneFileContent && appState.webcloneSelectedFile.endsWith("index.html")) {
     // Parse the untrusted clone only to rewrite local assets. Its serialized
     // HTML runs in a separate sandboxed WebContentsView with no Node/preload;
     // the preview server applies a restrictive CSP and blocks network egress.
@@ -5567,11 +5402,11 @@ async function toggleWebClonePreview(show = true) {
     csp.httpEquiv = "Content-Security-Policy";
     csp.content = "default-src data: blob:; img-src data: blob:; style-src data: blob: 'unsafe-inline'; script-src data: blob: 'unsafe-inline'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';";
     previewDocument.head.prepend(csp);
-    const files = Array.isArray(webcloneManifest?.files) ? webcloneManifest.files : [];
+    const files = Array.isArray(appState.webcloneManifest?.files) ? appState.webcloneManifest.files : [];
     const embeddedAssets = [];
     for (const file of files) {
       if (file.path === "WebClone/index.html") continue;
-      const loaded = await window.api.webCloneReadFile?.({ path: assessmentPath, relativePath: file.path });
+      const loaded = await window.api.webCloneReadFile?.({ path: appState.assessmentPath, relativePath: file.path });
       if (loaded?.error || typeof loaded.content !== "string") continue;
       const relative = file.path.replace(/^WebClone\//, "");
       if (!/\.(?:css|js|mjs)$/i.test(relative)) continue;
@@ -5585,7 +5420,7 @@ async function toggleWebClonePreview(show = true) {
       } catch { /* Source metadata is optional. */ }
       embeddedAssets.push({ relative, basename: relative.split("/").pop(), sourceUrl, sourcePath, encoded });
     }
-    const baseUrl = webcloneManifest?.finalUrl || webcloneManifest?.target || "https://xekute.invalid/";
+    const baseUrl = appState.webcloneManifest?.finalUrl || appState.webcloneManifest?.target || "https://xekute.invalid/";
     previewDocument.querySelectorAll("script[src], link[rel~='stylesheet'][href]").forEach((element) => {
       const attribute = element.hasAttribute("src") ? "src" : "href";
       const original = String(element.getAttribute(attribute) || "").trim();
@@ -5618,9 +5453,9 @@ async function toggleWebClonePreview(show = true) {
 }
 
 async function showWebCloneWorkspace() {
-  browserWorkspace?.setVisible(false);
-  if (terminalMaximized) setTerminalMaximized(false);
-  currentWorkspaceMode = "webclone";
+  appState.browserWorkspace?.setVisible(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
+  appState.currentWorkspaceMode = "webclone";
   setCodeEditorVisible(false);
   resourceViewer.hidden = true; securityWorkspace.hidden = true; appSettingsWorkspace.hidden = true; webcloneWorkspace.hidden = false;
   editorPane?.setAttribute("aria-label", "WebClone workspace");
@@ -5630,15 +5465,15 @@ async function showWebCloneWorkspace() {
   await loadWebCloneManifest();
 }
 
-function modeLabel(mode = chatMode) {
+function modeLabel(mode = appState.chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)] || {};
   return profile?.label || "Agent";
 }
 
 function setSidebarCollapsed(collapsed) {
-  sidebarCollapsed = Boolean(collapsed);
-  sidebar?.classList.toggle("collapsed", sidebarCollapsed);
-  sidebarResize?.classList.toggle("collapsed", sidebarCollapsed);
+  appState.sidebarCollapsed = Boolean(collapsed);
+  sidebar?.classList.toggle("collapsed", appState.sidebarCollapsed);
+  sidebarResize?.classList.toggle("collapsed", appState.sidebarCollapsed);
   syncSidebarActivity();
   requestAnimationFrame(() => {
     EditorManager.layout();
@@ -5647,8 +5482,8 @@ function setSidebarCollapsed(collapsed) {
 }
 
 function syncSidebarActivity() {
-  const projectActive = !sidebarCollapsed
-    && currentSidebarView === "project";
+  const projectActive = !appState.sidebarCollapsed
+    && appState.currentSidebarView === "project";
   btnTopFileTree?.classList.toggle("active", projectActive);
   btnTopFileTree?.classList.toggle("inactive", !projectActive);
   btnTopFileTree?.setAttribute("aria-pressed", String(projectActive));
@@ -5660,7 +5495,7 @@ function syncSidebarActivity() {
 
 function setSidebarView(view, { persist = true } = {}) {
   const next = "project";
-  currentSidebarView = next;
+  appState.currentSidebarView = next;
   if (explorerSidebarView) {
     const visible = next === "project";
     explorerSidebarView.hidden = !visible;
@@ -5686,12 +5521,12 @@ function setSidebarView(view, { persist = true } = {}) {
 }
 
 function activateSidebarView(view) {
-  if (!sidebarCollapsed && currentSidebarView === view) {
+  if (!appState.sidebarCollapsed && appState.currentSidebarView === view) {
     setSidebarCollapsed(true);
     return;
   }
   setSidebarView(view);
-  if (sidebarCollapsed) setSidebarCollapsed(false);
+  if (appState.sidebarCollapsed) setSidebarCollapsed(false);
 }
 
 function persistBugBountyExpansion() {
@@ -5733,7 +5568,7 @@ function restoreBugBountyTreeState() {
   item?.setAttribute("aria-selected", "true");
 }
 
-function assessmentFolderName(folder = assessmentPath) {
+function assessmentFolderName(folder = appState.assessmentPath) {
   return String(folder || "").replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "ASSESSMENT";
 }
 
@@ -5749,7 +5584,7 @@ function assessmentRepairIssueDetails(issue = {}) {
   return { icon: "codicon-warning", action: "Needs manual attention", tone: "blocked" };
 }
 
-function renderAssessmentRepairDialog(verification = assessmentVerification) {
+function renderAssessmentRepairDialog(verification = appState.assessmentVerification) {
   const missing = Array.isArray(verification?.missing) ? verification.missing : [];
   const createCount = missing.filter((issue) => issue.reason === "missing").length;
   const updateCount = missing.filter((issue) => issue.reason === "missing_fields").length;
@@ -5784,7 +5619,7 @@ function renderAssessmentRepairDialog(verification = assessmentVerification) {
       : `<div class="assessment-repair-empty">The assessment is already complete.</div>`;
   }
   if (assessmentRepairConfirm) {
-    assessmentRepairConfirm.disabled = !assessmentPath || !missing.length;
+    assessmentRepairConfirm.disabled = !appState.assessmentPath || !missing.length;
     assessmentRepairConfirm.textContent = blockedCount && !createCount && !updateCount
       ? "Close"
       : "Create missing items";
@@ -5802,18 +5637,18 @@ function setNotifications(items = []) {
   const merged = updatesState.pendingNotification
     ? [updatesState.pendingNotification, ...baseItems]
     : baseItems;
-  notificationItems = merged.filter(Boolean);
+  appState.notificationItems = merged.filter(Boolean);
   if (notificationCount) {
-    notificationCount.textContent = String(notificationItems.length);
-    notificationCount.hidden = notificationItems.length === 0;
+    notificationCount.textContent = String(appState.notificationItems.length);
+    notificationCount.hidden = appState.notificationItems.length === 0;
   }
   if (btnNotifications) {
-    btnNotifications.classList.toggle("has-notifications", notificationItems.length > 0);
-    btnNotifications.title = notificationItems.length ? `${notificationItems.length} notification${notificationItems.length === 1 ? "" : "s"}` : "Notifications";
+    btnNotifications.classList.toggle("has-notifications", appState.notificationItems.length > 0);
+    btnNotifications.title = appState.notificationItems.length ? `${appState.notificationItems.length} notification${appState.notificationItems.length === 1 ? "" : "s"}` : "Notifications";
   }
   if (!notificationList) return;
-  notificationList.innerHTML = notificationItems.length
-    ? notificationItems.map((item) => `<article class="notification-item ${escapeHtml(item.tone || "warning")}"><span class="codicon ${escapeHtml(item.icon || "codicon-warning")}"></span><div><strong>${escapeHtml(item.title || "Notification")}</strong><p>${escapeHtml(item.message || "")}</p>${item.action ? `<button type="button" class="notification-action" data-notification-action="${escapeHtml(item.action)}">${escapeHtml(item.actionLabel || "Review")}</button>` : ""}</div></article>`).join("")
+  notificationList.innerHTML = appState.notificationItems.length
+    ? appState.notificationItems.map((item) => `<article class="notification-item ${escapeHtml(item.tone || "warning")}"><span class="codicon ${escapeHtml(item.icon || "codicon-warning")}"></span><div><strong>${escapeHtml(item.title || "Notification")}</strong><p>${escapeHtml(item.message || "")}</p>${item.action ? `<button type="button" class="notification-action" data-notification-action="${escapeHtml(item.action)}">${escapeHtml(item.actionLabel || "Review")}</button>` : ""}</div></article>`).join("")
     : '<div class="notification-empty">No notifications</div>';
   notificationList.querySelectorAll("[data-notification-action]").forEach((button) => button.addEventListener("click", () => {
       if (button.dataset.notificationAction === "assessment-repair") openAssessmentRepairDialog();
@@ -5838,7 +5673,7 @@ function positionNotificationPanel() {
 
   function beginUpdateInstallFromNotification() {
     updatesState.pendingNotification = null;
-    setNotifications(notificationItems);
+    setNotifications(appState.notificationItems);
     beginUpdateInstall();
   }
 
@@ -5977,7 +5812,7 @@ function showUpdateNotification(version) {
     icon: "codicon-cloud-download",
     tone: "warning",
   };
-  setNotifications(notificationItems);
+  setNotifications(appState.notificationItems);
 }
 
 function handleUpdateEvent(payload = {}) {
@@ -5993,7 +5828,7 @@ function handleUpdateEvent(payload = {}) {
       updatesState.ignoredVersion = "";
       updatesState.deferredVersion = "";
       updatesState.pendingNotification = null;
-      setNotifications(notificationItems);
+      setNotifications(appState.notificationItems);
     }
     // An explicit Help → Check for Updates still shows the ignored version.
     if (ignored && !payload.manual) {
@@ -6026,7 +5861,7 @@ function handleUpdateEvent(payload = {}) {
     updatesState.ignoredVersion = "";
     updatesState.deferredVersion = "";
     updatesState.pendingNotification = null;
-    setNotifications(notificationItems);
+    setNotifications(appState.notificationItems);
     if (payload.deferred) {
       updatesState.readyVersion = String(payload.version || updatesState.availableVersion || "");
       showUpdateReadyToast(updatesState.readyVersion);
@@ -6038,7 +5873,7 @@ function handleUpdateEvent(payload = {}) {
     // The main process quits the app shortly after this event.
   } else if (type === "installing") {
     updatesState.pendingNotification = null;
-    setNotifications(notificationItems);
+    setNotifications(appState.notificationItems);
     const label = updateToast && !updateToast.hidden ? updateToast.querySelector(".update-toast-progress-label") : null;
     if (label) label.textContent = "Installing…";
     else showTransientUpdateNotice("Installing update…", "XEKUTE will restart automatically.");
@@ -6049,14 +5884,14 @@ function handleUpdateEvent(payload = {}) {
       updatesState.ignoredVersion = "";
       updatesState.deferredVersion = "";
       updatesState.pendingNotification = null;
-      setNotifications(notificationItems);
+      setNotifications(appState.notificationItems);
       showTransientUpdateNotice("XEKUTE is up to date", "You're on the latest version.");
     }
   } else if (type === "updated") {
     updatesState.ignoredVersion = "";
     updatesState.deferredVersion = "";
     updatesState.pendingNotification = null;
-    setNotifications(notificationItems);
+    setNotifications(appState.notificationItems);
     showTransientUpdateNotice("XEKUTE is now up to date", `Updated successfully to version ${String(payload.version || "").trim()}.`);
   } else if (type === "disabled") {
     if (payload.manual || payload.reason === "install") {
@@ -6077,14 +5912,14 @@ function handleUpdateEvent(payload = {}) {
 }
 
 async function openAssessmentRepairDialog() {
-  if (!assessmentPath || bugBountyRepair?.disabled) return;
-  let verification = assessmentVerification;
+  if (!appState.assessmentPath || bugBountyRepair?.disabled) return;
+  let verification = appState.assessmentVerification;
   try {
-    verification = await window.api.assessmentVerify({ path: assessmentPath });
+    verification = await window.api.assessmentVerify({ path: appState.assessmentPath });
   } catch (error) {
     verification = { error: error?.message || "Assessment verification failed." };
   }
-  assessmentVerification = verification;
+  appState.assessmentVerification = verification;
   if (verification?.error) {
     setAssessmentUiState("error", { message: verification.error });
     return;
@@ -6137,15 +5972,15 @@ function setAssessmentUiState(state, details = {}) {
         : "Assessment files changed — click to review";
 
   if (bugBountyTargetLabel) {
-    bugBountyTargetLabel.textContent = assessmentPath ? assessmentFolderName().toUpperCase() : "ASSESSMENT";
-    bugBountyTargetLabel.title = assessmentPath;
+    bugBountyTargetLabel.textContent = appState.assessmentPath ? assessmentFolderName().toUpperCase() : "ASSESSMENT";
+    bugBountyTargetLabel.title = appState.assessmentPath;
   }
 
   bugBountyStateIcon.className = "codicon bugbounty-setup-icon";
   if (state === "checking" || state === "repairing") {
     bugBountyStateIcon.classList.add("codicon-loading", "codicon-modifier-spin");
     bugBountyStateTitle.textContent = state === "repairing" ? "Repairing Assessment" : "Checking Assessment";
-    bugBountyStateMessage.textContent = details.message || assessmentPath;
+    bugBountyStateMessage.textContent = details.message || appState.assessmentPath;
     return;
   }
   if (incomplete) {
@@ -6167,9 +6002,9 @@ function setAssessmentUiState(state, details = {}) {
     bugBountyStateIcon.classList.add("codicon-folder-library");
     bugBountyStateTitle.textContent = details.title || "Project Ready";
     bugBountyStateMessage.textContent = details.message || "The project is active for Search, Terminal, and Chat.";
-    if (bugBountyTargetLabel && rootPath) {
-      bugBountyTargetLabel.textContent = projectName(rootPath).toUpperCase();
-      bugBountyTargetLabel.title = rootPath;
+    if (bugBountyTargetLabel && appState.rootPath) {
+      bugBountyTargetLabel.textContent = projectName(appState.rootPath).toUpperCase();
+      bugBountyTargetLabel.title = appState.rootPath;
     }
     return;
   }
@@ -6179,28 +6014,28 @@ function setAssessmentUiState(state, details = {}) {
 }
 
 async function refreshAssessmentState() {
-  const sequence = ++assessmentRefreshSequence;
-  if (!rootPath) {
-    assessmentPath = "";
-    browserWorkspace?.projectChanged();
-    assessmentVerification = null;
-    assessmentSettingsCache = null;
-    assessmentSettingsVirtual = false;
+  const sequence = ++appState.assessmentRefreshSequence;
+  if (!appState.rootPath) {
+    appState.assessmentPath = "";
+    appState.browserWorkspace?.projectChanged();
+    appState.assessmentVerification = null;
+    appState.assessmentSettingsCache = null;
+    appState.assessmentSettingsVirtual = false;
     syncInterceptorToggleUi(null);
     setAssessmentUiState("setup", {});
     configureProxyListener();
     return;
   }
-  if (sequence !== assessmentRefreshSequence) return;
-  assessmentPath = rootPath;
-  assessmentVerification = null;
-  localStorage.setItem(BUG_BOUNTY_PATH_KEY, assessmentPath);
+  if (sequence !== appState.assessmentRefreshSequence) return;
+  appState.assessmentPath = appState.rootPath;
+  appState.assessmentVerification = null;
+  localStorage.setItem(BUG_BOUNTY_PATH_KEY, appState.assessmentPath);
   setAssessmentUiState("project", {
-    title: projectName(rootPath),
+    title: projectName(appState.rootPath),
     message: "Project folder active. Engagement, scope, ROE, and context are managed in XEKUTE Settings.",
   });
   await refreshAssessmentSettingsCache();
-  if (sequence !== assessmentRefreshSequence) return;
+  if (sequence !== appState.assessmentRefreshSequence) return;
   await configureProxyListener();
 }
 
@@ -6208,7 +6043,7 @@ async function createAssessmentFolder() {
   setAssessmentUiState("checking", { message: "Choose a location and assessment name." });
   let result;
   try {
-    result = await window.api.assessmentCreate({ defaultParent: rootPath || undefined });
+    result = await window.api.assessmentCreate({ defaultParent: appState.rootPath || undefined });
   } catch (error) {
     result = { error: error?.message || "Could not create the assessment folder." };
   }
@@ -6220,36 +6055,36 @@ async function createAssessmentFolder() {
     setAssessmentUiState("error", { title: "Creation Failed", message: result.error });
     return;
   }
-  assessmentPath = result.path || result.root;
-  selectedCustomFolder = "";
+  appState.assessmentPath = result.path || result.root;
+  appState.selectedCustomFolder = "";
   selectedCustomEntries.clear();
-  localStorage.setItem(BUG_BOUNTY_PATH_KEY, assessmentPath);
-  await loadWorkspace(assessmentPath);
+  localStorage.setItem(BUG_BOUNTY_PATH_KEY, appState.assessmentPath);
+  await loadWorkspace(appState.assessmentPath);
   await refreshAssessmentState();
   refreshSecurityHistoryIfVisible();
 }
 
 function resetProjectWorkspaceState() {
-  assessmentPath = "";
-  browserWorkspace?.projectChanged();
-  selectedCustomFolder = "";
+  appState.assessmentPath = "";
+  appState.browserWorkspace?.projectChanged();
+  appState.selectedCustomFolder = "";
   selectedCustomEntries.clear();
-  assessmentVerification = null;
-  assessmentSettingsCache = null;
-  assessmentSettingsVirtual = false;
+  appState.assessmentVerification = null;
+  appState.assessmentSettingsCache = null;
+  appState.assessmentSettingsVirtual = false;
   localStorage.removeItem(BUG_BOUNTY_PATH_KEY);
 
-  if (resourceViewerTitle) resourceViewerTitle.textContent = rootPath ? projectName(rootPath) : "Project workspace";
+  if (resourceViewerTitle) resourceViewerTitle.textContent = appState.rootPath ? projectName(appState.rootPath) : "Project workspace";
   if (resourceViewerMeta) resourceViewerMeta.textContent = "Project workspace";
-  resourcePreviewText = "";
-  resourceCurrentFilePath = "";
-  resourceSavedText = "";
-  resourceSettingsActive = false;
-  resourceSettingsData = null;
-  resourceChecklistActive = false;
-  resourceChecklistData = null;
-  resourceScopeActive = false;
-  resourceScopeData = null;
+  appState.resourcePreviewText = "";
+  appState.resourceCurrentFilePath = "";
+  appState.resourceSavedText = "";
+  appState.resourceSettingsActive = false;
+  appState.resourceSettingsData = null;
+  appState.resourceChecklistActive = false;
+  appState.resourceChecklistData = null;
+  appState.resourceScopeActive = false;
+  appState.resourceScopeData = null;
   if (settingsViewSwitch) settingsViewSwitch.hidden = true;
   if (settingsUIView) settingsUIView.hidden = true;
   if (checklistUIView) checklistUIView.hidden = true;
@@ -6264,11 +6099,10 @@ function resetProjectWorkspaceState() {
   showResourceWorkspace();
 }
 
-let projectActivationGeneration = 0;
 
 async function activateProjectWorkspace(folder) {
   if (!folder) return false;
-  const activationGeneration = ++projectActivationGeneration;
+  const activationGeneration = ++appState.projectActivationGeneration;
 
   // Verify the folder before replacing the current Target state. This keeps a
   // canceled/invalid selection from blanking the active assessment.
@@ -6276,11 +6110,11 @@ async function activateProjectWorkspace(folder) {
   try {
     entries = await window.api.readdir(folder);
   } catch (error) {
-    if (activationGeneration !== projectActivationGeneration) return false;
+    if (activationGeneration !== appState.projectActivationGeneration) return false;
     setAssessmentUiState("error", { title: "Project Open Failed", message: error?.message || "Could not read the selected folder." });
     return false;
   }
-  if (activationGeneration !== projectActivationGeneration) return false;
+  if (activationGeneration !== appState.projectActivationGeneration) return false;
   if (!entries || entries.error) {
     setAssessmentUiState("error", { title: "Project Open Failed", message: entries?.error || "Could not read the selected folder." });
     return false;
@@ -6291,17 +6125,17 @@ async function activateProjectWorkspace(folder) {
   try {
     loaded = await loadWorkspace(folder);
   } catch (error) {
-    if (activationGeneration !== projectActivationGeneration) return false;
+    if (activationGeneration !== appState.projectActivationGeneration) return false;
     setAssessmentUiState("error", { title: "Project Open Failed", message: error?.message || "The selected folder could not be loaded." });
     return false;
   }
-  if (activationGeneration !== projectActivationGeneration) return false;
+  if (activationGeneration !== appState.projectActivationGeneration) return false;
   if (!loaded) {
     setAssessmentUiState("error", { title: "Project Open Failed", message: "The selected folder could not be loaded." });
     return false;
   }
   await refreshAssessmentState();
-  if (activationGeneration !== projectActivationGeneration) return false;
+  if (activationGeneration !== appState.projectActivationGeneration) return false;
   refreshSecurityHistoryIfVisible();
   if (resourceViewerTitle) resourceViewerTitle.textContent = projectName(folder);
   return true;
@@ -6311,7 +6145,7 @@ async function createProject() {
   setAssessmentUiState("checking", { message: "Choose a name and location for the new project." });
   let result;
   try {
-    result = await window.api.createProject({ defaultParent: rootPath || undefined });
+    result = await window.api.createProject({ defaultParent: appState.rootPath || undefined });
   } catch (error) {
     result = { error: error?.message || "Could not create the project." };
   }
@@ -6343,36 +6177,36 @@ async function openAssessmentFolder() {
     setAssessmentUiState("error", { message: result?.error || "No assessment folder was selected." });
     return;
   }
-  assessmentPath = result.path;
-  selectedCustomFolder = "";
+  appState.assessmentPath = result.path;
+  appState.selectedCustomFolder = "";
   selectedCustomEntries.clear();
-  localStorage.setItem(BUG_BOUNTY_PATH_KEY, assessmentPath);
-  await loadWorkspace(assessmentPath);
+  localStorage.setItem(BUG_BOUNTY_PATH_KEY, appState.assessmentPath);
+  await loadWorkspace(appState.assessmentPath);
   await refreshAssessmentState();
   refreshSecurityHistoryIfVisible();
 }
 
 async function repairAssessmentFolder() {
-  if (!assessmentPath || bugBountyRepair.disabled) return;
-  const missing = Array.isArray(assessmentVerification?.missing) ? assessmentVerification.missing : [];
+  if (!appState.assessmentPath || bugBountyRepair.disabled) return;
+  const missing = Array.isArray(appState.assessmentVerification?.missing) ? appState.assessmentVerification.missing : [];
   const hasRepairableItems = missing.some((issue) => ["missing", "missing_fields"].includes(issue.reason));
   if (!hasRepairableItems) {
     closeAssessmentRepairDialog();
     return;
   }
   closeAssessmentRepairDialog();
-  setAssessmentUiState("repairing", { message: assessmentPath });
+  setAssessmentUiState("repairing", { message: appState.assessmentPath });
   let result;
   try {
-    result = await window.api.assessmentRepair({ path: assessmentPath });
+    result = await window.api.assessmentRepair({ path: appState.assessmentPath });
   } catch (error) {
     result = { error: error?.message || "Assessment repair failed." };
   }
   if (result?.error) {
-    setAssessmentUiState("incomplete", { ...assessmentVerification, message: result.error });
+    setAssessmentUiState("incomplete", { ...appState.assessmentVerification, message: result.error });
     return;
   }
-  assessmentVerification = result;
+  appState.assessmentVerification = result;
   if (!result.valid) {
     const blocked = result.blocked?.length || result.missingCount || 0;
     setAssessmentUiState("incomplete", { ...result, message: `${blocked} item${blocked === 1 ? " needs" : "s need"} manual attention.` });
@@ -6382,15 +6216,15 @@ async function repairAssessmentFolder() {
 }
 
 function assessmentDiskPath(relativePath) {
-  const root = String(assessmentPath || "").replace(/[/\\]+$/, "");
+  const root = String(appState.assessmentPath || "").replace(/[/\\]+$/, "");
   const separator = root.includes("\\") ? "\\" : "/";
   return `${root}${separator}${String(relativePath || "").replace(/[/\\]+/g, separator)}`;
 }
 
 function setResourceDirty(dirty) {
-  resourceDirty = Boolean(dirty && resourceCurrentFilePath);
-  resourceViewerTitle?.classList.toggle("dirty", resourceDirty);
-  if (resourceViewerSave) resourceViewerSave.disabled = !resourceDirty;
+  appState.resourceDirty = Boolean(dirty && appState.resourceCurrentFilePath);
+  resourceViewerTitle?.classList.toggle("dirty", appState.resourceDirty);
+  if (resourceViewerSave) resourceViewerSave.disabled = !appState.resourceDirty;
 }
 
 function syncResourceCursorPosition() {
@@ -6409,11 +6243,11 @@ function syncResourceCursorPosition() {
 }
 
 async function saveResourceChanges() {
-  if (!resourceCurrentFilePath || !resourceDirty) return { ok: true };
+  if (!appState.resourceCurrentFilePath || !appState.resourceDirty) return { ok: true };
   const text = resourceViewerContent.value;
 
-  if (resourceSettingsActive) {
-    clearTimeout(resourceSettingsSaveTimer);
+  if (appState.resourceSettingsActive) {
+    clearTimeout(appState.resourceSettingsSaveTimer);
     let settings;
     try {
       settings = JSON.parse(text);
@@ -6428,23 +6262,23 @@ async function saveResourceChanges() {
       resourceViewerMeta.textContent = `Save failed: ${result.error}`;
       return result;
     }
-    resourceSettingsData = JSON.parse(JSON.stringify(result.settings || settings));
-    resourcePreviewText = `${JSON.stringify(resourceSettingsData, null, 2)}\n`;
-    resourceViewerContent.value = resourcePreviewText;
-    populateResourceSettingsForm(resourceSettingsData);
+    appState.resourceSettingsData = JSON.parse(JSON.stringify(result.settings || settings));
+    appState.resourcePreviewText = `${JSON.stringify(appState.resourceSettingsData, null, 2)}\n`;
+    resourceViewerContent.value = appState.resourcePreviewText;
+    populateResourceSettingsForm(appState.resourceSettingsData);
     resourceViewerMeta.textContent = "Project runtime settings · Saved";
   } else {
-    const result = await window.api.writeFile(resourceCurrentFilePath, text);
+    const result = await window.api.writeFile(appState.resourceCurrentFilePath, text);
     if (result?.error) {
       resourceViewerMeta.textContent = `Save failed: ${result.error}`;
       return result;
     }
-    resourcePreviewText = text;
-    resourceViewerMeta.textContent = `${relativePathFromRoot(resourceCurrentFilePath) || resourceCurrentFilePath} · Saved`;
+    appState.resourcePreviewText = text;
+    resourceViewerMeta.textContent = `${relativePathFromRoot(appState.resourceCurrentFilePath) || appState.resourceCurrentFilePath} · Saved`;
     await refreshDirMap();
   }
 
-  resourceSavedText = resourceViewerContent.value;
+  appState.resourceSavedText = resourceViewerContent.value;
   setResourceDirty(false);
   syncResourceCursorPosition();
   return { ok: true };
@@ -6460,13 +6294,13 @@ function populateResourceSettingsForm(settings) {
 }
 
 function setResourceSettingsMode(mode) {
-  if (!resourceSettingsActive) return;
+  if (!appState.resourceSettingsActive) return;
   const nextMode = mode === "ui" ? "ui" : "json";
   if (nextMode === "ui") {
     try {
       const parsed = JSON.parse(resourceViewerContent.value);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected a JSON object");
-      resourceSettingsData = parsed;
+      appState.resourceSettingsData = parsed;
     } catch (error) {
       resourceViewerMeta.textContent = `Invalid JSON: ${error.message}`;
       resourceViewerContent.hidden = false;
@@ -6474,30 +6308,30 @@ function setResourceSettingsMode(mode) {
       return;
     }
   }
-  settingsEditorMode = nextMode;
-  localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, settingsEditorMode);
+  appState.settingsEditorMode = nextMode;
+  localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, appState.settingsEditorMode);
   syncSettingsEditorButtons();
-  const uiActive = settingsEditorMode === "ui";
+  const uiActive = appState.settingsEditorMode === "ui";
   resourceViewerContent.hidden = uiActive;
   settingsUIView.hidden = !uiActive;
-  if (uiActive) populateResourceSettingsForm(resourceSettingsData);
+  if (uiActive) populateResourceSettingsForm(appState.resourceSettingsData);
 }
 
 function scheduleResourceSettingsSave() {
-  clearTimeout(resourceSettingsSaveTimer);
+  clearTimeout(appState.resourceSettingsSaveTimer);
   if (resourceViewerMeta) resourceViewerMeta.textContent = "Project runtime settings · Saving...";
-  resourceSettingsSaveTimer = setTimeout(() => {
-    const snapshot = JSON.parse(JSON.stringify(resourceSettingsData || {}));
-    resourceSettingsSaveChain = resourceSettingsSaveChain.then(async () => {
+  appState.resourceSettingsSaveTimer = setTimeout(() => {
+    const snapshot = JSON.parse(JSON.stringify(appState.resourceSettingsData || {}));
+    appState.resourceSettingsSaveChain = appState.resourceSettingsSaveChain.then(async () => {
       const result = await saveAssessmentSettings(snapshot);
       if (result?.error) {
         if (resourceViewerMeta) resourceViewerMeta.textContent = `Save failed: ${result.error}`;
         return;
       }
       const snapshotText = `${JSON.stringify(snapshot, null, 2)}\n`;
-      const currentText = `${JSON.stringify(resourceSettingsData || {}, null, 2)}\n`;
+      const currentText = `${JSON.stringify(appState.resourceSettingsData || {}, null, 2)}\n`;
       if (currentText === snapshotText) {
-        resourceSavedText = currentText;
+        appState.resourceSavedText = currentText;
         setResourceDirty(false);
       }
       if (resourceViewerMeta) resourceViewerMeta.textContent = "Project runtime settings · Saved";
@@ -6506,72 +6340,72 @@ function scheduleResourceSettingsSave() {
 }
 
 function updateResourceSettingFromInput(input) {
-  if (!resourceSettingsActive || !resourceSettingsData) return;
+  if (!appState.resourceSettingsActive || !appState.resourceSettingsData) return;
   let value = input.value;
   if (input.dataset.settingType === "boolean") value = input.checked;
   if (input.dataset.settingType === "number") {
     const number = Number(input.value);
     value = Number.isFinite(number) ? number : null;
   }
-  setNestedSettingValue(resourceSettingsData, input.dataset.settingPath, value);
-  assessmentSettingsCache = resourceSettingsData;
-  syncInterceptorToggleUi(resourceSettingsData);
-  resourcePreviewText = `${JSON.stringify(resourceSettingsData, null, 2)}\n`;
-  resourceViewerContent.value = resourcePreviewText;
-  setResourceDirty(resourcePreviewText !== resourceSavedText);
+  setNestedSettingValue(appState.resourceSettingsData, input.dataset.settingPath, value);
+  appState.assessmentSettingsCache = appState.resourceSettingsData;
+  syncInterceptorToggleUi(appState.resourceSettingsData);
+  appState.resourcePreviewText = `${JSON.stringify(appState.resourceSettingsData, null, 2)}\n`;
+  resourceViewerContent.value = appState.resourcePreviewText;
+  setResourceDirty(appState.resourcePreviewText !== appState.resourceSavedText);
   scheduleResourceSettingsSave();
 }
 
 async function showSettingsResource(filePath) {
-  assessmentModuleActive = false; assessmentModuleView.hidden = true;
-  if (resourceDirty && resourceCurrentFilePath === filePath) {
+  appState.assessmentModuleActive = false; assessmentModuleView.hidden = true;
+  if (appState.resourceDirty && appState.resourceCurrentFilePath === filePath) {
     resourceViewerContent.focus();
     return;
   }
-  if (resourceDirty && resourceCurrentFilePath && resourceCurrentFilePath !== filePath) {
+  if (appState.resourceDirty && appState.resourceCurrentFilePath && appState.resourceCurrentFilePath !== filePath) {
     const saved = await saveResourceChanges();
     if (saved?.error) return;
   }
   showResourceWorkspace();
-  const result = await window.api.assessmentSettings({ path: assessmentPath });
+  const result = await window.api.assessmentSettings({ path: appState.assessmentPath });
   if (result?.error || !result?.settings) {
     await showResourcePreview(filePath, "Project Runtime Settings", "App-managed project settings", { icon: "codicon-settings-gear" });
     return;
   }
 
-  resourceSettingsActive = true;
-  resourceChecklistActive = false;
-  resourceChecklistData = null;
-  resourceScopeActive = false;
-  resourceScopeData = null;
+  appState.resourceSettingsActive = true;
+  appState.resourceChecklistActive = false;
+  appState.resourceChecklistData = null;
+  appState.resourceScopeActive = false;
+  appState.resourceScopeData = null;
   if (checklistUIView) checklistUIView.hidden = true;
   if (scopeUIView) scopeUIView.hidden = true;
-  resourceSettingsData = JSON.parse(JSON.stringify(result.settings));
-  assessmentSettingsCache = resourceSettingsData;
-  resourcePreviewText = `${JSON.stringify(resourceSettingsData, null, 2)}\n`;
-  resourceCurrentFilePath = filePath;
-  resourceSavedText = resourcePreviewText;
+  appState.resourceSettingsData = JSON.parse(JSON.stringify(result.settings));
+  appState.assessmentSettingsCache = appState.resourceSettingsData;
+  appState.resourcePreviewText = `${JSON.stringify(appState.resourceSettingsData, null, 2)}\n`;
+  appState.resourceCurrentFilePath = filePath;
+  appState.resourceSavedText = appState.resourcePreviewText;
   resourceViewerTitle.textContent = "Project Runtime Settings";
   resourceViewerMeta.textContent = "App-managed project settings";
   resourceViewerMeta.title = filePath;
   resourceViewerIcon.className = "codicon codicon-settings-gear";
   resourceViewerEmpty.hidden = true;
   resourceViewerContent.classList.remove("error");
-  resourceViewerContent.value = resourcePreviewText;
+  resourceViewerContent.value = appState.resourcePreviewText;
   resourceViewerContent.readOnly = false;
   resourceViewerCopy.disabled = false;
   setResourceDirty(false);
   settingsViewSwitch.hidden = false;
-  populateResourceSettingsForm(resourceSettingsData);
-  setResourceSettingsMode(settingsEditorMode);
-  if (settingsEditorMode === "json") {
+  populateResourceSettingsForm(appState.resourceSettingsData);
+  setResourceSettingsMode(appState.settingsEditorMode);
+  if (appState.settingsEditorMode === "json") {
     resourceViewerContent.focus();
     syncResourceCursorPosition();
   }
 }
 
 function checklistStatuses() {
-  return resourceChecklistType === "mitre"
+  return appState.resourceChecklistType === "mitre"
     ? [["not-started", "Not started"], ["in-progress", "In progress"], ["observed", "Observed"], ["not-observed", "Not observed"], ["not-applicable", "Not applicable"], ["blocked", "Blocked"]]
     : [["not-tested", "Not tested"], ["in-progress", "In progress"], ["passed", "Passed"], ["failed", "Failed"], ["not-applicable", "Not applicable"], ["blocked", "Blocked"]];
 }
@@ -6582,7 +6416,7 @@ function checklistTextList(value) {
 }
 
 function checklistStatusIssue(check, status) {
-  if (resourceChecklistType === "mitre") return "";
+  if (appState.resourceChecklistType === "mitre") return "";
   const procedure = checklistTextList(check?.procedure);
   const evidence = checklistTextList(check?.evidence || check?.evidenceIds);
   const reason = String(check?.result || check?.notes || "").trim();
@@ -6599,10 +6433,10 @@ function checklistStatusIssue(check, status) {
 }
 
 async function checklistEvidenceIssue(check, status) {
-  if (resourceChecklistType === "mitre" || !["passed", "failed"].includes(status)) return "";
+  if (appState.resourceChecklistType === "mitre" || !["passed", "failed"].includes(status)) return "";
   const ids = checklistTextList(check?.evidence || check?.evidenceIds);
-  if (!ids.length || !assessmentPath || !window.api.assessmentEvidence) return "";
-  const result = await window.api.assessmentEvidence({ path: assessmentPath, limit: 2000 });
+  if (!ids.length || !appState.assessmentPath || !window.api.assessmentEvidence) return "";
+  const result = await window.api.assessmentEvidence({ path: appState.assessmentPath, limit: 2000 });
   if (result?.error) return `Evidence could not be validated: ${result.error}`;
   const available = new Set((result?.records || []).map((record) => String(record.id || "")));
   const missing = ids.filter((id) => !available.has(id));
@@ -6610,50 +6444,50 @@ async function checklistEvidenceIssue(check, status) {
 }
 
 function recalculateChecklistProgress() {
-  const checks = Array.isArray(resourceChecklistData?.checks) ? resourceChecklistData.checks : [];
+  const checks = Array.isArray(appState.resourceChecklistData?.checks) ? appState.resourceChecklistData.checks : [];
   const counts = { total: checks.length, notStarted: 0, notTested: 0, inProgress: 0, passed: 0, failed: 0, observed: 0, notObserved: 0, notApplicable: 0, blocked: 0 };
   const keys = { "not-started": "notStarted", "not-tested": "notTested", "in-progress": "inProgress", passed: "passed", failed: "failed", observed: "observed", "not-observed": "notObserved", "not-applicable": "notApplicable", blocked: "blocked" };
-  checks.forEach((check) => { const key = keys[check.status || (resourceChecklistType === "mitre" ? "not-started" : "not-tested")]; if (key) counts[key] += 1; });
-  resourceChecklistData.progress = resourceChecklistType === "mitre"
+  checks.forEach((check) => { const key = keys[check.status || (appState.resourceChecklistType === "mitre" ? "not-started" : "not-tested")]; if (key) counts[key] += 1; });
+  appState.resourceChecklistData.progress = appState.resourceChecklistType === "mitre"
     ? { total: counts.total, notStarted: counts.notStarted, inProgress: counts.inProgress, observed: counts.observed, notObserved: counts.notObserved, notApplicable: counts.notApplicable, blocked: counts.blocked }
     : { total: counts.total, notTested: counts.notTested + counts.notStarted, inProgress: counts.inProgress, passed: counts.passed, failed: counts.failed, notApplicable: counts.notApplicable, blocked: counts.blocked };
-  const completed = checks.filter((check) => !["not-started", "not-tested", "in-progress"].includes(check.status || (resourceChecklistType === "mitre" ? "not-started" : "not-tested"))).length;
+  const completed = checks.filter((check) => !["not-started", "not-tested", "in-progress"].includes(check.status || (appState.resourceChecklistType === "mitre" ? "not-started" : "not-tested"))).length;
   const percent = checks.length ? Math.round((completed / checks.length) * 100) : 0;
   if (checklistProgress) checklistProgress.innerHTML = `<strong>${percent}%</strong><span>${completed} of ${checks.length} reviewed</span><i><b style="width:${percent}%"></b></i>`;
 }
 
 function scheduleChecklistSave() {
-  clearTimeout(resourceChecklistSaveTimer);
+  clearTimeout(appState.resourceChecklistSaveTimer);
   recalculateChecklistProgress();
-  resourcePreviewText = `${JSON.stringify(resourceChecklistData, null, 2)}\n`;
-  resourceViewerContent.value = resourcePreviewText;
-  setResourceDirty(resourcePreviewText !== resourceSavedText);
-  resourceViewerMeta.textContent = `${resourceChecklistType === "mitre" ? "MITRE ATT&CK" : "OWASP WSTG"} · Saving...`;
-  resourceChecklistSaveTimer = setTimeout(async () => {
-    const snapshot = `${JSON.stringify(resourceChecklistData, null, 2)}\n`;
-    const result = await window.api.writeFile(resourceCurrentFilePath, snapshot);
+  appState.resourcePreviewText = `${JSON.stringify(appState.resourceChecklistData, null, 2)}\n`;
+  resourceViewerContent.value = appState.resourcePreviewText;
+  setResourceDirty(appState.resourcePreviewText !== appState.resourceSavedText);
+  resourceViewerMeta.textContent = `${appState.resourceChecklistType === "mitre" ? "MITRE ATT&CK" : "OWASP WSTG"} · Saving...`;
+  appState.resourceChecklistSaveTimer = setTimeout(async () => {
+    const snapshot = `${JSON.stringify(appState.resourceChecklistData, null, 2)}\n`;
+    const result = await window.api.writeFile(appState.resourceCurrentFilePath, snapshot);
     if (result?.error) { resourceViewerMeta.textContent = `Save failed: ${result.error}`; return; }
-    if (resourceViewerContent.value === snapshot) { resourceSavedText = snapshot; setResourceDirty(false); }
-    resourceViewerMeta.textContent = `${resourceChecklistType === "mitre" ? "MITRE ATT&CK" : "OWASP WSTG"} · Saved`;
+    if (resourceViewerContent.value === snapshot) { appState.resourceSavedText = snapshot; setResourceDirty(false); }
+    resourceViewerMeta.textContent = `${appState.resourceChecklistType === "mitre" ? "MITRE ATT&CK" : "OWASP WSTG"} · Saved`;
   }, 350);
 }
 
 function renderChecklistUI() {
-  if (!resourceChecklistActive || !resourceChecklistData || !checklistGroups) return;
-  const framework = resourceChecklistData.framework || {};
-  checklistFrameworkName.textContent = resourceChecklistType === "mitre" ? "MITRE ATT&CK Enterprise" : "OWASP WSTG + Top 10";
-  checklistFrameworkVersion.textContent = resourceChecklistType === "mitre"
+  if (!appState.resourceChecklistActive || !appState.resourceChecklistData || !checklistGroups) return;
+  const framework = appState.resourceChecklistData.framework || {};
+  checklistFrameworkName.textContent = appState.resourceChecklistType === "mitre" ? "MITRE ATT&CK Enterprise" : "OWASP WSTG + Top 10";
+  checklistFrameworkVersion.textContent = appState.resourceChecklistType === "mitre"
     ? `ATT&CK ${framework.version || ""} · checked ${framework.checkedAt || ""}`
     : `WSTG ${framework.version || ""} (stable ${framework.stableVersion || ""}) · Top 10:${framework.top10Version || ""}`;
   recalculateChecklistProgress();
   const query = String(checklistSearch?.value || "").trim().toLowerCase();
   const filter = checklistStatusFilter?.value || "all";
-  const checks = (resourceChecklistData.checks || []).map((check, index) => ({ check, index })).filter(({ check }) => {
+  const checks = (appState.resourceChecklistData.checks || []).map((check, index) => ({ check, index })).filter(({ check }) => {
     const haystack = [check.id, check.techniqueId, check.category, check.tactic, check.title, check.technique].join(" ").toLowerCase();
     const statusMatches = filter === "all" || check.status === filter || (filter === "not-tested" && check.status === "not-started") || (filter === "failed" && check.status === "observed");
     return statusMatches && (!query || haystack.includes(query));
   });
-  const groupKey = resourceChecklistType === "mitre" ? "tactic" : "category";
+  const groupKey = appState.resourceChecklistType === "mitre" ? "tactic" : "category";
   const groups = new Map();
   checks.forEach((entry) => { const name = entry.check[groupKey] || "Other"; if (!groups.has(name)) groups.set(name, []); groups.get(name).push(entry); });
   checklistGroups.innerHTML = "";
@@ -6662,7 +6496,7 @@ function renderChecklistUI() {
     const summary = document.createElement("summary"); summary.innerHTML = `<span class="codicon codicon-chevron-right"></span><strong>${escapeHtml(groupName)}</strong><small>${entries.length} checks</small>`; section.appendChild(summary);
     const list = document.createElement("div"); list.className = "checklist-items";
     entries.forEach(({ check, index }) => {
-      const normalizedStatus = resourceChecklistType !== "mitre" && check.status === "not-started" ? "not-tested" : (check.status || (resourceChecklistType === "mitre" ? "not-started" : "not-tested"));
+      const normalizedStatus = appState.resourceChecklistType !== "mitre" && check.status === "not-started" ? "not-tested" : (check.status || (appState.resourceChecklistType === "mitre" ? "not-started" : "not-tested"));
       const card = document.createElement("article"); card.className = `checklist-item status-${normalizedStatus}`;
       const heading = document.createElement("div"); heading.className = "checklist-item-heading";
       const identity = document.createElement("div"); identity.className = "checklist-item-identity";
@@ -6670,14 +6504,14 @@ function renderChecklistUI() {
       const title = document.createElement("strong"); title.textContent = check.title || check.technique || "Untitled check"; identity.append(code, title);
       const status = document.createElement("select"); status.className = "checklist-status"; status.dataset.index = String(index);
       checklistStatuses().forEach(([value, label]) => status.add(new Option(label, value))); status.value = normalizedStatus; heading.append(identity, status); card.appendChild(heading);
-      if (resourceChecklistType === "mitre") {
+      if (appState.resourceChecklistType === "mitre") {
         const applicability = document.createElement("select"); applicability.className = "checklist-applicability"; applicability.dataset.index = String(index);
         [["unknown", "Applicability unknown"], ["applicable", "Applicable"], ["not-applicable", "Not applicable"]].forEach(([value, label]) => applicability.add(new Option(label, value))); applicability.value = check.applicability || "unknown"; card.appendChild(applicability);
       } else {
         const procedure = document.createElement("textarea"); procedure.className = "checklist-procedure"; procedure.dataset.index = String(index); procedure.placeholder = "Test procedure (one step per line)"; procedure.value = checklistTextList(check.procedure).join("\n"); card.appendChild(procedure);
         const evidence = document.createElement("input"); evidence.className = "checklist-evidence"; evidence.dataset.index = String(index); evidence.placeholder = "Evidence IDs (comma separated)"; evidence.value = checklistTextList(check.evidence || check.evidenceIds).join(", "); card.appendChild(evidence);
       }
-      const notes = document.createElement("textarea"); notes.className = "checklist-notes"; notes.dataset.index = String(index); notes.placeholder = resourceChecklistType === "mitre" ? "Observations, detection opportunities, or evidence paths" : "Result, limitation, blocked reason, or finding IDs"; notes.value = resourceChecklistType === "mitre" ? (check.observations || check.notes || "") : (check.result || check.notes || ""); card.appendChild(notes);
+      const notes = document.createElement("textarea"); notes.className = "checklist-notes"; notes.dataset.index = String(index); notes.placeholder = appState.resourceChecklistType === "mitre" ? "Observations, detection opportunities, or evidence paths" : "Result, limitation, blocked reason, or finding IDs"; notes.value = appState.resourceChecklistType === "mitre" ? (check.observations || check.notes || "") : (check.result || check.notes || ""); card.appendChild(notes);
       const issue = checklistStatusIssue(check, normalizedStatus);
       if (issue) { const validation = document.createElement("p"); validation.className = "checklist-validation"; validation.textContent = issue; card.appendChild(validation); }
       const reference = check.references?.[0]; if (/^https:\/\//i.test(reference || "")) { const link = document.createElement("a"); link.href = reference; link.target = "_blank"; link.rel = "noreferrer"; link.textContent = "Framework reference"; card.appendChild(link); }
@@ -6689,36 +6523,36 @@ function renderChecklistUI() {
 }
 
 function setResourceChecklistMode(mode) {
-  if (!resourceChecklistActive) return;
+  if (!appState.resourceChecklistActive) return;
   const nextMode = mode === "ui" ? "ui" : "json";
   if (nextMode === "ui") {
-    try { resourceChecklistData = JSON.parse(resourceViewerContent.value); } catch (error) { resourceViewerMeta.textContent = `Invalid JSON: ${error.message}`; return; }
+    try { appState.resourceChecklistData = JSON.parse(resourceViewerContent.value); } catch (error) { resourceViewerMeta.textContent = `Invalid JSON: ${error.message}`; return; }
   }
-  settingsEditorMode = nextMode; localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, nextMode); syncSettingsEditorButtons();
+  appState.settingsEditorMode = nextMode; localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, nextMode); syncSettingsEditorButtons();
   resourceViewerContent.hidden = nextMode === "ui"; checklistUIView.hidden = nextMode !== "ui"; settingsUIView.hidden = true;
   if (nextMode === "ui") renderChecklistUI(); else { resourceViewerContent.focus(); syncResourceCursorPosition(); }
 }
 
 async function showChecklistResource(filePath, type) {
-  assessmentModuleActive = false; assessmentModuleView.hidden = true;
-  if (resourceChecklistActive && resourceCurrentFilePath === filePath) {
-    if (settingsEditorMode === "ui") checklistSearch?.focus();
+  appState.assessmentModuleActive = false; assessmentModuleView.hidden = true;
+  if (appState.resourceChecklistActive && appState.resourceCurrentFilePath === filePath) {
+    if (appState.settingsEditorMode === "ui") checklistSearch?.focus();
     else resourceViewerContent?.focus();
     return;
   }
-  if (resourceDirty && resourceCurrentFilePath && resourceCurrentFilePath !== filePath) { const saved = await saveResourceChanges(); if (saved?.error) return; }
+  if (appState.resourceDirty && appState.resourceCurrentFilePath && appState.resourceCurrentFilePath !== filePath) { const saved = await saveResourceChanges(); if (saved?.error) return; }
   showResourceWorkspace();
   const result = await window.api.readFile(filePath);
   if (result?.error) return showResourcePreview(filePath, `${type}-checklist.json`, "Checklist", { icon: "codicon-checklist" });
   let parsed; try { parsed = JSON.parse(result.content); } catch { return showResourcePreview(filePath, "Invalid checklist JSON", "Edit the JSON to restore UI mode", { icon: "codicon-error" }); }
-  resourceSettingsActive = false; resourceSettingsData = null; resourceScopeActive = false; resourceScopeData = null; settingsUIView.hidden = true; scopeUIView.hidden = true;
-  resourceChecklistActive = true; resourceChecklistType = type; resourceChecklistData = parsed;
-  resourcePreviewText = `${JSON.stringify(parsed, null, 2)}\n`; resourceCurrentFilePath = filePath; resourceSavedText = resourcePreviewText;
+  appState.resourceSettingsActive = false; appState.resourceSettingsData = null; appState.resourceScopeActive = false; appState.resourceScopeData = null; settingsUIView.hidden = true; scopeUIView.hidden = true;
+  appState.resourceChecklistActive = true; appState.resourceChecklistType = type; appState.resourceChecklistData = parsed;
+  appState.resourcePreviewText = `${JSON.stringify(parsed, null, 2)}\n`; appState.resourceCurrentFilePath = filePath; appState.resourceSavedText = appState.resourcePreviewText;
   resourceViewerTitle.textContent = type === "mitre" ? "MITRE ATT&CK Checklist" : type === "asvs" ? "OWASP ASVS Checklist" : "OWASP WSTG Checklist";
   resourceViewerMeta.textContent = type === "mitre" ? "Enterprise ATT&CK technique coverage" : type === "asvs" ? "Application Security Verification Standard coverage" : "WSTG testing scenarios and OWASP Top 10:2025";
   resourceViewerMeta.title = filePath; resourceViewerIcon.className = `codicon ${type === "mitre" ? "codicon-type-hierarchy-sub" : "codicon-checklist"}`;
-  resourceViewerEmpty.hidden = true; resourceViewerContent.classList.remove("error"); resourceViewerContent.readOnly = false; resourceViewerContent.value = resourcePreviewText; resourceViewerCopy.disabled = false;
-  settingsViewSwitch.hidden = false; setResourceDirty(false); setResourceChecklistMode(settingsEditorMode);
+  resourceViewerEmpty.hidden = true; resourceViewerContent.classList.remove("error"); resourceViewerContent.readOnly = false; resourceViewerContent.value = appState.resourcePreviewText; resourceViewerCopy.disabled = false;
+  settingsViewSwitch.hidden = false; setResourceDirty(false); setResourceChecklistMode(appState.settingsEditorMode);
 }
 
 function humanizeScopeKey(key) {
@@ -6767,10 +6601,10 @@ function appendScopeFields(container, object, prefix = "", depth = 0) {
 }
 
 function renderScopeUI() {
-  if (!resourceScopeActive || !resourceScopeData || !scopeUIForm) return;
-  const meta = MANAGED_CORE_RESOURCE_META[resourceScopeRelativePath] || ["Managed Core Resource", "Schema-managed assessment data."];
+  if (!appState.resourceScopeActive || !appState.resourceScopeData || !scopeUIForm) return;
+  const meta = MANAGED_CORE_RESOURCE_META[appState.resourceScopeRelativePath] || ["Managed Core Resource", "Schema-managed assessment data."];
   scopeUITitle.textContent = meta[0]; scopeUIDescription.textContent = meta[1]; scopeUIForm.innerHTML = "";
-  for (const [key, value] of Object.entries(resourceScopeData)) {
+  for (const [key, value] of Object.entries(appState.resourceScopeData)) {
     if (key === "schemaVersion" || /Template$/.test(key)) continue;
     const section = document.createElement("section"); section.className = "scope-ui-section";
     const heading = document.createElement("header"); heading.innerHTML = `<strong>${escapeHtml(humanizeScopeKey(key))}</strong>`; section.appendChild(heading);
@@ -6781,43 +6615,43 @@ function renderScopeUI() {
 }
 
 function scheduleScopeSave() {
-  clearTimeout(resourceScopeSaveTimer);
-  resourcePreviewText = `${JSON.stringify(resourceScopeData, null, 2)}\n`; resourceViewerContent.value = resourcePreviewText; setResourceDirty(resourcePreviewText !== resourceSavedText);
-  resourceViewerMeta.textContent = `${resourceScopeRelativePath} · Saving...`;
-  resourceScopeSaveTimer = setTimeout(async () => {
-    const snapshot = `${JSON.stringify(resourceScopeData, null, 2)}\n`;
-    const result = await window.api.writeFile(resourceCurrentFilePath, snapshot);
+  clearTimeout(appState.resourceScopeSaveTimer);
+  appState.resourcePreviewText = `${JSON.stringify(appState.resourceScopeData, null, 2)}\n`; resourceViewerContent.value = appState.resourcePreviewText; setResourceDirty(appState.resourcePreviewText !== appState.resourceSavedText);
+  resourceViewerMeta.textContent = `${appState.resourceScopeRelativePath} · Saving...`;
+  appState.resourceScopeSaveTimer = setTimeout(async () => {
+    const snapshot = `${JSON.stringify(appState.resourceScopeData, null, 2)}\n`;
+    const result = await window.api.writeFile(appState.resourceCurrentFilePath, snapshot);
     if (result?.error) { resourceViewerMeta.textContent = `Save failed: ${result.error}`; return; }
-    if (resourceViewerContent.value === snapshot) { resourceSavedText = snapshot; setResourceDirty(false); }
-    resourceViewerMeta.textContent = `${resourceScopeRelativePath} · Saved`;
+    if (resourceViewerContent.value === snapshot) { appState.resourceSavedText = snapshot; setResourceDirty(false); }
+    resourceViewerMeta.textContent = `${appState.resourceScopeRelativePath} · Saved`;
   }, 350);
 }
 
 function setResourceScopeMode(mode) {
-  if (!resourceScopeActive) return;
+  if (!appState.resourceScopeActive) return;
   const nextMode = mode === "ui" ? "ui" : "json";
   if (nextMode === "ui") {
-    try { resourceScopeData = JSON.parse(resourceViewerContent.value); } catch (error) { resourceViewerMeta.textContent = `Invalid JSON: ${error.message}`; return; }
+    try { appState.resourceScopeData = JSON.parse(resourceViewerContent.value); } catch (error) { resourceViewerMeta.textContent = `Invalid JSON: ${error.message}`; return; }
   }
-  settingsEditorMode = nextMode; localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, nextMode); syncSettingsEditorButtons();
+  appState.settingsEditorMode = nextMode; localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, nextMode); syncSettingsEditorButtons();
   resourceViewerContent.hidden = nextMode === "ui"; scopeUIView.hidden = nextMode !== "ui"; settingsUIView.hidden = true; checklistUIView.hidden = true;
   if (nextMode === "ui") renderScopeUI(); else { resourceViewerContent.focus(); syncResourceCursorPosition(); }
 }
 
 async function showScopeResource(filePath, relativePath) {
-  assessmentModuleActive = false; assessmentModuleView.hidden = true;
-  if (resourceScopeActive && resourceCurrentFilePath === filePath) { if (settingsEditorMode === "json") resourceViewerContent.focus(); return; }
-  if (resourceDirty && resourceCurrentFilePath && resourceCurrentFilePath !== filePath) { const saved = await saveResourceChanges(); if (saved?.error) return; }
+  appState.assessmentModuleActive = false; assessmentModuleView.hidden = true;
+  if (appState.resourceScopeActive && appState.resourceCurrentFilePath === filePath) { if (appState.settingsEditorMode === "json") resourceViewerContent.focus(); return; }
+  if (appState.resourceDirty && appState.resourceCurrentFilePath && appState.resourceCurrentFilePath !== filePath) { const saved = await saveResourceChanges(); if (saved?.error) return; }
   showResourceWorkspace();
   const result = await window.api.readFile(filePath);
   if (result?.error) return showResourcePreview(filePath, relativePath.split("/").pop(), `Target / ${relativePath}`, { icon: "codicon-list-tree" });
   let parsed; try { parsed = JSON.parse(result.content); } catch { return showResourcePreview(filePath, "Invalid scope JSON", `Target / ${relativePath}`, { icon: "codicon-error" }); }
-  resourceSettingsActive = false; resourceChecklistActive = false; resourceScopeActive = true; resourceScopeData = parsed; resourceScopeRelativePath = relativePath;
+  appState.resourceSettingsActive = false; appState.resourceChecklistActive = false; appState.resourceScopeActive = true; appState.resourceScopeData = parsed; appState.resourceScopeRelativePath = relativePath;
   settingsUIView.hidden = true; checklistUIView.hidden = true;
-  resourcePreviewText = `${JSON.stringify(parsed, null, 2)}\n`; resourceCurrentFilePath = filePath; resourceSavedText = resourcePreviewText;
+  appState.resourcePreviewText = `${JSON.stringify(parsed, null, 2)}\n`; appState.resourceCurrentFilePath = filePath; appState.resourceSavedText = appState.resourcePreviewText;
   resourceViewerTitle.textContent = relativePath.split("/").pop(); resourceViewerMeta.textContent = `Target / ${relativePath}`; resourceViewerMeta.title = filePath; resourceViewerIcon.className = "codicon codicon-list-tree";
-  resourceViewerEmpty.hidden = true; resourceViewerContent.classList.remove("error"); resourceViewerContent.readOnly = false; resourceViewerContent.value = resourcePreviewText; resourceViewerCopy.disabled = false;
-  settingsViewSwitch.hidden = false; setResourceDirty(false); setResourceScopeMode(settingsEditorMode);
+  resourceViewerEmpty.hidden = true; resourceViewerContent.classList.remove("error"); resourceViewerContent.readOnly = false; resourceViewerContent.value = appState.resourcePreviewText; resourceViewerCopy.disabled = false;
+  settingsViewSwitch.hidden = false; setResourceDirty(false); setResourceScopeMode(appState.settingsEditorMode);
 }
 
 const ASSESSMENT_MODULE_META = {
@@ -6842,9 +6676,9 @@ function moduleTable(headers, rows, empty = "No records yet.") {
 }
 
 function renderAssessmentModule() {
-  if (!assessmentModuleActive || !assessmentModuleContent) return;
-  const data = assessmentModuleData;
-  const relativePath = assessmentModulePath;
+  if (!appState.assessmentModuleActive || !assessmentModuleContent) return;
+  const data = appState.assessmentModuleData;
+  const relativePath = appState.assessmentModulePath;
   let summary = "";
   let content = "";
 
@@ -6894,7 +6728,7 @@ function renderAssessmentModule() {
 }
 
 async function showAssessmentModule(filePath, relativePath) {
-  if (resourceDirty && resourceCurrentFilePath && resourceCurrentFilePath !== filePath) {
+  if (appState.resourceDirty && appState.resourceCurrentFilePath && appState.resourceCurrentFilePath !== filePath) {
     const saved = await saveResourceChanges();
     if (saved?.error) return;
   }
@@ -6910,36 +6744,36 @@ async function showAssessmentModule(filePath, relativePath) {
     try { parsed = JSON.parse(result.content); } catch { return showResourcePreview(filePath, basenameOf(filePath), `Target / ${relativePath}`, { icon: "codicon-error" }); }
   }
   const [title, description, icon] = ASSESSMENT_MODULE_META[relativePath] || [basenameOf(filePath), `Target / ${relativePath}`, "codicon-file-text"];
-  assessmentModuleActive = true; assessmentModulePath = relativePath; assessmentModuleData = parsed;
-  resourceSettingsActive = false; resourceSettingsData = null; resourceChecklistActive = false; resourceChecklistData = null; resourceScopeActive = false; resourceScopeData = null;
+  appState.assessmentModuleActive = true; appState.assessmentModulePath = relativePath; appState.assessmentModuleData = parsed;
+  appState.resourceSettingsActive = false; appState.resourceSettingsData = null; appState.resourceChecklistActive = false; appState.resourceChecklistData = null; appState.resourceScopeActive = false; appState.resourceScopeData = null;
   resourceViewerEmpty.hidden = true; resourceViewerContent.hidden = true; resourceViewerContent.value = "";
-  resourceCurrentFilePath = ""; resourceSavedText = ""; resourcePreviewText = ""; resourceViewerCopy.disabled = true; resourceViewerSave.disabled = true;
+  appState.resourceCurrentFilePath = ""; appState.resourceSavedText = ""; appState.resourcePreviewText = ""; resourceViewerCopy.disabled = true; resourceViewerSave.disabled = true;
   settingsViewSwitch.hidden = true; settingsUIView.hidden = true; checklistUIView.hidden = true; scopeUIView.hidden = true; assessmentModuleView.hidden = false;
   assessmentModuleTitle.textContent = title; assessmentModuleDescription.textContent = description; resourceViewerTitle.textContent = title; resourceViewerMeta.textContent = `Target / ${relativePath}`; resourceViewerMeta.title = filePath; resourceViewerIcon.className = `codicon ${icon}`;
   setResourceDirty(false); renderAssessmentModule();
 }
 
 async function refreshAssessmentModule() {
-  if (!assessmentModuleActive || !assessmentModulePath || !assessmentPath) return;
-  const filePath = assessmentDiskPath(assessmentModulePath);
+  if (!appState.assessmentModuleActive || !appState.assessmentModulePath || !appState.assessmentPath) return;
+  const filePath = assessmentDiskPath(appState.assessmentModulePath);
   const result = await window.api.readFile(filePath);
   if (result?.error) return;
-  if (/\.jsonl$/i.test(assessmentModulePath)) {
-    assessmentModuleData = String(result.content || "").split(/\r?\n/).filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return { type: "invalid", content: line }; } });
-  } else if (assessmentModulePath.endsWith(".md")) {
-    assessmentModuleData = { content: String(result.content || "") };
+  if (/\.jsonl$/i.test(appState.assessmentModulePath)) {
+    appState.assessmentModuleData = String(result.content || "").split(/\r?\n/).filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return { type: "invalid", content: line }; } });
+  } else if (appState.assessmentModulePath.endsWith(".md")) {
+    appState.assessmentModuleData = { content: String(result.content || "") };
   } else {
-    try { assessmentModuleData = JSON.parse(result.content); } catch { return; }
+    try { appState.assessmentModuleData = JSON.parse(result.content); } catch { return; }
   }
   renderAssessmentModule();
 }
 
 async function startAssessmentRun() {
-  if (!assessmentPath || assessmentRunStart?.disabled) return;
+  if (!appState.assessmentPath || assessmentRunStart?.disabled) return;
   const role = canonicalChatMode(assessmentRunProfile?.value || "ask");
   const profile = role;
   assessmentRunStart.disabled = true;
-  const result = await window.api.assessmentCreateRun({ path: assessmentPath, run: { profile, status: "running", operator: "local-user" } });
+  const result = await window.api.assessmentCreateRun({ path: appState.assessmentPath, run: { profile, status: "running", operator: "local-user" } });
   if (result?.error) {
     assessmentRunStart.disabled = false;
     addErrorMessage(result.error);
@@ -6950,25 +6784,25 @@ async function startAssessmentRun() {
 }
 
 async function stopAssessmentRun() {
-  if (!assessmentPath || !assessmentModuleData || assessmentModulePath !== "runs/runs.json") return;
-  const active = (assessmentModuleData.runs || []).find((run) => ["running", "paused"].includes(run.status));
+  if (!appState.assessmentPath || !appState.assessmentModuleData || appState.assessmentModulePath !== "runs/runs.json") return;
+  const active = (appState.assessmentModuleData.runs || []).find((run) => ["running", "paused"].includes(run.status));
   if (!active) return;
   const reasonInput = await AppDialog.prompt("Why is this run being stopped?", "Stopped by operator", { title: "Stop run" });
   if (reasonInput === null) return;
   const reason = reasonInput.trim() || "Stopped by operator";
-  const result = await window.api.assessmentUpdateRun({ path: assessmentPath, id: active.id, patch: { status: "stopped", completedAt: new Date().toISOString(), stopReason: reason } });
+  const result = await window.api.assessmentUpdateRun({ path: appState.assessmentPath, id: active.id, patch: { status: "stopped", completedAt: new Date().toISOString(), stopReason: reason } });
   if (result?.error) { addErrorMessage(result.error); return; }
   setAgentStatus(`Run ${active.id} stopped`);
   await refreshAssessmentModule();
 }
 
 assessmentModuleOpenJson?.addEventListener("click", () => {
-  if (!assessmentModulePath || !assessmentPath) return;
-  showResourcePreview(assessmentDiskPath(assessmentModulePath), basenameOf(assessmentModulePath), `Target / ${assessmentModulePath}`, { icon: "codicon-json" });
+  if (!appState.assessmentModulePath || !appState.assessmentPath) return;
+  showResourcePreview(assessmentDiskPath(appState.assessmentModulePath), basenameOf(appState.assessmentModulePath), `Target / ${appState.assessmentModulePath}`, { icon: "codicon-json" });
 });
 assessmentReportGenerate?.addEventListener("click", async () => {
-  if (!assessmentPath || assessmentModulePath !== "report/report.md") return;
-  const result = await window.api.assessmentGenerateReport({ path: assessmentPath });
+  if (!appState.assessmentPath || appState.assessmentModulePath !== "report/report.md") return;
+  const result = await window.api.assessmentGenerateReport({ path: appState.assessmentPath });
   if (result?.error) addErrorMessage(result.error);
   else setAgentStatus(`Report generated: ${result.path}`);
 });
@@ -6976,12 +6810,12 @@ assessmentRunStart?.addEventListener("click", startAssessmentRun);
 assessmentRunStop?.addEventListener("click", stopAssessmentRun);
 
 function setResourceWrapLines(wrapped) {
-  resourceWrapLines = Boolean(wrapped);
-  localStorage.setItem("xekute.resourceWrapLines", String(resourceWrapLines));
+  appState.resourceWrapLines = Boolean(wrapped);
+  localStorage.setItem("xekute.resourceWrapLines", String(appState.resourceWrapLines));
   if (!resourceViewerContent) return;
-  resourceViewerContent.classList.toggle("wrap-lines", resourceWrapLines);
-  resourceViewerContent.setAttribute("wrap", resourceWrapLines ? "soft" : "off");
-  resourceViewerContent.title = resourceWrapLines
+  resourceViewerContent.classList.toggle("wrap-lines", appState.resourceWrapLines);
+  resourceViewerContent.setAttribute("wrap", appState.resourceWrapLines ? "soft" : "off");
+  resourceViewerContent.title = appState.resourceWrapLines
     ? "Line wrapping on · Alt+Z to unwrap"
     : "Line wrapping off · Alt+Z to wrap";
   syncResourceCursorPosition();
@@ -6989,23 +6823,23 @@ function setResourceWrapLines(wrapped) {
 
 async function showResourcePreview(filePath, title, meta = "", { icon = "codicon-file-text", line = 1 } = {}) {
   if (!filePath || !resourceViewerContent) return;
-  assessmentModuleActive = false;
+  appState.assessmentModuleActive = false;
   if (assessmentModuleView) assessmentModuleView.hidden = true;
-  if (resourceDirty && resourceCurrentFilePath === filePath) {
+  if (appState.resourceDirty && appState.resourceCurrentFilePath === filePath) {
     resourceViewerContent.focus();
     return;
   }
-  if (resourceDirty && resourceCurrentFilePath && resourceCurrentFilePath !== filePath) {
+  if (appState.resourceDirty && appState.resourceCurrentFilePath && appState.resourceCurrentFilePath !== filePath) {
     const saved = await saveResourceChanges();
     if (saved?.error) return;
   }
   showResourceWorkspace();
-  resourceSettingsActive = false;
-  resourceSettingsData = null;
-  resourceChecklistActive = false;
-  resourceChecklistData = null;
-  resourceScopeActive = false;
-  resourceScopeData = null;
+  appState.resourceSettingsActive = false;
+  appState.resourceSettingsData = null;
+  appState.resourceChecklistActive = false;
+  appState.resourceChecklistData = null;
+  appState.resourceScopeActive = false;
+  appState.resourceScopeData = null;
   if (checklistUIView) checklistUIView.hidden = true;
   if (scopeUIView) scopeUIView.hidden = true;
   if (settingsViewSwitch) settingsViewSwitch.hidden = true;
@@ -7019,26 +6853,26 @@ async function showResourcePreview(filePath, title, meta = "", { icon = "codicon
   resourceViewerContent.hidden = false;
 
   if (result?.error || result?.content == null) {
-    resourcePreviewText = `Unable to preview this resource.\n\n${result?.error || "No readable content was returned."}`;
+    appState.resourcePreviewText = `Unable to preview this resource.\n\n${result?.error || "No readable content was returned."}`;
     resourceViewerContent.classList.add("error");
-    resourceCurrentFilePath = "";
-    resourceSavedText = "";
+    appState.resourceCurrentFilePath = "";
+    appState.resourceSavedText = "";
     resourceViewerContent.readOnly = true;
     resourceViewerCopy.disabled = true;
   } else {
     const raw = String(result.content);
     const limit = 300000;
-    resourcePreviewText = raw.length > limit
+    appState.resourcePreviewText = raw.length > limit
       ? `${raw.slice(0, limit)}\n\n--- Preview truncated at ${limit.toLocaleString()} characters ---`
       : raw;
     resourceViewerContent.classList.remove("error");
-    resourceCurrentFilePath = raw.length > limit ? "" : filePath;
-    resourceSavedText = resourcePreviewText;
+    appState.resourceCurrentFilePath = raw.length > limit ? "" : filePath;
+    appState.resourceSavedText = appState.resourcePreviewText;
     resourceViewerContent.readOnly = raw.length > limit;
     resourceViewerCopy.disabled = false;
   }
 
-  resourceViewerContent.value = resourcePreviewText;
+  resourceViewerContent.value = appState.resourcePreviewText;
   setResourceDirty(false);
   requestAnimationFrame(() => {
     const lineHeight = Number.parseFloat(getComputedStyle(resourceViewerContent).lineHeight) || 19;
@@ -7049,7 +6883,7 @@ async function showResourcePreview(filePath, title, meta = "", { icon = "codicon
 }
 
 resourceViewerCopy?.addEventListener("click", async () => {
-  const text = resourceViewerContent?.value || resourcePreviewText;
+  const text = resourceViewerContent?.value || appState.resourcePreviewText;
   if (!text) return;
   await navigator.clipboard.writeText(text);
   resourceViewerCopy.title = "Copied";
@@ -7058,15 +6892,15 @@ resourceViewerCopy?.addEventListener("click", async () => {
 
 resourceViewerSave?.addEventListener("click", saveResourceChanges);
 resourceViewerContent?.addEventListener("input", () => {
-  resourcePreviewText = resourceViewerContent.value;
-  setResourceDirty(resourcePreviewText !== resourceSavedText);
+  appState.resourcePreviewText = resourceViewerContent.value;
+  setResourceDirty(appState.resourcePreviewText !== appState.resourceSavedText);
   syncResourceCursorPosition();
 });
 resourceViewerContent?.addEventListener("keydown", (event) => {
   if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === "z") {
     event.preventDefault();
     event.stopPropagation();
-    setResourceWrapLines(!resourceWrapLines);
+    setResourceWrapLines(!appState.resourceWrapLines);
     return;
   }
   if (event.key !== "Tab" || resourceViewerContent.readOnly) return;
@@ -7082,19 +6916,19 @@ resourceViewerContent?.addEventListener("select", syncResourceCursorPosition);
 resourceViewerContent?.addEventListener("scroll", () => {
   if (resourceLineNumbers) resourceLineNumbers.scrollTop = resourceViewerContent.scrollTop;
 });
-setResourceWrapLines(resourceWrapLines);
+setResourceWrapLines(appState.resourceWrapLines);
 
 async function openAssessmentItem(item) {
   const relativePath = item?.dataset?.bountyFile;
-  if (!assessmentPath || !relativePath) return;
+  if (!appState.assessmentPath || !relativePath) return;
 
   let verification;
   try {
-    verification = await window.api.assessmentVerify({ path: assessmentPath });
+    verification = await window.api.assessmentVerify({ path: appState.assessmentPath });
   } catch (error) {
     verification = { error: error?.message || "Assessment verification failed." };
   }
-  assessmentVerification = verification;
+  appState.assessmentVerification = verification;
   if (verification?.error) {
     setAssessmentUiState("error", { message: verification.error });
     return;
@@ -7152,11 +6986,11 @@ function setSecurityStatus(message, tone = "") {
 }
 
 function saveSecurityDraft() {
-  securityDrafts.set(selectedSecurityTool, {
+  securityDrafts.set(appState.selectedSecurityTool, {
     request: securityRequestEditor?.value || "",
     response: securityResponseEditor?.value || "",
     payloads: securityPayloadEditor?.value || "",
-    attackType: securityAttackTypeValue,
+    attackType: appState.securityAttackTypeValue,
   });
 }
 
@@ -7171,7 +7005,7 @@ function repeaterTabLabel(request) {
 }
 
 function activeRepeaterTab() {
-  return securityRepeaterTabState.find((tab) => tab.id === securityActiveRepeaterTab) || null;
+  return appState.securityRepeaterTabState.find((tab) => tab.id === appState.securityActiveRepeaterTab) || null;
 }
 
 function captureRepeaterTab() {
@@ -7183,10 +7017,10 @@ function captureRepeaterTab() {
 }
 
 function renderRepeaterTabs() {
-  if (!securityRepeaterTabList || selectedSecurityTool !== "repeater") return;
+  if (!securityRepeaterTabList || appState.selectedSecurityTool !== "repeater") return;
   securityRepeaterTabList.innerHTML = "";
-  securityRepeaterTabState.forEach((tab, index) => {
-    const active = tab.id === securityActiveRepeaterTab;
+  appState.securityRepeaterTabState.forEach((tab, index) => {
+    const active = tab.id === appState.securityActiveRepeaterTab;
     const button = document.createElement("button");
     button.type = "button";
     button.className = `security-repeater-tab${active ? " active" : ""}`;
@@ -7219,10 +7053,10 @@ function renderRepeaterHistoryNav() {
 }
 
 function activateRepeaterTab(id) {
-  if (securityActiveRepeaterTab && securityActiveRepeaterTab !== id) captureRepeaterTab();
-  const tab = securityRepeaterTabState.find((item) => item.id === id);
+  if (appState.securityActiveRepeaterTab && appState.securityActiveRepeaterTab !== id) captureRepeaterTab();
+  const tab = appState.securityRepeaterTabState.find((item) => item.id === id);
   if (!tab) return;
-  securityActiveRepeaterTab = tab.id;
+  appState.securityActiveRepeaterTab = tab.id;
   securityRequestEditor.value = tab.request;
   securityResponseEditor.value = tab.response;
   syncSecurityExchangeSizes();
@@ -7231,28 +7065,28 @@ function activateRepeaterTab(id) {
 }
 
 function createRepeaterTab({ activate = true, request = "", response = "" } = {}) {
-  securityRepeaterSeq += 1;
+  appState.securityRepeaterSeq += 1;
   const tab = {
-    id: `repeater-${securityRepeaterSeq}`,
+    id: `repeater-${appState.securityRepeaterSeq}`,
     request: request || DEFAULT_SECURITY_REQUEST,
     response: response || "",
     history: [],
     historyIndex: -1,
   };
   tab.name = repeaterTabLabel(tab.request);
-  securityRepeaterTabState.push(tab);
+  appState.securityRepeaterTabState.push(tab);
   if (activate) activateRepeaterTab(tab.id);
   else renderRepeaterTabs();
   return tab;
 }
 
 function closeRepeaterTab(id) {
-  const index = securityRepeaterTabState.findIndex((tab) => tab.id === id);
+  const index = appState.securityRepeaterTabState.findIndex((tab) => tab.id === id);
   if (index < 0) return;
-  const wasActive = securityActiveRepeaterTab === id;
-  securityRepeaterTabState.splice(index, 1);
-  if (!securityRepeaterTabState.length) {
-    securityActiveRepeaterTab = "";
+  const wasActive = appState.securityActiveRepeaterTab === id;
+  appState.securityRepeaterTabState.splice(index, 1);
+  if (!appState.securityRepeaterTabState.length) {
+    appState.securityActiveRepeaterTab = "";
     createRepeaterTab();
     return;
   }
@@ -7260,8 +7094,8 @@ function closeRepeaterTab(id) {
     renderRepeaterTabs();
     return;
   }
-  securityActiveRepeaterTab = "";
-  activateRepeaterTab(securityRepeaterTabState[Math.max(0, index - 1)].id);
+  appState.securityActiveRepeaterTab = "";
+  activateRepeaterTab(appState.securityRepeaterTabState[Math.max(0, index - 1)].id);
 }
 
 function pushRepeaterHistory(request, response, status, durationMs) {
@@ -7305,7 +7139,7 @@ function emptyIntruderTabState(request = "", response = "", payloads = "") {
 }
 
 function activeIntruderTab() {
-  return securityIntruderTabState.find((tab) => tab.id === securityActiveIntruderTab) || null;
+  return appState.securityIntruderTabState.find((tab) => tab.id === appState.securityActiveIntruderTab) || null;
 }
 
 function isUnusedIntruderTab(tab) {
@@ -7318,24 +7152,24 @@ function isUnusedIntruderTab(tab) {
 function captureIntruderTab() {
   const tab = activeIntruderTab();
   if (!tab) return;
-  const onResults = securityIntruderTab === "results";
+  const onResults = appState.securityIntruderTab === "results";
   tab.payloads = securityPayloadEditor?.value || "";
-  tab.attackType = securityAttackTypeValue;
-  tab.panel = securityIntruderTab;
-  tab.template = securityIntruderTemplate;
-  tab.results = securityIntruderResults;
-  tab.selectedResult = securitySelectedResult;
-  if (onResults && securityIntruderTemplate) tab.request = securityIntruderTemplate;
+  tab.attackType = appState.securityAttackTypeValue;
+  tab.panel = appState.securityIntruderTab;
+  tab.template = appState.securityIntruderTemplate;
+  tab.results = appState.securityIntruderResults;
+  tab.selectedResult = appState.securitySelectedResult;
+  if (onResults && appState.securityIntruderTemplate) tab.request = appState.securityIntruderTemplate;
   else tab.request = securityRequestEditor?.value || tab.request || "";
   tab.response = securityResponseEditor?.value || "";
   tab.name = repeaterTabLabel(tab.request);
 }
 
 function renderIntruderTabs() {
-  if (!securityRepeaterTabList || selectedSecurityTool !== "intruder") return;
+  if (!securityRepeaterTabList || appState.selectedSecurityTool !== "intruder") return;
   securityRepeaterTabList.innerHTML = "";
-  securityIntruderTabState.forEach((tab, index) => {
-    const active = tab.id === securityActiveIntruderTab;
+  appState.securityIntruderTabState.forEach((tab, index) => {
+    const active = tab.id === appState.securityActiveIntruderTab;
     const button = document.createElement("button");
     button.type = "button";
     button.className = `security-repeater-tab${active ? " active" : ""}`;
@@ -7359,20 +7193,20 @@ function renderIntruderTabs() {
 }
 
 function activateIntruderTab(id) {
-  if (securityActiveIntruderTab && securityActiveIntruderTab !== id) captureIntruderTab();
-  const tab = securityIntruderTabState.find((item) => item.id === id);
+  if (appState.securityActiveIntruderTab && appState.securityActiveIntruderTab !== id) captureIntruderTab();
+  const tab = appState.securityIntruderTabState.find((item) => item.id === id);
   if (!tab) return;
-  securityActiveIntruderTab = tab.id;
-  securityIntruderTemplate = tab.template || "";
-  securityIntruderResults = Array.isArray(tab.results) ? tab.results : [];
-  securitySelectedResult = Number.isInteger(tab.selectedResult) ? tab.selectedResult : -1;
+  appState.securityActiveIntruderTab = tab.id;
+  appState.securityIntruderTemplate = tab.template || "";
+  appState.securityIntruderResults = Array.isArray(tab.results) ? tab.results : [];
+  appState.securitySelectedResult = Number.isInteger(tab.selectedResult) ? tab.selectedResult : -1;
   if (securityPayloadEditor) securityPayloadEditor.value = tab.payloads || DEFAULT_INTRUDER_PAYLOADS;
   setAttackType(tab.attackType || "sniper", { silent: true });
   const panel = tab.panel || "positions";
-  securityIntruderTab = panel;
+  appState.securityIntruderTab = panel;
   setIntruderTab(panel);
-  if (panel === "results" && securityIntruderResults[securitySelectedResult]) {
-    const selected = securityIntruderResults[securitySelectedResult];
+  if (panel === "results" && appState.securityIntruderResults[appState.securitySelectedResult]) {
+    const selected = appState.securityIntruderResults[appState.securitySelectedResult];
     securityRequestEditor.value = selected.request || tab.request;
     securityResponseEditor.value = selected.response || "";
   } else {
@@ -7386,25 +7220,25 @@ function activateIntruderTab(id) {
 }
 
 function createIntruderTab({ activate = true, request = "", response = "", payloads = "" } = {}) {
-  securityIntruderSeq += 1;
+  appState.securityIntruderSeq += 1;
   const tab = {
-    id: `intruder-${securityIntruderSeq}`,
+    id: `intruder-${appState.securityIntruderSeq}`,
     ...emptyIntruderTabState(request, response, payloads),
   };
   tab.name = repeaterTabLabel(tab.request);
-  securityIntruderTabState.push(tab);
+  appState.securityIntruderTabState.push(tab);
   if (activate) activateIntruderTab(tab.id);
   else renderIntruderTabs();
   return tab;
 }
 
 function closeIntruderTab(id) {
-  const index = securityIntruderTabState.findIndex((tab) => tab.id === id);
+  const index = appState.securityIntruderTabState.findIndex((tab) => tab.id === id);
   if (index < 0) return;
-  const wasActive = securityActiveIntruderTab === id;
-  securityIntruderTabState.splice(index, 1);
-  if (!securityIntruderTabState.length) {
-    securityActiveIntruderTab = "";
+  const wasActive = appState.securityActiveIntruderTab === id;
+  appState.securityIntruderTabState.splice(index, 1);
+  if (!appState.securityIntruderTabState.length) {
+    appState.securityActiveIntruderTab = "";
     createIntruderTab();
     return;
   }
@@ -7412,12 +7246,12 @@ function closeIntruderTab(id) {
     renderIntruderTabs();
     return;
   }
-  securityActiveIntruderTab = "";
-  activateIntruderTab(securityIntruderTabState[Math.max(0, index - 1)].id);
+  appState.securityActiveIntruderTab = "";
+  activateIntruderTab(appState.securityIntruderTabState[Math.max(0, index - 1)].id);
 }
 
 function createWorkbenchTab() {
-  if (selectedSecurityTool === "intruder") createIntruderTab();
+  if (appState.selectedSecurityTool === "intruder") createIntruderTab();
   else createRepeaterTab();
 }
 
@@ -7540,7 +7374,7 @@ function syncIntruderUi() {
 
 function onSecurityRequestChanged() {
   syncSecurityExchangeSizes();
-  if (selectedSecurityTool === "intruder") syncIntruderUi();
+  if (appState.selectedSecurityTool === "intruder") syncIntruderUi();
 }
 
 function markSelectionAsPosition() {
@@ -7612,22 +7446,22 @@ function clearPayloadPositions() {
 }
 
 function setAttackType(value, { silent = false } = {}) {
-  securityAttackTypeValue = INTRUDER_ATTACK_TYPES.includes(value) ? value : "sniper";
+  appState.securityAttackTypeValue = INTRUDER_ATTACK_TYPES.includes(value) ? value : "sniper";
   securityAttackButtons.forEach((button) => {
-    const active = button.dataset.attackType === securityAttackTypeValue;
+    const active = button.dataset.attackType === appState.securityAttackTypeValue;
     button.classList.toggle("active", active);
     button.setAttribute("aria-checked", String(active));
   });
   if (!silent) {
     saveSecurityDraft();
-    if (selectedSecurityTool === "intruder") captureIntruderTab();
+    if (appState.selectedSecurityTool === "intruder") captureIntruderTab();
   }
 }
 
 function setIntruderTab(tab) {
   const next = ["positions", "payloads", "results"].includes(tab) ? tab : "positions";
-  const previous = securityIntruderTab;
-  securityIntruderTab = next;
+  const previous = appState.securityIntruderTab;
+  appState.securityIntruderTab = next;
   if (securityWorkbench) securityWorkbench.dataset.intruderTab = next;
   securityIntruderTabButtons.forEach((button) => {
     const active = button.dataset.intruderTab === next;
@@ -7638,16 +7472,16 @@ function setIntruderTab(tab) {
     section.hidden = section.dataset.intruderPanel !== next;
   });
   // Leaving Results restores the templated request so the attack can be re-run.
-  if (previous === "results" && next !== "results" && securityIntruderTemplate) {
-    securityRequestEditor.value = securityIntruderTemplate;
+  if (previous === "results" && next !== "results" && appState.securityIntruderTemplate) {
+    securityRequestEditor.value = appState.securityIntruderTemplate;
     securityResponseEditor.value = "";
-    securitySelectedResult = -1;
+    appState.securitySelectedResult = -1;
     syncSecurityExchangeSizes();
     renderIntruderResults();
   }
   if (next === "payloads") renderPayloadSets();
   if (next === "positions") renderPositionChips();
-  const active = selectedSecurityTool === "intruder" ? activeIntruderTab() : null;
+  const active = appState.selectedSecurityTool === "intruder" ? activeIntruderTab() : null;
   if (active) active.panel = next;
 }
 
@@ -7673,13 +7507,13 @@ function intruderPayloadLabel(generated, template) {
 }
 
 function renderIntruderResults() {
-  if (securityResultsCount) securityResultsCount.textContent = String(securityIntruderResults.length);
-  if (securityResultsEmpty) securityResultsEmpty.hidden = securityIntruderResults.length > 0;
+  if (securityResultsCount) securityResultsCount.textContent = String(appState.securityIntruderResults.length);
+  if (securityResultsEmpty) securityResultsEmpty.hidden = appState.securityIntruderResults.length > 0;
   if (!securityResultsRows) return;
   securityResultsRows.innerHTML = "";
-  securityIntruderResults.forEach((result, index) => {
+  appState.securityIntruderResults.forEach((result, index) => {
     const row = document.createElement("tr");
-    row.classList.toggle("selected", index === securitySelectedResult);
+    row.classList.toggle("selected", index === appState.securitySelectedResult);
     const statusClass = result.status ? `result-status-${String(result.status).charAt(0)}` : "";
     row.innerHTML = `
       <td class="result-num">${index + 1}</td>
@@ -7693,9 +7527,9 @@ function renderIntruderResults() {
 }
 
 function selectIntruderResult(index) {
-  const result = securityIntruderResults[index];
+  const result = appState.securityIntruderResults[index];
   if (!result) return;
-  securitySelectedResult = index;
+  appState.securitySelectedResult = index;
   securityRequestEditor.value = result.request || "";
   securityResponseEditor.value = result.response || "";
   syncSecurityExchangeSizes();
@@ -7713,10 +7547,10 @@ function closeSecurityToolMenu() {
 
 function setSecurityTool(tool, { persist = true } = {}) {
   const next = SECURITY_TOOL_META[tool] ? tool : "interceptor";
-  if (selectedSecurityTool === "repeater") captureRepeaterTab();
-  if (selectedSecurityTool === "intruder") captureIntruderTab();
+  if (appState.selectedSecurityTool === "repeater") captureRepeaterTab();
+  if (appState.selectedSecurityTool === "intruder") captureIntruderTab();
   saveSecurityDraft();
-  selectedSecurityTool = next;
+  appState.selectedSecurityTool = next;
   const meta = SECURITY_TOOL_META[next];
 
   securityToolLabel.textContent = meta.label;
@@ -7724,7 +7558,7 @@ function setSecurityTool(tool, { persist = true } = {}) {
   securityWorkbenchMode.textContent = meta.label;
   securityRunLabel.textContent = meta.action;
   securityInterceptToggle.hidden = next !== "interceptor";
-  securityDropButton.hidden = next !== "interceptor" || !currentProxyCaptureId;
+  securityDropButton.hidden = next !== "interceptor" || !appState.currentProxyCaptureId;
   securityWorkbench.hidden = false;
   securityWorkbench.dataset.securityTool = next;
   if (securityRepeaterTabs) securityRepeaterTabs.hidden = next !== "repeater" && next !== "intruder";
@@ -7744,14 +7578,14 @@ function setSecurityTool(tool, { persist = true } = {}) {
   });
 
   if (next === "repeater") {
-    if (!securityRepeaterTabState.length) createRepeaterTab({ activate: false });
-    const target = activeRepeaterTab() || securityRepeaterTabState[0];
-    securityActiveRepeaterTab = "";
+    if (!appState.securityRepeaterTabState.length) createRepeaterTab({ activate: false });
+    const target = activeRepeaterTab() || appState.securityRepeaterTabState[0];
+    appState.securityActiveRepeaterTab = "";
     activateRepeaterTab(target.id);
   } else if (next === "intruder") {
-    if (!securityIntruderTabState.length) createIntruderTab({ activate: false });
-    const target = activeIntruderTab() || securityIntruderTabState[0];
-    securityActiveIntruderTab = "";
+    if (!appState.securityIntruderTabState.length) createIntruderTab({ activate: false });
+    const target = activeIntruderTab() || appState.securityIntruderTabState[0];
+    appState.securityActiveIntruderTab = "";
     activateIntruderTab(target.id);
   } else {
     const draft = securityDrafts.get(next) || {};
@@ -7759,10 +7593,10 @@ function setSecurityTool(tool, { persist = true } = {}) {
     securityResponseEditor.value = draft.response || "";
   }
   syncSecurityHistoryForTool(next);
-  setSecurityStatus(next === "interceptor" && proxyListenerState.running
-    ? proxyListenerState.warning || `Listening on ${proxyListenerState.host}:${proxyListenerState.port}`
-    : "Ready", proxyListenerState.warning ? "error" : "");
-  if (next === "interceptor") syncInterceptorToggleUi(assessmentSettingsCache);
+  setSecurityStatus(next === "interceptor" && appState.proxyListenerState.running
+    ? appState.proxyListenerState.warning || `Listening on ${appState.proxyListenerState.host}:${appState.proxyListenerState.port}`
+    : "Ready", appState.proxyListenerState.warning ? "error" : "");
+  if (next === "interceptor") syncInterceptorToggleUi(appState.assessmentSettingsCache);
   syncSecurityExchangeSizes();
   closeSecurityToolMenu();
   if (persist) localStorage.setItem(SECURITY_TOOL_KEY, next);
@@ -7866,14 +7700,14 @@ function setSecurityInspectorStatus(message, tone = "") {
 }
 
 function setSecurityInspectorTab(tab) {
-  securityInspectorTab = ["decoder", "jwt", "cookies"].includes(tab) ? tab : "decoder";
+  appState.securityInspectorTab = ["decoder", "jwt", "cookies"].includes(tab) ? tab : "decoder";
   securityInspectorTabs.forEach((button) => {
-    const active = button.dataset.inspectorTab === securityInspectorTab;
+    const active = button.dataset.inspectorTab === appState.securityInspectorTab;
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  securityInspectorPanels.forEach((panel) => { panel.hidden = panel.dataset.inspectorPanel !== securityInspectorTab; });
-  localStorage.setItem(SECURITY_INSPECTOR_TAB_KEY, securityInspectorTab);
+  securityInspectorPanels.forEach((panel) => { panel.hidden = panel.dataset.inspectorPanel !== appState.securityInspectorTab; });
+  localStorage.setItem(SECURITY_INSPECTOR_TAB_KEY, appState.securityInspectorTab);
 }
 
 function setSecurityInspectorOpen(open) {
@@ -7883,7 +7717,7 @@ function setSecurityInspectorOpen(open) {
   securityInspectorToggle?.setAttribute("aria-expanded", String(expanded));
   if (securityInspectorToggle) securityInspectorToggle.title = expanded ? "Close Inspector" : "Open Inspector";
   localStorage.setItem(SECURITY_INSPECTOR_OPEN_KEY, String(expanded));
-  if (expanded) { setSecurityInspectorTab(securityInspectorTab); refreshSecurityInspectorContext(); }
+  if (expanded) { setSecurityInspectorTab(appState.securityInspectorTab); refreshSecurityInspectorContext(); }
 }
 
 function inspectorEditorSelection() {
@@ -8027,7 +7861,7 @@ function securityHistoryTimeValue(record) {
 }
 
 function securityHistorySortValue(record, key) {
-  const meta = trafficHistoryMeta(record, 0, securityHistoryRecords.length || 1);
+  const meta = trafficHistoryMeta(record, 0, appState.securityHistoryRecords.length || 1);
   if (key === "number") return Number(record?.__pointerHistoryNumber) || 0;
   if (key === "params") {
     if (typeof record?.hasParams === "boolean") return record.hasParams ? 1 : 0;
@@ -8042,8 +7876,8 @@ function securityHistorySortValue(record, key) {
 }
 
 function sortedSecurityHistoryRecords(records) {
-  const direction = securityHistorySort.direction === "desc" ? -1 : 1;
-  const key = securityHistorySort.key;
+  const direction = appState.securityHistorySort.direction === "desc" ? -1 : 1;
+  const key = appState.securityHistorySort.key;
   return [...records].sort((left, right) => {
     const leftValue = securityHistorySortValue(left, key);
     const rightValue = securityHistorySortValue(right, key);
@@ -8057,8 +7891,8 @@ function sortedSecurityHistoryRecords(records) {
 
 function updateSecurityHistorySortHeaders() {
   securityHistorySortHeaders.forEach((header) => {
-    const active = header.dataset.historySort === securityHistorySort.key;
-    const direction = active ? securityHistorySort.direction : "none";
+    const active = header.dataset.historySort === appState.securityHistorySort.key;
+    const direction = active ? appState.securityHistorySort.direction : "none";
     header.classList.toggle("sorted", active);
     header.setAttribute("aria-sort", direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none");
     const icon = header.querySelector(".codicon");
@@ -8073,38 +7907,38 @@ function updateSecurityHistorySortHeaders() {
 
 function setSecurityHistorySort(key) {
   if (!key) return;
-  if (securityHistorySort.key === key) securityHistorySort.direction = securityHistorySort.direction === "asc" ? "desc" : "asc";
-  else securityHistorySort = { key, direction: key === "time" ? "desc" : "asc" };
-  renderSecurityHistory(securityHistoryRecords);
+  if (appState.securityHistorySort.key === key) appState.securityHistorySort.direction = appState.securityHistorySort.direction === "asc" ? "desc" : "asc";
+  else appState.securityHistorySort = { key, direction: key === "time" ? "desc" : "asc" };
+  renderSecurityHistory(appState.securityHistoryRecords);
 }
 
 function syncSecurityHistorySelectionUi() {
   securityHistoryRows?.querySelectorAll("tr").forEach((row, rowIndex) => {
-    const selected = selectedSecurityHistoryIndices.has(rowIndex);
+    const selected = appState.selectedSecurityHistoryIndices.has(rowIndex);
     row.classList.toggle("selected", selected);
     row.setAttribute("aria-selected", String(selected));
   });
 }
 
 function securityHistoryIndexForRequestId(requestId) {
-  return securityHistoryRecords.findIndex((record) => String(record.requestId) === String(requestId));
+  return appState.securityHistoryRecords.findIndex((record) => String(record.requestId) === String(requestId));
 }
 
 function restoreSecurityHistorySelectionFromIds() {
-  const restoredIndices = securityHistoryRecords
-    .map((record, index) => selectedSecurityHistoryRequestIds.has(String(record.requestId)) ? index : -1)
+  const restoredIndices = appState.securityHistoryRecords
+    .map((record, index) => appState.selectedSecurityHistoryRequestIds.has(String(record.requestId)) ? index : -1)
     .filter((index) => index >= 0);
-  selectedSecurityHistoryIndices = new Set(restoredIndices);
-  if (restoredIndices.length && !restoredIndices.includes(securityHistoryAnchorIndex)) {
-    securityHistoryAnchorIndex = restoredIndices[0];
+  appState.selectedSecurityHistoryIndices = new Set(restoredIndices);
+  if (restoredIndices.length && !restoredIndices.includes(appState.securityHistoryAnchorIndex)) {
+    appState.securityHistoryAnchorIndex = restoredIndices[0];
   } else if (!restoredIndices.length) {
-    securityHistoryAnchorIndex = -1;
+    appState.securityHistoryAnchorIndex = -1;
   }
 }
 
 function updateSecurityHistorySummary(truncated = false) {
   if (!securityHistorySummary) return;
-  const count = securityHistoryRecords.length;
+  const count = appState.securityHistoryRecords.length;
   const suffix = truncated || count >= SECURITY_HISTORY_LIMIT ? " · latest 500" : "";
   securityHistorySummary.textContent = `${count} exchange${count === 1 ? "" : "s"}${suffix}`;
 }
@@ -8112,9 +7946,9 @@ function updateSecurityHistorySummary(truncated = false) {
 async function hydrateSecurityHistoryRecords(records) {
   const payload = (Array.isArray(records) ? records : []).filter(Boolean);
   const missing = payload.filter((record) => record.request == null || record.response == null);
-  if (!missing.length || !assessmentPath) return payload;
+  if (!missing.length || !appState.assessmentPath) return payload;
   const result = await window.api.assessmentTrafficRecords({
-    path: assessmentPath,
+    path: appState.assessmentPath,
     requestIds: missing.map((record) => record.requestId).filter(Boolean),
   });
   const byId = new Map((result?.records || []).map((record) => [String(record.requestId), record]));
@@ -8128,46 +7962,46 @@ async function hydrateSecurityHistoryRecords(records) {
 }
 
 async function loadSecurityHistoryRecord(index) {
-  const record = securityHistoryRecords[index];
+  const record = appState.securityHistoryRecords[index];
   if (!record) return;
-  const token = ++securityHistoryLoadToken;
+  const token = ++appState.securityHistoryLoadToken;
   if (record.request == null || record.response == null) {
     await hydrateSecurityHistoryRecords([record]);
-    if (token !== securityHistoryLoadToken) return;
+    if (token !== appState.securityHistoryLoadToken) return;
   }
   securityRequestEditor.value = String(record.request || "");
   securityResponseEditor.value = String(record.response || "");
   syncSecurityExchangeSizes();
-  const label = record.requestId || `entry ${securityHistoryRecords.length - index}`;
+  const label = record.requestId || `entry ${appState.securityHistoryRecords.length - index}`;
   setSecurityStatus(`History · ${label} · ${record.timestamp || record.isoTimestamp || ""}`, "success");
 }
 
 function setSecurityHistorySelection(indices, { loadRecordIndex = null, anchorIndex = null } = {}) {
-  selectedSecurityHistoryIndices = new Set(indices);
-  selectedSecurityHistoryRequestIds = new Set([...selectedSecurityHistoryIndices]
-    .map((index) => securityHistoryRecords[index]?.requestId)
+  appState.selectedSecurityHistoryIndices = new Set(indices);
+  appState.selectedSecurityHistoryRequestIds = new Set([...appState.selectedSecurityHistoryIndices]
+    .map((index) => appState.securityHistoryRecords[index]?.requestId)
     .filter(Boolean)
     .map(String));
-  if (anchorIndex != null) securityHistoryAnchorIndex = anchorIndex;
+  if (anchorIndex != null) appState.securityHistoryAnchorIndex = anchorIndex;
   syncSecurityHistorySelectionUi();
   if (loadRecordIndex != null && loadRecordIndex >= 0) loadSecurityHistoryRecord(loadRecordIndex);
 }
 
 function selectSecurityHistoryRecord(index, event = null) {
-  const record = securityHistoryRecords[index];
+  const record = appState.securityHistoryRecords[index];
   if (!record) return;
 
-  if (event?.shiftKey && securityHistoryAnchorIndex >= 0) {
-    const start = Math.min(securityHistoryAnchorIndex, index);
-    const end = Math.max(securityHistoryAnchorIndex, index);
+  if (event?.shiftKey && appState.securityHistoryAnchorIndex >= 0) {
+    const start = Math.min(appState.securityHistoryAnchorIndex, index);
+    const end = Math.max(appState.securityHistoryAnchorIndex, index);
     const indices = [];
     for (let i = start; i <= end; i += 1) indices.push(i);
-    setSecurityHistorySelection(indices, { loadRecordIndex: index, anchorIndex: securityHistoryAnchorIndex });
+    setSecurityHistorySelection(indices, { loadRecordIndex: index, anchorIndex: appState.securityHistoryAnchorIndex });
     return;
   }
 
   if (event && (event.ctrlKey || event.metaKey)) {
-    const next = new Set(selectedSecurityHistoryIndices);
+    const next = new Set(appState.selectedSecurityHistoryIndices);
     if (next.has(index)) next.delete(index);
     else next.add(index);
     setSecurityHistorySelection([...next], { loadRecordIndex: index, anchorIndex: index });
@@ -8183,9 +8017,9 @@ function closeSecurityHistoryMenu() {
 }
 
 function selectedSecurityHistoryRecords() {
-  return [...selectedSecurityHistoryIndices]
+  return [...appState.selectedSecurityHistoryIndices]
     .sort((a, b) => a - b)
-    .map((index) => securityHistoryRecords[index])
+    .map((index) => appState.securityHistoryRecords[index])
     .filter(Boolean);
 }
 
@@ -8204,17 +8038,17 @@ async function sendHistoryRecordsToRepeater(records) {
   }
   closeSecurityHistoryMenu();
   setSecurityTool("repeater");
-  const firstUnused = securityRepeaterTabState.length === 1 && isUnusedRepeaterTab(activeRepeaterTab() || securityRepeaterTabState[0]);
+  const firstUnused = appState.securityRepeaterTabState.length === 1 && isUnusedRepeaterTab(activeRepeaterTab() || appState.securityRepeaterTabState[0]);
   payload.forEach((record, index) => {
     const request = String(record.request || "");
     const response = String(record.response || "");
     const activate = index === payload.length - 1;
     if (index === 0 && firstUnused) {
-      const tab = activeRepeaterTab() || securityRepeaterTabState[0];
+      const tab = activeRepeaterTab() || appState.securityRepeaterTabState[0];
       tab.request = request;
       tab.response = response;
       tab.name = repeaterTabLabel(tab.request);
-      securityActiveRepeaterTab = "";
+      appState.securityActiveRepeaterTab = "";
       activateRepeaterTab(tab.id);
       return;
     }
@@ -8235,16 +8069,16 @@ async function sendHistoryRecordsToIntruder(records) {
   }
   closeSecurityHistoryMenu();
   setSecurityTool("intruder");
-  const firstUnused = securityIntruderTabState.length === 1 && isUnusedIntruderTab(activeIntruderTab() || securityIntruderTabState[0]);
+  const firstUnused = appState.securityIntruderTabState.length === 1 && isUnusedIntruderTab(activeIntruderTab() || appState.securityIntruderTabState[0]);
   payload.forEach((record, index) => {
     const request = String(record.request || "");
     const response = String(record.response || "");
     const activate = index === payload.length - 1;
     if (index === 0 && firstUnused) {
-      const tab = activeIntruderTab() || securityIntruderTabState[0];
+      const tab = activeIntruderTab() || appState.securityIntruderTabState[0];
       Object.assign(tab, emptyIntruderTabState(request, response));
       tab.name = repeaterTabLabel(tab.request);
-      securityActiveIntruderTab = "";
+      appState.securityActiveIntruderTab = "";
       activateIntruderTab(tab.id);
       return;
     }
@@ -8254,9 +8088,9 @@ async function sendHistoryRecordsToIntruder(records) {
 }
 
 function openSecurityHistoryMenu(clientX, clientY) {
-  if (!securityHistoryMenu || selectedSecurityHistoryIndices.size === 0) return;
-  securityHistoryAnalyzeButton.disabled = securityBusy || isRunningChatActive();
-  const count = selectedSecurityHistoryIndices.size;
+  if (!securityHistoryMenu || appState.selectedSecurityHistoryIndices.size === 0) return;
+  securityHistoryAnalyzeButton.disabled = appState.securityBusy || isRunningChatActive();
+  const count = appState.selectedSecurityHistoryIndices.size;
   if (securityHistoryRepeaterLabel) {
     securityHistoryRepeaterLabel.textContent = count === 1 ? "Send to Repeater" : `Send ${count} to Repeater`;
   }
@@ -8284,22 +8118,22 @@ function openSecurityHistoryMenu(clientX, clientY) {
 }
 
 async function deleteSelectedSecurityHistoryRecords() {
-  if (!assessmentPath || selectedSecurityHistoryIndices.size === 0) return;
-  const requestIds = [...selectedSecurityHistoryIndices]
-    .map((index) => securityHistoryRecords[index]?.requestId)
+  if (!appState.assessmentPath || appState.selectedSecurityHistoryIndices.size === 0) return;
+  const requestIds = [...appState.selectedSecurityHistoryIndices]
+    .map((index) => appState.securityHistoryRecords[index]?.requestId)
     .filter(Boolean);
   if (!requestIds.length) return;
 
   closeSecurityHistoryMenu();
   setSecurityStatus(`Deleting ${requestIds.length} exchange${requestIds.length === 1 ? "" : "s"}...`);
-  const result = await window.api.assessmentDeleteTrafficRecords({ path: assessmentPath, requestIds });
+  const result = await window.api.assessmentDeleteTrafficRecords({ path: appState.assessmentPath, requestIds });
   if (result?.error) {
     setSecurityStatus(result.error, "error");
     return;
   }
-  selectedSecurityHistoryIndices = new Set();
-  selectedSecurityHistoryRequestIds = new Set();
-  securityHistoryAnchorIndex = -1;
+  appState.selectedSecurityHistoryIndices = new Set();
+  appState.selectedSecurityHistoryRequestIds = new Set();
+  appState.securityHistoryAnchorIndex = -1;
   securityRequestEditor.value = "";
   securityResponseEditor.value = "";
   syncSecurityExchangeSizes();
@@ -8315,8 +8149,8 @@ function bindSecurityHistoryRow(row, record) {
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     const index = securityHistoryIndexForRequestId(row.dataset.requestId);
-    securityHistoryMenuIndex = index;
-    if (!selectedSecurityHistoryIndices.has(index)) {
+    appState.securityHistoryMenuIndex = index;
+    if (!appState.selectedSecurityHistoryIndices.has(index)) {
       setSecurityHistorySelection([index], { loadRecordIndex: index, anchorIndex: index });
     }
     openSecurityHistoryMenu(event.clientX, event.clientY);
@@ -8329,11 +8163,11 @@ function bindSecurityHistoryRow(row, record) {
 }
 
 function createSecurityHistoryRow(record, index) {
-  const meta = trafficHistoryMeta(record, index, securityHistoryRecords.length);
+  const meta = trafficHistoryMeta(record, index, appState.securityHistoryRecords.length);
   const row = document.createElement("tr");
   row.tabIndex = 0;
-  row.setAttribute("aria-selected", String(selectedSecurityHistoryIndices.has(index)));
-  row.classList.toggle("selected", selectedSecurityHistoryIndices.has(index));
+  row.setAttribute("aria-selected", String(appState.selectedSecurityHistoryIndices.has(index)));
+  row.classList.toggle("selected", appState.selectedSecurityHistoryIndices.has(index));
   row.title = `${meta.method} ${record.url || meta.path}`.trim();
   appendSecurityHistoryCell(row, meta.number, "history-number");
   appendSecurityHistoryCell(row, meta.host, "history-host");
@@ -8350,10 +8184,10 @@ function createSecurityHistoryRow(record, index) {
 }
 
 function renderSecurityHistory(records, { loadSelection = false } = {}) {
-  const preservedRequestIds = new Set(selectedSecurityHistoryRequestIds);
+  const preservedRequestIds = new Set(appState.selectedSecurityHistoryRequestIds);
   if (!preservedRequestIds.size) {
-    [...selectedSecurityHistoryIndices].forEach((index) => {
-      const requestId = securityHistoryRecords[index]?.requestId;
+    [...appState.selectedSecurityHistoryIndices].forEach((index) => {
+      const requestId = appState.securityHistoryRecords[index]?.requestId;
       if (requestId) preservedRequestIds.add(String(requestId));
     });
   }
@@ -8362,32 +8196,32 @@ function renderSecurityHistory(records, { loadSelection = false } = {}) {
     if (!record || Object.prototype.hasOwnProperty.call(record, "__pointerHistoryNumber")) return;
     Object.defineProperty(record, "__pointerHistoryNumber", { value: sourceRecords.length - index, enumerable: false, configurable: true });
   });
-  securityHistoryRecords = sortedSecurityHistoryRecords(sourceRecords);
+  appState.securityHistoryRecords = sortedSecurityHistoryRecords(sourceRecords);
   updateSecurityHistorySortHeaders();
-  selectedSecurityHistoryRequestIds = preservedRequestIds;
+  appState.selectedSecurityHistoryRequestIds = preservedRequestIds;
   restoreSecurityHistorySelectionFromIds();
   closeSecurityHistoryMenu();
   if (!securityHistoryRows || !securityHistoryEmpty) return;
   const fragment = document.createDocumentFragment();
-  securityHistoryRecords.forEach((record, index) => {
+  appState.securityHistoryRecords.forEach((record, index) => {
     fragment.appendChild(createSecurityHistoryRow(record, index));
   });
   securityHistoryRows.replaceChildren(fragment);
-  securityHistoryEmpty.hidden = securityHistoryRecords.length > 0;
-  if (loadSelection && selectedSecurityHistoryIndices.size) {
-    loadSecurityHistoryRecord([...selectedSecurityHistoryIndices][0]);
+  securityHistoryEmpty.hidden = appState.securityHistoryRecords.length > 0;
+  if (loadSelection && appState.selectedSecurityHistoryIndices.size) {
+    loadSecurityHistoryRecord([...appState.selectedSecurityHistoryIndices][0]);
   }
 }
 
 function ingestLiveSecurityHistory(summary) {
   if (!summary?.requestId || securityHistoryPanel?.hidden) return;
-  if (securityHistoryRecords.some((record) => String(record.requestId) === String(summary.requestId))) return;
-  const maxNum = securityHistoryRecords.reduce((max, record) => Math.max(max, Number(record.__pointerHistoryNumber) || 0), 0);
+  if (appState.securityHistoryRecords.some((record) => String(record.requestId) === String(summary.requestId))) return;
+  const maxNum = appState.securityHistoryRecords.reduce((max, record) => Math.max(max, Number(record.__pointerHistoryNumber) || 0), 0);
   Object.defineProperty(summary, "__pointerHistoryNumber", { value: maxNum + 1, enumerable: false, configurable: true });
-  const liveDefaultSort = securityHistorySort.key === "time" && securityHistorySort.direction === "desc";
+  const liveDefaultSort = appState.securityHistorySort.key === "time" && appState.securityHistorySort.direction === "desc";
   if (liveDefaultSort) {
-    securityHistoryRecords.unshift(summary);
-    if (securityHistoryRecords.length > SECURITY_HISTORY_LIMIT) securityHistoryRecords.length = SECURITY_HISTORY_LIMIT;
+    appState.securityHistoryRecords.unshift(summary);
+    if (appState.securityHistoryRecords.length > SECURITY_HISTORY_LIMIT) appState.securityHistoryRecords.length = SECURITY_HISTORY_LIMIT;
     restoreSecurityHistorySelectionFromIds();
     if (securityHistoryRows && securityHistoryEmpty) {
       securityHistoryEmpty.hidden = true;
@@ -8396,27 +8230,27 @@ function ingestLiveSecurityHistory(summary) {
       syncSecurityHistorySelectionUi();
     }
   } else {
-    renderSecurityHistory([summary, ...securityHistoryRecords], { loadSelection: false });
-    if (securityHistoryRecords.length > SECURITY_HISTORY_LIMIT) {
-      renderSecurityHistory(securityHistoryRecords.slice(0, SECURITY_HISTORY_LIMIT), { loadSelection: false });
+    renderSecurityHistory([summary, ...appState.securityHistoryRecords], { loadSelection: false });
+    if (appState.securityHistoryRecords.length > SECURITY_HISTORY_LIMIT) {
+      renderSecurityHistory(appState.securityHistoryRecords.slice(0, SECURITY_HISTORY_LIMIT), { loadSelection: false });
     }
   }
-  updateSecurityHistorySummary(securityHistoryRecords.length >= SECURITY_HISTORY_LIMIT);
+  updateSecurityHistorySummary(appState.securityHistoryRecords.length >= SECURITY_HISTORY_LIMIT);
 }
 
 async function loadSecurityHistory() {
-  if (securityHistoryLoading || !securityHistoryPanel || securityHistoryPanel.hidden) return;
-  if (!assessmentPath) {
+  if (appState.securityHistoryLoading || !securityHistoryPanel || securityHistoryPanel.hidden) return;
+  if (!appState.assessmentPath) {
     renderSecurityHistory([]);
     securityHistoryEmpty.textContent = "Create or open an assessment to load Traffic/Raw history.";
     securityHistorySummary.textContent = "No assessment";
     return;
   }
-  securityHistoryLoading = true;
+  appState.securityHistoryLoading = true;
   securityHistoryRefresh?.classList.add("loading");
   securityHistorySummary.textContent = "Loading Traffic/Raw...";
   try {
-    const result = await window.api.assessmentTrafficHistory({ path: assessmentPath, limit: SECURITY_HISTORY_LIMIT, includeBodies: false });
+    const result = await window.api.assessmentTrafficHistory({ path: appState.assessmentPath, limit: SECURITY_HISTORY_LIMIT, includeBodies: false });
     if (result?.error) {
       renderSecurityHistory([]);
       securityHistoryEmpty.textContent = result.error;
@@ -8427,10 +8261,10 @@ async function loadSecurityHistory() {
     securityHistoryEmpty.textContent = "Traffic/Raw has no captured HTTP exchanges yet.";
     updateSecurityHistorySummary(Boolean(result.truncated));
   } finally {
-    securityHistoryLoading = false;
+    appState.securityHistoryLoading = false;
     securityHistoryRefresh?.classList.remove("loading");
-    if (securityHistoryReloadQueued) {
-      securityHistoryReloadQueued = false;
+    if (appState.securityHistoryReloadQueued) {
+      appState.securityHistoryReloadQueued = false;
       refreshSecurityHistoryIfVisible();
     }
   }
@@ -8438,11 +8272,11 @@ async function loadSecurityHistory() {
 
 function setSecurityHistoryVisible(visible) {
   if (!securityHistoryPanel || !securityHistoryToggle) return;
-  if (visible && selectedSecurityTool !== "interceptor") visible = false;
+  if (visible && appState.selectedSecurityTool !== "interceptor") visible = false;
   securityHistoryPanel.hidden = !visible;
   securityHistoryToggle.classList.toggle("active", Boolean(visible));
   securityHistoryToggle.setAttribute("aria-pressed", String(Boolean(visible)));
-  if (selectedSecurityTool === "interceptor") interceptorHistoryWanted = Boolean(visible);
+  if (appState.selectedSecurityTool === "interceptor") appState.interceptorHistoryWanted = Boolean(visible);
   if (visible) loadSecurityHistory();
   else closeSecurityHistoryMenu();
 }
@@ -8457,20 +8291,20 @@ function syncSecurityHistoryForTool(tool) {
     securityHistoryToggle?.setAttribute("aria-pressed", "false");
     return;
   }
-  setSecurityHistoryVisible(interceptorHistoryWanted);
+  setSecurityHistoryVisible(appState.interceptorHistoryWanted);
 }
 
 function refreshSecurityHistoryIfVisible() {
   if (securityHistoryPanel?.hidden) return;
   const now = Date.now();
-  if (!securityHistoryRefreshFirstAt) securityHistoryRefreshFirstAt = now;
-  const wait = now - securityHistoryRefreshFirstAt >= SECURITY_HISTORY_REFRESH_MAX_MS ? 0 : SECURITY_HISTORY_REFRESH_MS;
-  clearTimeout(securityHistoryRefreshTimer);
-  securityHistoryRefreshTimer = setTimeout(() => {
-    securityHistoryRefreshTimer = null;
-    securityHistoryRefreshFirstAt = 0;
-    if (securityHistoryLoading) {
-      securityHistoryReloadQueued = true;
+  if (!appState.securityHistoryRefreshFirstAt) appState.securityHistoryRefreshFirstAt = now;
+  const wait = now - appState.securityHistoryRefreshFirstAt >= SECURITY_HISTORY_REFRESH_MAX_MS ? 0 : SECURITY_HISTORY_REFRESH_MS;
+  clearTimeout(appState.securityHistoryRefreshTimer);
+  appState.securityHistoryRefreshTimer = setTimeout(() => {
+    appState.securityHistoryRefreshTimer = null;
+    appState.securityHistoryRefreshFirstAt = 0;
+    if (appState.securityHistoryLoading) {
+      appState.securityHistoryReloadQueued = true;
       return;
     }
     loadSecurityHistory();
@@ -8478,23 +8312,23 @@ function refreshSecurityHistoryIfVisible() {
 }
 
 function setSecurityBusy(busy) {
-  securityBusy = Boolean(busy);
-  securityRunButton.disabled = securityBusy;
-  securityClearButton.disabled = securityBusy;
-  securityHistoryAnalyzeButton.disabled = securityBusy;
+  appState.securityBusy = Boolean(busy);
+  securityRunButton.disabled = appState.securityBusy;
+  securityClearButton.disabled = appState.securityBusy;
+  securityHistoryAnalyzeButton.disabled = appState.securityBusy;
 }
 
 async function runSecurityRequest(rawRequest, mode) {
   return window.api.securityHttpRequest({
-    assessmentPath,
+    assessmentPath: appState.assessmentPath,
     rawRequest,
     mode,
   });
 }
 
 async function runSecurityWorkbench() {
-  if (securityBusy) return;
-  if (!assessmentPath) {
+  if (appState.securityBusy) return;
+  if (!appState.assessmentPath) {
     setSecurityStatus("Create or open a project first", "error");
     return;
   }
@@ -8505,29 +8339,29 @@ async function runSecurityWorkbench() {
   }
 
   setSecurityBusy(true);
-  setSecurityStatus(selectedSecurityTool === "intruder" ? "Preparing payload requests..." : "Sending...");
+  setSecurityStatus(appState.selectedSecurityTool === "intruder" ? "Preparing payload requests..." : "Sending...");
   try {
-    if (selectedSecurityTool !== "intruder") {
-      if (selectedSecurityTool === "interceptor" && currentProxyCaptureId) {
-        const forwarded = await window.api.proxyForward({ id: currentProxyCaptureId, request });
+    if (appState.selectedSecurityTool !== "intruder") {
+      if (appState.selectedSecurityTool === "interceptor" && appState.currentProxyCaptureId) {
+        const forwarded = await window.api.proxyForward({ id: appState.currentProxyCaptureId, request });
         if (forwarded?.error) {
           setSecurityStatus(forwarded.error, "error");
         } else {
-          currentProxyCaptureId = "";
+          appState.currentProxyCaptureId = "";
           securityDropButton.hidden = true;
           setSecurityStatus("Forwarded - waiting for response");
         }
         return;
       }
-      const result = await runSecurityRequest(request, selectedSecurityTool);
+      const result = await runSecurityRequest(request, appState.selectedSecurityTool);
       if (result?.error) {
         setSecurityStatus(result.error, "error");
         securityResponseEditor.value = `XEKUTE blocked the request:\n${result.error}\n${result.code ? `\nCode: ${result.code}` : ""}`;
       } else {
         securityResponseEditor.value = result.response || "";
-        lastLoggedSecuritySignature = securityExchangeSignature();
+        appState.lastLoggedSecuritySignature = securityExchangeSignature();
         setSecurityStatus(`${result.status} in ${result.durationMs} ms - logged ${result.logged?.timestamp || ""}`, "success");
-        if (selectedSecurityTool === "repeater") {
+        if (appState.selectedSecurityTool === "repeater") {
           pushRepeaterHistory(request, result.response || "", result.status, result.durationMs);
           captureRepeaterTab();
           renderRepeaterTabs();
@@ -8537,7 +8371,7 @@ async function runSecurityWorkbench() {
       return;
     }
 
-    const settingsResult = await window.api.assessmentSettings({ path: assessmentPath });
+    const settingsResult = await window.api.assessmentSettings({ path: appState.assessmentPath });
     if (settingsResult?.error) {
       setSecurityStatus(settingsResult.error, "error");
       return;
@@ -8547,13 +8381,13 @@ async function runSecurityWorkbench() {
     const delayMs = Math.max(500, Math.min(Number(intruderSettings.delayBetweenRequestsMs) || 500, 60000));
     // On the Results tab the editors show the selected row, so the stored
     // template is the only place the payload positions still exist.
-    const attackRequest = securityIntruderTab === "results" && securityIntruderTemplate
-      ? securityIntruderTemplate.trim()
+    const attackRequest = appState.securityIntruderTab === "results" && appState.securityIntruderTemplate
+      ? appState.securityIntruderTemplate.trim()
       : request;
     const built = await window.api.securityBuildIntruder({
       rawRequest: attackRequest,
       payloadSets: securityPayloadEditor.value,
-      attackType: securityAttackTypeValue,
+      attackType: appState.securityAttackTypeValue,
       maxRequests,
     });
     if (built?.error) {
@@ -8561,10 +8395,10 @@ async function runSecurityWorkbench() {
       setIntruderTab("payloads");
       return;
     }
-    const attackTabId = securityActiveIntruderTab;
-    securityIntruderTemplate = attackRequest;
-    securityIntruderResults = [];
-    securitySelectedResult = -1;
+    const attackTabId = appState.securityActiveIntruderTab;
+    appState.securityIntruderTemplate = attackRequest;
+    appState.securityIntruderResults = [];
+    appState.securitySelectedResult = -1;
     renderIntruderResults();
     setIntruderTab("results");
     captureIntruderTab();
@@ -8585,10 +8419,10 @@ async function runSecurityWorkbench() {
         request: generatedRequest,
         response: result.response || "",
       };
-      const attackTab = securityIntruderTabState.find((tab) => tab.id === attackTabId);
-      if (securityActiveIntruderTab === attackTabId) {
-        securityIntruderResults.push(row);
-        selectIntruderResult(securityIntruderResults.length - 1);
+      const attackTab = appState.securityIntruderTabState.find((tab) => tab.id === attackTabId);
+      if (appState.securityActiveIntruderTab === attackTabId) {
+        appState.securityIntruderResults.push(row);
+        selectIntruderResult(appState.securityIntruderResults.length - 1);
         captureIntruderTab();
         renderIntruderTabs();
       } else if (attackTab) {
@@ -8600,10 +8434,10 @@ async function runSecurityWorkbench() {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
     if (completed && completed === built.requests.length) {
-      lastLoggedSecuritySignature = securityExchangeSignature();
+      appState.lastLoggedSecuritySignature = securityExchangeSignature();
       setSecurityStatus(`${completed} request${completed === 1 ? "" : "s"} completed and logged${built.capped ? ` (capped at ${built.maxRequests})` : ""}`, "success");
     }
-    if (securityActiveIntruderTab === attackTabId) {
+    if (appState.securityActiveIntruderTab === attackTabId) {
       captureIntruderTab();
       renderIntruderTabs();
     }
@@ -8618,11 +8452,11 @@ async function runSecurityWorkbench() {
 
 async function logSecurityExchangeIfNeeded() {
   const signature = securityExchangeSignature();
-  if (!assessmentPath || !signature.replace("\u0000", "").trim() || signature === lastLoggedSecuritySignature) return { ok: true };
+  if (!appState.assessmentPath || !signature.replace("\u0000", "").trim() || signature === appState.lastLoggedSecuritySignature) return { ok: true };
   const result = await window.api.assessmentTrafficLog({
-    path: assessmentPath,
+    path: appState.assessmentPath,
     record: {
-      tool: selectedSecurityTool,
+      tool: appState.selectedSecurityTool,
       requestId: `capture-${Date.now().toString(36)}`,
       request: securityRequestEditor.value,
       response: securityResponseEditor.value,
@@ -8630,14 +8464,14 @@ async function logSecurityExchangeIfNeeded() {
     },
   });
   if (!result?.error) {
-    lastLoggedSecuritySignature = signature;
+    appState.lastLoggedSecuritySignature = signature;
     refreshSecurityHistoryIfVisible();
   }
   return result;
 }
 
 async function analyzeSecurityExchange(record) {
-  if (securityBusy || isRunningChatActive()) return;
+  if (appState.securityBusy || isRunningChatActive()) return;
   if (!record) return;
   closeSecurityHistoryMenu();
   try {
@@ -8646,7 +8480,7 @@ async function analyzeSecurityExchange(record) {
     setSecurityStatus(error.message || "Could not load the captured exchange", "error");
     return;
   }
-  if (securityBusy || isRunningChatActive()) return;
+  if (appState.securityBusy || isRunningChatActive()) return;
   const request = String(record.request || "").trim();
   const response = String(record.response || "").trim();
   if (!request && !response) {
@@ -8678,23 +8512,23 @@ async function analyzeSecurityExchange(record) {
 }
 
 function clearSecurityExchange() {
-  if (securityBusy) return;
-  if (currentProxyCaptureId) {
+  if (appState.securityBusy) return;
+  if (appState.currentProxyCaptureId) {
     setSecurityStatus("Forward or Drop the pending request before clearing", "error");
     return;
   }
   securityRequestEditor.value = "";
   securityResponseEditor.value = "";
-  lastLoggedSecuritySignature = "";
-  if (selectedSecurityTool === "repeater") {
+  appState.lastLoggedSecuritySignature = "";
+  if (appState.selectedSecurityTool === "repeater") {
     captureRepeaterTab();
     renderRepeaterTabs();
     renderRepeaterHistoryNav();
   }
-  if (selectedSecurityTool === "intruder") {
-    securityIntruderTemplate = "";
-    securityIntruderResults = [];
-    securitySelectedResult = -1;
+  if (appState.selectedSecurityTool === "intruder") {
+    appState.securityIntruderTemplate = "";
+    appState.securityIntruderResults = [];
+    appState.securitySelectedResult = -1;
     renderIntruderResults();
     syncIntruderUi();
     captureIntruderTab();
@@ -8706,21 +8540,21 @@ function clearSecurityExchange() {
 }
 
 async function dropInterceptedRequest() {
-  if (!currentProxyCaptureId || securityBusy) return;
-  const id = currentProxyCaptureId;
+  if (!appState.currentProxyCaptureId || appState.securityBusy) return;
+  const id = appState.currentProxyCaptureId;
   const result = await window.api.proxyDrop({ id });
   if (result?.error) {
     setSecurityStatus(result.error, "error");
     return;
   }
-  currentProxyCaptureId = "";
+  appState.currentProxyCaptureId = "";
   securityDropButton.hidden = true;
   setSecurityStatus("Request dropped", "success");
 }
 
 globalThis.XekuteSecurity = {
   async captureExchange({ request = "", response = "", tool = "interceptor" } = {}) {
-    if (currentSidebarView !== "project") activateSidebarView("project");
+    if (appState.currentSidebarView !== "project") activateSidebarView("project");
     showSecurityWorkspace(SECURITY_TOOL_META[tool] ? tool : "interceptor");
     securityRequestEditor.value = String(request);
     securityResponseEditor.value = String(response);
@@ -8731,19 +8565,19 @@ globalThis.XekuteSecurity = {
   },
 };
 
-function modeButtonClass(mode = chatMode) {
+function modeButtonClass(mode = appState.chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
   if (profile?.key === "agent" || profile?.key === "executor" || profile?.key === "execution" || profile?.key === "exploit") return "mode-agent";
   return "mode-ask";
 }
 
-function modeIconClass(mode = chatMode) {
+function modeIconClass(mode = appState.chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
   if (profile?.key === "agent" || profile?.key === "executor") return "codicon-copilot";
   return "codicon-comment-discussion";
 }
 
-function modePlaceholder(mode = chatMode) {
+function modePlaceholder(mode = appState.chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)];
   if (profile?.key === "ask") return "Ask, analyze, observe, or explain";
   if (profile?.key === "agent") return "Describe the investigation or workspace action";
@@ -8751,12 +8585,12 @@ function modePlaceholder(mode = chatMode) {
 }
 
 function syncChatInputPlaceholder() {
-  if (chatInput) chatInput.placeholder = selectedSlashCommand ? "" : modePlaceholder();
+  if (chatInput) chatInput.placeholder = appState.selectedSlashCommand ? "" : modePlaceholder();
 }
 
-function modeTools(mode = chatMode) {
+function modeTools(mode = appState.chatMode) {
   const profile = CHAT_PROFILE_DEFS[canonicalChatMode(mode)] || {};
-  return ToolMap.toolsForProfile(profile.key || chatMode || "agent");
+  return ToolMap.toolsForProfile(profile.key || appState.chatMode || "agent");
 }
 
 function syncChatModeUi() {
@@ -8773,14 +8607,14 @@ function syncChatModeUi() {
     chatModeIcon.classList.add(modeIconClass());
   }
   chatModeMenu?.querySelectorAll("[data-chat-mode]").forEach((button) => {
-    const active = button.dataset.chatMode === chatMode;
+    const active = button.dataset.chatMode === appState.chatMode;
     button.classList.toggle("active", active);
     button.setAttribute("aria-checked", String(active));
   });
   syncChatInputPlaceholder();
   const liveRun = activeSessionRun();
   setAgentStatus(isRunningChatActive()
-    ? `${modeLabel(liveRun?.mode || chatMode)} working`
+    ? `${modeLabel(liveRun?.mode || appState.chatMode)} working`
     : `${modeLabel()} ready`);
   updateContextUsage();
   if (chatModeMenu && !chatModeMenu.hidden) {
@@ -8830,10 +8664,10 @@ function positionChatModeMenu() {
 function setChatMode(mode) {
   const canonical = canonicalChatMode(mode);
   if (!CHAT_ROLES.has(canonical) && !CHAT_PROFILE_KEYS.has(canonical)) return;
-  chatMode = canonical;
-  chatFamily = "xekute";
+  appState.chatMode = canonical;
+  appState.chatFamily = "xekute";
   localStorage.setItem(CHAT_MODE_KEY, canonical);
-  localStorage.setItem(CHAT_FAMILY_KEY, chatFamily);
+  localStorage.setItem(CHAT_FAMILY_KEY, appState.chatFamily);
   closeChatModeMenu();
   syncChatModeUi();
   syncActiveChatSession();
@@ -8841,8 +8675,8 @@ function setChatMode(mode) {
 }
 
 function setChatFamily(_family) {
-  chatFamily = "xekute";
-  localStorage.setItem(CHAT_FAMILY_KEY, chatFamily);
+  appState.chatFamily = "xekute";
+  localStorage.setItem(CHAT_FAMILY_KEY, appState.chatFamily);
   syncChatModeUi();
   syncActiveChatSession();
 }
@@ -8851,36 +8685,35 @@ function syncActiveChatSession({ persist = true } = {}) {
   const session = activeChatSession();
   if (!session) return;
   session.history = MessageIdentity?.ensureMessageIdentity
-    ? MessageIdentity.ensureMessageIdentity(chatHistory, session.id)
-    : chatHistory;
-  chatHistory = session.history;
-  session.contextFilesCache = contextFilesCache;
-  session.activeStreamContent = activeStreamContent;
+    ? MessageIdentity.ensureMessageIdentity(appState.chatHistory, session.id)
+    : appState.chatHistory;
+  appState.chatHistory = session.history;
+  session.contextFilesCache = appState.contextFilesCache;
+  session.activeStreamContent = appState.activeStreamContent;
   session.messagesHtml = sanitizePersistedChatHtml(messages?.innerHTML || "");
   captureSessionTranscript(session, messages);
-  session.chatMode = chatMode;
-  session.chatFamily = chatFamily;
-  session.selectedModel = selectedModel;
+  session.chatMode = appState.chatMode;
+  session.chatFamily = appState.chatFamily;
+  session.selectedModel = appState.selectedModel;
   session.updatedAt = session.updatedAt || session.createdAt || new Date().toISOString();
   if (persist) schedulePersistChatSessions();
 }
 
-let chatSessionTabSignature = "";
 
 function renderChatSessionSelect() {
   if (!chatSessionSelect) return;
   const signature = chatSessions.map((session) => [
     session.id,
     session.title || "",
-    session.id === activeChatSessionId ? "1" : "0",
+    session.id === appState.activeChatSessionId ? "1" : "0",
     isChatSessionRunning(session.id) ? "1" : "0",
     chatSessionsNeedingAttention.has(session.id) ? "1" : "0",
   ].join("\u001f")).join("\u001e");
-  if (signature === chatSessionTabSignature && chatSessionSelect.childElementCount === chatSessions.length) {
+  if (signature === appState.chatSessionTabSignature && chatSessionSelect.childElementCount === chatSessions.length) {
     chatSessionSelect.classList.toggle("disabled", !chatSessions.length);
     return;
   }
-  chatSessionTabSignature = signature;
+  appState.chatSessionTabSignature = signature;
   chatSessionSelect.innerHTML = "";
   chatSessionSelect.classList.toggle("disabled", !chatSessions.length);
 
@@ -8889,7 +8722,7 @@ function renderChatSessionSelect() {
     const needsAttention = !running && chatSessionsNeedingAttention.has(session.id);
     const tab = document.createElement("button");
     tab.type = "button";
-    tab.className = `chat-session-tab${session.id === activeChatSessionId ? " active" : ""}${running ? " running" : ""}${needsAttention ? " needs-attention" : ""}`;
+    tab.className = `chat-session-tab${session.id === appState.activeChatSessionId ? " active" : ""}${running ? " running" : ""}${needsAttention ? " needs-attention" : ""}`;
     tab.dataset.sessionId = session.id;
     tab.dataset.runState = running ? "running" : needsAttention ? "complete-unread" : "idle";
     const title = session.title || "New Agent";
@@ -8925,7 +8758,7 @@ function renderChatSessionSelect() {
   if (btnChatNew) btnChatNew.disabled = false;
 }
 
-function scrollChatSessionIntoView(sessionId = activeChatSessionId) {
+function scrollChatSessionIntoView(sessionId = appState.activeChatSessionId) {
   if (!chatSessionSelect || !sessionId) return;
   const tab = [...chatSessionSelect.querySelectorAll(".chat-session-tab")]
     .find((item) => item.dataset.sessionId === sessionId);
@@ -8996,10 +8829,10 @@ function cloneSessionValue(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-async function forkChatSession(sourceId = activeChatSessionId) {
+async function forkChatSession(sourceId = appState.activeChatSessionId) {
   const source = allKnownChatSessions().find((session) => session.id === sourceId);
   if (!source) return null;
-  if (source.id === activeChatSessionId) syncActiveChatSession({ persist: false });
+  if (source.id === appState.activeChatSessionId) syncActiveChatSession({ persist: false });
   const fork = createChatSession(nextForkTitle(source));
   fork.forkedFromSessionId = forkRootSessionId(source);
   fork.history = cloneSessionValue(source.history || []);
@@ -9029,10 +8862,10 @@ async function forkChatSession(sourceId = activeChatSessionId) {
   fork.memoryBlockId = "";
   fork.memoryBlockHistoryStart = -1;
   const sourceMemoryId = String(source.memorySessionId || "");
-  if (sourceMemoryId && rootPath && typeof window.api?.forkTier1Session === "function") {
+  if (sourceMemoryId && appState.rootPath && typeof window.api?.forkTier1Session === "function") {
     try {
       const copied = await window.api.forkTier1Session({
-        workspace: rootPath,
+        workspace: appState.rootPath,
         projectId: source.memoryProjectId || "",
         sourceSessionId: sourceMemoryId,
         destKey: fork.id,
@@ -9045,7 +8878,7 @@ async function forkChatSession(sourceId = activeChatSessionId) {
   }
   chatSessions.push(fork);
   applyActiveChatSession(fork);
-  contextFilesCache = Array.isArray(fork.contextFilesCache) ? fork.contextFilesCache : [];
+  appState.contextFilesCache = Array.isArray(fork.contextFilesCache) ? fork.contextFilesCache : [];
   renderChatSessionSelect();
   scrollChatSessionIntoView(fork.id);
   updateContextUsage();
@@ -9068,11 +8901,11 @@ function newChatSession() {
 
 // Closes a chat session: it is removed from the open tab strip but kept in
 // storage so it still appears in chat history and can be reopened.
-function closeChatSession(id = activeChatSessionId) {
+function closeChatSession(id = appState.activeChatSessionId) {
   if (isChatSessionRunning(id)) return;
   const idx = chatSessions.findIndex((session) => session.id === id);
   if (idx < 0) return;
-  const wasActive = id === activeChatSessionId;
+  const wasActive = id === appState.activeChatSessionId;
   if (wasActive) prepareActiveChatSessionForSwitch("");
   const [session] = chatSessions.splice(idx, 1);
   session.updatedAt = new Date().toISOString();
@@ -9087,10 +8920,10 @@ function closeChatSession(id = activeChatSessionId) {
     return;
   }
   if (!chatSessions.length) {
-    activeChatSessionId = "";
-    chatHistory = [];
-    contextFilesCache = [];
-    activeStreamContent = "";
+    appState.activeChatSessionId = "";
+    appState.chatHistory = [];
+    appState.contextFilesCache = [];
+    appState.activeStreamContent = "";
     messages.innerHTML = "";
     syncChatEmptyState();
     setChatCollapsed(true);
@@ -9121,7 +8954,7 @@ function destroyChatSession(id) {
   }
   const openIdx = chatSessions.findIndex((session) => session.id === id);
   if (openIdx >= 0) {
-    if (id === activeChatSessionId) prepareActiveChatSessionForSwitch("");
+    if (id === appState.activeChatSessionId) prepareActiveChatSessionForSwitch("");
     clearChatSessionState(chatSessions[openIdx]);
     chatSessions.splice(openIdx, 1);
   } else {
@@ -9137,12 +8970,12 @@ function destroyChatSession(id) {
       }
     }
   }
-  if (id === activeChatSessionId || !activeChatSession()) {
+  if (id === appState.activeChatSessionId || !activeChatSession()) {
     if (!chatSessions.length) {
-      activeChatSessionId = "";
-      chatHistory = [];
-      contextFilesCache = [];
-      activeStreamContent = "";
+      appState.activeChatSessionId = "";
+      appState.chatHistory = [];
+      appState.contextFilesCache = [];
+      appState.activeStreamContent = "";
       messages.innerHTML = "";
       syncChatEmptyState();
       setChatCollapsed(true);
@@ -9158,7 +8991,7 @@ function destroyChatSession(id) {
 }
 
 function deleteActiveChatSession() {
-  destroyChatSession(activeChatSessionId);
+  destroyChatSession(appState.activeChatSessionId);
 }
 
 function archiveChatSession(id) {
@@ -9230,7 +9063,7 @@ function reopenChatSession(id, { closePopover = true } = {}) {
 
 function createChatHistorySessionRow(session, { archived = false } = {}) {
   const row = document.createElement("div");
-  row.className = `chat-history-session${session.id === activeChatSessionId ? " active" : ""}${archived ? " archived" : ""}`;
+  row.className = `chat-history-session${session.id === appState.activeChatSessionId ? " active" : ""}${archived ? " archived" : ""}`;
   row.dataset.sessionId = session.id;
   row.title = session.title || "Untitled chat";
 
@@ -9303,7 +9136,7 @@ function renderChatHistory() {
   const recent = sortHistorySessions([...recentById.values()], query);
   const archived = sortHistorySessions(archivedChatSessions, query);
   const matchingCount = recent.length + archived.length;
-  const recentPage = paginateRecentHistory(recent, { showAll: chatHistoryShowAllRecent });
+  const recentPage = paginateRecentHistory(recent, { showAll: appState.chatHistoryShowAllRecent });
   const visibleRecent = recentPage.visible;
   const remainingRecent = recentPage.remaining;
 
@@ -9325,8 +9158,8 @@ function renderChatHistory() {
     const more = document.createElement("button");
     more.type = "button";
     more.className = "chat-history-more";
-    more.dataset.chatHistoryMore = chatHistoryShowAllRecent ? "less" : "more";
-    more.textContent = chatHistoryShowAllRecent ? "Show less" : `Show ${remainingRecent} more`;
+    more.dataset.chatHistoryMore = appState.chatHistoryShowAllRecent ? "less" : "more";
+    more.textContent = appState.chatHistoryShowAllRecent ? "Show less" : `Show ${remainingRecent} more`;
     more.setAttribute("aria-label", more.textContent);
     chatHistoryBody.appendChild(more);
   }
@@ -9336,10 +9169,10 @@ function renderChatHistory() {
     archiveToggle.type = "button";
     archiveToggle.className = "chat-history-archive-toggle";
     archiveToggle.dataset.toggleArchived = "true";
-    archiveToggle.setAttribute("aria-expanded", String(chatHistoryArchivedOpen));
+    archiveToggle.setAttribute("aria-expanded", String(appState.chatHistoryArchivedOpen));
 
     const archiveIcon = document.createElement("span");
-    archiveIcon.className = `codicon codicon-chevron-right chat-history-archive-chevron${chatHistoryArchivedOpen ? " expanded" : ""}`;
+    archiveIcon.className = `codicon codicon-chevron-right chat-history-archive-chevron${appState.chatHistoryArchivedOpen ? " expanded" : ""}`;
     archiveIcon.setAttribute("aria-hidden", "true");
     const archiveLabel = document.createElement("span");
     archiveLabel.textContent = "Archived";
@@ -9347,7 +9180,7 @@ function renderChatHistory() {
     archiveToggle.appendChild(archiveLabel);
     chatHistoryBody.appendChild(archiveToggle);
 
-    if (chatHistoryArchivedOpen) {
+    if (appState.chatHistoryArchivedOpen) {
       if (!archived.length) {
         const emptyArchived = document.createElement("div");
         emptyArchived.className = "chat-history-archive-empty";
@@ -9387,8 +9220,8 @@ function openChatHistoryPopover() {
   if (!chatHistoryPopover) return;
   closeModelMenu();
   closeContextPopover();
-  chatHistoryShowAllRecent = false;
-  chatHistoryArchivedOpen = false;
+  appState.chatHistoryShowAllRecent = false;
+  appState.chatHistoryArchivedOpen = false;
   renderChatHistory();
   chatHistoryPopover.hidden = false;
   btnChatHistory?.classList.add("active");
@@ -9425,9 +9258,9 @@ function maybeNameActiveChat(text) {
 const initialChatSession = createChatSession("New Agent");
 clearChatSessionState(initialChatSession);
 chatSessions.push(initialChatSession);
-activeChatSessionId = chatSessions[0].id;
-chatHistory = chatSessions[0].history;
-contextFilesCache = chatSessions[0].contextFilesCache;
+appState.activeChatSessionId = chatSessions[0].id;
+appState.chatHistory = chatSessions[0].history;
+appState.contextFilesCache = chatSessions[0].contextFilesCache;
 
 function loadModelSettings() {
   try {
@@ -9473,17 +9306,17 @@ function loadModelSettings() {
   }
 }
 
-let modelSettings = loadModelSettings();
+appState.modelSettings = loadModelSettings();
 // Model settings and context counters are initialized before the initial mode
 // sync because the context indicator reads both of them.
 syncChatModeUi();
 
 function getModelSettings(name) {
-  const provider = String(selectedLlmProvider?.() || activeLlmProvider || "ollama").toLowerCase();
+  const provider = String(selectedLlmProvider?.() || appState.activeLlmProvider || "ollama").toLowerCase();
   const key = ContextBudget?.contextKey(provider, name) || `${provider}:${name}`;
-  const legacy = modelSettings[name];
-  if (!modelSettings[key]) {
-    modelSettings[key] = legacy ? { ...legacy } : {
+  const legacy = appState.modelSettings[name];
+  if (!appState.modelSettings[key]) {
+    appState.modelSettings[key] = legacy ? { ...legacy } : {
       thinking: null,
       thinkingConfigured: false,
       reasoningEffort: null,
@@ -9493,7 +9326,7 @@ function getModelSettings(name) {
       contextLimitTokens: null,
     };
   }
-  return modelSettings[key];
+  return appState.modelSettings[key];
 }
 
 function modelThinkingEnabled(settings) {
@@ -9503,7 +9336,7 @@ function modelThinkingEnabled(settings) {
 }
 
 function saveModelSettings() {
-  localStorage.setItem(MODEL_SETTINGS_KEY, JSON.stringify(modelSettings));
+  localStorage.setItem(MODEL_SETTINGS_KEY, JSON.stringify(appState.modelSettings));
 }
 
 function setModelSetting(name, key, value) {
@@ -9518,8 +9351,8 @@ function setModelSetting(name, key, value) {
     getModelSettings(name).contextLimitTokens = tokens;
   }
   saveModelSettings();
-  if (name === selectedModel) syncModelControlsSummary();
-  if (name === selectedModel && key === "context") {
+  if (name === appState.selectedModel) syncModelControlsSummary();
+  if (name === appState.selectedModel && key === "context") {
     updateContextUsage();
     void refreshStoredContextCapacity();
   }
@@ -9535,7 +9368,7 @@ function tokensToContextLabel(tokens) {
 
 async function fetchOpenRouterModelMetadata(modelName) {
   if (!modelName || !isOpenRouterProvider()) return ContextBudget.normalizeModelMetadata({}, modelName);
-  const existing = openRouterModelMeta[modelName];
+  const existing = appState.openRouterModelMeta[modelName];
   if ((existing?.contextWindowTokens || existing?.contextLength) && openRouterContextLengthsCache.has(modelName)) {
     return ContextBudget.normalizeModelMetadata(existing, modelName);
   }
@@ -9546,21 +9379,21 @@ async function fetchOpenRouterModelMetadata(modelName) {
         ? Math.max(...result.contextLengths.map(Number).filter((value) => Number.isFinite(value) && value > 0))
         : null;
       if (result?.modelMeta || endpointMaximum) {
-        openRouterModelMeta[modelName] = {
-          ...(openRouterModelMeta[modelName] || {}),
+        appState.openRouterModelMeta[modelName] = {
+          ...(appState.openRouterModelMeta[modelName] || {}),
           ...(result.modelMeta || {}),
           ...(endpointMaximum && !result.modelMeta?.contextWindowTokens ? { contextWindowTokens: endpointMaximum, contextLength: endpointMaximum, source: "endpoint" } : {}),
           endpointContextLengths: Array.isArray(result?.endpointContextLengths) ? result.endpointContextLengths : [],
         };
       }
       openRouterContextLengthsCache.set(modelName, Array.isArray(result?.contextLengths) ? result.contextLengths : []);
-      const metadata = ContextBudget.normalizeModelMetadata(openRouterModelMeta[modelName] || {}, modelName);
+      const metadata = ContextBudget.normalizeModelMetadata(appState.openRouterModelMeta[modelName] || {}, modelName);
       if (metadata.contextWindowTokens || metadata.maxCompletionTokens) return metadata;
     } catch {
       /* Fall back to the model list metadata. */
     }
   }
-  return ContextBudget.normalizeModelMetadata(openRouterModelMeta[modelName] || {}, modelName);
+  return ContextBudget.normalizeModelMetadata(appState.openRouterModelMeta[modelName] || {}, modelName);
 }
 
 async function ensureOpenRouterModelContext(modelName) {
@@ -9586,19 +9419,19 @@ function resolveModelContextPlan(modelName, metadata = {}, runtime = null) {
 }
 
 async function refreshModelContextCapacity() {
-  if (!selectedModel) {
-    resolvedContextCapacity = { tokens: AUTO_CONTEXT_ESTIMATE, source: "fallback", approximate: true };
+  if (!appState.selectedModel) {
+    appState.resolvedContextCapacity = { tokens: AUTO_CONTEXT_ESTIMATE, source: "fallback", approximate: true };
     updateContextUsage();
     return;
   }
 
-  const seq = ++contextCapacitySeq;
+  const seq = ++appState.contextCapacitySeq;
 
   if (isOpenRouterProvider()) {
-    const metadata = await ensureOpenRouterModelContext(selectedModel);
-    if (seq !== contextCapacitySeq) return;
-    const plan = resolveModelContextPlan(selectedModel, metadata);
-    resolvedContextCapacity = {
+    const metadata = await ensureOpenRouterModelContext(appState.selectedModel);
+    if (seq !== appState.contextCapacitySeq) return;
+    const plan = resolveModelContextPlan(appState.selectedModel, metadata);
+    appState.resolvedContextCapacity = {
       tokens: plan.effectiveLimitTokens,
       source: plan.source,
       approximate: plan.approximate,
@@ -9609,24 +9442,24 @@ async function refreshModelContextCapacity() {
   }
 
   try {
-    const runtime = await window.api.runtimeModel({ model: selectedModel });
-    if (seq !== contextCapacitySeq) return;
-    if (runtime?.ok && runtime.contextLength) ollamaRuntimeContext[selectedModel] = runtime.contextLength;
-    const plan = resolveModelContextPlan(selectedModel, {}, runtime?.ok ? runtime : null);
-    resolvedContextCapacity = { tokens: plan.effectiveLimitTokens, source: plan.source, approximate: plan.approximate, plan };
+    const runtime = await window.api.runtimeModel({ model: appState.selectedModel });
+    if (seq !== appState.contextCapacitySeq) return;
+    if (runtime?.ok && runtime.contextLength) ollamaRuntimeContext[appState.selectedModel] = runtime.contextLength;
+    const plan = resolveModelContextPlan(appState.selectedModel, {}, runtime?.ok ? runtime : null);
+    appState.resolvedContextCapacity = { tokens: plan.effectiveLimitTokens, source: plan.source, approximate: plan.approximate, plan };
     updateContextUsage();
   } catch {
-    if (seq !== contextCapacitySeq) return;
-    const plan = resolveModelContextPlan(selectedModel);
-    resolvedContextCapacity = { tokens: plan.effectiveLimitTokens, source: plan.source, approximate: plan.approximate, plan };
+    if (seq !== appState.contextCapacitySeq) return;
+    const plan = resolveModelContextPlan(appState.selectedModel);
+    appState.resolvedContextCapacity = { tokens: plan.effectiveLimitTokens, source: plan.source, approximate: plan.approximate, plan };
     updateContextUsage();
   }
 }
 
 async function applyOpenRouterModelDefaults(modelName) {
   const metadata = await ensureOpenRouterModelContext(modelName);
-  if (modelName === selectedModel) await refreshModelContextCapacity();
-  if (editingModel === modelName) {
+  if (modelName === appState.selectedModel) await refreshModelContextCapacity();
+  if (appState.editingModel === modelName) {
     renderReasoningOptions(metadata);
     renderContextOptions(getModelSettings(modelName).context, metadata);
     updateModelRuntimeNote(modelName);
@@ -9664,9 +9497,9 @@ function contextPreviewRoute(requestText = "") {
   const activeFile = getActiveFileContext();
   return globalThis.XekuteContextRouter?.routeRequest({
     text: requestText,
-    hasWorkspace: Boolean(rootPath),
-    family: chatFamily,
-    mode: chatMode,
+    hasWorkspace: Boolean(appState.rootPath),
+    family: appState.chatFamily,
+    mode: appState.chatMode,
     activeFile,
   }) || {
     kind: "conversation",
@@ -9679,11 +9512,11 @@ function contextPreviewRoute(requestText = "") {
   };
 }
 
-function resolvedWorkingContextPlan(modelName = selectedModel) {
+function resolvedWorkingContextPlan(modelName = appState.selectedModel) {
   const provider = isOpenRouterProvider() ? "openrouter" : "ollama";
-  const cached = resolvedContextCapacity?.plan;
+  const cached = appState.resolvedContextCapacity?.plan;
   const metadata = (cached?.model === modelName && cached?.metadata)
-    || (provider === "openrouter" ? (openRouterModelMeta[modelName] || {}) : {});
+    || (provider === "openrouter" ? (appState.openRouterModelMeta[modelName] || {}) : {});
   const preference = contextPreferenceFor(modelName);
   const runtime = cached?.model === modelName && cached?.source === "runtime" && cached.modelMaxTokens
     ? { contextLength: cached.modelMaxTokens }
@@ -9696,7 +9529,7 @@ function resolvedWorkingContextPlan(modelName = selectedModel) {
   return resolveModelContextPlan(modelName, metadata, runtimeUsable ? runtime : null);
 }
 
-function workingHistoryMessages(history = chatHistory, session = activeChatSession()) {
+function workingHistoryMessages(history = appState.chatHistory, session = activeChatSession()) {
   const source = MessageIdentity?.ensureMessageIdentity
     ? MessageIdentity.ensureMessageIdentity(history, session?.id || "chat")
     : (Array.isArray(history) ? history : []);
@@ -9778,7 +9611,7 @@ const CONTEXT_SUMMARIZED_NOTICE = "Chat context summarized";
 const CONTEXT_SUMMARIZATION_INTERRUPTED_NOTICE = "Chat summarization interrupted";
 
 function pendingContextCheckpointNotice(container = messages) {
-  if (contextCheckpointNotice?.isConnected && contextCheckpointNotice.dataset.state === "pending" && container?.contains?.(contextCheckpointNotice)) return contextCheckpointNotice;
+  if (appState.contextCheckpointNotice?.isConnected && appState.contextCheckpointNotice.dataset.state === "pending" && container?.contains?.(appState.contextCheckpointNotice)) return appState.contextCheckpointNotice;
   return container?.querySelector?.(".context-checkpoint-notice[data-state='pending']") || null;
 }
 
@@ -9829,7 +9662,7 @@ function ensureContextCheckpointNotice(container = messages, { text = CONTEXT_SU
   }
   setContextCheckpointNoticeText(notice, text);
   notice.dataset.state = state;
-  contextCheckpointNotice = notice;
+  appState.contextCheckpointNotice = notice;
   return notice;
 }
 
@@ -9861,7 +9694,7 @@ function finishContextCheckpointNotice(container = messages, outcome = "complete
   const interrupted = result === "interrupted";
   setContextCheckpointNoticeText(notice, failed ? "Context checkpoint needs attention" : interrupted ? CONTEXT_SUMMARIZATION_INTERRUPTED_NOTICE : CONTEXT_SUMMARIZED_NOTICE);
   notice.dataset.state = failed ? "error" : interrupted ? "interrupted" : "complete";
-  if (contextCheckpointNotice === notice) contextCheckpointNotice = null;
+  if (appState.contextCheckpointNotice === notice) appState.contextCheckpointNotice = null;
   return notice;
 }
 
@@ -9871,7 +9704,7 @@ function applyContextCheckpointUi(run, payload = {}) {
   const status = String(payload.status || "").toLowerCase();
   const active = status === "started" || status === "running";
   if (run) run.contextCheckpointPending = active;
-  if (session) contextCheckpointingSessionId = active ? session.id : (contextCheckpointingSessionId === session.id ? "" : contextCheckpointingSessionId);
+  if (session) appState.contextCheckpointingSessionId = active ? session.id : (appState.contextCheckpointingSessionId === session.id ? "" : appState.contextCheckpointingSessionId);
   const container = chatRunContainer(run);
   if (active) {
     ensureContextCheckpointNotice(container, { assistant: run?.assistant });
@@ -9880,8 +9713,8 @@ function applyContextCheckpointUi(run, payload = {}) {
     finishContextCheckpointNotice(container, status);
     run?.assistant?.releasePlanningAfterCheckpoint?.();
   }
-  const visible = Boolean(session && activeChatSessionId === session.id && !run?.viewHost);
-  setContextCheckpointUi(active && (visible || contextCheckpointingSessionId === activeChatSessionId));
+  const visible = Boolean(session && appState.activeChatSessionId === session.id && !run?.viewHost);
+  setContextCheckpointUi(active && (visible || appState.contextCheckpointingSessionId === appState.activeChatSessionId));
   if (visible) {
     setAgentStatus(active ? CONTEXT_SUMMARIZING_NOTICE : status === "failed" ? "Context checkpoint needs attention" : `${modeLabel(run?.mode)} working`);
     if (!active) updateContextUsage();
@@ -9895,7 +9728,7 @@ function applyChatReferenceImportUi(run, payload = {}) {
   const text = "Bringing chats to this session...";
   const container = chatRunContainer(run);
   if (run) { run.chatReferenceImportPending = active; run.contextCheckpointPending = active; }
-  if (run?.session) contextCheckpointingSessionId = active ? run.session.id : (contextCheckpointingSessionId === run.session.id ? "" : contextCheckpointingSessionId);
+  if (run?.session) appState.contextCheckpointingSessionId = active ? run.session.id : (appState.contextCheckpointingSessionId === run.session.id ? "" : appState.contextCheckpointingSessionId);
   if (active) {
     const notice = ensureContextCheckpointNotice(container, { text, assistant: run?.assistant });
     if (notice) {
@@ -9937,20 +9770,20 @@ function applyChatReferenceImportUi(run, payload = {}) {
       setContextCheckpointNoticeText(notice, "Brought chats");
       if (notice) notice.dataset.state = "complete";
     }
-    if (contextCheckpointNotice === notice) contextCheckpointNotice = null;
+    if (appState.contextCheckpointNotice === notice) appState.contextCheckpointNotice = null;
     run?.assistant?.releasePlanningAfterCheckpoint?.();
   }
-  const visible = Boolean(run?.session && activeChatSessionId === run.session.id && !run.viewHost);
+  const visible = Boolean(run?.session && appState.activeChatSessionId === run.session.id && !run.viewHost);
   if (visible) { setContextCheckpointUi(active); setAgentStatus(active ? text : payload.status === "failed" ? "Could not bring chats" : `${modeLabel(run.mode)} working`); scrollMessages(); }
   if (run) syncChatRunSession(run);
 }
 
 function setContextCheckpointUi(checkpointing) {
-  contextCheckpointing = Boolean(checkpointing);
-  if (!contextCheckpointing) contextCheckpointingSessionId = contextCheckpointingSessionId && activeChatRuns.get(contextCheckpointingSessionId)?.contextCheckpointPending
-    ? contextCheckpointingSessionId
+  appState.contextCheckpointing = Boolean(checkpointing);
+  if (!appState.contextCheckpointing) appState.contextCheckpointingSessionId = appState.contextCheckpointingSessionId && activeChatRuns.get(appState.contextCheckpointingSessionId)?.contextCheckpointPending
+    ? appState.contextCheckpointingSessionId
     : "";
-  const affectsActiveChat = contextCheckpointing && (!contextCheckpointingSessionId || contextCheckpointingSessionId === activeChatSessionId);
+  const affectsActiveChat = appState.contextCheckpointing && (!appState.contextCheckpointingSessionId || appState.contextCheckpointingSessionId === appState.activeChatSessionId);
   if (chatInput) {
     chatInput.disabled = false;
     chatInput.readOnly = false;
@@ -10014,7 +9847,7 @@ function normalizeContextUsageSnapshot(value) {
 
 function storeLastContextUsage(value, {
   session = activeChatSession(),
-  model = selectedModel,
+  model = appState.selectedModel,
   contextPlan = null,
 } = {}) {
   const usage = normalizeContextUsageSnapshot(value);
@@ -10039,7 +9872,7 @@ function storeLastContextUsage(value, {
     memory.checkpointTokens = Number(summarizedTokens);
     if (memory.status === "empty") memory.status = "ready";
   }
-  if (session.id === activeChatSessionId) syncActiveChatSession();
+  if (session.id === appState.activeChatSessionId) syncActiveChatSession();
   else schedulePersistChatSessions();
   return usage;
 }
@@ -10048,10 +9881,10 @@ async function refreshStoredContextCapacity() {
   await refreshModelContextCapacity();
   const session = activeChatSession();
   const usage = normalizeContextUsageSnapshot(session?.lastContextUsage);
-  if (!usage || !selectedModel) return;
-  if (usage.model && usage.model !== selectedModel) return;
+  if (!usage || !appState.selectedModel) return;
+  if (usage.model && usage.model !== appState.selectedModel) return;
   const plan = resolvedWorkingContextPlan();
-  usage.model = selectedModel;
+  usage.model = appState.selectedModel;
   usage.provider = plan.provider;
   usage.modelMaxTokens = plan.modelMaxTokens || usage.modelMaxTokens;
   usage.effectiveLimitTokens = plan.effectiveLimitTokens;
@@ -10067,12 +9900,12 @@ async function refreshStoredContextCapacity() {
 }
 
 function getContextUsage(usedOverride = null) {
-  const settings = selectedModel ? getModelSettings(selectedModel) : { context: AUTO_CONTEXT };
+  const settings = appState.selectedModel ? getModelSettings(appState.selectedModel) : { context: AUTO_CONTEXT };
   const plan = resolvedWorkingContextPlan();
   const storedCandidate = normalizeContextUsageSnapshot(activeChatSession()?.lastContextUsage);
   const stored = storedCandidate && storedCandidate.source === "estimate" ? storedCandidate : null;
   const breakdown = getContextBreakdown();
-  const total = plan.effectiveLimitTokens || resolvedContextCapacity.tokens || AUTO_CONTEXT_ESTIMATE;
+  const total = plan.effectiveLimitTokens || appState.resolvedContextCapacity.tokens || AUTO_CONTEXT_ESTIMATE;
   const capacityApproximate = Boolean(plan.approximate);
   const promptBudget = plan.promptBudgetTokens || total;
   const used = breakdown.estimatedTotal;
@@ -10160,7 +9993,7 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
     contextUsageBreakdown.innerHTML = rows.join("");
   }
   renderContextBlocksPanel(breakdown.blocks, breakdown.pinBudgetTokens);
-  setContextCheckpointUi(contextCheckpointing);
+  setContextCheckpointUi(appState.contextCheckpointing);
   if (contextUsageMenu && !contextUsageMenu.hidden) {
     requestAnimationFrame(positionContextPopover);
   }
@@ -10171,15 +10004,15 @@ function renderContextUsage({ total, used, free, pct, source, breakdown = getCon
 // the moment a session is opened, rather than only after the first send.
 function tier1PreviewSignature() {
   const session = activeChatSession();
-  if (!session || !rootPath || !selectedModel) return "";
+  if (!session || !appState.rootPath || !appState.selectedModel) return "";
   const plan = resolvedWorkingContextPlan();
   return [
-    rootPath,
+    appState.rootPath,
     session.memorySessionId || session.id,
-    selectedModel,
-    canonicalChatMode(session.chatMode || chatMode),
-    session.chatFamily || chatFamily,
-    authoritySettingsData?.superMode || "",
+    appState.selectedModel,
+    canonicalChatMode(session.chatMode || appState.chatMode),
+    session.chatFamily || appState.chatFamily,
+    appState.authoritySettingsData?.superMode || "",
     plan.effectiveLimitTokens || 0,
   ].join("|");
 }
@@ -10188,27 +10021,27 @@ function scheduleTier1ContextPreview({ force = false } = {}) {
   if (typeof window.api?.contextTier1Usage !== "function") return;
   const signature = tier1PreviewSignature();
   if (!signature) return;
-  if (!force && signature === tier1PreviewSignatureValue) return;
-  tier1PreviewSignatureValue = signature;
-  clearTimeout(tier1PreviewTimer);
-  tier1PreviewTimer = setTimeout(() => { void refreshTier1ContextPreview(signature); }, 150);
+  if (!force && signature === appState.tier1PreviewSignatureValue) return;
+  appState.tier1PreviewSignatureValue = signature;
+  clearTimeout(appState.tier1PreviewTimer);
+  appState.tier1PreviewTimer = setTimeout(() => { void refreshTier1ContextPreview(signature); }, 150);
 }
 
 async function refreshTier1ContextPreview(signature) {
   const session = activeChatSession();
-  if (!session || tier1PreviewInFlight) return;
+  if (!session || appState.tier1PreviewInFlight) return;
   // A live run publishes its own Tier 1 snapshots; never overwrite them with a
   // preview taken between two model rounds.
   if (isChatSessionRunning(session.id)) return;
-  tier1PreviewInFlight = true;
+  appState.tier1PreviewInFlight = true;
   try {
     const plan = resolvedWorkingContextPlan();
     const response = await window.api.contextTier1Usage({
-      workspace: rootPath || "",
-      model: selectedModel,
-      mode: canonicalChatMode(session.chatMode || chatMode),
-      modeFamily: session.chatFamily || chatFamily,
-      authorityProfile: authoritySettingsData?.superMode || "",
+      workspace: appState.rootPath || "",
+      model: appState.selectedModel,
+      mode: canonicalChatMode(session.chatMode || appState.chatMode),
+      modeFamily: session.chatFamily || appState.chatFamily,
+      authorityProfile: appState.authoritySettingsData?.superMode || "",
       contextPlan: plan,
       numCtx: plan.provider === "ollama" ? plan.effectiveLimitTokens : null,
       contextBudget: plan.effectiveLimitTokens,
@@ -10222,10 +10055,10 @@ async function refreshTier1ContextPreview(signature) {
     // The selection can change while the assembly is in flight; a stale answer
     // must not replace the rows for a different session, mode, or model.
     if (signature !== tier1PreviewSignature() || isChatSessionRunning(session.id)) return;
-    storeLastContextUsage(usage, { session, model: selectedModel, contextPlan: plan });
-    if (session.id === activeChatSessionId) renderContextUsage(getContextUsage());
+    storeLastContextUsage(usage, { session, model: appState.selectedModel, contextPlan: plan });
+    if (session.id === appState.activeChatSessionId) renderContextUsage(getContextUsage());
   } catch { /* the meter keeps its last Tier 1 snapshot */ }
-  finally { tier1PreviewInFlight = false; }
+  finally { appState.tier1PreviewInFlight = false; }
 }
 
 function updateContextUsage() {
@@ -10238,7 +10071,7 @@ async function pinContextBlock(index, pinned) {
   const session = activeChatSession();
   if (!session || typeof window.api?.contextPinBlock !== "function") return;
   try {
-    const response = await window.api.contextPinBlock({ workspace: rootPath || "", memorySessionId: session.memorySessionId || "", index, pinned });
+    const response = await window.api.contextPinBlock({ workspace: appState.rootPath || "", memorySessionId: session.memorySessionId || "", index, pinned });
     if (!response?.ok) return;
     const block = (session.lastContextUsage?.blocks || []).find((entry) => entry.index === index);
     if (block) block.pinned = response.pinned === true;
@@ -10315,7 +10148,7 @@ function applyContextReleaseUi(run, payload = {}) {
     else host.appendChild(notice);
   }
   const session = run?.session;
-  if (session && activeChatSessionId === session.id && !run?.viewHost) updateContextUsage();
+  if (session && appState.activeChatSessionId === session.id && !run?.viewHost) updateContextUsage();
 }
 
 // Like the model picker: a small menu above the ring, and each row's panel
@@ -10419,26 +10252,24 @@ function setExplorerTreeDepth(item, depth = 0) {
   return normalized;
 }
 
-let creatingItem = false;
-let renamingItem = false;
 async function createNewItemInput(isFolder) {
-  if (!rootPath || creatingItem || renamingItem) return;
-  creatingItem = true;
+  if (!appState.rootPath || appState.creatingItem || appState.renamingItem) return;
+  appState.creatingItem = true;
 
-  let targetDir = rootPath;
+  let targetDir = appState.rootPath;
   let targetContainer = fileTree;
   let inputDepth = 0;
 
   // If an item is highlighted, contextualize where to add the new element
-  if (selectedItem) {
-    const isDir = selectedItem.dataset.isDir === "true";
+  if (appState.selectedItem) {
+    const isDir = appState.selectedItem.dataset.isDir === "true";
     if (isDir) {
-      targetDir = selectedItem.dataset.path;
-      const childrenContainer = selectedItem.nextElementSibling;
+      targetDir = appState.selectedItem.dataset.path;
+      const childrenContainer = appState.selectedItem.nextElementSibling;
       
       // Auto-expand directory exactly like VS Code
-      const chevron = selectedItem.querySelector(".tree-chevron");
-      const icon = selectedItem.querySelector(".tree-icon");
+      const chevron = appState.selectedItem.querySelector(".tree-chevron");
+      const icon = appState.selectedItem.querySelector(".tree-icon");
       setTreeChevronExpanded(chevron, true);
       if (icon) icon.className = "tree-icon codicon codicon-folder-opened";
       if (childrenContainer) childrenContainer.style.display = "block";
@@ -10446,20 +10277,20 @@ async function createNewItemInput(isFolder) {
       
       // Force directory load if it hasn't been cached/expanded yet
       if (childrenContainer && (childrenContainer.childElementCount === 0 || (childrenContainer.children.length === 1 && childrenContainer.children[0].textContent === "Loading…"))) {
-        const currentDepth = explorerTreeDepth(selectedItem);
+        const currentDepth = explorerTreeDepth(appState.selectedItem);
         childrenContainer.innerHTML = "";
         await renderTree(targetDir, childrenContainer, currentDepth + 1);
       }
       
       targetContainer = childrenContainer;
-      inputDepth = explorerTreeDepth(selectedItem) + 1;
+      inputDepth = explorerTreeDepth(appState.selectedItem) + 1;
     } else {
       // If a file is selected, create adjacent to it inside its parent folder
-      const filePath = selectedItem.dataset.path;
+      const filePath = appState.selectedItem.dataset.path;
       const lastIdx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
       targetDir = filePath.substring(0, lastIdx);
-      targetContainer = selectedItem.parentElement;
-      inputDepth = explorerTreeDepth(selectedItem);
+      targetContainer = appState.selectedItem.parentElement;
+      inputDepth = explorerTreeDepth(appState.selectedItem);
     }
   }
 
@@ -10498,7 +10329,7 @@ async function createNewItemInput(isFolder) {
     const name = input.value.trim();
     if (!name) {
       inputRow.remove();
-      creatingItem = false;
+      appState.creatingItem = false;
       return;
     }
 
@@ -10537,7 +10368,7 @@ async function createNewItemInput(isFolder) {
         }
       }
     }
-    creatingItem = false;
+    appState.creatingItem = false;
   }
 
   input.addEventListener("keydown", async (e) => {
@@ -10548,7 +10379,7 @@ async function createNewItemInput(isFolder) {
       e.preventDefault();
       finished = true;
       inputRow.remove();
-      creatingItem = false;
+      appState.creatingItem = false;
     }
   });
 
@@ -10584,11 +10415,11 @@ function projectName(folder) {
 }
 
 function setExplorerRootExpanded(expanded) {
-  explorerRootExpanded = Boolean(expanded);
-  fileTree.hidden = !explorerRootExpanded || !rootPath;
-  explorerRootToggle?.classList.toggle("collapsed", !explorerRootExpanded);
-  explorerRootChevron?.classList.toggle("codicon-chevron-down", explorerRootExpanded);
-  explorerRootChevron?.classList.toggle("codicon-chevron-right", !explorerRootExpanded);
+  appState.explorerRootExpanded = Boolean(expanded);
+  fileTree.hidden = !appState.explorerRootExpanded || !appState.rootPath;
+  explorerRootToggle?.classList.toggle("collapsed", !appState.explorerRootExpanded);
+  explorerRootChevron?.classList.toggle("codicon-chevron-down", appState.explorerRootExpanded);
+  explorerRootChevron?.classList.toggle("codicon-chevron-right", !appState.explorerRootExpanded);
 }
 
 function setProjectFolder(folder) {
@@ -10627,7 +10458,7 @@ function loadRunCommands() {
 }
 
 function runCommandKey() {
-  return rootPath || "__global__";
+  return appState.rootPath || "__global__";
 }
 
 function getRunCommand() {
@@ -10663,15 +10494,15 @@ async function loadWorkspace(folder) {
     return false;
   }
 
-  rootPath = folder;
-  assessmentPath = folder;
-  browserWorkspace?.projectChanged();
-  guidanceContext = "";
-  guidanceContextRequestPath = folder;
+  appState.rootPath = folder;
+  appState.assessmentPath = folder;
+  appState.browserWorkspace?.projectChanged();
+  appState.guidanceContext = "";
+  appState.guidanceContextRequestPath = folder;
   localStorage.setItem(BUG_BOUNTY_PATH_KEY, folder);
-  selectedItem = null;
+  appState.selectedItem = null;
   selectedExplorerPaths.clear();
-  explorerSelectionAnchorPath = "";
+  appState.explorerSelectionAnchorPath = "";
   expandedTreePaths.clear();
   localStorage.setItem(WORKSPACE_KEY, folder);
   setProjectFolder(folder);
@@ -10694,7 +10525,7 @@ async function loadWorkspace(folder) {
     title: projectName(folder),
     message: "Project folder active. Configure engagement, scope, ROE, and context in XEKUTE Settings.",
   });
-  if (currentWorkspaceMode === "settings") {
+  if (appState.currentWorkspaceMode === "settings") {
     await loadProjectProfile();
     if (!appController.isCurrent(workspaceOperation.epoch)) return false;
   }
@@ -10722,7 +10553,7 @@ activityRun?.addEventListener("click", () => runActiveCode());
   activityBugBounty?.addEventListener("click", () => {
     // The Project activity icon owns only the file-tree pane. It must never
     // replace the active editor, special tab, or chat workspace.
-    if (sidebarCollapsed) {
+    if (appState.sidebarCollapsed) {
       setSidebarView("project");
       setSidebarCollapsed(false);
       return;
@@ -10731,11 +10562,11 @@ activityRun?.addEventListener("click", () => runActiveCode());
   });
 activitySecurity?.addEventListener("click", () => showSecurityWorkspace());
 activityTerminal?.addEventListener("click", () => {
-  setTerminalCollapsed(!terminalCollapsed);
-  if (!terminalCollapsed) TerminalManager.focusActive();
+  setTerminalCollapsed(!appState.terminalCollapsed);
+  if (!appState.terminalCollapsed) TerminalManager.focusActive();
 });
 activityChat?.addEventListener("click", () => {
-  if (chatCollapsed) openChatPane({ createIfEmpty: true });
+  if (appState.chatCollapsed) openChatPane({ createIfEmpty: true });
   else setChatCollapsed(true);
 });
 function openAppSettings(section) {
@@ -10804,45 +10635,45 @@ function openBrowserTab() {
 }
 
 function switchToBrowserTab() {
-  if (terminalMaximized) setTerminalMaximized(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
   commitActiveTab();
-  activeTabPath = BROWSER_TAB_PATH;
-  editorLoadedPath = null;
+  appState.activeTabPath = BROWSER_TAB_PATH;
+  appState.editorLoadedPath = null;
   renderTabs();
   renderEditor({ focusEditor: false });
 }
 
 function showBrowserWorkspaceContent() {
-  currentWorkspaceMode = "browser";
+  appState.currentWorkspaceMode = "browser";
   if (editorTabBar) editorTabBar.hidden = false;
   if (editorBody) editorBody.hidden = true;
   if (resourceViewer) resourceViewer.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = true;
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (webcloneWorkspace) webcloneWorkspace.hidden = true;
-  if (assessmentModuleView) { assessmentModuleView.hidden = true; assessmentModuleActive = false; }
+  if (assessmentModuleView) { assessmentModuleView.hidden = true; appState.assessmentModuleActive = false; }
   window.api.webCloneHidePreview?.();
   editorPane?.setAttribute("aria-label", "Browser workspace");
   updateEditorPathBar();
-  browserWorkspace?.setVisible(true);
+  appState.browserWorkspace?.setVisible(true);
   syncWorkspaceActivity();
 }
 
 function switchToSettingsTab() {
-  if (terminalMaximized) setTerminalMaximized(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
   commitActiveTab();
-  activeTabPath = SETTINGS_TAB_PATH;
-  editorLoadedPath = null;
+  appState.activeTabPath = SETTINGS_TAB_PATH;
+  appState.editorLoadedPath = null;
   renderTabs();
   openSettingsWorkspace();
   syncWorkspaceActivity();
 }
 
 function switchToInterceptorTab() {
-  if (terminalMaximized) setTerminalMaximized(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
   commitActiveTab();
-  activeTabPath = INTERCEPTOR_TAB_PATH;
-  editorLoadedPath = null;
+  appState.activeTabPath = INTERCEPTOR_TAB_PATH;
+  appState.editorLoadedPath = null;
   renderTabs();
   renderEditor({ focusEditor: false });
 }
@@ -10851,19 +10682,18 @@ function openSettingsWorkspace() {
   renderEditor({ focusEditor: false });
 }
 
-let settingsWorkspacePromise = null;
 function loadSettingsWorkspace() {
-  if (settingsWorkspacePromise) return settingsWorkspacePromise;
-  settingsWorkspacePromise = (async () => {
+  if (appState.settingsWorkspacePromise) return appState.settingsWorkspacePromise;
+  appState.settingsWorkspacePromise = (async () => {
     await refreshAssessmentSettingsCache();
     await loadProjectProfile();
     await loadGuidanceSettings();
     await loadAuthoritySettings();
     await loadCertificateSettings();
     await loadMcpSettings();
-    setAppSettingsSection(appSettingsSection);
+    setAppSettingsSection(appState.appSettingsSection);
   })();
-  return settingsWorkspacePromise;
+  return appState.settingsWorkspacePromise;
 }
 activitySettings?.addEventListener("click", openAppSettings);
 btnBugBountyMore?.addEventListener("click", () => openQuickPalette("command"));
@@ -10900,8 +10730,8 @@ assessmentRepairOverlay?.addEventListener("click", (event) => {
   if (event.target === assessmentRepairOverlay) closeAssessmentRepairDialog();
 });
 $("btn-context-add")?.addEventListener("click", async () => {
-  if (!assessmentPath) return;
-  const result = await window.api.assessmentBuildContext({ path: assessmentPath });
+  if (!appState.assessmentPath) return;
+  const result = await window.api.assessmentBuildContext({ path: appState.assessmentPath });
   if (result?.ok) { setAgentStatus(`${result.imported || 0} context source file(s) imported`); await refreshCustomTree(); }
   else if (result?.error) addErrorMessage(result.error);
 });
@@ -10919,17 +10749,17 @@ function selectCustomEntry(event, entry, { contextMenu = false } = {}) {
   const additive = event.ctrlKey || event.metaKey;
   const rows = [...customTreeItems.querySelectorAll(".custom-entry-row[data-custom-path]")];
   const ordered = rows.map((row) => row.dataset.customPath);
-  if (event.shiftKey && customSelectionAnchor && ordered.includes(customSelectionAnchor)) {
-    const start = ordered.indexOf(customSelectionAnchor); const end = ordered.indexOf(pathValue);
+  if (event.shiftKey && appState.customSelectionAnchor && ordered.includes(appState.customSelectionAnchor)) {
+    const start = ordered.indexOf(appState.customSelectionAnchor); const end = ordered.indexOf(pathValue);
     if (!additive) selectedCustomEntries.clear();
     ordered.slice(Math.min(start, end), Math.max(start, end) + 1).forEach((item) => selectedCustomEntries.add(item));
   } else if (additive) {
     if (selectedCustomEntries.has(pathValue)) selectedCustomEntries.delete(pathValue); else selectedCustomEntries.add(pathValue);
-    customSelectionAnchor = pathValue;
+    appState.customSelectionAnchor = pathValue;
   } else if (!contextMenu || !selectedCustomEntries.has(pathValue)) {
-    selectedCustomEntries.clear(); selectedCustomEntries.add(pathValue); customSelectionAnchor = pathValue;
+    selectedCustomEntries.clear(); selectedCustomEntries.add(pathValue); appState.customSelectionAnchor = pathValue;
   }
-  if (entry.type === "directory") selectedCustomFolder = pathValue;
+  if (entry.type === "directory") appState.selectedCustomFolder = pathValue;
   syncCustomSelectionUI();
 }
 
@@ -10951,25 +10781,25 @@ function openCustomContextMenu(event, entry) {
 
 async function deleteSelectedCustomEntries() {
   const relativePaths = [...selectedCustomEntries];
-  if (!relativePaths.length || !assessmentPath || deletingCustomEntries) return;
+  if (!relativePaths.length || !appState.assessmentPath || appState.deletingCustomEntries) return;
   releaseWorkspaceMutationFocus();
-  const currentPath = String(resourceCurrentFilePath || "").replace(/\\/g, "/").toLowerCase();
+  const currentPath = String(appState.resourceCurrentFilePath || "").replace(/\\/g, "/").toLowerCase();
   const deletedCurrentResource = relativePaths.some((item) => {
     const target = assessmentDiskPath(`custom/${item}`).replace(/\\/g, "/").toLowerCase();
     return currentPath === target || currentPath.startsWith(`${target}/`);
   });
-  deletingCustomEntries = true;
+  appState.deletingCustomEntries = true;
   if (customContextDelete) customContextDelete.disabled = true;
   try {
-    const result = await window.api.assessmentDeleteEntries({ path: assessmentPath, relativePaths });
+    const result = await window.api.assessmentDeleteEntries({ path: appState.assessmentPath, relativePaths });
     if (result?.error) {
       await AppDialog.alert(`Delete failed: ${result.error}`, { title: "Delete failed" });
       return;
     }
-    if (selectedCustomFolder && relativePaths.some((item) => selectedCustomFolder === item || selectedCustomFolder.startsWith(`${item}/`))) selectedCustomFolder = "";
-    selectedCustomEntries.clear(); customSelectionAnchor = "";
+    if (appState.selectedCustomFolder && relativePaths.some((item) => appState.selectedCustomFolder === item || appState.selectedCustomFolder.startsWith(`${item}/`))) appState.selectedCustomFolder = "";
+    selectedCustomEntries.clear(); appState.customSelectionAnchor = "";
     if (deletedCurrentResource) {
-      setResourceDirty(false); resourceCurrentFilePath = ""; resourcePreviewText = ""; resourceSavedText = "";
+      setResourceDirty(false); appState.resourceCurrentFilePath = ""; appState.resourcePreviewText = ""; appState.resourceSavedText = "";
       resourceViewerContent.value = ""; resourceViewerContent.hidden = true; resourceViewerEmpty.hidden = false; resourceViewerTitle.textContent = "Target workspace"; resourceViewerMeta.textContent = "The selected Custom item was deleted."; resourceViewerCopy.disabled = true; settingsViewSwitch.hidden = true; settingsUIView.hidden = true; checklistUIView.hidden = true; scopeUIView.hidden = true;
     }
     await refreshCustomEntries();
@@ -10977,7 +10807,7 @@ async function deleteSelectedCustomEntries() {
   } catch (error) {
     await AppDialog.alert(`Delete failed: ${error?.message || "Unexpected workspace error"}`, { title: "Delete failed" });
   } finally {
-    deletingCustomEntries = false;
+    appState.deletingCustomEntries = false;
     if (customContextDelete) customContextDelete.disabled = selectedCustomEntries.size === 0;
     closeCustomContextMenu();
     restoreChatComposerAfterUiAction();
@@ -10985,15 +10815,15 @@ async function deleteSelectedCustomEntries() {
 }
 
 async function refreshCustomEntries() {
-  if (!customTreeItems || !assessmentPath) return;
-  const result = await window.api.assessmentCustomEntries({ path: assessmentPath });
+  if (!customTreeItems || !appState.assessmentPath) return;
+  const result = await window.api.assessmentCustomEntries({ path: appState.assessmentPath });
   customTreeItems.innerHTML = "";
   let toolsLabelAdded = false;
   const entries = result?.entries || [];
   const selectablePaths = new Set(entries.filter((entry) => entry.source === "custom").map((entry) => entry.relativePath));
   for (const selected of selectedCustomEntries) if (!selectablePaths.has(selected)) selectedCustomEntries.delete(selected);
   const customFolders = new Set(entries.filter((entry) => entry.source === "custom" && entry.type === "directory").map((entry) => entry.relativePath));
-  if (selectedCustomFolder && !customFolders.has(selectedCustomFolder)) selectedCustomFolder = "";
+  if (appState.selectedCustomFolder && !customFolders.has(appState.selectedCustomFolder)) appState.selectedCustomFolder = "";
   entries.forEach((entry) => {
     if (entry.source === "tools" && !toolsLabelAdded) {
       toolsLabelAdded = true;
@@ -11010,12 +10840,12 @@ async function refreshCustomEntries() {
       if (!event.ctrlKey && !event.metaKey && !event.shiftKey) showResourcePreview(assessmentDiskPath(`${entry.source}/${entry.relativePath}`), entry.name, `${entry.source === "tools" ? "Tool Results" : "Custom"} / ${entry.relativePath}`, { icon: "codicon-file" });
     });
     if (entry.type === "directory" && entry.source === "custom") {
-      row.classList.toggle("creation-target", entry.relativePath === selectedCustomFolder);
+      row.classList.toggle("creation-target", entry.relativePath === appState.selectedCustomFolder);
       button.addEventListener("click", (event) => selectCustomEntry(event, entry));
       const actions = document.createElement("span"); actions.className = "custom-folder-actions";
       [["file", "codicon-new-file", "New file in folder"], ["directory", "codicon-new-folder", "New subfolder"]].forEach(([type, iconName, title]) => {
         const action = document.createElement("button"); action.type = "button"; action.className = "custom-folder-action"; action.title = title; action.setAttribute("aria-label", title); action.innerHTML = `<span class="codicon ${iconName}"></span>`;
-        action.addEventListener("click", (event) => { event.stopPropagation(); selectedCustomFolder = entry.relativePath; beginCustomEntry(type, entry.relativePath, row); }); actions.appendChild(action);
+        action.addEventListener("click", (event) => { event.stopPropagation(); appState.selectedCustomFolder = entry.relativePath; beginCustomEntry(type, entry.relativePath, row); }); actions.appendChild(action);
       });
       row.appendChild(actions);
     }
@@ -11024,8 +10854,8 @@ async function refreshCustomEntries() {
   });
   syncCustomSelectionUI();
 }
-function beginCustomEntry(type, parentRelative = selectedCustomFolder, anchorRow = null) {
-  if (!assessmentPath || !customTreeItems) return;
+function beginCustomEntry(type, parentRelative = appState.selectedCustomFolder, anchorRow = null) {
+  if (!appState.assessmentPath || !customTreeItems) return;
   customTreeItems.querySelector(".custom-create-row")?.remove();
   const row = document.createElement("div"); row.className = "custom-create-row";
   const parent = String(parentRelative || "").replace(/^\/+|\/+$/g, "");
@@ -11040,11 +10870,11 @@ function beginCustomEntry(type, parentRelative = selectedCustomFolder, anchorRow
     if (!name) { cancel(); return; }
     committing = true; input.disabled = true; row.classList.add("creating");
     const relativeName = parent ? `${parent}/${name}` : name;
-    const result = await window.api.assessmentCreateEntry({ path: assessmentPath, relativePath: `custom/${relativeName}`, type });
+    const result = await window.api.assessmentCreateEntry({ path: appState.assessmentPath, relativePath: `custom/${relativeName}`, type });
     if (result?.error) {
       committing = false; input.disabled = false; row.classList.remove("creating"); row.classList.add("error"); input.title = result.error; input.focus(); input.select(); return;
     }
-    if (type === "directory") selectedCustomFolder = relativeName;
+    if (type === "directory") appState.selectedCustomFolder = relativeName;
     await refreshCustomEntries();
     if (type === "file" && result.path) await showResourcePreview(result.path, name.split(/[\\/]/).pop(), `Custom / ${relativeName}`, { icon: "codicon-file" });
   };
@@ -11122,7 +10952,7 @@ securityHistorySortHeaders.forEach((header) => header.querySelector("button")?.a
 securityHistoryMenu?.addEventListener("click", (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (action === "analyze-agent") {
-    analyzeSecurityExchange(securityHistoryRecords[securityHistoryMenuIndex]);
+    analyzeSecurityExchange(appState.securityHistoryRecords[appState.securityHistoryMenuIndex]);
     return;
   }
   if (action === "delete") {
@@ -11204,7 +11034,7 @@ document.addEventListener("click", (event) => {
   if (proxyMenu && !proxyMenu.hidden && !proxyWrap?.contains(event.target) && !proxyMenu.contains(event.target)) closeProxyBrowserMenu();
 });
 window.api.onIdentityStatus?.((snapshot) => {
-  if (appSettingsSection !== "project") return;
+  if (appState.appSettingsSection !== "project") return;
   const rendered = renderIdentitySettings(snapshot);
   if (snapshot?.ok === false || snapshot?.error) setIdentitySettingsStatus(snapshot.error?.message || snapshot.error || "Identity settings unavailable.", "error");
   else if (rendered.credentialListError) setIdentitySettingsStatus(rendered.credentialListError, "error");
@@ -11213,7 +11043,7 @@ window.api.onIdentityStatus?.((snapshot) => {
   else setIdentitySettingsStatus("Identity status updated.");
 });
 window.api.onIdentityPersistence?.((event) => {
-  if (appSettingsSection !== "project") return;
+  if (appState.appSettingsSection !== "project") return;
   if (event?.ok === false) {
     setIdentitySettingsStatus(event.message || "Refreshed identity state could not be saved; XEKUTE will retry after the next action.", "error");
   } else if (event?.recovered) {
@@ -11246,7 +11076,7 @@ bugBountyTree?.addEventListener("click", async (event) => {
 webcloneBuildAction?.addEventListener("click", buildWebClone);
 webclonePreviewAction?.addEventListener("click", () => toggleWebClonePreview(webclonePreviewPane?.hidden !== false));
 webclonePreviewClose?.addEventListener("click", () => toggleWebClonePreview(false));
-webcloneFilesToggle?.addEventListener("click", () => setWebCloneFilesCollapsed(!webcloneFilesCollapsed));
+webcloneFilesToggle?.addEventListener("click", () => setWebCloneFilesCollapsed(!appState.webcloneFilesCollapsed));
 if (webclonePreviewFrame && typeof ResizeObserver !== "undefined") {
   new ResizeObserver(syncWebClonePreviewBounds).observe(webclonePreviewFrame);
 }
@@ -11271,7 +11101,7 @@ projectSettingsForm?.addEventListener("input", (event) => {
   if (!event.target.closest("[data-project-field]")) return;
   scheduleProjectProfileAutosave();
   if (event.target.dataset.projectField === "project.name" && projectSettingsName) {
-    projectSettingsName.textContent = event.target.value.trim() || projectName(rootPath || "Project");
+    projectSettingsName.textContent = event.target.value.trim() || projectName(appState.rootPath || "Project");
   }
 });
 guidanceNew?.addEventListener("click", beginGuidanceCreate);
@@ -11280,15 +11110,15 @@ guidanceImport?.addEventListener("click", importGuidanceFiles);
 guidanceScopeTabs?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-guidance-scope]");
   if (!button) return;
-  guidanceScope = button.dataset.guidanceScope || "all";
-  localStorage.setItem("pointer:guidanceScope", guidanceScope);
+  appState.guidanceScope = button.dataset.guidanceScope || "all";
+  localStorage.setItem("pointer:guidanceScope", appState.guidanceScope);
   renderGuidanceSettings();
 });
 mcpSettingsTabs?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-mcp-scope]");
   if (!button) return;
-  mcpScope = button.dataset.mcpScope || "all";
-  localStorage.setItem("pointer:mcpScope", mcpScope);
+  appState.mcpScope = button.dataset.mcpScope || "all";
+  localStorage.setItem("pointer:mcpScope", appState.mcpScope);
   renderMcpSettings();
 });
 kaliAccessEnabled?.addEventListener("change", () => {
@@ -11301,7 +11131,7 @@ kaliAccessForm?.addEventListener("submit", saveKaliAccess);
 kaliAccessFields?.addEventListener("input", () => queueKaliAccessAutosave());
 kaliAccessAcceptHostKey?.addEventListener("change", () => queueKaliAccessAutosave(0));
 kaliAccessTest?.addEventListener("click", testKaliAccess);
-kaliAccessOpenMcp?.addEventListener("click", () => openMcpConfig(mcpScope === "project" ? "project" : "global"));
+kaliAccessOpenMcp?.addEventListener("click", () => openMcpConfig(appState.mcpScope === "project" ? "project" : "global"));
 kaliAccessKeyBrowse?.addEventListener("click", async () => {
   const result = await window.api.kaliAccessPickIdentity?.();
   if (result?.ok && result.filePath && kaliAccessKey) {
@@ -11402,7 +11232,7 @@ openRouterApiKey?.addEventListener("change", () => queueLlmSettingsAutosave(0));
 openRouterBaseUrl?.addEventListener("input", () => queueLlmSettingsAutosave());
 ollamaHostInput?.addEventListener("input", () => queueLlmSettingsAutosave());
 modelsSettingsSearch?.addEventListener("input", () => {
-  modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
+  appState.modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
   renderModelsSettingsList();
 });
 modelsSettingsSearch?.addEventListener("keydown", (event) => {
@@ -11411,13 +11241,13 @@ modelsSettingsSearch?.addEventListener("keydown", (event) => {
   const name = addCustomModelName(modelsSettingsSearch.value);
   if (!name) return;
   modelsSettingsSearch.value = "";
-  modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
+  appState.modelsSettingsDisplayLimit = MODELS_SETTINGS_PAGE_SIZE;
   renderModelsSettingsList();
   renderExploreSubagentSelect();
 });
 modelsSettingsRefresh?.addEventListener("click", () => refreshModelsSettingsPanel());
 modelsViewAllBtn?.addEventListener("click", () => {
-  modelsSettingsDisplayLimit += MODELS_SETTINGS_PAGE_SIZE;
+  appState.modelsSettingsDisplayLimit += MODELS_SETTINGS_PAGE_SIZE;
   renderModelsSettingsList();
 });
 modelsExploreSubagent?.addEventListener("change", () => {
@@ -11435,15 +11265,15 @@ generalStatusBarToggle?.addEventListener("change", () => {
 });
 appSettingsSearch?.addEventListener("input", () => filterAppSettingsNavigation(appSettingsSearch.value));
 document.addEventListener("keydown", (event) => {
-  if (currentWorkspaceMode !== "settings" || !event.ctrlKey || event.key.toLowerCase() !== "f") return;
+  if (appState.currentWorkspaceMode !== "settings" || !event.ctrlKey || event.key.toLowerCase() !== "f") return;
   event.preventDefault();
   appSettingsSearch?.focus();
   appSettingsSearch?.select();
 });
 $("app-settings-dialog")?.addEventListener("submit", (event) => { event.preventDefault(); localStorage.setItem(CUSTOM_COMMANDS_KEY, customCommandsInput.value); if (commandRegistryInput?.value.trim()) { try { JSON.parse(commandRegistryInput.value); localStorage.setItem(COMMAND_REGISTRY_KEY, commandRegistryInput.value); } catch { addErrorMessage("Command registry must be valid JSON."); return; } } else localStorage.removeItem(COMMAND_REGISTRY_KEY); appSettingsOverlay.hidden = true; renderSlashSuggestions(); });
 explorerRootToggle?.addEventListener("click", () => {
-  if (!rootPath) return;
-  setExplorerRootExpanded(!explorerRootExpanded);
+  if (!appState.rootPath) return;
+  setExplorerRootExpanded(!appState.explorerRootExpanded);
 });
 
 async function openProject() {
@@ -11482,13 +11312,13 @@ function applyUiZoom() {
     (window.innerWidth * current) / UI_MIN_LAYOUT_WIDTH,
     (window.innerHeight * current) / UI_MIN_LAYOUT_HEIGHT,
   );
-  const next = Math.max(0.5, Math.min(uiZoom, Math.floor(fit * 100) / 100));
+  const next = Math.max(0.5, Math.min(appState.uiZoom, Math.floor(fit * 100) / 100));
   if (Math.abs(next - current) > 0.001) window.api.setUiZoom(next);
 }
 
 function setUiZoom(value) {
-  uiZoom = Math.round(Math.max(0.8, Math.min(1.5, Number(value) || 1)) * 10) / 10;
-  localStorage.setItem(UI_ZOOM_KEY, String(uiZoom));
+  appState.uiZoom = Math.round(Math.max(0.8, Math.min(1.5, Number(value) || 1)) * 10) / 10;
+  localStorage.setItem(UI_ZOOM_KEY, String(appState.uiZoom));
   applyUiZoom();
 }
 
@@ -11536,13 +11366,13 @@ function toggleAppMenu(name) {
   if (name === "run") updateRunMenuState();
 }
 
-setUiZoom(uiZoom);
+setUiZoom(appState.uiZoom);
 syncMinimapMenu();
 
 async function configureRunCommand() {
   const current = getRunCommand();
-  const hint = activeTabPath && openTabs.has(activeTabPath)
-    ? `Example: python ${openTabs.get(activeTabPath).name}`
+  const hint = appState.activeTabPath && openTabs.has(appState.activeTabPath)
+    ? `Example: python ${openTabs.get(appState.activeTabPath).name}`
     : "Example: python main.py";
   const value = await AppDialog.prompt(`Command to run from the project folder:\n${hint}`, current, { title: "Run command" });
   if (value === null) return;
@@ -11596,14 +11426,14 @@ async function runMenuAction(action) {
   if (!focusedActions.has(action)) return;
   switch (action) {
     case "new-file":
-      if (!rootPath) {
+      if (!appState.rootPath) {
         await AppDialog.alert("Open a folder first.", { title: "Folder required" });
         return;
       }
       createNewItemInput(false);
       break;
     case "new-folder":
-      if (!rootPath) {
+      if (!appState.rootPath) {
         await AppDialog.alert("Open a folder first.", { title: "Folder required" });
         return;
       }
@@ -11632,10 +11462,10 @@ async function runMenuAction(action) {
       document.execCommand(action);
       break;
     case "toggle-terminal":
-      setTerminalCollapsed(!terminalCollapsed);
+      setTerminalCollapsed(!appState.terminalCollapsed);
       break;
     case "toggle-chat":
-      if (chatCollapsed) openChatPane({ createIfEmpty: true });
+      if (appState.chatCollapsed) openChatPane({ createIfEmpty: true });
       else setChatCollapsed(true);
       break;
     case "command-palette":
@@ -11654,20 +11484,20 @@ async function runMenuAction(action) {
       openProject();
       break;
     case "save-file":
-      if (resourceCurrentFilePath && resourceViewer && !resourceViewer.hidden) saveResourceChanges();
+      if (appState.resourceCurrentFilePath && resourceViewer && !resourceViewer.hidden) saveResourceChanges();
       else saveActiveTab();
       break;
     case "close-editor":
-      if (activeTabPath) closeTab(activeTabPath);
+      if (appState.activeTabPath) closeTab(appState.activeTabPath);
       break;
     case "select-all":
       document.execCommand("selectAll");
       break;
     case "zoom-in":
-      setUiZoom(uiZoom + 0.1);
+      setUiZoom(appState.uiZoom + 0.1);
       break;
     case "zoom-out":
-      setUiZoom(uiZoom - 0.1);
+      setUiZoom(appState.uiZoom - 0.1);
       break;
     case "zoom-reset":
       setUiZoom(1);
@@ -11767,18 +11597,18 @@ function buildCommandItems() {
   return [
     {
       title: "Search: Open Workspace File",
-      detail: rootPath ? "Open a file by name" : "Create or open a project first",
+      detail: appState.rootPath ? "Open a file by name" : "Create or open a project first",
       icon: "codicon-go-to-file",
       key: quickShortcutLabel("Ctrl+P"),
-      disabled: !rootPath,
+      disabled: !appState.rootPath,
       run: () => openQuickPalette("file"),
     },
     {
       title: "Search: Project",
-      detail: rootPath ? `Search ${projectName(rootPath)}` : "Open a project first",
+      detail: appState.rootPath ? `Search ${projectName(appState.rootPath)}` : "Open a project first",
       icon: "codicon-search",
       key: quickShortcutLabel("Ctrl+F"),
-      disabled: !rootPath,
+      disabled: !appState.rootPath,
       run: () => openQuickPalette("search"),
     },
     {
@@ -11789,7 +11619,7 @@ function buildCommandItems() {
     },
     {
       title: "Project: Open Existing Project",
-      detail: rootPath || "Choose an existing folder",
+      detail: appState.rootPath || "Choose an existing folder",
       icon: "codicon-folder-library",
       run: () => openProject(),
     },
@@ -11801,10 +11631,10 @@ function buildCommandItems() {
     },
     {
       title: "Terminal: Toggle",
-      detail: terminalCollapsed ? "Show terminal" : "Hide terminal",
+      detail: appState.terminalCollapsed ? "Show terminal" : "Hide terminal",
       icon: "codicon-terminal",
       key: "Ctrl+`",
-      run: () => setTerminalCollapsed(!terminalCollapsed),
+      run: () => setTerminalCollapsed(!appState.terminalCollapsed),
     },
     {
       title: "Terminal: New Session",
@@ -11821,9 +11651,9 @@ function buildCommandItems() {
     },
     {
       title: "Chat: Toggle",
-      detail: chatCollapsed ? "Show chat" : "Hide chat",
+      detail: appState.chatCollapsed ? "Show chat" : "Hide chat",
       icon: "codicon-comment-discussion",
-      run: () => chatCollapsed ? openChatPane({ createIfEmpty: true }) : setChatCollapsed(true),
+      run: () => appState.chatCollapsed ? openChatPane({ createIfEmpty: true }) : setChatCollapsed(true),
     },
     {
       title: "Chat: New Session",
@@ -11836,7 +11666,7 @@ function buildCommandItems() {
 }
 
 function quickFileItems(query) {
-  const files = ToolParser.parseProjectFiles(dirMapCache || "");
+  const files = ToolParser.parseProjectFiles(appState.dirMapCache || "");
   return files
     .map((file) => {
       const name = basenameOf(file);
@@ -11917,22 +11747,22 @@ function advancedSearchTokenRange() {
   return { start, end: cursor, value: quickInput.value.slice(start, cursor) };
 }
 
-function applyQuickSearchSuggestion(index = quickSearchSuggestionSelection) {
-  const suggestion = quickSearchSuggestionItems[index];
-  const range = quickSearchSuggestionRange;
+function applyQuickSearchSuggestion(index = appState.quickSearchSuggestionSelection) {
+  const suggestion = appState.quickSearchSuggestionItems[index];
+  const range = appState.quickSearchSuggestionRange;
   if (!suggestion || !range || !quickInput) return false;
   quickInput.setRangeText(suggestion.insert, range.start, range.end, "end");
   quickSearchSuggestions.hidden = true;
-  quickSearchSuggestionItems = [];
-  quickSearchSuggestionRange = null;
-  quickSelection = 0;
+  appState.quickSearchSuggestionItems = [];
+  appState.quickSearchSuggestionRange = null;
+  appState.quickSelection = 0;
   renderWorkspaceSearch();
   quickInput.focus();
   return true;
 }
 
 function renderQuickSearchSuggestions({ force = false } = {}) {
-  if (!quickSearchSuggestions || quickMode !== "search" || !quickSearchAssist?.hidden) {
+  if (!quickSearchSuggestions || appState.quickMode !== "search" || !quickSearchAssist?.hidden) {
     if (quickSearchSuggestions) quickSearchSuggestions.hidden = true;
     return;
   }
@@ -11956,9 +11786,9 @@ function renderQuickSearchSuggestions({ force = false } = {}) {
     items = ADVANCED_SEARCH_OPERATORS.filter((entry) => !token || entry.name.startsWith(token.toLowerCase())).slice(0, 8)
       .map((entry) => ({ label: `${entry.name}:`, description: entry.description, insert: `${rawToken.startsWith("-") ? "-" : ""}${entry.name}:` }));
   }
-  quickSearchSuggestionItems = items;
-  quickSearchSuggestionSelection = 0;
-  quickSearchSuggestionRange = range;
+  appState.quickSearchSuggestionItems = items;
+  appState.quickSearchSuggestionSelection = 0;
+  appState.quickSearchSuggestionRange = range;
   quickSearchSuggestions.replaceChildren();
   if (!items.length) {
     quickSearchSuggestions.hidden = true;
@@ -11970,7 +11800,7 @@ function renderQuickSearchSuggestions({ force = false } = {}) {
     button.className = `quick-search-suggestion${index === 0 ? " active" : ""}`;
     button.innerHTML = `<code>${escapeHtml(item.label)}</code><span>${escapeHtml(item.description)}</span>`;
     button.addEventListener("mouseenter", () => {
-      quickSearchSuggestionSelection = index;
+      appState.quickSearchSuggestionSelection = index;
       [...quickSearchSuggestions.children].forEach((child, childIndex) => child.classList.toggle("active", childIndex === index));
     });
     button.addEventListener("mousedown", (event) => event.preventDefault());
@@ -11994,7 +11824,7 @@ function extractAdvancedSearchChips(query) {
 function renderAdvancedSearchChips() {
   if (!quickSearchChips) return;
   quickSearchChips.replaceChildren();
-  const chips = quickMode === "search" ? extractAdvancedSearchChips(quickInput?.value || "") : [];
+  const chips = appState.quickMode === "search" ? extractAdvancedSearchChips(quickInput?.value || "") : [];
   quickSearchChips.hidden = !chips.length;
   for (const chip of chips) {
     const button = document.createElement("button");
@@ -12056,8 +11886,8 @@ function setQuickModeUi(mode) {
 }
 
 function renderQuickList(items, metaText = "", { quietEmpty = false } = {}) {
-  quickItems = items;
-  quickSelection = Math.max(0, Math.min(quickSelection, quickItems.length - 1));
+  appState.quickItems = items;
+  appState.quickSelection = Math.max(0, Math.min(appState.quickSelection, appState.quickItems.length - 1));
   quickPanel?.classList.toggle("quick-panel-minimal", quietEmpty);
   if (quickMeta) {
     quickMeta.textContent = metaText;
@@ -12085,7 +11915,7 @@ function createQuickResultRow(item, index) {
   const row = document.createElement("button");
   row.type = "button";
   row.dataset.quickIndex = String(index);
-  row.className = `quick-result${index === quickSelection ? " active" : ""}`;
+  row.className = `quick-result${index === appState.quickSelection ? " active" : ""}`;
   row.innerHTML = `
     <span class="codicon ${escapeHtml(item.icon || "codicon-chevron-right")} quick-result-icon"></span>
     <span class="quick-result-main">
@@ -12095,10 +11925,10 @@ function createQuickResultRow(item, index) {
     <span class="quick-result-key">${escapeHtml(item.key || "")}</span>
   `;
   row.addEventListener("mouseenter", () => {
-    quickSelection = index;
+    appState.quickSelection = index;
     if (quickResults?.classList.contains("is-virtualized")) {
       [...quickResults.querySelectorAll(".quick-result")].forEach((candidate) => {
-        candidate.classList.toggle("active", Number(candidate.dataset.quickIndex) === quickSelection);
+        candidate.classList.toggle("active", Number(candidate.dataset.quickIndex) === appState.quickSelection);
       });
       return;
     }
@@ -12118,7 +11948,7 @@ function renderVirtualizedSearchResults(metaText = quickMeta?.textContent || "")
   if (!quickResults) return;
   quickResults.hidden = false;
   quickResults.classList.add("is-virtualized");
-  if (!quickItems.length) {
+  if (!appState.quickItems.length) {
     quickResults.replaceChildren();
     if (String(metaText).startsWith("Searching")) return;
     const empty = document.createElement("div");
@@ -12131,17 +11961,17 @@ function renderVirtualizedSearchResults(metaText = quickMeta?.textContent || "")
   const viewportHeight = quickResults.clientHeight || 480;
   const start = Math.max(0, Math.floor(quickResults.scrollTop / QUICK_SEARCH_ROW_HEIGHT) - QUICK_SEARCH_OVERSCAN);
   const visibleCount = Math.ceil(viewportHeight / QUICK_SEARCH_ROW_HEIGHT) + (QUICK_SEARCH_OVERSCAN * 2);
-  const end = Math.min(quickItems.length, start + visibleCount);
+  const end = Math.min(appState.quickItems.length, start + visibleCount);
   let space = quickResults.querySelector(":scope > .quick-results-virtual-space");
   if (!space) {
     space = document.createElement("div");
     space.className = "quick-results-virtual-space";
     quickResults.replaceChildren(space);
   }
-  space.style.height = `${quickItems.length * QUICK_SEARCH_ROW_HEIGHT}px`;
+  space.style.height = `${appState.quickItems.length * QUICK_SEARCH_ROW_HEIGHT}px`;
   const fragment = document.createDocumentFragment();
   for (let index = start; index < end; index += 1) {
-    const row = createQuickResultRow(quickItems[index], index);
+    const row = createQuickResultRow(appState.quickItems[index], index);
     row.style.top = `${index * QUICK_SEARCH_ROW_HEIGHT}px`;
     fragment.appendChild(row);
   }
@@ -12151,7 +11981,7 @@ function renderVirtualizedSearchResults(metaText = quickMeta?.textContent || "")
 function syncQuickSelection() {
   if (!quickResults) return;
   if (quickResults.classList.contains("is-virtualized")) {
-    const rowTop = quickSelection * QUICK_SEARCH_ROW_HEIGHT;
+    const rowTop = appState.quickSelection * QUICK_SEARCH_ROW_HEIGHT;
     const rowBottom = rowTop + QUICK_SEARCH_ROW_HEIGHT;
     let movedViewport = false;
     if (rowTop < quickResults.scrollTop) {
@@ -12167,14 +11997,14 @@ function syncQuickSelection() {
       return;
     }
     [...quickResults.querySelectorAll(".quick-result")].forEach((row) => {
-      row.classList.toggle("active", Number(row.dataset.quickIndex) === quickSelection);
+      row.classList.toggle("active", Number(row.dataset.quickIndex) === appState.quickSelection);
     });
     return;
   }
   [...quickResults.querySelectorAll(".quick-result")].forEach((row) => {
     const index = Number(row.dataset.quickIndex);
-    row.classList.toggle("active", index === quickSelection);
-    if (index === quickSelection) row.scrollIntoView({ block: "nearest" });
+    row.classList.toggle("active", index === appState.quickSelection);
+    if (index === appState.quickSelection) row.scrollIntoView({ block: "nearest" });
   });
 }
 
@@ -12209,45 +12039,45 @@ function workspaceSearchResultItem(row, query) {
 }
 
 function cancelActiveWorkspaceSearch() {
-  const requestId = quickSearchRequestId;
-  quickSearchRequestId = "";
-  if (quickSearchRenderFrame) cancelAnimationFrame(quickSearchRenderFrame);
-  if (quickSearchScrollFrame) cancelAnimationFrame(quickSearchScrollFrame);
-  quickSearchRenderFrame = 0;
-  quickSearchScrollFrame = 0;
-  quickSearchPendingRows = [];
-  quickSearchPendingTotal = 0;
-  quickSearchSourceCounts = {};
+  const requestId = appState.quickSearchRequestId;
+  appState.quickSearchRequestId = "";
+  if (appState.quickSearchRenderFrame) cancelAnimationFrame(appState.quickSearchRenderFrame);
+  if (appState.quickSearchScrollFrame) cancelAnimationFrame(appState.quickSearchScrollFrame);
+  appState.quickSearchRenderFrame = 0;
+  appState.quickSearchScrollFrame = 0;
+  appState.quickSearchPendingRows = [];
+  appState.quickSearchPendingTotal = 0;
+  appState.quickSearchSourceCounts = {};
   if (requestId) void window.api.cancelWorkspaceSearch?.({ requestId });
 }
 
 function flushWorkspaceSearchRows(metaText = "") {
-  if (quickSearchRenderFrame) cancelAnimationFrame(quickSearchRenderFrame);
-  quickSearchRenderFrame = 0;
+  if (appState.quickSearchRenderFrame) cancelAnimationFrame(appState.quickSearchRenderFrame);
+  appState.quickSearchRenderFrame = 0;
   const query = (quickInput?.value || "").trim();
-  const rows = quickSearchPendingRows;
-  quickSearchPendingRows = [];
-  quickItems.push(...rows.map((row) => workspaceSearchResultItem(row, query)));
-  const total = quickSearchPendingTotal || quickItems.length;
-  const sources = formattedSearchSources(quickSearchSourceCounts);
+  const rows = appState.quickSearchPendingRows;
+  appState.quickSearchPendingRows = [];
+  appState.quickItems.push(...rows.map((row) => workspaceSearchResultItem(row, query)));
+  const total = appState.quickSearchPendingTotal || appState.quickItems.length;
+  const sources = formattedSearchSources(appState.quickSearchSourceCounts);
   const exactMatchLabel = `exact match${total === 1 ? "" : "es"}`;
   renderVirtualizedSearchResults(metaText || `Searching… ${total.toLocaleString()} ${sources ? `matches · ${sources}` : exactMatchLabel}`);
 }
 
 window.api.onWorkspaceSearchBatch?.((payload) => {
-  if (!payload?.requestId || payload.requestId !== quickSearchRequestId || quickMode !== "search") return;
+  if (!payload?.requestId || payload.requestId !== appState.quickSearchRequestId || appState.quickMode !== "search") return;
   const rows = Array.isArray(payload.results) ? payload.results : [];
-  quickSearchPendingRows.push(...rows);
-  quickSearchPendingTotal = Number(payload.totalCount) || quickSearchPendingTotal;
-  if (payload.sourceCounts && typeof payload.sourceCounts === "object") quickSearchSourceCounts = { ...payload.sourceCounts };
+  appState.quickSearchPendingRows.push(...rows);
+  appState.quickSearchPendingTotal = Number(payload.totalCount) || appState.quickSearchPendingTotal;
+  if (payload.sourceCounts && typeof payload.sourceCounts === "object") appState.quickSearchSourceCounts = { ...payload.sourceCounts };
   if (payload.done) {
     const result = payload.summary || {};
     if (result.cancelled) return;
     if (result.error) {
-      quickSearchPendingRows = [];
-      quickSearchPendingTotal = 0;
-      quickSearchRequestId = "";
-      quickItems = [];
+      appState.quickSearchPendingRows = [];
+      appState.quickSearchPendingTotal = 0;
+      appState.quickSearchRequestId = "";
+      appState.quickItems = [];
       if (quickResults) {
         quickResults.replaceChildren();
         quickResults.hidden = true;
@@ -12256,11 +12086,11 @@ window.api.onWorkspaceSearchBatch?.((payload) => {
       setQuickSearchMeta(`Query error${column}: ${result.error}`, { error: true });
       return;
     }
-    if (result.sourceCounts && typeof result.sourceCounts === "object") quickSearchSourceCounts = { ...result.sourceCounts };
-    const total = Number(result.totalCount) || quickSearchPendingTotal || quickItems.length;
-    const displayed = quickItems.length + quickSearchPendingRows.length;
+    if (result.sourceCounts && typeof result.sourceCounts === "object") appState.quickSearchSourceCounts = { ...result.sourceCounts };
+    const total = Number(result.totalCount) || appState.quickSearchPendingTotal || appState.quickItems.length;
+    const displayed = appState.quickItems.length + appState.quickSearchPendingRows.length;
     const kind = result.mode === "advanced" ? (result.correlation ? "authorization candidate" : "result") : "exact match";
-    const sources = formattedSearchSources(quickSearchSourceCounts);
+    const sources = formattedSearchSources(appState.quickSearchSourceCounts);
     const skipped = Number(result.skippedLargeFiles) > 0 ? ` · ${Number(result.skippedLargeFiles).toLocaleString()} oversized file${Number(result.skippedLargeFiles) === 1 ? "" : "s"} skipped` : "";
     const meta = result.capped
       ? `${displayed.toLocaleString()} of ${total.toLocaleString()}+ ${kind}${displayed === 1 ? "" : "es"} — refine your search`
@@ -12270,18 +12100,18 @@ window.api.onWorkspaceSearchBatch?.((payload) => {
           : `${total.toLocaleString()}+ ${kind}${total === 1 ? "" : "es"} — refine your search`)
         : `${total.toLocaleString()} ${kind}${total === 1 ? "" : "es"}`;
     flushWorkspaceSearchRows(`${meta}${sources ? ` · ${sources}` : ""}${skipped}`);
-    quickSearchRequestId = "";
+    appState.quickSearchRequestId = "";
     return;
   }
-  if (!quickSearchRenderFrame) {
-    quickSearchRenderFrame = requestAnimationFrame(() => flushWorkspaceSearchRows());
+  if (!appState.quickSearchRenderFrame) {
+    appState.quickSearchRenderFrame = requestAnimationFrame(() => flushWorkspaceSearchRows());
   }
 });
 
 quickResults?.addEventListener("scroll", () => {
-  if (!quickResults.classList.contains("is-virtualized") || quickSearchScrollFrame) return;
-  quickSearchScrollFrame = requestAnimationFrame(() => {
-    quickSearchScrollFrame = 0;
+  if (!quickResults.classList.contains("is-virtualized") || appState.quickSearchScrollFrame) return;
+  appState.quickSearchScrollFrame = requestAnimationFrame(() => {
+    appState.quickSearchScrollFrame = 0;
     renderVirtualizedSearchResults();
   });
 }, { passive: true });
@@ -12304,7 +12134,7 @@ function renderCommandPalette() {
 
 function renderQuickFiles() {
   const query = quickInput?.value || "";
-  if (!rootPath) {
+  if (!appState.rootPath) {
     renderQuickList([], "Open a folder to use Quick Open");
     return;
   }
@@ -12314,7 +12144,7 @@ function renderQuickFiles() {
 
 function renderWorkspaceSearch() {
   const query = (quickInput?.value || "").trim();
-  if (quickSearchTimer) clearTimeout(quickSearchTimer);
+  if (appState.quickSearchTimer) clearTimeout(appState.quickSearchTimer);
   cancelActiveWorkspaceSearch();
   renderAdvancedSearchChips();
   renderQuickSearchSuggestions();
@@ -12322,26 +12152,26 @@ function renderWorkspaceSearch() {
     renderQuickList([], "", { quietEmpty: true });
     return;
   }
-  if (!rootPath) {
+  if (!appState.rootPath) {
     renderQuickList([], "Create or open a Target to search its workspace");
     return;
   }
 
-  const seq = ++quickSearchSeq;
+  const seq = ++appState.quickSearchSeq;
   const requestId = `workspace-search-${Date.now()}-${seq}`;
-  quickSearchRequestId = requestId;
-  quickItems = [];
-  quickSelection = 0;
+  appState.quickSearchRequestId = requestId;
+  appState.quickItems = [];
+  appState.quickSelection = 0;
   if (quickResults) quickResults.scrollTop = 0;
-  quickSearchSourceCounts = {};
+  appState.quickSearchSourceCounts = {};
   renderVirtualizedSearchResults("Searching workspace…");
-  quickSearchTimer = setTimeout(async () => {
-    const result = await window.api.searchWorkspace({ workspace: rootPath, query, limit: QUICK_SEARCH_RESULT_LIMIT, requestId });
-    if (seq !== quickSearchSeq || quickMode !== "search" || requestId !== quickSearchRequestId) return;
+  appState.quickSearchTimer = setTimeout(async () => {
+    const result = await window.api.searchWorkspace({ workspace: appState.rootPath, query, limit: QUICK_SEARCH_RESULT_LIMIT, requestId });
+    if (seq !== appState.quickSearchSeq || appState.quickMode !== "search" || requestId !== appState.quickSearchRequestId) return;
     if (result?.error) {
-      quickSearchRequestId = "";
-      quickSearchPendingRows = [];
-      quickSearchPendingTotal = 0;
+      appState.quickSearchRequestId = "";
+      appState.quickSearchPendingRows = [];
+      appState.quickSearchPendingTotal = 0;
       if (quickResults) {
         quickResults.replaceChildren();
         quickResults.hidden = true;
@@ -12353,17 +12183,17 @@ function renderWorkspaceSearch() {
 }
 
 function renderQuickPalette() {
-  if (quickMode === "file") renderQuickFiles();
-  else if (quickMode === "search") renderWorkspaceSearch();
+  if (appState.quickMode === "file") renderQuickFiles();
+  else if (appState.quickMode === "search") renderWorkspaceSearch();
   else renderCommandPalette();
 }
 
 async function openQuickPalette(mode = "command", initialValue = "") {
   if (!quickOverlay || !quickInput) return;
-  quickMode = mode;
-  quickSelection = 0;
+  appState.quickMode = mode;
+  appState.quickSelection = 0;
   setQuickModeUi(mode);
-  if (mode === "file" && rootPath && !dirMapCache) await refreshDirMap();
+  if (mode === "file" && appState.rootPath && !appState.dirMapCache) await refreshDirMap();
   quickInput.value = initialValue;
   quickOverlay.hidden = false;
   renderQuickPalette();
@@ -12375,31 +12205,31 @@ async function openQuickPalette(mode = "command", initialValue = "") {
 
 function closeQuickPalette() {
   if (quickOverlay) quickOverlay.hidden = true;
-  if (quickSearchTimer) clearTimeout(quickSearchTimer);
+  if (appState.quickSearchTimer) clearTimeout(appState.quickSearchTimer);
   cancelActiveWorkspaceSearch();
-  quickSearchSeq += 1;
-  quickItems = [];
+  appState.quickSearchSeq += 1;
+  appState.quickItems = [];
   setQuickSearchAssistVisible(false);
   if (quickSearchSuggestions) quickSearchSuggestions.hidden = true;
-  if (activeTabPath) EditorManager.focus();
+  if (appState.activeTabPath) EditorManager.focus();
   else chatInput?.focus();
 }
 
-async function runSelectedQuickItem(index = quickSelection) {
-  const item = quickItems[index];
+async function runSelectedQuickItem(index = appState.quickSelection) {
+  const item = appState.quickItems[index];
   if (!item) return;
   closeQuickPalette();
   await item.run?.();
 }
 
 quickInput?.addEventListener("input", () => {
-  quickSelection = 0;
+  appState.quickSelection = 0;
   renderQuickPalette();
 });
 
 quickInput?.addEventListener("keydown", (e) => {
-  const suggestionsOpen = quickSearchSuggestions && !quickSearchSuggestions.hidden && quickSearchSuggestionItems.length;
-  if (quickMode === "search" && e.ctrlKey && e.code === "Space") {
+  const suggestionsOpen = quickSearchSuggestions && !quickSearchSuggestions.hidden && appState.quickSearchSuggestionItems.length;
+  if (appState.quickMode === "search" && e.ctrlKey && e.code === "Space") {
     e.preventDefault();
     renderQuickSearchSuggestions({ force: true });
     return;
@@ -12408,7 +12238,7 @@ quickInput?.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (suggestionsOpen) {
       quickSearchSuggestions.hidden = true;
-      quickSearchSuggestionItems = [];
+      appState.quickSearchSuggestionItems = [];
       return;
     }
     if (quickSearchAssist && !quickSearchAssist.hidden) {
@@ -12421,22 +12251,22 @@ quickInput?.addEventListener("keydown", (e) => {
   if (e.key === "ArrowDown") {
     e.preventDefault();
     if (suggestionsOpen) {
-      quickSearchSuggestionSelection = (quickSearchSuggestionSelection + 1) % quickSearchSuggestionItems.length;
-      [...quickSearchSuggestions.children].forEach((child, index) => child.classList.toggle("active", index === quickSearchSuggestionSelection));
+      appState.quickSearchSuggestionSelection = (appState.quickSearchSuggestionSelection + 1) % appState.quickSearchSuggestionItems.length;
+      [...quickSearchSuggestions.children].forEach((child, index) => child.classList.toggle("active", index === appState.quickSearchSuggestionSelection));
       return;
     }
-    quickSelection = quickItems.length ? (quickSelection + 1) % quickItems.length : 0;
+    appState.quickSelection = appState.quickItems.length ? (appState.quickSelection + 1) % appState.quickItems.length : 0;
     syncQuickSelection();
     return;
   }
   if (e.key === "ArrowUp") {
     e.preventDefault();
     if (suggestionsOpen) {
-      quickSearchSuggestionSelection = (quickSearchSuggestionSelection - 1 + quickSearchSuggestionItems.length) % quickSearchSuggestionItems.length;
-      [...quickSearchSuggestions.children].forEach((child, index) => child.classList.toggle("active", index === quickSearchSuggestionSelection));
+      appState.quickSearchSuggestionSelection = (appState.quickSearchSuggestionSelection - 1 + appState.quickSearchSuggestionItems.length) % appState.quickSearchSuggestionItems.length;
+      [...quickSearchSuggestions.children].forEach((child, index) => child.classList.toggle("active", index === appState.quickSearchSuggestionSelection));
       return;
     }
-    quickSelection = quickItems.length ? (quickSelection - 1 + quickItems.length) % quickItems.length : 0;
+    appState.quickSelection = appState.quickItems.length ? (appState.quickSelection - 1 + appState.quickItems.length) % appState.quickItems.length : 0;
     syncQuickSelection();
     return;
   }
@@ -12484,7 +12314,7 @@ chatModeMenu?.addEventListener("click", (e) => {
 
 function closeWorkspaceContextMenu() {
   if (workspaceContextMenu) workspaceContextMenu.hidden = true;
-  workspaceContextTarget = null;
+  appState.workspaceContextTarget = null;
 }
 
 function workspaceContextActionButton(action) {
@@ -12561,7 +12391,7 @@ function workspaceRunCommand(target) {
 
 function renderWorkspaceContextMenu() {
   if (!workspaceContextMenu) return;
-  const target = workspaceContextTarget;
+  const target = appState.workspaceContextTarget;
   const isDir = Boolean(target?.isDir);
   const selectionCount = selectedExplorerPaths.size;
   const multiple = selectionCount > 1;
@@ -12573,7 +12403,7 @@ function renderWorkspaceContextMenu() {
   setHidden("analyze", !target || isDir || multiple);
   setHidden("cut", !target || multiple);
   setHidden("copy", !target || multiple);
-  setHidden("paste", !workspaceClipboard || multiple);
+  setHidden("paste", !appState.workspaceClipboard || multiple);
   setHidden("new-file", !isDir || multiple);
   setHidden("new-folder", !isDir || multiple);
   setHidden("terminal", multiple || !workspaceRunCommand(target));
@@ -12597,7 +12427,7 @@ function openWorkspaceContextMenu(event, entry, item) {
     shiftKey: event.shiftKey,
     contextMenu: true,
   });
-  workspaceContextTarget = {
+  appState.workspaceContextTarget = {
     path: entry.path,
     relativePath: relativePathFromRoot(entry.path),
     isDir: Boolean(entry.isDir),
@@ -12666,8 +12496,8 @@ function remapOpenTabsUnderWorkspacePath(sourceAbsolute, destinationAbsolute) {
     openTabs.set(nextPath, tab);
   }
   if (!changed) return;
-  activeTabPath = remapWorkspacePath(activeTabPath, sourceAbsolute, destinationAbsolute);
-  editorLoadedPath = null;
+  appState.activeTabPath = remapWorkspacePath(appState.activeTabPath, sourceAbsolute, destinationAbsolute);
+  appState.editorLoadedPath = null;
   renderTabs();
   renderEditor({ focusEditor: false });
 }
@@ -12685,13 +12515,13 @@ function remapExpandedTreePathsUnder(sourceAbsolute, destinationAbsolute) {
 }
 
 async function applyWorkspaceRename(target, normalizedName) {
-  if (!rootPath || !target?.relativePath || typeof window.api?.movePath !== "function") return false;
+  if (!appState.rootPath || !target?.relativePath || typeof window.api?.movePath !== "function") return false;
 
   const destination = workspaceRenameDestination(target.relativePath, normalizedName);
   const sourceAbsolute = normPath(target.path);
   const destinationAbsolute = normPath(joinWorkspacePath(destination));
   const result = await window.api.movePath({
-    workspace: rootPath,
+    workspace: appState.rootPath,
     source: target.relativePath,
     destination,
   });
@@ -12699,13 +12529,13 @@ async function applyWorkspaceRename(target, normalizedName) {
 
   remapOpenTabsUnderWorkspacePath(sourceAbsolute, destinationAbsolute);
   remapExpandedTreePathsUnder(sourceAbsolute, destinationAbsolute);
-  contextFilesCache = contextFilesCache.map((file) => ({
+  appState.contextFilesCache = appState.contextFilesCache.map((file) => ({
     ...file,
     path: remapWorkspacePath(file.path, target.relativePath, destination),
   }));
-  if (workspaceClipboard) {
-    workspaceClipboard.relativePath = remapWorkspacePath(workspaceClipboard.relativePath, target.relativePath, destination);
-    workspaceClipboard.name = basenameOf(workspaceClipboard.relativePath);
+  if (appState.workspaceClipboard) {
+    appState.workspaceClipboard.relativePath = remapWorkspacePath(appState.workspaceClipboard.relativePath, target.relativePath, destination);
+    appState.workspaceClipboard.name = basenameOf(appState.workspaceClipboard.relativePath);
   }
   syncActiveChatSession();
   await refreshWorkspaceUi({ preserveSelectionPath: destinationAbsolute });
@@ -12713,12 +12543,12 @@ async function applyWorkspaceRename(target, normalizedName) {
 }
 
 function startInlineWorkspaceRename(target) {
-  if (!target?.item || !target?.relativePath || creatingItem || renamingItem) return;
+  if (!target?.item || !target?.relativePath || appState.creatingItem || appState.renamingItem) return;
   const item = target.item;
   const nameEl = item.querySelector(".tree-name");
   if (!nameEl || item.querySelector(".tree-input")) return;
 
-  renamingItem = true;
+  appState.renamingItem = true;
   const originalName = nameEl.textContent || target.name || basenameOf(target.relativePath);
   const input = document.createElement("input");
   input.type = "text";
@@ -12744,7 +12574,7 @@ function startInlineWorkspaceRename(target) {
       input.replaceWith(restored);
     }
     item.classList.remove("tree-input-row");
-    renamingItem = false;
+    appState.renamingItem = false;
   };
 
   async function commit() {
@@ -12759,7 +12589,7 @@ function startInlineWorkspaceRename(target) {
 
     const renamed = await applyWorkspaceRename(target, normalizedName);
     if (!renamed) restoreName();
-    else renamingItem = false;
+    else appState.renamingItem = false;
   }
 
   input.addEventListener("keydown", async (event) => {
@@ -12783,9 +12613,9 @@ async function renameWorkspaceContextTarget(target) {
 }
 
 function setWorkspaceClipboard(operation) {
-  const target = workspaceContextTarget;
+  const target = appState.workspaceContextTarget;
   if (!target?.relativePath) return;
-  workspaceClipboard = {
+  appState.workspaceClipboard = {
     operation,
     relativePath: target.relativePath,
     isDir: target.isDir,
@@ -12796,9 +12626,9 @@ function setWorkspaceClipboard(operation) {
 }
 
 async function pasteWorkspaceClipboard() {
-  if (!rootPath || !workspaceClipboard || !workspaceContextTarget) return;
-  const clipboard = workspaceClipboard;
-  const target = workspaceContextTarget;
+  if (!appState.rootPath || !appState.workspaceClipboard || !appState.workspaceContextTarget) return;
+  const clipboard = appState.workspaceClipboard;
+  const target = appState.workspaceContextTarget;
   const destination = workspacePasteDestination(target, clipboard.relativePath);
   const transfer = clipboard.operation === "cut" ? window.api.movePath : window.api.copyPath;
   if (typeof transfer !== "function") {
@@ -12807,7 +12637,7 @@ async function pasteWorkspaceClipboard() {
     return;
   }
   closeWorkspaceContextMenu();
-  const result = await transfer({ workspace: rootPath, source: clipboard.relativePath, destination });
+  const result = await transfer({ workspace: appState.rootPath, source: clipboard.relativePath, destination });
   if (result?.error) {
     await AppDialog.alert(`Could not ${clipboard.operation === "cut" ? "move" : "copy"} ${clipboard.name}: ${result.error}`, { title: "Transfer failed" });
     return;
@@ -12817,9 +12647,9 @@ async function pasteWorkspaceClipboard() {
   if (clipboard.operation === "cut") {
     closeTabsUnderWorkspacePath(sourceAbsolute, { force: true });
     clearExpandedTreePathsUnder(sourceAbsolute);
-    workspaceClipboard = null;
+    appState.workspaceClipboard = null;
   }
-  workspaceContextMenu?.classList.toggle("has-clipboard", Boolean(workspaceClipboard));
+  workspaceContextMenu?.classList.toggle("has-clipboard", Boolean(appState.workspaceClipboard));
   await refreshWorkspaceUi({ preserveSelectionPath: joinWorkspacePath(result.destination || destination) });
   restoreChatComposerAfterUiAction();
 }
@@ -12827,7 +12657,7 @@ async function pasteWorkspaceClipboard() {
 async function startWorkspaceFileAnalysis(target) {
   if (!target || target.isDir || !target.relativePath) return;
   const fileName = target.name || basenameOf(target.relativePath);
-  const returnMode = canonicalChatMode(chatMode);
+  const returnMode = canonicalChatMode(appState.chatMode);
   const prompt = [
     `Perform a focused security analysis of the workspace file \`${target.relativePath}\`.`,
     `Use the read_file tool to inspect exactly \`${target.relativePath}\` from the current workspace before drawing conclusions.`,
@@ -12871,7 +12701,7 @@ async function startWorkspaceFileAnalysis(target) {
 }
 
 async function runWorkspaceContextAction(action) {
-  const target = workspaceContextTarget;
+  const target = appState.workspaceContextTarget;
   if (!target) return;
   if (action === "open") {
     closeWorkspaceContextMenu();
@@ -13110,7 +12940,7 @@ async function moveDroppedTreeItem(event, { isDir = false, relativePath = "", pa
   }
   const sourceName = sourceRel.split("/").pop();
   const destination = relativePath ? `${relativePath}/${sourceName}` : sourceName;
-  const result = await transfer({ workspace: rootPath, source: sourceRel, destination });
+  const result = await transfer({ workspace: appState.rootPath, source: sourceRel, destination });
   if (result?.error) {
     await AppDialog.alert(`Could not move ${sourceName}: ${result.error}`, { title: "Move failed" });
     return;
@@ -13124,7 +12954,7 @@ async function moveDroppedTreeItem(event, { isDir = false, relativePath = "", pa
 
 function explorerPathKey(value = "") {
   const normalized = normPath(String(value || ""));
-  if (/^[a-zA-Z]:\//.test(normalized) || (rootPath && String(rootPath).includes("\\"))) {
+  if (/^[a-zA-Z]:\//.test(normalized) || (appState.rootPath && String(appState.rootPath).includes("\\"))) {
     return normalized.toLowerCase();
   }
   return normalized;
@@ -13138,7 +12968,7 @@ function findExplorerTreeItem(targetPath) {
 }
 
 function expandExplorerAncestors(relativePath) {
-  if (!rootPath || !relativePath) return;
+  if (!appState.rootPath || !relativePath) return;
   const segments = String(relativePath).split("/").filter(Boolean);
   for (let i = 0; i < segments.length - 1; i++) {
     setExpandedTreePath(joinWorkspacePath(segments.slice(0, i + 1).join("/")), true);
@@ -13161,7 +12991,7 @@ function visibleExplorerItems() {
 
 function syncExplorerSelectionUI({ primaryPath = "", focus = true } = {}) {
   const rows = [...(fileTree?.querySelectorAll?.(".tree-item[data-path]") || [])];
-  const preferred = explorerPathKey(primaryPath || selectedItem?.dataset?.path || "");
+  const preferred = explorerPathKey(primaryPath || appState.selectedItem?.dataset?.path || "");
   let primary = null;
   for (const row of rows) {
     const path = explorerPathKey(row.dataset.path);
@@ -13172,16 +13002,16 @@ function syncExplorerSelectionUI({ primaryPath = "", focus = true } = {}) {
     if (selected && path === preferred) primary = row;
   }
   if (!primary) primary = rows.find((row) => selectedExplorerPaths.has(explorerPathKey(row.dataset.path))) || null;
-  selectedItem = primary;
-  if (!selectedItem) return;
-  selectedItem.tabIndex = 0;
-  if (focus && document.activeElement !== selectedItem) selectedItem.focus({ preventScroll: true });
+  appState.selectedItem = primary;
+  if (!appState.selectedItem) return;
+  appState.selectedItem.tabIndex = 0;
+  if (focus && document.activeElement !== appState.selectedItem) appState.selectedItem.focus({ preventScroll: true });
 }
 
 function selectItem(el, { focus = true, ctrlKey = false, metaKey = false, shiftKey = false, contextMenu = false } = {}) {
   if (!el?.dataset?.path) {
     selectedExplorerPaths.clear();
-    explorerSelectionAnchorPath = "";
+    appState.explorerSelectionAnchorPath = "";
     syncExplorerSelectionUI({ primaryPath: "", focus: false });
     return;
   }
@@ -13189,7 +13019,7 @@ function selectItem(el, { focus = true, ctrlKey = false, metaKey = false, shiftK
   const orderedVisiblePaths = visibleExplorerItems().map((item) => explorerPathKey(item.dataset.path));
   const next = ExplorerSelection.nextSelection({
     selectedPaths: [...selectedExplorerPaths],
-    anchorPath: explorerSelectionAnchorPath,
+    anchorPath: appState.explorerSelectionAnchorPath,
     clickedPath,
     orderedVisiblePaths,
     additive: Boolean(ctrlKey || metaKey),
@@ -13198,22 +13028,22 @@ function selectItem(el, { focus = true, ctrlKey = false, metaKey = false, shiftK
   });
   selectedExplorerPaths.clear();
   next.selectedPaths.forEach((path) => selectedExplorerPaths.add(path));
-  explorerSelectionAnchorPath = next.anchorPath;
+  appState.explorerSelectionAnchorPath = next.anchorPath;
   syncExplorerSelectionUI({ primaryPath: next.primaryPath, focus });
 }
 
 async function rerenderExplorer(options = {}) {
-  if (!rootPath) return;
+  if (!appState.rootPath) return;
   const explicitSelection = Object.prototype.hasOwnProperty.call(options, "preserveSelectionPath");
   const requestedPrimary = explicitSelection
     ? explorerPathKey(options.preserveSelectionPath || "")
-    : explorerPathKey(selectedItem?.dataset.path || "");
+    : explorerPathKey(appState.selectedItem?.dataset.path || "");
   const requestedPaths = explicitSelection
     ? (requestedPrimary ? [requestedPrimary] : [])
     : [...selectedExplorerPaths];
-  const requestedAnchor = explicitSelection ? requestedPrimary : explorerSelectionAnchorPath;
+  const requestedAnchor = explicitSelection ? requestedPrimary : appState.explorerSelectionAnchorPath;
   closeWorkspaceContextMenu();
-  await renderTree(rootPath, fileTree, 0);
+  await renderTree(appState.rootPath, fileTree, 0);
   // Allow dropping a dragged item onto the tree root (empty area) to move it to the project root.
   if (!fileTree.dataset.treeDropBound) {
     fileTree.dataset.treeDropBound = "1";
@@ -13239,21 +13069,21 @@ async function rerenderExplorer(options = {}) {
   const availablePaths = new Set([...fileTree.querySelectorAll(".tree-item[data-path]")].map((item) => explorerPathKey(item.dataset.path)));
   selectedExplorerPaths.clear();
   requestedPaths.filter((path) => availablePaths.has(path)).forEach((path) => selectedExplorerPaths.add(path));
-  explorerSelectionAnchorPath = availablePaths.has(requestedAnchor)
+  appState.explorerSelectionAnchorPath = availablePaths.has(requestedAnchor)
     ? requestedAnchor
     : ([...selectedExplorerPaths][0] || "");
   syncExplorerSelectionUI({ primaryPath: requestedPrimary, focus: Boolean(selectedExplorerPaths.size) });
 }
 
 function refreshWorkspaceUi(options = {}) {
-  const workspaceAtRequest = rootPath;
-  const refresh = workspaceUiRefreshQueue.catch(() => {}).then(async () => {
-    if (!workspaceAtRequest || normPath(rootPath) !== normPath(workspaceAtRequest)) return;
+  const workspaceAtRequest = appState.rootPath;
+  const refresh = appState.workspaceUiRefreshQueue.catch(() => {}).then(async () => {
+    if (!workspaceAtRequest || normPath(appState.rootPath) !== normPath(workspaceAtRequest)) return;
     await refreshDirMap();
-    if (normPath(rootPath) !== normPath(workspaceAtRequest)) return;
+    if (normPath(appState.rootPath) !== normPath(workspaceAtRequest)) return;
     await rerenderExplorer(options);
   });
-  workspaceUiRefreshQueue = refresh;
+  appState.workspaceUiRefreshQueue = refresh;
   return refresh;
 }
 
@@ -13345,10 +13175,10 @@ async function reconcileDeletedWorkspacePaths(targets = []) {
     for (const selectedPath of [...selectedExplorerPaths]) {
       if (pathIsAtOrUnder(selectedPath, target.path)) selectedExplorerPaths.delete(selectedPath);
     }
-    contextFilesCache = contextFilesCache.filter((file) => file.path !== target.relPath && !file.path.startsWith(`${target.relPath}/`));
+    appState.contextFilesCache = appState.contextFilesCache.filter((file) => file.path !== target.relPath && !file.path.startsWith(`${target.relPath}/`));
   }
-  if (deleted.some((target) => pathIsAtOrUnder(explorerSelectionAnchorPath, target.path))) {
-    explorerSelectionAnchorPath = [...selectedExplorerPaths][0] || "";
+  if (deleted.some((target) => pathIsAtOrUnder(appState.explorerSelectionAnchorPath, target.path))) {
+    appState.explorerSelectionAnchorPath = [...selectedExplorerPaths][0] || "";
   }
   syncActiveChatSession();
   await refreshWorkspaceUi();
@@ -13359,7 +13189,7 @@ async function reconcileDeletedWorkspacePath(absPath, relPath) {
 }
 
 async function deleteSelectedExplorerItem() {
-  if (!rootPath || !selectedItem || deletingExplorerItem) return;
+  if (!appState.rootPath || !appState.selectedItem || appState.deletingExplorerItem) return;
   const targets = selectedExplorerTargets();
   if (!targets.length) return;
   const hasDirtyTabs = [...openTabs.entries()].some(([tabPath, tab]) => tab?.dirty && targets.some((target) => pathIsAtOrUnder(tabPath, target.path)));
@@ -13376,25 +13206,25 @@ async function deleteSelectedExplorerItem() {
   );
   if (!confirmed) return;
 
-  deletingExplorerItem = true;
+  appState.deletingExplorerItem = true;
   try {
     const deleted = [];
     for (const target of targets) {
-      const result = await window.api.deletePath({ workspace: rootPath, path: target.relPath });
+      const result = await window.api.deletePath({ workspace: appState.rootPath, path: target.relPath });
       if (result?.error) {
         await AppDialog.alert(`Could not delete ${target.label}: ${result.error}`, { title: "Delete failed" });
         break;
       }
       deleted.push(target);
     }
-    if (workspaceClipboard && deleted.some((target) => pathIsAtOrUnder(workspaceClipboard.relativePath, target.relPath))) {
-      workspaceClipboard = null;
+    if (appState.workspaceClipboard && deleted.some((target) => pathIsAtOrUnder(appState.workspaceClipboard.relativePath, target.relPath))) {
+      appState.workspaceClipboard = null;
     }
     await reconcileDeletedWorkspacePaths(deleted);
   } catch (error) {
     await AppDialog.alert(`Delete failed: ${error?.message || "Unexpected workspace error"}`, { title: "Delete failed" });
   } finally {
-    deletingExplorerItem = false;
+    appState.deletingExplorerItem = false;
     restoreChatComposerAfterUiAction();
   }
 }
@@ -13454,7 +13284,7 @@ function renderSettingsForm(tab) {
 }
 
 function syncSettingsEditorButtons() {
-  const uiActive = settingsEditorMode === "ui";
+  const uiActive = appState.settingsEditorMode === "ui";
   settingsViewJson.classList.toggle("active", !uiActive);
   settingsViewJson.setAttribute("aria-pressed", String(!uiActive));
   settingsViewUi.classList.toggle("active", uiActive);
@@ -13463,9 +13293,9 @@ function syncSettingsEditorButtons() {
 
 async function setSettingsEditorMode(mode) {
   const next = mode === "ui" ? "ui" : "json";
-  const tab = activeTabPath ? openTabs.get(activeTabPath) : null;
-  if (!isAssessmentSettingsTab(tab) || settingsEditorMode === next) return;
-  if (settingsEditorMode === "json") commitActiveTab();
+  const tab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
+  if (!isAssessmentSettingsTab(tab) || appState.settingsEditorMode === next) return;
+  if (appState.settingsEditorMode === "json") commitActiveTab();
   if (next === "ui") {
     const parsed = parseSettingsTab(tab);
     if (parsed.error) {
@@ -13474,16 +13304,16 @@ async function setSettingsEditorMode(mode) {
       return;
     }
   }
-  settingsEditorMode = next;
+  appState.settingsEditorMode = next;
   localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, next);
-  editorLoadedPath = null;
+  appState.editorLoadedPath = null;
   syncSettingsEditorButtons();
   await renderEditor();
 }
 
 function updateSettingFromInput(input) {
-  if (!activeTabPath) return;
-  const tab = openTabs.get(activeTabPath);
+  if (!appState.activeTabPath) return;
+  const tab = openTabs.get(appState.activeTabPath);
   if (!isAssessmentSettingsTab(tab)) return;
   const parsed = parseSettingsTab(tab);
   if (parsed.error) return;
@@ -13496,7 +13326,7 @@ function updateSettingFromInput(input) {
   setNestedSettingValue(parsed.value, input.dataset.settingPath, value);
   tab.content = `${JSON.stringify(parsed.value, null, 2)}\n`;
   tab.dirty = tab.content !== tab.savedContent;
-  assessmentSettingsCache = parsed.value;
+  appState.assessmentSettingsCache = parsed.value;
   syncInterceptorToggleUi(parsed.value);
   updateTabDirtyIndicator();
   scheduleSettingsAutoSave();
@@ -13510,20 +13340,20 @@ function syncOpenSettingsTabContent(settings) {
     tab.content = nextContent;
     tab.dirty = nextContent !== tab.savedContent;
     updateTabDirtyIndicator();
-    if (settingsEditorMode === "ui" && activeTabPath === tab.path) renderSettingsForm(tab);
+    if (appState.settingsEditorMode === "ui" && appState.activeTabPath === tab.path) renderSettingsForm(tab);
   }
 }
 
-function isInterceptionActive(settings = assessmentSettingsCache) {
+function isInterceptionActive(settings = appState.assessmentSettingsCache) {
   return Boolean(settings?.interception?.enabled && settings?.interception?.interceptRequests);
 }
 
-function syncInterceptorToggleUi(settings = assessmentSettingsCache) {
+function syncInterceptorToggleUi(settings = appState.assessmentSettingsCache) {
   if (!securityInterceptToggle) return;
   const active = isInterceptionActive(settings);
   securityInterceptToggle.classList.toggle("active", active);
   securityInterceptToggle.setAttribute("aria-pressed", String(active));
-  securityInterceptToggle.disabled = !assessmentPath;
+  securityInterceptToggle.disabled = !appState.assessmentPath;
   if (securityInterceptToggleLabel) {
     securityInterceptToggleLabel.textContent = active ? "Intercept On" : "Intercept Off";
   }
@@ -13533,45 +13363,44 @@ function syncInterceptorToggleUi(settings = assessmentSettingsCache) {
   }
 }
 
-let assessmentSettingsRefreshGeneration = 0;
 
 async function refreshAssessmentSettingsCache() {
-  const refreshGeneration = ++assessmentSettingsRefreshGeneration;
-  if (!assessmentPath) {
-    assessmentSettingsCache = null;
-    assessmentSettingsVirtual = false;
+  const refreshGeneration = ++appState.assessmentSettingsRefreshGeneration;
+  if (!appState.assessmentPath) {
+    appState.assessmentSettingsCache = null;
+    appState.assessmentSettingsVirtual = false;
     syncInterceptorToggleUi(null);
     return null;
   }
-  const requestedAssessment = assessmentPath;
-  const requestedWorkspace = rootPath;
+  const requestedAssessment = appState.assessmentPath;
+  const requestedWorkspace = appState.rootPath;
   const result = await window.api.assessmentSettings({ path: requestedAssessment });
-  if (assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace || refreshGeneration !== assessmentSettingsRefreshGeneration) return null;
+  if (appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace || refreshGeneration !== appState.assessmentSettingsRefreshGeneration) return null;
   if (result?.error) {
-    assessmentSettingsCache = null;
-    assessmentSettingsVirtual = false;
+    appState.assessmentSettingsCache = null;
+    appState.assessmentSettingsVirtual = false;
     syncInterceptorToggleUi(null);
     return result;
   }
-  assessmentSettingsCache = result.settings;
-  assessmentSettingsVirtual = Boolean(result.virtual);
-  if (!result.virtual && result.settings?.authority) authoritySettingsData = normalizeAuthoritySettings(result.settings.authority);
-  syncInterceptorToggleUi(assessmentSettingsCache);
+  appState.assessmentSettingsCache = result.settings;
+  appState.assessmentSettingsVirtual = Boolean(result.virtual);
+  if (!result.virtual && result.settings?.authority) appState.authoritySettingsData = normalizeAuthoritySettings(result.settings.authority);
+  syncInterceptorToggleUi(appState.assessmentSettingsCache);
   return result;
 }
 
 async function saveAssessmentSettings(settings) {
-  if (!assessmentPath) return { error: "No project open" };
-  const requestedAssessment = assessmentPath;
-  const requestedWorkspace = rootPath;
+  if (!appState.assessmentPath) return { error: "No project open" };
+  const requestedAssessment = appState.assessmentPath;
+  const requestedWorkspace = appState.rootPath;
   const result = await window.api.assessmentWriteSettings({ path: requestedAssessment, settings });
-  if (assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return result;
+  if (appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return result;
   if (result?.error) return result;
-  assessmentSettingsCache = result.settings;
-  assessmentSettingsVirtual = false;
+  appState.assessmentSettingsCache = result.settings;
+  appState.assessmentSettingsVirtual = false;
   if (result.settings?.authority) {
-    authoritySettingsData = normalizeAuthoritySettings(result.settings.authority);
-    localStorage.setItem(AUTHORITY_SETTINGS_KEY, JSON.stringify(authoritySettingsData, null, 2));
+    appState.authoritySettingsData = normalizeAuthoritySettings(result.settings.authority);
+    localStorage.setItem(AUTHORITY_SETTINGS_KEY, JSON.stringify(appState.authoritySettingsData, null, 2));
   }
   syncOpenSettingsTabContent(result.settings);
   syncInterceptorToggleUi(result.settings);
@@ -13580,14 +13409,14 @@ async function saveAssessmentSettings(settings) {
 }
 
 async function toggleInterceptorCapture() {
-  if (!assessmentPath) {
+  if (!appState.assessmentPath) {
     setSecurityStatus("Create or open a project first", "error");
     return;
   }
-  const requestedAssessment = assessmentPath;
-  const requestedWorkspace = rootPath;
-  const current = assessmentSettingsCache || (await refreshAssessmentSettingsCache())?.settings;
-  if (assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return;
+  const requestedAssessment = appState.assessmentPath;
+  const requestedWorkspace = appState.rootPath;
+  const current = appState.assessmentSettingsCache || (await refreshAssessmentSettingsCache())?.settings;
+  if (appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return;
   if (!current) {
     setSecurityStatus("Could not read project runtime settings", "error");
     return;
@@ -13602,7 +13431,7 @@ async function toggleInterceptorCapture() {
     nextSettings.listener.enabled = true;
   }
   const result = await saveAssessmentSettings(nextSettings);
-  if (assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return;
+  if (appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return;
   if (result?.error) {
     setSecurityStatus(result.error, "error");
     return;
@@ -13610,40 +13439,39 @@ async function toggleInterceptorCapture() {
   setSecurityStatus(turningOn ? "Request interception enabled" : "Request interception disabled — traffic passes through");
 }
 
-let proxyConfigurationGeneration = 0;
 
 function syncProxyListenerUi(nextState = {}) {
-  proxyListenerState = { ...proxyListenerState, ...nextState };
+  appState.proxyListenerState = { ...appState.proxyListenerState, ...nextState };
   if (proxyListenerStatus) {
-    proxyListenerStatus.classList.toggle("running", Boolean(proxyListenerState.running && !proxyListenerState.warning));
-    proxyListenerStatus.classList.toggle("error", Boolean(proxyListenerState.error || proxyListenerState.warning));
-    proxyListenerStatus.textContent = proxyListenerState.error
-      ? proxyListenerState.error
-      : proxyListenerState.running
-        ? proxyListenerState.warning || `Listening on ${proxyListenerState.host}:${proxyListenerState.port} - ${proxyListenerState.targetCount ?? 0} scoped target${proxyListenerState.targetCount === 1 ? "" : "s"}`
+    proxyListenerStatus.classList.toggle("running", Boolean(appState.proxyListenerState.running && !appState.proxyListenerState.warning));
+    proxyListenerStatus.classList.toggle("error", Boolean(appState.proxyListenerState.error || appState.proxyListenerState.warning));
+    proxyListenerStatus.textContent = appState.proxyListenerState.error
+      ? appState.proxyListenerState.error
+      : appState.proxyListenerState.running
+        ? appState.proxyListenerState.warning || `Listening on ${appState.proxyListenerState.host}:${appState.proxyListenerState.port} - ${appState.proxyListenerState.targetCount ?? 0} scoped target${appState.proxyListenerState.targetCount === 1 ? "" : "s"}`
         : "Stopped";
   }
-  if (proxyCaPath) proxyCaPath.value = proxyListenerState.caCertPath || "Generated when the listener starts";
-  if (selectedSecurityTool === "interceptor" && proxyListenerState.running && !currentProxyCaptureId) {
-    setSecurityStatus(proxyListenerState.warning || `Listening on ${proxyListenerState.host}:${proxyListenerState.port}`,
-      proxyListenerState.warning ? "error" : "");
+  if (proxyCaPath) proxyCaPath.value = appState.proxyListenerState.caCertPath || "Generated when the listener starts";
+  if (appState.selectedSecurityTool === "interceptor" && appState.proxyListenerState.running && !appState.currentProxyCaptureId) {
+    setSecurityStatus(appState.proxyListenerState.warning || `Listening on ${appState.proxyListenerState.host}:${appState.proxyListenerState.port}`,
+      appState.proxyListenerState.warning ? "error" : "");
   }
 }
 
 async function configureProxyListener() {
-  const requestGeneration = ++proxyConfigurationGeneration;
-  const requestedAssessment = assessmentPath;
-  const requestedWorkspace = rootPath;
+  const requestGeneration = ++appState.proxyConfigurationGeneration;
+  const requestedAssessment = appState.assessmentPath;
+  const requestedWorkspace = appState.rootPath;
   try {
     const result = await window.api.proxyConfigure({
       assessmentPath: requestedAssessment,
     });
-    if (requestGeneration !== proxyConfigurationGeneration || assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return result;
+    if (requestGeneration !== appState.proxyConfigurationGeneration || appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return result;
     syncProxyListenerUi(result || {});
     return result;
   } catch (error) {
     const result = { error: error?.message || "Proxy listener configuration failed", running: false };
-    if (requestGeneration !== proxyConfigurationGeneration || assessmentPath !== requestedAssessment || rootPath !== requestedWorkspace) return result;
+    if (requestGeneration !== appState.proxyConfigurationGeneration || appState.assessmentPath !== requestedAssessment || appState.rootPath !== requestedWorkspace) return result;
     syncProxyListenerUi(result);
     return result;
   }
@@ -13670,7 +13498,7 @@ function closeProxyBrowserMenu() {
     menu.style.right = "";
     menu.style.left = "";
     menu.style.zIndex = "";
-    if (proxyBrowserMenuHome && menu.parentElement !== proxyBrowserMenuHome) proxyBrowserMenuHome.appendChild(menu);
+    if (appState.proxyBrowserMenuHome && menu.parentElement !== appState.proxyBrowserMenuHome) appState.proxyBrowserMenuHome.appendChild(menu);
   }
   button?.setAttribute("aria-expanded", "false");
 }
@@ -13679,7 +13507,7 @@ function positionProxyBrowserMenu() {
   const menu = document.getElementById("security-proxy-browser-menu") || securityProxyBrowserMenu;
   const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
   if (!menu || !button) return;
-  if (!proxyBrowserMenuHome) proxyBrowserMenuHome = menu.parentElement;
+  if (!appState.proxyBrowserMenuHome) appState.proxyBrowserMenuHome = menu.parentElement;
   document.body.appendChild(menu);
   const rect = button.getBoundingClientRect();
   menu.style.position = "fixed";
@@ -13690,10 +13518,10 @@ function positionProxyBrowserMenu() {
 }
 
 async function chooseProxyBrowserIdentity() {
-  if (!assessmentPath) return launchProxyBrowser("");
+  if (!appState.assessmentPath) return launchProxyBrowser("");
   let identities = [];
   try {
-    const snapshot = await window.api.identitiesGet?.({ workspace: assessmentPath });
+    const snapshot = await window.api.identitiesGet?.({ workspace: appState.assessmentPath });
     identities = identityRecordList(snapshot);
   } catch { identities = []; }
   if (!identities.length) return launchProxyBrowser("");
@@ -13711,7 +13539,7 @@ async function chooseProxyBrowserIdentity() {
 }
 
 async function launchProxyBrowser(identityId = "") {
-  if (!assessmentPath) {
+  if (!appState.assessmentPath) {
     setSecurityStatus("Create or open a project first", "error");
     return;
   }
@@ -13724,7 +13552,7 @@ async function launchProxyBrowser(identityId = "") {
   try {
     closeProxyBrowserMenu();
     openBrowserTab();
-    await browserWorkspace?.open({ identityId: String(identityId || ""), purpose: "assessment" });
+    await appState.browserWorkspace?.open({ identityId: String(identityId || ""), purpose: "assessment" });
   } catch (error) {
     setSecurityStatus(error?.message || "The browser could not be opened.", "error");
   } finally {
@@ -13734,9 +13562,9 @@ async function launchProxyBrowser(identityId = "") {
 }
 
 function scheduleSettingsAutoSave() {
-  clearTimeout(settingsAutoSaveTimer);
-  settingsAutoSaveTimer = setTimeout(async () => {
-    const tab = activeTabPath ? openTabs.get(activeTabPath) : null;
+  clearTimeout(appState.settingsAutoSaveTimer);
+  appState.settingsAutoSaveTimer = setTimeout(async () => {
+    const tab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
     if (!isAssessmentSettingsTab(tab) || !tab.dirty) return;
     await saveActiveTab();
   }, 450);
@@ -13745,23 +13573,23 @@ function scheduleSettingsAutoSave() {
 function handleProxyCapture(payload = {}) {
   const phase = payload.phase;
   if (phase === "error") {
-    if (payload.id === currentProxyCaptureId) setSecurityStatus(payload.error || "Proxy capture failed", "error");
+    if (payload.id === appState.currentProxyCaptureId) setSecurityStatus(payload.error || "Proxy capture failed", "error");
     return;
   }
   if (phase === "status") {
-    if (payload.id === currentProxyCaptureId) setSecurityStatus(payload.status || "Updated");
+    if (payload.id === appState.currentProxyCaptureId) setSecurityStatus(payload.status || "Updated");
     return;
   }
 
-  const intercepting = Boolean(payload.paused) || Boolean(currentProxyCaptureId) || isInterceptionActive();
+  const intercepting = Boolean(payload.paused) || Boolean(appState.currentProxyCaptureId) || isInterceptionActive();
   if (intercepting) {
     const draft = securityDrafts.get("interceptor") || {};
     if (payload.request != null) draft.request = String(payload.request);
     if (payload.response != null) draft.response = String(payload.response);
     securityDrafts.set("interceptor", draft);
 
-    if (currentSidebarView === "project") {
-      if (selectedSecurityTool !== "interceptor") setSecurityTool("interceptor");
+    if (appState.currentSidebarView === "project") {
+      if (appState.selectedSecurityTool !== "interceptor") setSecurityTool("interceptor");
       if (payload.request != null) securityRequestEditor.value = String(payload.request);
       if (payload.response != null) securityResponseEditor.value = String(payload.response);
       syncSecurityExchangeSizes();
@@ -13769,7 +13597,7 @@ function handleProxyCapture(payload = {}) {
   }
 
   if (phase === "request") {
-    currentProxyCaptureId = payload.paused ? String(payload.id || "") : "";
+    appState.currentProxyCaptureId = payload.paused ? String(payload.id || "") : "";
     securityDropButton.hidden = !payload.paused;
     setSecurityStatus(payload.paused ? `Intercepted ${payload.url} - waiting for Forward or Drop` : `Captured ${payload.url}`);
   } else if (phase === "request-complete") {
@@ -13777,9 +13605,9 @@ function handleProxyCapture(payload = {}) {
   } else if (phase === "response-headers") {
     setSecurityStatus(`Receiving ${payload.url}`);
   } else if (phase === "response") {
-    currentProxyCaptureId = "";
+    appState.currentProxyCaptureId = "";
     securityDropButton.hidden = true;
-    lastLoggedSecuritySignature = securityExchangeSignature();
+    appState.lastLoggedSecuritySignature = securityExchangeSignature();
     setSecurityStatus(`Captured and logged ${payload.logged?.timestamp || ""}`, payload.logged?.error ? "error" : "success");
     if (payload.history) ingestLiveSecurityHistory(payload.history);
     else refreshSecurityHistoryIfVisible();
@@ -13855,13 +13683,13 @@ async function openFile(filePath, fileName, {
   column = 1,
 } = {}) {
   const path = normPath(filePath);
-  if (line > 0 && isMarkdownFileName(fileName) && markdownViewMode === "md") {
-    markdownViewMode = "text";
-    localStorage.setItem(MARKDOWN_VIEW_MODE_KEY, markdownViewMode);
+  if (line > 0 && isMarkdownFileName(fileName) && appState.markdownViewMode === "md") {
+    appState.markdownViewMode = "text";
+    localStorage.setItem(MARKDOWN_VIEW_MODE_KEY, appState.markdownViewMode);
   }
-  if (line > 0 && fileName === "Project Runtime Settings" && settingsEditorMode === "ui") {
-    settingsEditorMode = "json";
-    localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, settingsEditorMode);
+  if (line > 0 && fileName === "Project Runtime Settings" && appState.settingsEditorMode === "ui") {
+    appState.settingsEditorMode = "json";
+    localStorage.setItem(SETTINGS_EDITOR_MODE_KEY, appState.settingsEditorMode);
     syncSettingsEditorButtons();
   }
   showCodeEditorWorkspace();
@@ -13903,25 +13731,25 @@ async function openFile(filePath, fileName, {
     tab.error = null;
   }
 
-  if (activeTabPath === path) {
+  if (appState.activeTabPath === path) {
     await renderEditor({ focusEditor });
     if (line > 0) await EditorManager.revealLocation?.(path, line, column);
   }
 }
 
 function commitActiveTab() {
-  if (!activeTabPath || !openTabs.has(activeTabPath)) return;
-  const tab = openTabs.get(activeTabPath);
+  if (!appState.activeTabPath || !openTabs.has(appState.activeTabPath)) return;
+  const tab = openTabs.get(appState.activeTabPath);
   if (isBrowserTab(tab)) return;
   if (tab.error || tab.content === null) return;
-  if (isAssessmentSettingsTab(tab) && settingsEditorMode === "ui") {
+  if (isAssessmentSettingsTab(tab) && appState.settingsEditorMode === "ui") {
     tab.dirty = tab.content !== tab.savedContent;
     return;
   }
   // Markdown preview intentionally does not attach its source to Monaco. Do
   // not replace the loaded Markdown with an empty loading model on tab changes.
-  if (isMarkdownFileName(tab.name) && markdownViewMode === "md") return;
-  tab.content = EditorManager.getValue(activeTabPath);
+  if (isMarkdownFileName(tab.name) && appState.markdownViewMode === "md") return;
+  tab.content = EditorManager.getValue(appState.activeTabPath);
   tab.dirty = tab.content !== tab.savedContent;
 }
 
@@ -13941,19 +13769,19 @@ function switchToTab(filePath, { focusEditor = true } = {}) {
   }
   showCodeEditorWorkspace();
   commitActiveTab();
-  activeTabPath = filePath;
-  editorLoadedPath = null;
+  appState.activeTabPath = filePath;
+  appState.editorLoadedPath = null;
   renderTabs();
   renderEditor({ focusEditor });
 }
 
 async function saveActiveTab() {
   commitActiveTab();
-  if (!activeTabPath) return;
-  const tab = openTabs.get(activeTabPath);
+  if (!appState.activeTabPath) return;
+  const tab = openTabs.get(appState.activeTabPath);
   if (!tab || tab.error || isBrowserTab(tab)) return;
   if (!tab.dirty) {
-    EditorManager.clearChangeDecorations(activeTabPath);
+    EditorManager.clearChangeDecorations(appState.activeTabPath);
     if (isAssessmentSettingsTab(tab)) await configureProxyListener();
     return;
   }
@@ -13968,18 +13796,18 @@ async function saveActiveTab() {
 
   tab.savedContent = tab.content;
   tab.dirty = false;
-  EditorManager.clearChangeDecorations(activeTabPath);
+  EditorManager.clearChangeDecorations(appState.activeTabPath);
   renderTabs();
   if (isAssessmentSettingsTab(tab)) await configureProxyListener();
   const savedPath = String(tab.diskPath || "").replace(/\\/g, "/").toLowerCase();
-  if (savedPath.endsWith("mcp.json") && appSettingsSection === "commands") {
+  if (savedPath.endsWith("mcp.json") && appState.appSettingsSection === "commands") {
     await loadMcpSettings();
   }
 }
 
 function focusExplorerSidebar() {
   setSidebarView("project");
-  if (sidebarCollapsed) setSidebarCollapsed(false);
+  if (appState.sidebarCollapsed) setSidebarCollapsed(false);
   setExplorerRootExpanded(true);
 }
 
@@ -13987,7 +13815,7 @@ function getEditorTabAbsolutePath(tab) {
   if (!tab || isSettingsTab(tab) || isInterceptorTab(tab) || isBrowserTab(tab)) return null;
   const rawPath = tab.diskPath || tab.path || "";
   if (!rawPath || String(rawPath).startsWith("xekute:")) return null;
-  if (rootPath) {
+  if (appState.rootPath) {
     const relativePath = relativePathFromRoot(rawPath);
     if (relativePath !== null) return joinWorkspacePath(relativePath);
   }
@@ -14000,7 +13828,7 @@ function getEditorTabFileActions(tab) {
     return { canReveal: false, canCopyPath: false, canCopyRelative: false };
   }
   const diskPath = normPath(absolutePath);
-  const relativePath = rootPath ? relativePathFromRoot(absolutePath) : null;
+  const relativePath = appState.rootPath ? relativePathFromRoot(absolutePath) : null;
   return {
     canReveal: true,
     canCopyPath: true,
@@ -14045,12 +13873,11 @@ async function copyEditorTabPath(tabPath, { relative = false } = {}) {
   await writeChatClipboardText(text);
 }
 
-let editorTabContextMenuPath = null;
 
 function closeEditorTabContextMenu() {
   if (!editorTabContextMenu) return;
   editorTabContextMenu.hidden = true;
-  editorTabContextMenuPath = null;
+  appState.editorTabContextMenuPath = null;
 }
 
 function openEditorTabContextMenu(clientX, clientY, tabPath) {
@@ -14059,7 +13886,7 @@ function openEditorTabContextMenu(clientX, clientY, tabPath) {
   closeWorkspaceContextMenu();
   closeSecurityHistoryMenu();
 
-  editorTabContextMenuPath = tabPath;
+  appState.editorTabContextMenuPath = tabPath;
   const paths = [...openTabs.keys()];
   const idx = paths.indexOf(tabPath);
   const tab = openTabs.get(tabPath);
@@ -14106,7 +13933,7 @@ async function closeAllEditorTabs() {
 }
 
 async function handleEditorTabContextMenuAction(action) {
-  const tabPath = editorTabContextMenuPath;
+  const tabPath = appState.editorTabContextMenuPath;
   closeEditorTabContextMenu();
   if (!tabPath) return;
   if (action === "close") await closeTab(tabPath);
@@ -14125,29 +13952,29 @@ async function closeTab(filePath, e, { force = false } = {}) {
   e?.stopPropagation();
   if (!openTabs.has(filePath)) return;
 
-  if (filePath === activeTabPath) commitActiveTab();
+  if (filePath === appState.activeTabPath) commitActiveTab();
   const tab = openTabs.get(filePath);
-  if (isBrowserTab(tab)) browserWorkspace?.setVisible(false);
+  if (isBrowserTab(tab)) appState.browserWorkspace?.setVisible(false);
   if (tab?.dirty && !force) {
     if (!await AppDialog.confirm(`"${tab.name}" has unsaved changes. Close anyway?`, { title: "Unsaved changes", confirmLabel: "Close", tone: "danger" })) return;
   }
 
   const paths = [...openTabs.keys()];
   const idx = paths.indexOf(filePath);
-  const wasActive = activeTabPath === filePath;
+  const wasActive = appState.activeTabPath === filePath;
   EditorManager.disposeModel(filePath);
   openTabs.delete(filePath);
 
   if (wasActive) {
-    editorLoadedPath = null;
+    appState.editorLoadedPath = null;
     if (openTabs.size === 0) {
-      activeTabPath = null;
-      currentWorkspaceMode = "editor";
+      appState.activeTabPath = null;
+      appState.currentWorkspaceMode = "editor";
       showCodeEditorWorkspace();
       if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
     } else {
       const next = paths[idx + 1] ?? paths[idx - 1];
-      activeTabPath = openTabs.has(next) ? next : [...openTabs.keys()][0];
+      appState.activeTabPath = openTabs.has(next) ? next : [...openTabs.keys()][0];
     }
   }
 
@@ -14161,8 +13988,8 @@ function isMarkdownFileName(fileName = "") {
 }
 
 function setMarkdownViewMode(mode) {
-  markdownViewMode = mode === "md" ? "md" : "text";
-  localStorage.setItem(MARKDOWN_VIEW_MODE_KEY, markdownViewMode);
+  appState.markdownViewMode = mode === "md" ? "md" : "text";
+  localStorage.setItem(MARKDOWN_VIEW_MODE_KEY, appState.markdownViewMode);
   renderTabs();
   renderEditor({ focusEditor: false });
 }
@@ -14173,7 +14000,7 @@ function renderTabs() {
   for (const [path, tab] of openTabs) {
     const el = document.createElement("div");
     el.className = "editor-tab"
-      + (path === activeTabPath ? " active" : "")
+      + (path === appState.activeTabPath ? " active" : "")
       + (tab.pinned ? " editor-tab-pinned" : "");
     const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab) || isBrowserTab(tab);
     if (specialWorkspaceTab) el.classList.add("special-workspace-tab");
@@ -14197,14 +14024,14 @@ function renderTabs() {
         event.preventDefault();
         return;
       }
-      draggedEditorTabPath = path;
+      appState.draggedEditorTabPath = path;
       el.classList.add("tab-dragging");
       event.dataTransfer?.setData("application/x-xekute-editor-tab", path);
       event.dataTransfer?.setData("text/plain", path);
       if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
     });
     el.addEventListener("dragover", (event) => {
-      const draggedPath = draggedEditorTabPath || event.dataTransfer?.getData("application/x-xekute-editor-tab");
+      const draggedPath = appState.draggedEditorTabPath || event.dataTransfer?.getData("application/x-xekute-editor-tab");
       if (!draggedPath || draggedPath === path) return;
       event.preventDefault();
       event.stopPropagation();
@@ -14215,7 +14042,7 @@ function renderTabs() {
       if (!el.contains(event.relatedTarget)) el.classList.remove("tab-drop-before", "tab-drop-after");
     });
     el.addEventListener("drop", (event) => {
-      const draggedPath = draggedEditorTabPath || event.dataTransfer?.getData("application/x-xekute-editor-tab");
+      const draggedPath = appState.draggedEditorTabPath || event.dataTransfer?.getData("application/x-xekute-editor-tab");
       if (!draggedPath || draggedPath === path) return;
       event.preventDefault();
       event.stopPropagation();
@@ -14224,7 +14051,7 @@ function renderTabs() {
       reorderOpenTabs(draggedPath, path, { after });
     });
     el.addEventListener("dragend", () => {
-      draggedEditorTabPath = null;
+      appState.draggedEditorTabPath = null;
       el.classList.remove("tab-dragging");
       clearEditorTabDropIndicators();
     });
@@ -14276,7 +14103,7 @@ function renderTabs() {
     editorTabBar.appendChild(el);
   }
 
-  const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
+  const activeTab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
   if (activeTab && isMarkdownFileName(activeTab.name)) {
     const actions = document.createElement("div");
     actions.className = "editor-tab-actions";
@@ -14290,8 +14117,8 @@ function renderTabs() {
       button.type = "button";
       button.textContent = mode === "md" ? "MD" : "Text";
       button.dataset.markdownView = mode;
-      button.setAttribute("aria-pressed", String(markdownViewMode === mode));
-      button.classList.toggle("active", markdownViewMode === mode);
+      button.setAttribute("aria-pressed", String(appState.markdownViewMode === mode));
+      button.classList.toggle("active", appState.markdownViewMode === mode);
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         setMarkdownViewMode(mode);
@@ -14307,7 +14134,7 @@ function renderTabs() {
 
 function updateEditorPathBar() {
   if (!editorPathBar || !editorPathLabel) return;
-  const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
+  const activeTab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
   if (!activeTab || isSettingsTab(activeTab) || isInterceptorTab(activeTab) || isBrowserTab(activeTab)) {
     editorPathBar.hidden = true;
     editorPathLabel.textContent = "";
@@ -14324,21 +14151,21 @@ function updateEditorPathBar() {
 }
 
 function updateTabDirtyIndicator() {
-  const idx = [...openTabs.keys()].indexOf(activeTabPath);
+  const idx = [...openTabs.keys()].indexOf(appState.activeTabPath);
   const tabEl = editorTabBar.children[idx];
-  const tab = openTabs.get(activeTabPath);
+  const tab = openTabs.get(appState.activeTabPath);
   tabEl?.querySelector(".tab-label")?.classList.toggle("tab-dirty", !!tab?.dirty);
 }
 
 async function renderEditor({ focusEditor = true } = {}) {
   if (markdownPreview) markdownPreview.hidden = true;
 
-  const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
+  const activeTab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
   if (isBrowserTab(activeTab)) {
     showBrowserWorkspaceContent();
     return;
   }
-  browserWorkspace?.setVisible(false);
+  appState.browserWorkspace?.setVisible(false);
   if (isSettingsTab(activeTab)) {
     if (editorEmpty) editorEmpty.setAttribute("hidden", "");
     if (editorView) editorView.setAttribute("hidden", "");
@@ -14346,14 +14173,14 @@ async function renderEditor({ focusEditor = true } = {}) {
     if (settingsUIView) settingsUIView.hidden = true;
     if (markdownPreview) markdownPreview.hidden = true;
     if (settingsEditorToolbar) settingsEditorToolbar.hidden = true;
-    currentWorkspaceMode = "settings";
+    appState.currentWorkspaceMode = "settings";
     if (editorTabBar) editorTabBar.hidden = false;
     if (editorBody) editorBody.hidden = true;
     updateEditorPathBar();
     if (resourceViewer) resourceViewer.hidden = true;
     if (securityWorkspace) securityWorkspace.hidden = true;
     if (webcloneWorkspace) webcloneWorkspace.hidden = true;
-    if (assessmentModuleView) { assessmentModuleView.hidden = true; assessmentModuleActive = false; }
+    if (assessmentModuleView) { assessmentModuleView.hidden = true; appState.assessmentModuleActive = false; }
     window.api.webCloneHidePreview?.();
     if (appSettingsWorkspace) appSettingsWorkspace.hidden = false;
     editorPane?.setAttribute("aria-label", "XEKUTE Settings");
@@ -14373,24 +14200,24 @@ async function renderEditor({ focusEditor = true } = {}) {
     return;
   }
 
-  if (!activeTabPath || !openTabs.has(activeTabPath)) {
+  if (!appState.activeTabPath || !openTabs.has(appState.activeTabPath)) {
     if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
     if (securityWorkspace) securityWorkspace.hidden = true;
-    currentWorkspaceMode = "editor";
+    appState.currentWorkspaceMode = "editor";
     if (editorBody) editorBody.hidden = false;
     editorEmpty.removeAttribute("hidden");
     editorView.setAttribute("hidden", "");
-    editorLoadedPath = null;
+    appState.editorLoadedPath = null;
     EditorManager.clear();
     return;
   }
 
-  const tab = openTabs.get(activeTabPath);
+  const tab = openTabs.get(appState.activeTabPath);
   const settingsTab = isAssessmentSettingsTab(tab);
   const markdownTab = isMarkdownFileName(tab.name);
   if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
   if (securityWorkspace) securityWorkspace.hidden = true;
-  currentWorkspaceMode = "editor";
+  appState.currentWorkspaceMode = "editor";
   if (editorBody) editorBody.hidden = false;
   editorEmpty.setAttribute("hidden", "");
   editorView.removeAttribute("hidden");
@@ -14401,9 +14228,9 @@ async function renderEditor({ focusEditor = true } = {}) {
 
   if (tab.content === null && !tab.error) {
     editorError.hidden = true;
-    editorLoadedPath = null;
+    appState.editorLoadedPath = null;
     try {
-      await EditorManager.showTab(activeTabPath, tab.name, "", { loading: true, focus: focusEditor });
+      await EditorManager.showTab(appState.activeTabPath, tab.name, "", { loading: true, focus: focusEditor });
     } catch (error) {
       editorError.hidden = false;
       editorError.textContent = `Editor failed to load: ${error?.message || error?.type || "Unknown editor error"}`;
@@ -14414,7 +14241,7 @@ async function renderEditor({ focusEditor = true } = {}) {
   if (tab.error) {
     editorError.hidden = false;
     editorError.textContent = tab.error;
-    editorLoadedPath = null;
+    appState.editorLoadedPath = null;
     EditorManager.clear();
     return;
   }
@@ -14422,7 +14249,7 @@ async function renderEditor({ focusEditor = true } = {}) {
   editorError.hidden = true;
   const text = tab.content ?? "";
 
-  if (markdownTab && markdownViewMode === "md") {
+  if (markdownTab && appState.markdownViewMode === "md") {
     monacoContainer.hidden = true;
     settingsUIView.hidden = true;
     markdownPreview.hidden = false;
@@ -14430,7 +14257,7 @@ async function renderEditor({ focusEditor = true } = {}) {
     return;
   }
 
-  if (settingsTab && settingsEditorMode === "ui") {
+  if (settingsTab && appState.settingsEditorMode === "ui") {
     const rendered = renderSettingsForm(tab);
     if (rendered.error) {
       editorError.hidden = false;
@@ -14441,15 +14268,15 @@ async function renderEditor({ focusEditor = true } = {}) {
     }
     monacoContainer.hidden = true;
     settingsUIView.hidden = false;
-    editorLoadedPath = null;
+    appState.editorLoadedPath = null;
     EditorManager.clear();
     return;
   }
 
-  if (editorLoadedPath !== activeTabPath) {
+  if (appState.editorLoadedPath !== appState.activeTabPath) {
     try {
-      await EditorManager.showTab(activeTabPath, tab.name, text, { focus: focusEditor });
-      editorLoadedPath = activeTabPath;
+      await EditorManager.showTab(appState.activeTabPath, tab.name, text, { focus: focusEditor });
+      appState.editorLoadedPath = appState.activeTabPath;
     } catch (error) {
       editorError.hidden = false;
       editorError.textContent = `Editor failed to load: ${error?.message || error?.type || "Unknown editor error"}`;
@@ -14458,7 +14285,7 @@ async function renderEditor({ focusEditor = true } = {}) {
 }
 
 EditorManager.setOnChange((path) => {
-  if (path !== activeTabPath) return;
+  if (path !== appState.activeTabPath) return;
   const tab = openTabs.get(path);
   if (!tab || tab.error) return;
   tab.content = EditorManager.getValue(path);
@@ -14469,35 +14296,35 @@ EditorManager.setOnChange((path) => {
 EditorManager.setOnSave(() => saveActiveTab());
 
 settingsViewJson?.addEventListener("click", () => {
-  if (resourceScopeActive) setResourceScopeMode("json");
-  else if (resourceChecklistActive) setResourceChecklistMode("json");
-  else if (resourceSettingsActive) setResourceSettingsMode("json");
+  if (appState.resourceScopeActive) setResourceScopeMode("json");
+  else if (appState.resourceChecklistActive) setResourceChecklistMode("json");
+  else if (appState.resourceSettingsActive) setResourceSettingsMode("json");
   else setSettingsEditorMode("json");
 });
 settingsViewUi?.addEventListener("click", () => {
-  if (resourceScopeActive) setResourceScopeMode("ui");
-  else if (resourceChecklistActive) setResourceChecklistMode("ui");
-  else if (resourceSettingsActive) setResourceSettingsMode("ui");
+  if (appState.resourceScopeActive) setResourceScopeMode("ui");
+  else if (appState.resourceChecklistActive) setResourceChecklistMode("ui");
+  else if (appState.resourceSettingsActive) setResourceSettingsMode("ui");
   else setSettingsEditorMode("ui");
 });
 settingsUIView?.addEventListener("input", (event) => {
   const input = event.target.closest("[data-setting-path]");
   if (!input) return;
-  if (resourceSettingsActive) updateResourceSettingFromInput(input);
+  if (appState.resourceSettingsActive) updateResourceSettingFromInput(input);
   else updateSettingFromInput(input);
 });
 checklistSearch?.addEventListener("input", renderChecklistUI);
 checklistStatusFilter?.addEventListener("change", renderChecklistUI);
 checklistGroups?.addEventListener("change", async (event) => {
   const index = Number(event.target.dataset.index);
-  const check = resourceChecklistData?.checks?.[index];
+  const check = appState.resourceChecklistData?.checks?.[index];
   if (!check) return;
   if (event.target.classList.contains("checklist-status")) {
     const requestedStatus = event.target.value;
     const issue = checklistStatusIssue(check, requestedStatus) || await checklistEvidenceIssue(check, requestedStatus);
     if (issue) {
       resourceViewerMeta.textContent = issue;
-      event.target.value = check.status === "not-started" && resourceChecklistType !== "mitre" ? "not-tested" : (check.status || "not-tested");
+      event.target.value = check.status === "not-started" && appState.resourceChecklistType !== "mitre" ? "not-tested" : (check.status || "not-tested");
       renderChecklistUI();
       return;
     }
@@ -14509,19 +14336,19 @@ checklistGroups?.addEventListener("change", async (event) => {
   if (event.target.classList.contains("checklist-status")) renderChecklistUI();
 });
 checklistGroups?.addEventListener("input", (event) => {
-  const check = resourceChecklistData?.checks?.[Number(event.target.dataset.index)];
+  const check = appState.resourceChecklistData?.checks?.[Number(event.target.dataset.index)];
   if (!check) return;
   if (event.target.classList.contains("checklist-procedure")) check.procedure = checklistTextList(event.target.value);
   else if (event.target.classList.contains("checklist-evidence")) check.evidence = checklistTextList(event.target.value);
   else if (event.target.classList.contains("checklist-notes")) {
-    if (resourceChecklistType === "mitre") check.observations = event.target.value;
+    if (appState.resourceChecklistType === "mitre") check.observations = event.target.value;
     else check.result = event.target.value;
   } else return;
   scheduleChecklistSave();
 });
 scopeUIForm?.addEventListener("input", (event) => {
   const input = event.target.closest("[data-scope-path]");
-  if (!input || !resourceScopeData) return;
+  if (!input || !appState.resourceScopeData) return;
   let value = input.value;
   if (input.dataset.scopeType === "boolean") value = input.checked;
   else if (input.dataset.scopeType === "number") value = Number(input.value);
@@ -14533,7 +14360,7 @@ scopeUIForm?.addEventListener("input", (event) => {
       input.classList.remove("invalid"); input.removeAttribute("title");
     } catch (error) { input.classList.add("invalid"); input.title = error.message; return; }
   }
-  setNestedSettingValue(resourceScopeData, input.dataset.scopePath, value);
+  setNestedSettingValue(appState.resourceScopeData, input.dataset.scopePath, value);
   scheduleScopeSave();
 });
 
@@ -14559,9 +14386,9 @@ function modelDisplayName(name = "") {
 
 function syncModelLabel() {
   if (!modelLabel) return;
-  modelLabel.textContent = modelDisplayName(selectedModel) || "Select model";
+  modelLabel.textContent = modelDisplayName(appState.selectedModel) || "Select model";
   if (modelPicker) {
-    modelPicker.title = selectedModel ? `Model: ${selectedModel}` : "Select model";
+    modelPicker.title = appState.selectedModel ? `Model: ${appState.selectedModel}` : "Select model";
   }
   updateContextUsage();
   syncModelControlsSummary();
@@ -14624,26 +14451,26 @@ function resetChatInput() {
 
 function syncModelControlsSummary() {
   if (!modelControlsMenu) return;
-  const settings = getModelSettings(selectedModel);
-  const metadata = openRouterModelMeta[selectedModel] || {};
+  const settings = getModelSettings(appState.selectedModel);
+  const metadata = appState.openRouterModelMeta[appState.selectedModel] || {};
   const maximum = isOpenRouterProvider()
     ? Math.max(Number(metadata.contextWindowTokens) || 0, ...(metadata.endpointContextLengths || []))
-    : Number(ollamaRuntimeContext[selectedModel]) || 0;
+    : Number(ollamaRuntimeContext[appState.selectedModel]) || 0;
   const configured = settings.contextMode === "custom" ? Number(settings.contextLimitTokens) || contextLabelToTokens(settings.context) : null;
-  const resolved = resolvedContextCapacity?.plan?.model === selectedModel ? resolvedContextCapacity.tokens : null;
+  const resolved = appState.resolvedContextCapacity?.plan?.model === appState.selectedModel ? appState.resolvedContextCapacity.tokens : null;
   const tokens = configured ? (maximum ? Math.min(configured, maximum) : configured) : resolved || maximum;
   modelContextValue.textContent = tokens ? formatOpenRouterContextLabel(tokens) : AUTO_CONTEXT;
-  modelContextTrigger.disabled = !selectedModel;
+  modelContextTrigger.disabled = !appState.selectedModel;
   if (isOpenRouterProvider()) {
-    const { reasoning, selected } = openRouterReasoningState(selectedModel);
+    const { reasoning, selected } = openRouterReasoningState(appState.selectedModel);
     modelEffortValue.textContent = selected ? reasoningEffortLabel(selected) : reasoning?.mandatory ? "Required" : reasoning?.available ? "Auto" : "Unavailable";
-    modelEffortTrigger.disabled = !selectedModel || !reasoning?.available;
+    modelEffortTrigger.disabled = !appState.selectedModel || !reasoning?.available;
   } else {
     modelEffortValue.textContent = settings.thinkingConfigured ? (modelThinkingEnabled(settings) ? "On" : "Off") : "Auto";
-    modelEffortTrigger.disabled = !selectedModel;
+    modelEffortTrigger.disabled = !appState.selectedModel;
   }
-  modelCurrentName.textContent = modelDisplayName(selectedModel) || "Select model";
-  modelBrowseTrigger.title = selectedModel || "Select model";
+  modelCurrentName.textContent = modelDisplayName(appState.selectedModel) || "Select model";
+  modelBrowseTrigger.title = appState.selectedModel || "Select model";
 }
 
 function openModelControlsMenu() {
@@ -14657,9 +14484,9 @@ function openModelControlsMenu() {
   modelPicker.setAttribute("aria-expanded", "true");
   positionModelPanel(modelControlsMenu, modelPicker);
   modelControlsMenu.querySelector("button:not(:disabled)")?.focus();
-  const modelName = selectedModel;
+  const modelName = appState.selectedModel;
   void refreshModelContextCapacity().then(() => {
-    if (modelControlsMenu.hidden || selectedModel !== modelName) return;
+    if (modelControlsMenu.hidden || appState.selectedModel !== modelName) return;
     syncModelControlsSummary();
     positionModelPanel(modelControlsMenu, modelPicker);
   });
@@ -14689,9 +14516,9 @@ function positionModelMenu() {
 }
 
 function closeModelEditMenu() {
-  modelEditRequest++;
+  appState.modelEditRequest++;
   modelEditMenu.hidden = true;
-  editingModel = null;
+  appState.editingModel = null;
   modelContextTrigger.setAttribute("aria-expanded", "false");
   modelEffortTrigger.setAttribute("aria-expanded", "false");
 }
@@ -14716,7 +14543,7 @@ function positionModelEditMenu(anchorEl) {
 }
 
 async function openModelEditMenu(panel, anchor) {
-  if (!selectedModel) return;
+  if (!appState.selectedModel) return;
   if (!modelEditMenu.hidden && modelEditMenu.dataset.panel === panel) {
     closeModelEditMenu();
     return;
@@ -14724,14 +14551,14 @@ async function openModelEditMenu(panel, anchor) {
   closeModelEditMenu();
   modelMenu.hidden = true;
   modelBrowseTrigger.setAttribute("aria-expanded", "false");
-  const modelName = selectedModel;
-  const request = ++modelEditRequest;
-  editingModel = modelName;
+  const modelName = appState.selectedModel;
+  const request = ++appState.modelEditRequest;
+  appState.editingModel = modelName;
   modelEditMenu.dataset.panel = panel;
   modelEditMenu.hidden = false;
   anchor.setAttribute("aria-expanded", "true");
   const settings = getModelSettings(modelName);
-  renderReasoningOptions(isOpenRouterProvider() ? (openRouterModelMeta[modelName] || null) : null);
+  renderReasoningOptions(isOpenRouterProvider() ? (appState.openRouterModelMeta[modelName] || null) : null);
   const thinkingEnabled = modelThinkingEnabled(settings);
   thinkingToggle.classList.toggle("on", thinkingEnabled);
   thinkingToggle.setAttribute("aria-pressed", String(thinkingEnabled));
@@ -14739,10 +14566,10 @@ async function openModelEditMenu(panel, anchor) {
     ? (thinkingEnabled ? "Thinking enabled" : "Thinking disabled")
     : "Thinking automatic for supported models";
   if (isOpenRouterProvider()) {
-    renderContextOptions(settings.context, openRouterModelMeta[modelName] || null);
+    renderContextOptions(settings.context, appState.openRouterModelMeta[modelName] || null);
     positionModelEditMenu(anchor);
     const metadata = await ensureOpenRouterModelContext(modelName);
-    if (request !== modelEditRequest || selectedModel !== modelName || modelEditMenu.hidden) return;
+    if (request !== appState.modelEditRequest || appState.selectedModel !== modelName || modelEditMenu.hidden) return;
     renderReasoningOptions(metadata);
     renderContextOptions(getModelSettings(modelName).context, metadata);
   } else {
@@ -14750,7 +14577,7 @@ async function openModelEditMenu(panel, anchor) {
     renderContextOptions(settings.context, null);
     if (window.api?.runtimeModel) {
       void window.api.runtimeModel({ model: modelName }).then((result) => {
-        if (request !== modelEditRequest || editingModel !== modelName || !result?.ok) return;
+        if (request !== appState.modelEditRequest || appState.editingModel !== modelName || !result?.ok) return;
         if (result.contextLength) ollamaRuntimeContext[modelName] = result.contextLength;
         renderContextOptions(getModelSettings(modelName).context, {
           contextWindowTokens: result.contextLength,
@@ -14773,7 +14600,7 @@ function reasoningEffortLabel(value) {
 
 function openRouterReasoningState(modelName, openRouterMetadata = null) {
   const metadata = ContextBudget.normalizeModelMetadata(
-    openRouterMetadata || openRouterModelMeta[modelName] || {},
+    openRouterMetadata || appState.openRouterModelMeta[modelName] || {},
     modelName,
   );
   const reasoning = metadata.reasoning;
@@ -14803,13 +14630,13 @@ function renderReasoningOptions(openRouterMetadata = null) {
   if (openRouterReasoningRow) openRouterReasoningRow.hidden = !openRouter;
   if (!reasoningOptions) return;
   reasoningOptions.innerHTML = "";
-  if (!openRouter || !editingModel) {
+  if (!openRouter || !appState.editingModel) {
     if (openRouterReasoningRow) openRouterReasoningRow.hidden = true;
     return;
   }
 
   const { metadata, reasoning, efforts: effortOptions, selected } = openRouterReasoningState(
-    editingModel,
+    appState.editingModel,
     openRouterMetadata,
   );
   if (!reasoning?.available) {
@@ -14828,7 +14655,7 @@ function renderReasoningOptions(openRouterMetadata = null) {
     return;
   }
 
-  const settings = getModelSettings(editingModel);
+  const settings = getModelSettings(appState.editingModel);
   if (selected && settings.reasoningEffort !== selected) {
     settings.reasoningEffort = selected;
     saveModelSettings();
@@ -14849,8 +14676,8 @@ function renderReasoningOptions(openRouterMetadata = null) {
     button.title = `Use ${effort} reasoning effort`;
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      if (!editingModel) return;
-      setModelSetting(editingModel, "reasoningEffort", effort);
+      if (!appState.editingModel) return;
+      setModelSetting(appState.editingModel, "reasoningEffort", effort);
       renderReasoningOptions(metadata);
       syncModelControlsSummary();
       closeModelEditMenu();
@@ -14876,8 +14703,8 @@ function nearestContextChoice(choices, tokens) {
 function pickerContextMaximum(metadataHint = null) {
   if (isOpenRouterProvider()) {
     const metadata = ContextBudget.normalizeModelMetadata(
-      metadataHint || openRouterModelMeta[editingModel] || {},
-      editingModel,
+      metadataHint || appState.openRouterModelMeta[appState.editingModel] || {},
+      appState.editingModel,
     );
     return Math.max(
       Number(metadata.contextWindowTokens) || 0,
@@ -14885,16 +14712,16 @@ function pickerContextMaximum(metadataHint = null) {
     ) || null;
   }
   return ContextBudget.positiveInteger(metadataHint?.contextWindowTokens)
-    || ContextBudget.positiveInteger(ollamaRuntimeContext[editingModel])
-    || (resolvedContextCapacity?.plan?.model === editingModel
-      ? ContextBudget.positiveInteger(resolvedContextCapacity.plan.modelMaxTokens)
+    || ContextBudget.positiveInteger(ollamaRuntimeContext[appState.editingModel])
+    || (appState.resolvedContextCapacity?.plan?.model === appState.editingModel
+      ? ContextBudget.positiveInteger(appState.resolvedContextCapacity.plan.modelMaxTokens)
       : null)
     || 1_048_576;
 }
 
 function renderContextOptions(selected, metadataHint = null) {
   contextOptions.innerHTML = "";
-  const settings = editingModel ? getModelSettings(editingModel) : { context: AUTO_CONTEXT, contextMode: "auto" };
+  const settings = appState.editingModel ? getModelSettings(appState.editingModel) : { context: AUTO_CONTEXT, contextMode: "auto" };
   const maximum = pickerContextMaximum(metadataHint);
   if (isOpenRouterProvider() && !maximum) {
     const note = document.createElement("span");
@@ -14919,8 +14746,8 @@ function renderContextOptions(selected, metadataHint = null) {
   autoBtn.title = "Use the model's full advertised context window";
   autoBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (!editingModel) return;
-    setModelSetting(editingModel, "context", AUTO_CONTEXT);
+    if (!appState.editingModel) return;
+    setModelSetting(appState.editingModel, "context", AUTO_CONTEXT);
     renderContextOptions(AUTO_CONTEXT, metadataHint);
     closeModelEditMenu();
     modelContextTrigger.focus();
@@ -14937,8 +14764,8 @@ function renderContextOptions(selected, metadataHint = null) {
     btn.title = `Use a ${windowLabel} token context window`;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (!editingModel) return;
-      setModelSetting(editingModel, "context", tokens);
+      if (!appState.editingModel) return;
+      setModelSetting(appState.editingModel, "context", tokens);
       renderContextOptions(tokens, metadataHint);
       closeModelEditMenu();
       modelContextTrigger.focus();
@@ -14984,7 +14811,7 @@ async function updateModelRuntimeNote(modelName) {
 
   try {
     const result = await window.api.runtimeModel({ model: modelName });
-    if (editingModel !== modelName || !result?.ok) return;
+    if (appState.editingModel !== modelName || !result?.ok) return;
     if (!result.loaded) {
       setModelRuntimeNote(`Model not loaded yet. ${baseNote}`, false);
       return;
@@ -15019,8 +14846,8 @@ async function updateModelRuntimeNote(modelName) {
 
 thinkingToggle?.addEventListener("click", (e) => {
   e.stopPropagation();
-  if (!editingModel || isOpenRouterProvider()) return;
-  const settings = getModelSettings(editingModel);
+  if (!appState.editingModel || isOpenRouterProvider()) return;
+  const settings = getModelSettings(appState.editingModel);
   settings.thinking = !modelThinkingEnabled(settings);
   settings.thinkingConfigured = true;
   saveModelSettings();
@@ -15055,22 +14882,22 @@ function withTimeout(promise, ms, label) {
 }
 
 function applyOllamaListResult(result) {
-  if (result?.provider) activeLlmProvider = result.provider;
+  if (result?.provider) appState.activeLlmProvider = result.provider;
   if (result?.provider === "openrouter" && result?.modelMeta) {
-    openRouterModelMeta = result.modelMeta;
+    appState.openRouterModelMeta = result.modelMeta;
     openRouterContextLengthsCache.clear();
   }
   if (statusOllamaPort) {
     if (result?.provider === "openrouter") {
-      statusOllamaPort.textContent = selectedModel ? `OpenRouter · ${modelDisplayName(selectedModel)}` : "OpenRouter";
+      statusOllamaPort.textContent = appState.selectedModel ? `OpenRouter · ${modelDisplayName(appState.selectedModel)}` : "OpenRouter";
     } else if (result?.host) {
       statusOllamaPort.textContent = `Ollama :${result.host}`;
     }
   }
 
   if (!result || result.error) {
-    allModels = normalizeModelNames(selectedModel ? [selectedModel] : []);
-    if (allModels.length) {
+    appState.allModels = normalizeModelNames(appState.selectedModel ? [appState.selectedModel] : []);
+    if (appState.allModels.length) {
       renderModelList();
     } else if (modelList) {
       setModelListMessage(result?.error || "Failed to load models");
@@ -15078,61 +14905,61 @@ function applyOllamaListResult(result) {
     return;
   }
 
-  allModels = normalizeModelNames(result.models);
+  appState.allModels = normalizeModelNames(result.models);
   const preferred = result.provider === "openrouter"
-    ? (openRouterModel?.value || selectedModel)
-    : selectedModel;
-  if (preferred && !allModels.includes(preferred)) {
+    ? (openRouterModel?.value || appState.selectedModel)
+    : appState.selectedModel;
+  if (preferred && !appState.allModels.includes(preferred)) {
     addCustomModelName(preferred);
   }
   syncSelectedModelFromEnabled();
   if (result.provider === "openrouter" && statusOllamaPort) {
-    statusOllamaPort.textContent = selectedModel ? `OpenRouter · ${modelDisplayName(selectedModel)}` : "OpenRouter";
+    statusOllamaPort.textContent = appState.selectedModel ? `OpenRouter · ${modelDisplayName(appState.selectedModel)}` : "OpenRouter";
   }
   renderModelList();
   renderExploreSubagentSelect();
-  if (appSettingsSection === "llm") {
+  if (appState.appSettingsSection === "llm") {
     renderModelsSettingsList();
   }
-  if (result?.provider === "openrouter" && selectedModel) {
-    void ensureOpenRouterModelContext(selectedModel).then(() => refreshModelContextCapacity());
+  if (result?.provider === "openrouter" && appState.selectedModel) {
+    void ensureOpenRouterModelContext(appState.selectedModel).then(() => refreshModelContextCapacity());
   } else {
     void refreshModelContextCapacity();
   }
 }
 
 async function loadModels({ showLoading = true } = {}) {
-  const seq = ++modelLoadSeq;
+  const seq = ++appState.modelLoadSeq;
   syncModelLabel();
   if (showLoading) showModelListLoading();
 
   if (!window.api?.listModels) {
-    allModels = normalizeModelNames(selectedModel ? [selectedModel] : []);
-    if (allModels.length) renderModelList();
+    appState.allModels = normalizeModelNames(appState.selectedModel ? [appState.selectedModel] : []);
+    if (appState.allModels.length) renderModelList();
     else setModelListMessage("App bridge not ready. Restart the app.");
     return;
   }
 
   try {
-    if (!modelLoadInFlight) {
-      modelLoadInFlight = withTimeout(
+    if (!appState.modelLoadInFlight) {
+      appState.modelLoadInFlight = withTimeout(
         window.api.listModels(),
         9000,
         "Ollama model loading timed out.",
       ).finally(() => {
-        modelLoadInFlight = null;
+        appState.modelLoadInFlight = null;
       });
     }
-    const result = await modelLoadInFlight;
-    if (seq !== modelLoadSeq) return;
+    const result = await appState.modelLoadInFlight;
+    if (seq !== appState.modelLoadSeq) return;
     applyOllamaListResult(result);
   } catch (err) {
-    if (seq !== modelLoadSeq) return;
-    allModels = normalizeModelNames(selectedModel ? [selectedModel] : []);
-    if (allModels.length) renderModelList();
+    if (seq !== appState.modelLoadSeq) return;
+    appState.allModels = normalizeModelNames(appState.selectedModel ? [appState.selectedModel] : []);
+    if (appState.allModels.length) renderModelList();
     else setModelListMessage(err.message || "Failed to load models");
   } finally {
-    if (seq !== modelLoadSeq) return;
+    if (seq !== appState.modelLoadSeq) return;
     syncModelLabel();
     if (!modelMenu.hidden) positionModelMenu();
   }
@@ -15153,7 +14980,7 @@ function renderModelList() {
   for (const name of filtered) {
     const row = document.createElement("button");
     row.type = "button";
-    row.className = "model-item" + (name === selectedModel ? " selected" : "");
+    row.className = "model-item" + (name === appState.selectedModel ? " selected" : "");
     row.dataset.model = name;
 
     const nameEl = document.createElement("span");
@@ -15182,8 +15009,8 @@ function renderModelList() {
     row.appendChild(trailing);
 
     row.addEventListener("click", async () => {
-      selectedModel = name;
-      localStorage.setItem("pointer:model", selectedModel);
+      appState.selectedModel = name;
+      localStorage.setItem("pointer:model", appState.selectedModel);
       syncModelLabel();
       closeModelMenu();
       modelPicker.focus();
@@ -15210,11 +15037,11 @@ async function openModelMenu() {
   modelMenu.hidden = false;
   modelBrowseTrigger.setAttribute("aria-expanded", "true");
   modelPicker.classList.add("open");
-  if (allModels.length) renderModelList();
+  if (appState.allModels.length) renderModelList();
   else showModelListLoading();
   positionModelMenu();
   modelMenu.style.visibility = "visible";
-  await loadModels({ showLoading: !allModels.length });
+  await loadModels({ showLoading: !appState.allModels.length });
   if (modelMenu.hidden) return;
   positionModelMenu();
   modelSearch.focus();
@@ -15281,8 +15108,8 @@ modelAddBtn.addEventListener("click", (e) => {
 function addCustomModel() {
   const name = addCustomModelName(modelCustom.value);
   if (!name) return;
-  selectedModel = name;
-  localStorage.setItem("pointer:model", selectedModel);
+  appState.selectedModel = name;
+  localStorage.setItem("pointer:model", appState.selectedModel);
   modelCustom.value = "";
   modelAddForm.hidden = true;
   syncModelLabel();
@@ -15330,8 +15157,8 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.api.onWorkspaceChanged?.((payload) => {
-  if (!rootPath || !payload?.workspace) return;
-  if (normPath(payload.workspace) !== normPath(rootPath)) return;
+  if (!appState.rootPath || !payload?.workspace) return;
+  if (normPath(payload.workspace) !== normPath(appState.rootPath)) return;
   const changedPath = String(payload.path || "").replace(/\\/g, "/");
   if (/(?:^|\/)(?:traffic\/(?:raw|filtered)\.jsonl|evidence\/index\.jsonl|\.xekute\/(?:logs|evidence|intelligence)\/)/i.test(changedPath)) return;
   refreshWorkspaceUi().catch((error) => console.warn("Workspace refresh failed", error));
@@ -15350,7 +15177,7 @@ window.addEventListener("resize", () => {
   if (!modelMenu.hidden) positionModelMenu();
   if (authorityMenu && !authorityMenu.hidden) positionAuthorityMenu();
   if (!contextUsageMenu.hidden) positionContextPopover();
-  if (!modelEditMenu.hidden && editingModel) {
+  if (!modelEditMenu.hidden && appState.editingModel) {
     positionModelEditMenu(modelEditMenu.dataset.panel === "context" ? modelContextTrigger : modelEffortTrigger);
   }
 });
@@ -15360,7 +15187,7 @@ loadAuthoritySettings();
 void (async () => {
   try {
     const llm = await window.api.llmSettings?.();
-    if (llm?.provider) activeLlmProvider = llm.provider;
+    if (llm?.provider) appState.activeLlmProvider = llm.provider;
   } catch {
     /* Provider falls back to listModels result. */
   }
@@ -15370,23 +15197,22 @@ void (async () => {
 
 // ── Tools & system prompt ─────────────────────────────────────────────────────
 
-let dirMapRequestGeneration = 0;
 
 async function refreshDirMap() {
-  const requestGeneration = ++dirMapRequestGeneration;
-  const requestedWorkspace = rootPath;
+  const requestGeneration = ++appState.dirMapRequestGeneration;
+  const requestedWorkspace = appState.rootPath;
   if (!requestedWorkspace) {
-    dirMapCache = "";
+    appState.dirMapCache = "";
     return;
   }
   const result = await window.api.dirMap(requestedWorkspace);
-  if (rootPath !== requestedWorkspace || requestGeneration !== dirMapRequestGeneration) return;
-  dirMapCache = result.map || "";
+  if (appState.rootPath !== requestedWorkspace || requestGeneration !== appState.dirMapRequestGeneration) return;
+  appState.dirMapCache = result.map || "";
 }
 
 function relativePathFromRoot(absPath) {
-  if (!rootPath || !absPath) return null;
-  const root = normPath(rootPath).replace(/\/$/, "");
+  if (!appState.rootPath || !absPath) return null;
+  const root = normPath(appState.rootPath).replace(/\/$/, "");
   const file = normPath(absPath);
   const caseInsensitive = root.includes("\\") || /^[a-zA-Z]:/.test(root);
   if (caseInsensitive) {
@@ -15401,9 +15227,9 @@ function relativePathFromRoot(absPath) {
 }
 
 function getActiveFileContext() {
-  if (!activeTabPath || !openTabs.has(activeTabPath)) return null;
+  if (!appState.activeTabPath || !openTabs.has(appState.activeTabPath)) return null;
   commitActiveTab();
-  const tab = openTabs.get(activeTabPath);
+  const tab = openTabs.get(appState.activeTabPath);
   const rel = relativePathFromRoot(tab.path);
   if (!rel) return null;
   return { path: rel, content: tab.content ?? "" };
@@ -15418,9 +15244,9 @@ async function readWorkspaceFile(relPath) {
 /** Load contents of project files mentioned in the user message (small models can't read minds). */
 async function collectMentionedFiles(userMessage) {
   const files = [];
-  if (!rootPath || !dirMapCache) return files;
+  if (!appState.rootPath || !appState.dirMapCache) return files;
 
-  const projectFiles = ToolParser.parseProjectFiles(dirMapCache);
+  const projectFiles = ToolParser.parseProjectFiles(appState.dirMapCache);
   const activePath = getActiveFileContext()?.path;
   const parts = splitFileTags(userMessage);
   const taggedPaths = [...new Set(parts.filter(part => part.path).map(part => part.path))];
@@ -15586,7 +15412,7 @@ function attachAssistantCopyButton(contentEl) {
   forkButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    forkChatSession(activeChatSessionId);
+    forkChatSession(appState.activeChatSessionId);
   });
 
   const footer = document.createElement("div");
@@ -16245,9 +16071,9 @@ function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
 }
 
 function joinWorkspacePath(relPath) {
-  if (!rootPath) return relPath;
-  const sep = rootPath.includes("\\") ? "\\" : "/";
-  return rootPath + sep + relPath.replace(/[/\\]/g, sep);
+  if (!appState.rootPath) return relPath;
+  const sep = appState.rootPath.includes("\\") ? "\\" : "/";
+  return appState.rootPath + sep + relPath.replace(/[/\\]/g, sep);
 }
 
 async function applyEditToEditor(tool, newContent, previousContent = null, { openIfMissing = true, preserveDirty = true } = {}) {
@@ -16271,10 +16097,10 @@ async function applyEditToEditor(tool, newContent, previousContent = null, { ope
     tab.dirty = false;
     tab.error = null;
     renderTabs();
-    if (activeTabPath === tabPath) {
-      editorLoadedPath = null;
+    if (appState.activeTabPath === tabPath) {
+      appState.editorLoadedPath = null;
       await renderEditor({ focusEditor: false });
-      if (!(isMarkdownFileName(tab.name) && markdownViewMode === "md")) {
+      if (!(isMarkdownFileName(tab.name) && appState.markdownViewMode === "md")) {
         await EditorManager.showChangeDecorations(tabPath, before, newContent);
       }
     }
@@ -16289,8 +16115,8 @@ async function applyEditToEditor(tool, newContent, previousContent = null, { ope
       tab.savedContent = newContent;
       tab.dirty = false;
     }
-    if (activeTabPath === tabPath) {
-      editorLoadedPath = null;
+    if (appState.activeTabPath === tabPath) {
+      appState.editorLoadedPath = null;
       await renderEditor({ focusEditor: false });
       await EditorManager.showChangeDecorations(tabPath, before, newContent);
     }
@@ -16328,7 +16154,7 @@ async function syncCanonicalApplyPatchToEditor(tool, result) {
 
   const preferredPath = [...fileStates].find(([, state]) => state === "file")?.[0] || "";
   await refreshWorkspaceUi({
-    preserveSelectionPath: preferredPath ? joinWorkspacePath(preferredPath) : selectedItem?.dataset.path || null,
+    preserveSelectionPath: preferredPath ? joinWorkspacePath(preferredPath) : appState.selectedItem?.dataset.path || null,
   });
 
   for (const [relativePath, state] of fileStates) {
@@ -16337,18 +16163,18 @@ async function syncCanonicalApplyPatchToEditor(tool, result) {
     const tab = openTabs.get(tabPath);
 
     if (state !== "file") {
-      contextFilesCache = contextFilesCache.filter((file) => file.path !== relativePath && !file.path.startsWith(`${relativePath}/`));
+      appState.contextFilesCache = appState.contextFilesCache.filter((file) => file.path !== relativePath && !file.path.startsWith(`${relativePath}/`));
       if (tab && !tab.dirty) await closeTab(tabPath, null, { force: true });
       continue;
     }
 
-    if (!tab && !contextFilesCache.some((file) => file.path === relativePath)) continue;
+    if (!tab && !appState.contextFilesCache.some((file) => file.path === relativePath)) continue;
     const diskResult = await window.api.readFile(absolutePath);
     if (diskResult?.error || diskResult?.content == null) continue;
     const diskContent = String(diskResult.content);
-    const previousContent = tab?.savedContent ?? contextFilesCache.find((file) => file.path === relativePath)?.content ?? "";
-    contextFilesCache = contextFilesCache.filter((file) => file.path !== relativePath);
-    contextFilesCache.push({ path: relativePath, content: diskContent });
+    const previousContent = tab?.savedContent ?? appState.contextFilesCache.find((file) => file.path === relativePath)?.content ?? "";
+    appState.contextFilesCache = appState.contextFilesCache.filter((file) => file.path !== relativePath);
+    appState.contextFilesCache.push({ path: relativePath, content: diskContent });
     if (tab) {
       await applyEditToEditor(
         { ...tool, file: relativePath },
@@ -16573,7 +16399,7 @@ function updateCommandTimelineRow(row, state = "success") {
   const label = row.querySelector(".agent-command-label");
   if (label) renderCommandTimelineLabel(row, state);
   persistCommandTimelineRowState(row);
-  const sessionId = String(row.dataset.sessionId || activeChatSessionId || "");
+  const sessionId = String(row.dataset.sessionId || appState.activeChatSessionId || "");
   const run = activeChatRuns.get(sessionId);
   if (run) settleVisibleParentRun(run);
   return row;
@@ -16588,7 +16414,7 @@ function persistCommandTimelineRowState(row) {
       syncChatRunSession(run);
       return;
     }
-    if (!sessionId || sessionId === activeChatSessionId) syncActiveChatSession();
+    if (!sessionId || sessionId === appState.activeChatSessionId) syncActiveChatSession();
   });
 }
 
@@ -16697,35 +16523,35 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
   fadeToolCard(card);
 
   if ((tool.toolName || tool.action) === "create_guidance" && result.guidancePath) {
-    selectedGuidancePath = result.guidancePath;
-    selectedGuidanceScope = result.scope || "project";
-    selectedGuidanceContent = String(result.content || "");
-    guidanceDraft = null;
+    appState.selectedGuidancePath = result.guidancePath;
+    appState.selectedGuidanceScope = result.scope || "project";
+    appState.selectedGuidanceContent = String(result.content || "");
+    appState.guidanceDraft = null;
     await loadGuidanceSettings({ preserveSelection: true });
   }
 
   if (result.mode === "read" && result.file && result.content != null) {
-    contextFilesCache = contextFilesCache.filter((file) => file.path !== result.file);
-    contextFilesCache.push({ path: result.file, content: result.content });
+    appState.contextFilesCache = appState.contextFilesCache.filter((file) => file.path !== result.file);
+    appState.contextFilesCache.push({ path: result.file, content: result.content });
   }
 
   const canonicalPatchSynced = await syncCanonicalApplyPatchToEditor(tool, result);
   if (!canonicalPatchSynced && result.mode === "delete" && result.file) {
     await reconcileDeletedWorkspacePath(joinWorkspacePath(result.file), result.file);
   } else if (!canonicalPatchSynced && (result.mutated || ["full", "create", "patch", "replace", "insert", "append", "noop"].includes(result.mode))) {
-    await refreshWorkspaceUi({ preserveSelectionPath: joinWorkspacePath(result.file || "") || selectedItem?.dataset.path || null });
+    await refreshWorkspaceUi({ preserveSelectionPath: joinWorkspacePath(result.file || "") || appState.selectedItem?.dataset.path || null });
     if (result.file && result.content != null) {
       const tabPath = normPath(joinWorkspacePath(result.file));
       const previousContent = openTabs.get(tabPath)?.savedContent
-        ?? contextFilesCache.find((file) => file.path === result.file)?.content
+        ?? appState.contextFilesCache.find((file) => file.path === result.file)?.content
         ?? "";
       await applyEditToEditor({ ...tool, file: result.file }, result.content, previousContent);
     }
   }
 
   if (result.file && result.content != null && ["full", "create", "patch", "replace", "insert", "append", "noop"].includes(result.mode)) {
-    contextFilesCache = contextFilesCache.filter((file) => file.path !== result.file);
-    contextFilesCache.push({ path: result.file, content: result.content });
+    appState.contextFilesCache = appState.contextFilesCache.filter((file) => file.path !== result.file);
+    appState.contextFilesCache.push({ path: result.file, content: result.content });
   }
 
   syncActiveChatSession();
@@ -16733,14 +16559,13 @@ async function applyToolResultToUi(tool, result, turn, contentEl) {
   scrollMessages();
 }
 
-let chatStickyMaskFrame = 0;
 const chatScroller = createChatScroller(messages, { onScroll: syncChatStickyMask });
 appLifecycle.add(() => chatScroller.destroy());
 
 function syncChatStickyMask() {
-  if (!chatPane || !messages || chatStickyMaskFrame) return;
-  chatStickyMaskFrame = requestAnimationFrame(() => {
-    chatStickyMaskFrame = 0;
+  if (!chatPane || !messages || appState.chatStickyMaskFrame) return;
+  appState.chatStickyMaskFrame = requestAnimationFrame(() => {
+    appState.chatStickyMaskFrame = 0;
     const paneRect = chatPane.getBoundingClientRect();
     const messagesRect = messages.getBoundingClientRect();
     const maskTop = chatHeader?.getBoundingClientRect().bottom || (paneRect.top + 35);
@@ -16870,8 +16695,8 @@ function addUserMessage(text, sourceMessageId = "", images = []) {
   const value = String(text || "");
   if (sourceMessageId && [...messages.querySelectorAll(".chat-turn.user")].some((turn) => turn.dataset.sourceMessageId === sourceMessageId)) return;
   if (!sourceMessageId && value && latestExchangeUserPromptText() === value.trim()) return;
-  const run = activeChatRuns.get(activeChatSessionId);
-  const running = run && isChatSessionRunning(activeChatSessionId);
+  const run = activeChatRuns.get(appState.activeChatSessionId);
+  const running = run && isChatSessionRunning(appState.activeChatSessionId);
   const turn = document.createElement("div");
   turn.className = "chat-turn user";
   turn.dataset.sourceMessageId = sourceMessageId;
@@ -16894,12 +16719,11 @@ function addUserMessage(text, sourceMessageId = "", images = []) {
 }
 
 const CHAT_ERROR_TOAST_MS = 15_000;
-let chatErrorToastTimer = 0;
 
 function hideChatErrorToast() {
-  if (chatErrorToastTimer) {
-    clearTimeout(chatErrorToastTimer);
-    chatErrorToastTimer = 0;
+  if (appState.chatErrorToastTimer) {
+    clearTimeout(appState.chatErrorToastTimer);
+    appState.chatErrorToastTimer = 0;
   }
   const toast = $("chat-error-toast");
   if (toast) toast.hidden = true;
@@ -16937,8 +16761,8 @@ function addErrorMessage(text, { container = messages, session = activeChatSessi
   if (label) label.textContent = message;
   if (!toast) return;
   toast.hidden = false;
-  if (chatErrorToastTimer) clearTimeout(chatErrorToastTimer);
-  chatErrorToastTimer = setTimeout(hideChatErrorToast, CHAT_ERROR_TOAST_MS);
+  if (appState.chatErrorToastTimer) clearTimeout(appState.chatErrorToastTimer);
+  appState.chatErrorToastTimer = setTimeout(hideChatErrorToast, CHAT_ERROR_TOAST_MS);
 }
 
 function agentStateKindForText(text = "") {
@@ -16957,7 +16781,7 @@ function isTaskListTool(tool) {
 }
 
 function clearComposerTaskList() {
-  activeComposerTaskList = null;
+  appState.activeComposerTaskList = null;
   if (composerTaskListEl) {
     composerTaskListEl.hidden = true;
     composerTaskListEl.innerHTML = "";
@@ -16981,8 +16805,8 @@ function renderComposerTaskList(payload = {}) {
   }
 
   const currentIndex = Math.max(0, tasks.findIndex((task) => ["in_progress", "blocked", "pending"].includes(task.status)));
-  const expanded = Boolean(activeComposerTaskList?.expanded);
-  activeComposerTaskList = { ...payload, tasks, currentIndex, expanded };
+  const expanded = Boolean(appState.activeComposerTaskList?.expanded);
+  appState.activeComposerTaskList = { ...payload, tasks, currentIndex, expanded };
   composerTaskListEl.hidden = false;
   inputBar?.classList.add("has-composer-task-list");
 
@@ -16996,20 +16820,20 @@ function renderComposerTaskList(payload = {}) {
   composerTaskListEl.innerHTML = `<button type="button" class="composer-task-list-card" aria-expanded="${String(expanded)}" aria-label="${expanded ? "Collapse" : "Expand"} task list">${rows}</button>`;
   const card = composerTaskListEl.querySelector(".composer-task-list-card");
   card?.addEventListener("click", () => {
-    if (!activeComposerTaskList) return;
-    activeComposerTaskList.expanded = !activeComposerTaskList.expanded;
-    renderComposerTaskList(activeComposerTaskList);
+    if (!appState.activeComposerTaskList) return;
+    appState.activeComposerTaskList.expanded = !appState.activeComposerTaskList.expanded;
+    renderComposerTaskList(appState.activeComposerTaskList);
   });
 }
 
 document.addEventListener("pointerdown", (event) => {
-  if (!activeComposerTaskList?.expanded || composerTaskListEl?.contains(event.target)) return;
-  activeComposerTaskList.expanded = false;
-  renderComposerTaskList(activeComposerTaskList);
+  if (!appState.activeComposerTaskList?.expanded || composerTaskListEl?.contains(event.target)) return;
+  appState.activeComposerTaskList.expanded = false;
+  renderComposerTaskList(appState.activeComposerTaskList);
 });
 
-function composerQuestionSessionId(sessionId = activeChatSessionId) {
-  return String(sessionId || activeChatSessionId || "");
+function composerQuestionSessionId(sessionId = appState.activeChatSessionId) {
+  return String(sessionId || appState.activeChatSessionId || "");
 }
 
 const COMPOSER_FREE_WRITE_ID = "free_write";
@@ -17028,7 +16852,7 @@ function questionOptionsWithFreeWrite(question = {}) {
 
 function syncComposerQuestionsForActiveSession() {
   if (!composerQuestionsEl) return;
-  const pending = pendingComposerQuestionsBySession.get(String(activeChatSessionId || "")) || null;
+  const pending = pendingComposerQuestionsBySession.get(String(appState.activeChatSessionId || "")) || null;
   composerQuestionsEl.replaceChildren();
   if (pending?.block) composerQuestionsEl.appendChild(pending.block);
   composerQuestionsEl.hidden = !pending;
@@ -17039,7 +16863,7 @@ function showCommandApprovalPanel({
   command = "",
   title = "Allow the below command to be executed?",
   requestId = "",
-  sessionId = activeChatSessionId,
+  sessionId = appState.activeChatSessionId,
   onLiveState = null,
 } = {}) {
   const ownerSessionId = composerQuestionSessionId(sessionId);
@@ -17139,7 +16963,7 @@ function showComposerQuestionsPanel({
   requestId = "",
   approval = null,
   questionnaire = null,
-  sessionId = activeChatSessionId,
+  sessionId = appState.activeChatSessionId,
   subagentLabel = "",
   onLiveState = null,
 } = {}) {
@@ -17837,7 +17661,7 @@ function coalesceDelegatedAssistantReplyFragments(assistant) {
   coalesceAdjacentReplyRuns(host);
 }
 
-function createAssistantTurn({ container = messages, sessionId = activeChatSessionId } = {}) {
+function createAssistantTurn({ container = messages, sessionId = appState.activeChatSessionId } = {}) {
   const turn = document.createElement("div");
   turn.className = "chat-turn assistant agent-stream";
   turn.setAttribute("aria-busy", "true");
@@ -17862,7 +17686,7 @@ function createAssistantTurn({ container = messages, sessionId = activeChatSessi
   const assistant = {
     turn,
     rootTurn: turn,
-    sessionId: String(sessionId || activeChatSessionId || ""),
+    sessionId: String(sessionId || appState.activeChatSessionId || ""),
     startedAt: Date.now(),
     usedTools: false,
     finalOutcome: null,
@@ -18740,16 +18564,11 @@ const SYSTEM_SKILL_SLASH_COMMANDS = Object.freeze([
 ]);
 const SYSTEM_SKILL_COMMANDS = new Set(SYSTEM_SKILL_SLASH_COMMANDS.map((command) => command.name));
 const BUG_BOUNTY_COMMANDS = new Set();
-let bugBountySlashCommands = [];
-let bugBountyReveal = 3;
-let slashSuggestionQuery = "";
-let slashSuggestionTarget = null;
 const CUSTOM_SKILL_COMMANDS = new Set();
-let customSkillSlashCommands = [];
 
-function syncCustomSkillSlashCommands(entries = customGuidanceEntries) {
+function syncCustomSkillSlashCommands(entries = appState.customGuidanceEntries) {
   const seen = new Set();
-  customSkillSlashCommands = (Array.isArray(entries) ? entries : [])
+  appState.customSkillSlashCommands = (Array.isArray(entries) ? entries : [])
     .filter((entry) => guidanceEntryKind(entry) === "skills")
     .sort((left, right) => {
       const leftScope = String(left?.scope || "project") === "project" ? 0 : 1;
@@ -18770,15 +18589,15 @@ function syncCustomSkillSlashCommands(entries = customGuidanceEntries) {
       && !seen.has(command.name)
       && seen.add(command.name));
   CUSTOM_SKILL_COMMANDS.clear();
-  customSkillSlashCommands.forEach((command) => CUSTOM_SKILL_COMMANDS.add(command.name));
+  appState.customSkillSlashCommands.forEach((command) => CUSTOM_SKILL_COMMANDS.add(command.name));
   renderSlashSuggestions();
 }
 
 function availableSlashCommands() {
   return [
     ...SYSTEM_SKILL_SLASH_COMMANDS,
-    ...bugBountySlashCommands,
-    ...customSkillSlashCommands,
+    ...appState.bugBountySlashCommands,
+    ...appState.customSkillSlashCommands,
     ...customSlashCommands(),
   ];
 }
@@ -18786,7 +18605,7 @@ function availableSlashCommands() {
 async function loadBugBountySlashCommands() {
   const result = await window.api?.listSlashCatalog?.().catch(() => null);
   const skills = Array.isArray(result?.skills) ? result.skills : [];
-  bugBountySlashCommands = skills
+  appState.bugBountySlashCommands = skills
     .filter((skill) => skill?.menu === "bug-bounty" && skill.id)
     .map((skill) => ({
       name: `/${String(skill.id).toLowerCase()}`,
@@ -18798,7 +18617,7 @@ async function loadBugBountySlashCommands() {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
   BUG_BOUNTY_COMMANDS.clear();
-  bugBountySlashCommands.forEach((command) => BUG_BOUNTY_COMMANDS.add(command.name));
+  appState.bugBountySlashCommands.forEach((command) => BUG_BOUNTY_COMMANDS.add(command.name));
   renderSlashSuggestions();
 }
 function customSlashCommands() {
@@ -18862,14 +18681,14 @@ function showSlashCommandOverview(command, anchor) {
 function closeSlashSuggestions() {
   if (slashCommandSuggestions) slashCommandSuggestions.hidden = true;
   hideSlashCommandOverview();
-  slashSuggestionItems = [];
-  slashSuggestionIndex = -1;
-  slashSuggestionTarget = null;
+  appState.slashSuggestionItems = [];
+  appState.slashSuggestionIndex = -1;
+  appState.slashSuggestionTarget = null;
 }
 
 function effectiveChatInputValue() {
   const text = String(chatInput?.value || "").trim();
-  return selectedSlashCommand ? `${selectedSlashCommand}${text ? ` ${text}` : ""}` : String(chatInput?.value || "");
+  return appState.selectedSlashCommand ? `${appState.selectedSlashCommand}${text ? ` ${text}` : ""}` : String(chatInput?.value || "");
 }
 
 function normalizeChatInputText(value = "") {
@@ -18883,17 +18702,17 @@ function fullChatInputEditorText() {
 
 function chatInputEditorValue() {
   const fullText = fullChatInputEditorText();
-  if (!selectedSlashCommand || !selectedSlashCommandEl || !chatInput?.contains(selectedSlashCommandEl)) {
+  if (!appState.selectedSlashCommand || !selectedSlashCommandEl || !chatInput?.contains(selectedSlashCommandEl)) {
     return fullText;
   }
-  if (!fullText.startsWith(selectedSlashCommand)) return fullText;
-  return fullText.slice(selectedSlashCommand.length).replace(/^ /, "");
+  if (!fullText.startsWith(appState.selectedSlashCommand)) return fullText;
+  return fullText.slice(appState.selectedSlashCommand.length).replace(/^ /, "");
 }
 
 function syncChatInputEmptyState() {
   if (!chatInput) return;
   const editorValue = chatInputEditorValue();
-  const isEmpty = !selectedSlashCommand && !editorValue.replace(/[\r\n\u200b]/g, "");
+  const isEmpty = !appState.selectedSlashCommand && !editorValue.replace(/[\r\n\u200b]/g, "");
   if (isEmpty && chatInput.childNodes.length) chatInput.replaceChildren();
   chatInput.classList.toggle("chat-input-empty", isEmpty);
 }
@@ -18902,7 +18721,7 @@ function renderChatInputEditorValue(value = "") {
   if (!chatInput) return;
   const text = normalizeChatInputText(value);
   chatInput.replaceChildren();
-  if (selectedSlashCommand && selectedSlashCommandEl) {
+  if (appState.selectedSlashCommand && selectedSlashCommandEl) {
     selectedSlashCommandEl.hidden = false;
     chatInput.append(selectedSlashCommandEl);
     appendFileTagText(chatInput, ` ${text}`);
@@ -18971,7 +18790,7 @@ function setChatInputCaretToEnd() {
 }
 
 function isChatInputCaretAtArgumentStart() {
-  if (!chatInput || !selectedSlashCommand || !selectedSlashCommandEl || !chatInput.contains(selectedSlashCommandEl)) return false;
+  if (!chatInput || !appState.selectedSlashCommand || !selectedSlashCommandEl || !chatInput.contains(selectedSlashCommandEl)) return false;
   const selection = window.getSelection?.();
   if (!selection || !selection.isCollapsed || !selection.anchorNode || !chatInput.contains(selection.anchorNode)) return false;
   const prefixRange = document.createRange();
@@ -18982,16 +18801,16 @@ function isChatInputCaretAtArgumentStart() {
     return false;
   }
   const prefix = normalizeChatInputText(prefixRange.toString());
-  return prefix === selectedSlashCommand || prefix === `${selectedSlashCommand} `;
+  return prefix === appState.selectedSlashCommand || prefix === `${appState.selectedSlashCommand} `;
 }
 
 function reconcileSelectedSlashCommandAfterEdit() {
-  const tokenRemoved = selectedSlashCommand && (!selectedSlashCommandEl || !chatInput?.contains(selectedSlashCommandEl));
-  const tokenEdited = selectedSlashCommand && selectedSlashCommandEl
+  const tokenRemoved = appState.selectedSlashCommand && (!selectedSlashCommandEl || !chatInput?.contains(selectedSlashCommandEl));
+  const tokenEdited = appState.selectedSlashCommand && selectedSlashCommandEl
     && chatInput?.contains(selectedSlashCommandEl)
-    && selectedSlashCommandEl.textContent !== selectedSlashCommand;
+    && selectedSlashCommandEl.textContent !== appState.selectedSlashCommand;
   if (tokenRemoved || tokenEdited) {
-    selectedSlashCommand = "";
+    appState.selectedSlashCommand = "";
     if (selectedSlashCommandEl) {
       if (tokenRemoved) selectedSlashCommandEl.hidden = true;
       else selectedSlashCommandEl.classList.remove("selected-slash-command");
@@ -19004,18 +18823,18 @@ function reconcileSelectedSlashCommandAfterEdit() {
 
 function setSelectedSlashCommand(command = "") {
   const editorText = chatInputEditorValue();
-  selectedSlashCommand = String(command || "").trim();
+  appState.selectedSlashCommand = String(command || "").trim();
   if (selectedSlashCommandEl) {
     selectedSlashCommandEl.classList.add("selected-slash-command");
-    selectedSlashCommandEl.textContent = selectedSlashCommand;
+    selectedSlashCommandEl.textContent = appState.selectedSlashCommand;
   }
-  composerEl?.classList.toggle("has-selected-slash-command", Boolean(selectedSlashCommand));
+  composerEl?.classList.toggle("has-selected-slash-command", Boolean(appState.selectedSlashCommand));
   renderChatInputEditorValue(editorText);
   syncChatInputPlaceholder();
 }
 
 function clearSelectedSlashCommand({ restoreText = false } = {}) {
-  const command = selectedSlashCommand;
+  const command = appState.selectedSlashCommand;
   setSelectedSlashCommand("");
   if (restoreText && command && chatInput) {
     const text = chatInput.value.trim();
@@ -19032,9 +18851,9 @@ function slashQueryAtCaret() {
   return match && { node, start: match.index + match[1].length, end: selection.anchorOffset, query: `/${match[2]}`.toLowerCase() };
 }
 
-function chooseSlashSuggestion(index = slashSuggestionIndex, { clicked = false } = {}) {
-  const command = slashSuggestionItems[index];
-  const target = slashSuggestionTarget;
+function chooseSlashSuggestion(index = appState.slashSuggestionIndex, { clicked = false } = {}) {
+  const command = appState.slashSuggestionItems[index];
+  const target = appState.slashSuggestionTarget;
   if (!command || !target?.node.isConnected) return false;
   const range = document.createRange();
   range.setStart(target.node, target.start);
@@ -19060,11 +18879,11 @@ function renderSlashSuggestions() {
   if (!slashCommandSuggestions || isRunningChatActive()) return closeSlashSuggestions();
   const target = slashQueryAtCaret();
   if (!target) return closeSlashSuggestions();
-  slashSuggestionTarget = target;
+  appState.slashSuggestionTarget = target;
   const query = target.query;
-  if (query !== slashSuggestionQuery) {
-    slashSuggestionQuery = query;
-    bugBountyReveal = 3;
+  if (query !== appState.slashSuggestionQuery) {
+    appState.slashSuggestionQuery = query;
+    appState.bugBountyReveal = 3;
   }
   const groupOrder = { "system-command": 0, "bug-bounty": 1, "custom-skill": 2, "custom-command": 3 };
   const matchingCommands = availableSlashCommands()
@@ -19075,16 +18894,16 @@ function renderSlashSuggestions() {
   const systemCommands = matchingCommands.filter((command) => command.group === "system-command");
   const bountyCommands = matchingCommands.filter((command) => command.group === "bug-bounty");
   const otherCommands = matchingCommands.filter((command) => command.group !== "system-command" && command.group !== "bug-bounty");
-  const visibleBounty = bountyCommands.slice(0, bugBountyReveal);
+  const visibleBounty = bountyCommands.slice(0, appState.bugBountyReveal);
   const bountyRemaining = bountyCommands.length - visibleBounty.length;
-  slashSuggestionItems = [...systemCommands, ...visibleBounty, ...otherCommands];
-  if (!slashSuggestionItems.length && bountyRemaining <= 0) return closeSlashSuggestions();
-  slashSuggestionIndex = Math.min(Math.max(slashSuggestionIndex, 0), Math.max(slashSuggestionItems.length - 1, 0));
+  appState.slashSuggestionItems = [...systemCommands, ...visibleBounty, ...otherCommands];
+  if (!appState.slashSuggestionItems.length && bountyRemaining <= 0) return closeSlashSuggestions();
+  appState.slashSuggestionIndex = Math.min(Math.max(appState.slashSuggestionIndex, 0), Math.max(appState.slashSuggestionItems.length - 1, 0));
   hideSlashCommandOverview();
   slashCommandSuggestions.innerHTML = "";
   const groupLabels = { "system-command": "System Commands", "bug-bounty": "Bug Bounty Skills", "custom-skill": "Custom Skills", "custom-command": "Commands" };
   let previousGroup = "";
-  slashSuggestionItems.forEach((command, index) => {
+  appState.slashSuggestionItems.forEach((command, index) => {
     if (command.group !== previousGroup) {
       const label = document.createElement("div");
       label.className = "slash-command-group-label";
@@ -19095,9 +18914,9 @@ function renderSlashSuggestions() {
     }
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `slash-command-option${index === slashSuggestionIndex ? " selected" : ""}`;
+    button.className = `slash-command-option${index === appState.slashSuggestionIndex ? " selected" : ""}`;
     button.setAttribute("role", "option");
-    button.setAttribute("aria-selected", String(index === slashSuggestionIndex));
+    button.setAttribute("aria-selected", String(index === appState.slashSuggestionIndex));
     const name = document.createElement("span");
     name.className = "slash-command-name";
     name.textContent = command.name;
@@ -19120,7 +18939,7 @@ function renderSlashSuggestions() {
       more.addEventListener("mousedown", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        bugBountyReveal += nextCount;
+        appState.bugBountyReveal += nextCount;
         renderSlashSuggestions();
       });
       slashCommandSuggestions.appendChild(more);
@@ -19130,57 +18949,46 @@ function renderSlashSuggestions() {
   slashCommandSuggestions.querySelector(".slash-command-option.selected")?.scrollIntoView({ block: "nearest" });
 }
 
-let fileTagSuggestions = null;
-let fileTagItems = [];
-let fileTagIndex = 0;
-let fileTagTarget = null;
-let fileTagDismissed = null;
-let fileTagDirMapRefresh = null;
-let projectFilesForTags = { source: null, files: [] };
-let terminalTagCache = { workspace: "", items: [], history: [], loaded: false, error: "" };
-let terminalTagRefresh = null;
-let terminalTagTimer = null;
-let terminalTagReloadHistory = false;
 
 function refreshTerminalsForTags(includeHistory = false) {
-  window.clearTimeout(terminalTagTimer);
-  terminalTagTimer = null;
-  if (terminalTagRefresh) { terminalTagReloadHistory ||= includeHistory; return; }
-  const workspace = rootPath;
-  if (terminalTagCache.workspace !== workspace) terminalTagCache = { workspace, items: [], history: [], loaded: false, error: "" };
-  terminalTagRefresh = Promise.resolve().then(() => window.api.terminalReferences({ workspace, includeHistory })).then(result => {
-    if (rootPath !== workspace) return;
+  window.clearTimeout(appState.terminalTagTimer);
+  appState.terminalTagTimer = null;
+  if (appState.terminalTagRefresh) { appState.terminalTagReloadHistory ||= includeHistory; return; }
+  const workspace = appState.rootPath;
+  if (appState.terminalTagCache.workspace !== workspace) appState.terminalTagCache = { workspace, items: [], history: [], loaded: false, error: "" };
+  appState.terminalTagRefresh = Promise.resolve().then(() => window.api.terminalReferences({ workspace, includeHistory })).then(result => {
+    if (appState.rootPath !== workspace) return;
     const incoming = result?.ok ? result.terminals || [] : [];
-    const history = includeHistory ? incoming.filter(item => item.saved) : terminalTagCache.history;
+    const history = includeHistory ? incoming.filter(item => item.saved) : appState.terminalTagCache.history;
     const live = incoming.map(item => {
       const prior = item.processId && history.find(saved => saved.processId === item.processId);
       return prior ? { ...item, id: prior.id } : item;
     });
     const items = [...new Map([...history, ...live].map(item => [item.id, item])).values()]
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-    terminalTagCache = { workspace, items, history, loaded: true,
+    appState.terminalTagCache = { workspace, items, history, loaded: true,
       error: result?.ok ? "" : "Could not load project terminals" };
   }).catch(() => {
-    if (rootPath === workspace) terminalTagCache = { workspace, items: [], history: [], loaded: true, error: "Could not load project terminals" };
+    if (appState.rootPath === workspace) appState.terminalTagCache = { workspace, items: [], history: [], loaded: true, error: "Could not load project terminals" };
   }).finally(() => {
-    terminalTagRefresh = null;
-    if (fileTagTarget?.kind === "terminal") {
+    appState.terminalTagRefresh = null;
+    if (appState.fileTagTarget?.kind === "terminal") {
       renderFileTagSuggestions();
-      if (terminalTagReloadHistory) {
-        terminalTagReloadHistory = false;
+      if (appState.terminalTagReloadHistory) {
+        appState.terminalTagReloadHistory = false;
         refreshTerminalsForTags(true);
-      } else if (!terminalTagRefresh && fileTagTarget?.kind === "terminal") {
-        terminalTagTimer = window.setTimeout(refreshTerminalsForTags, 1000);
+      } else if (!appState.terminalTagRefresh && appState.fileTagTarget?.kind === "terminal") {
+        appState.terminalTagTimer = window.setTimeout(refreshTerminalsForTags, 1000);
       }
     }
   });
 }
 
 function fileTagProjectFiles() {
-  if (projectFilesForTags.source !== dirMapCache) {
-    projectFilesForTags = { source: dirMapCache, files: ToolParser.parseProjectFiles(dirMapCache || "") };
+  if (appState.projectFilesForTags.source !== appState.dirMapCache) {
+    appState.projectFilesForTags = { source: appState.dirMapCache, files: ToolParser.parseProjectFiles(appState.dirMapCache || "") };
   }
-  return projectFilesForTags.files;
+  return appState.projectFilesForTags.files;
 }
 
 function fileTagQueryAtCaret() {
@@ -19193,73 +19001,73 @@ function fileTagQueryAtCaret() {
 }
 
 function closeFileTagSuggestions() {
-  terminalTagReloadHistory = false;
-  window.clearTimeout(terminalTagTimer);
-  terminalTagTimer = null;
-  if (fileTagSuggestions) fileTagSuggestions.hidden = true;
-  fileTagItems = [];
-  fileTagTarget = null;
+  appState.terminalTagReloadHistory = false;
+  window.clearTimeout(appState.terminalTagTimer);
+  appState.terminalTagTimer = null;
+  if (appState.fileTagSuggestions) appState.fileTagSuggestions.hidden = true;
+  appState.fileTagItems = [];
+  appState.fileTagTarget = null;
   chatInput?.removeAttribute("aria-activedescendant");
   chatInput?.setAttribute("aria-expanded", "false");
 }
 
 function fileTagSuggestionsElement() {
-  if (fileTagSuggestions) return fileTagSuggestions;
-  fileTagSuggestions = document.createElement("div");
-  fileTagSuggestions.id = "file-tag-suggestions";
-  fileTagSuggestions.className = "file-tag-suggestions";
-  fileTagSuggestions.setAttribute("role", "listbox");
-  fileTagSuggestions.setAttribute("aria-label", "Project files and chats");
-  fileTagSuggestions.hidden = true;
-  slashCommandSuggestions?.after(fileTagSuggestions);
-  return fileTagSuggestions;
+  if (appState.fileTagSuggestions) return appState.fileTagSuggestions;
+  appState.fileTagSuggestions = document.createElement("div");
+  appState.fileTagSuggestions.id = "file-tag-suggestions";
+  appState.fileTagSuggestions.className = "file-tag-suggestions";
+  appState.fileTagSuggestions.setAttribute("role", "listbox");
+  appState.fileTagSuggestions.setAttribute("aria-label", "Project files and chats");
+  appState.fileTagSuggestions.hidden = true;
+  slashCommandSuggestions?.after(appState.fileTagSuggestions);
+  return appState.fileTagSuggestions;
 }
 
 function renderFileTagSuggestions({ revealSelection = false } = {}) {
-  const found = rootPath && chatInput && document.activeElement === chatInput ? fileTagQueryAtCaret() : null;
-  if (!found) fileTagDismissed = null;
-  if (!found || (found.node === fileTagDismissed?.node && found.start === fileTagDismissed.start && found.kind === fileTagDismissed.kind && found.query === fileTagDismissed.query)) return closeFileTagSuggestions();
-  const opening = !fileTagTarget || found.kind !== fileTagTarget.kind;
-  const queryChanged = opening || found.query !== fileTagTarget.query;
+  const found = appState.rootPath && chatInput && document.activeElement === chatInput ? fileTagQueryAtCaret() : null;
+  if (!found) appState.fileTagDismissed = null;
+  if (!found || (found.node === appState.fileTagDismissed?.node && found.start === appState.fileTagDismissed.start && found.kind === appState.fileTagDismissed.kind && found.query === appState.fileTagDismissed.query)) return closeFileTagSuggestions();
+  const opening = !appState.fileTagTarget || found.kind !== appState.fileTagTarget.kind;
+  const queryChanged = opening || found.query !== appState.fileTagTarget.query;
   const isTerminal = found.kind === "terminal";
-  if (!isTerminal) window.clearTimeout(terminalTagTimer);
-  if (opening && !isTerminal && !fileTagDirMapRefresh) {
-    fileTagDirMapRefresh = refreshDirMap().catch(() => {}).finally(() => {
-      fileTagDirMapRefresh = null;
-      if (fileTagTarget) renderFileTagSuggestions();
+  if (!isTerminal) window.clearTimeout(appState.terminalTagTimer);
+  if (opening && !isTerminal && !appState.fileTagDirMapRefresh) {
+    appState.fileTagDirMapRefresh = refreshDirMap().catch(() => {}).finally(() => {
+      appState.fileTagDirMapRefresh = null;
+      if (appState.fileTagTarget) renderFileTagSuggestions();
     });
   }
-  if (queryChanged) fileTagIndex = 0;
-  fileTagTarget = found;
-  if (isTerminal && (opening || terminalTagCache.workspace !== rootPath)) refreshTerminalsForTags(true);
+  if (queryChanged) appState.fileTagIndex = 0;
+  appState.fileTagTarget = found;
+  if (isTerminal && (opening || appState.terminalTagCache.workspace !== appState.rootPath)) refreshTerminalsForTags(true);
   const currentSession = activeChatSession();
   const chats = projectChatsForTags([...chatSessions, ...closedChatSessions, ...archivedChatSessions], currentSession?.memorySessionId || currentSession?.id,
     currentSession?.memoryProjectId);
-  fileTagItems = isTerminal ? topTerminalTagMatches(terminalTagCache.workspace === rootPath ? terminalTagCache.items : [], found.query, scoreQuickMatch)
+  appState.fileTagItems = isTerminal ? topTerminalTagMatches(appState.terminalTagCache.workspace === appState.rootPath ? appState.terminalTagCache.items : [], found.query, scoreQuickMatch)
     : topContextTagMatches(fileTagProjectFiles(), chats, found.query, scoreQuickMatch);
-  fileTagIndex = Math.min(fileTagIndex, Math.max(fileTagItems.length - 1, 0));
+  appState.fileTagIndex = Math.min(appState.fileTagIndex, Math.max(appState.fileTagItems.length - 1, 0));
   const list = fileTagSuggestionsElement();
   const previousScrollTop = list.scrollTop;
   list.setAttribute("aria-label", isTerminal ? "Project terminals" : "Project files and chats");
   list.replaceChildren();
-  if (!fileTagItems.length) {
+  if (!appState.fileTagItems.length) {
     const empty = document.createElement("div");
     empty.className = "file-tag-empty";
     empty.setAttribute("role", "presentation");
-    empty.textContent = isTerminal ? terminalTagCache.error || (terminalTagCache.loaded ? "No matching terminals" : "Loading project terminals…")
-      : dirMapCache ? "No matching files or chats" : "Loading project context…";
+    empty.textContent = isTerminal ? appState.terminalTagCache.error || (appState.terminalTagCache.loaded ? "No matching terminals" : "Loading project terminals…")
+      : appState.dirMapCache ? "No matching files or chats" : "Loading project context…";
     list.appendChild(empty);
   }
-  fileTagItems.forEach((item, index) => {
+  appState.fileTagItems.forEach((item, index) => {
     const isChat = item.kind === "chat";
     const terminal = item.kind === "terminal";
     const path = item.path || "";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `file-tag-option${index === fileTagIndex ? " selected" : ""}`;
+    button.className = `file-tag-option${index === appState.fileTagIndex ? " selected" : ""}`;
     button.setAttribute("role", "option");
     button.id = `file-tag-option-${index}`;
-    button.setAttribute("aria-selected", String(index === fileTagIndex));
+    button.setAttribute("aria-selected", String(index === appState.fileTagIndex));
     button.title = terminal ? `${item.name}\n${item.cwd || ""}\n${item.command || ""}` : isChat ? `Chat: ${item.title}` : path;
     const fileName = terminal ? item.name : isChat ? item.title : fileTagName(path);
     const icon = document.createElement("span");
@@ -19293,14 +19101,14 @@ function renderFileTagSuggestions({ revealSelection = false } = {}) {
   chatInput.setAttribute("aria-controls", list.id);
   chatInput.setAttribute("aria-autocomplete", "list");
   chatInput.setAttribute("aria-expanded", "true");
-  if (fileTagItems.length) chatInput.setAttribute("aria-activedescendant", `file-tag-option-${fileTagIndex}`);
+  if (appState.fileTagItems.length) chatInput.setAttribute("aria-activedescendant", `file-tag-option-${appState.fileTagIndex}`);
   list.scrollTop = queryChanged ? 0 : previousScrollTop;
   if (queryChanged || revealSelection) list.querySelector(".file-tag-option.selected")?.scrollIntoView({ block: "nearest" });
 }
 
-function chooseFileTag(index = fileTagIndex) {
-  const item = fileTagItems[index];
-  const target = fileTagTarget;
+function chooseFileTag(index = appState.fileTagIndex) {
+  const item = appState.fileTagItems[index];
+  const target = appState.fileTagTarget;
   if (!item || !target?.node.isConnected) return false;
   const range = document.createRange();
   range.setStart(target.node, target.start);
@@ -19351,17 +19159,17 @@ function handleFileTagKeydown(e) {
     onChatInputChange();
     return true;
   }
-  if (fileTagSuggestions?.hidden !== false) return false;
-  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && fileTagItems.length) {
+  if (appState.fileTagSuggestions?.hidden !== false) return false;
+  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && appState.fileTagItems.length) {
     const direction = e.key === "ArrowDown" ? 1 : -1;
-    fileTagIndex = (fileTagIndex + direction + fileTagItems.length) % fileTagItems.length;
+    appState.fileTagIndex = (appState.fileTagIndex + direction + appState.fileTagItems.length) % appState.fileTagItems.length;
     renderFileTagSuggestions({ revealSelection: true });
     return true;
   }
   if (e.key === "Tab" && !e.shiftKey) return chooseFileTag() || true;
   if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) return chooseFileTag() || true;
   if (e.key === "Escape") {
-    fileTagDismissed = fileTagTarget;
+    appState.fileTagDismissed = appState.fileTagTarget;
     closeFileTagSuggestions();
     return true;
   }
@@ -19409,12 +19217,12 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
   const runSession = [...chatSessions, ...closedChatSessions, ...archivedChatSessions]
     .find((session) => session.id === String(targetSessionId || ""));
   if (!runSession) return { ok: false, code: "BACKGROUND_SESSION_NOT_FOUND" };
-  const runModel = runSession.selectedModel || selectedModel;
+  const runModel = runSession.selectedModel || appState.selectedModel;
   if (!runModel) return { ok: false, code: "BACKGROUND_MODEL_NOT_SELECTED" };
   const runMode = options?.modeOverride
     ? canonicalChatMode(options.modeOverride)
-    : canonicalChatMode(runSession.turnMode || runSession.chatMode || chatMode);
-  const runFamily = runSession.chatFamily || chatFamily;
+    : canonicalChatMode(runSession.turnMode || runSession.chatMode || appState.chatMode);
+  const runFamily = runSession.chatFamily || appState.chatFamily;
   const runSettings = getModelSettings(runModel);
   const runContextPlan = resolvedWorkingContextPlan(runModel);
   ensureChatMemorySessionId(runSession);
@@ -19425,7 +19233,7 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
   const runActiveFile = Object.prototype.hasOwnProperty.call(options || {}, "activeFile")
     ? options.activeFile
     : (providedContextFiles[0] || getActiveFileContext());
-  const runWorkspace = String(options?.workspace || rootPath || "");
+  const runWorkspace = String(options?.workspace || appState.rootPath || "");
   try {
     // Background lanes never open cards or transcript rows. Their global
     // event sink auto-skips any clarification request that cannot be shown.
@@ -19439,13 +19247,13 @@ async function executeHiddenAgentRuntime({ targetSessionId = "", text = "", opti
       reasoningEffort: runContextPlan.provider === "openrouter" ? runSettings.reasoningEffort : null,
       mode: runMode,
       modeFamily: runFamily,
-      authorityProfile: authoritySettingsData.superMode,
+      authorityProfile: appState.authoritySettingsData.superMode,
       chatHistory: workingHistoryMessages((runSession.history || []).filter((message) => !isInternalRuntimeInputMessage(message)), runSession),
       rawSourceTokens: estimateMessagesTokens((runSession.history || []).filter((message) => !isInternalRuntimeInputMessage(message))),
       sessionId: runtimeSessionId,
       chatSessionId: runSession.id,
       blockId: runSession.memoryBlockId || "",
-      dirMap: dirMapCache,
+      dirMap: appState.dirMapCache,
       activeFile: runActiveFile,
       extraFiles: providedContextFiles,
       subagentModel: getExploreSubagentModel(),
@@ -19479,7 +19287,7 @@ function sendHiddenAgentRuntime(payload = {}) {
 
 async function sendMessageWithAgentRuntime(options = {}) {
   const internal = Boolean(options?.internal);
-  const targetSessionId = String(options?.sessionId || activeChatSessionId || "");
+  const targetSessionId = String(options?.sessionId || appState.activeChatSessionId || "");
   const hasExplicitText = Object.prototype.hasOwnProperty.call(options || {}, "text");
   let text = hasExplicitText
     ? String(options.text || "")
@@ -19490,12 +19298,12 @@ async function sendMessageWithAgentRuntime(options = {}) {
   if (!internal) {
     // Images go with a new message only; a run already in progress gets text.
     const busy = isChatSessionRunning(targetSessionId) || chatSendInFlight.has(targetSessionId);
-    const sendingImages = !busy && composerImages.length > 0;
+    const sendingImages = !busy && appState.composerImages.length > 0;
     if (!text.trim() && !sendingImages) return;
     if (busy) {
       return submitLiveChatInput(chatSessions.find((session) => session.id === targetSessionId), text);
     }
-    if (!text.trim()) text = composerImages.length > 1 ? "See the attached images." : "See the attached image.";
+    if (!text.trim()) text = appState.composerImages.length > 1 ? "See the attached images." : "See the attached image.";
     chatSendInFlight.add(targetSessionId);
     clearChatSessionStoppedByOperator(chatSessions.find((session) => session.id === targetSessionId) || { id: targetSessionId });
   } else if (!text || isChatSessionRunning(targetSessionId)) return;
@@ -19521,12 +19329,12 @@ async function sendMessageWithAgentRuntime(options = {}) {
     || (internal ? null : activeChatSession());
   if (!runSession) return;
   let runHistory = runSession.history;
-  const runModel = runSession.selectedModel || selectedModel;
+  const runModel = runSession.selectedModel || appState.selectedModel;
   const runMode = options?.modeOverride
     ? canonicalChatMode(options.modeOverride)
-    : canonicalChatMode(runSession.chatMode || chatMode);
+    : canonicalChatMode(runSession.chatMode || appState.chatMode);
   runSession.turnMode = runMode;
-  const runFamily = runSession.chatFamily || chatFamily;
+  const runFamily = runSession.chatFamily || appState.chatFamily;
   if (!runModel) {
     if (!internal) addErrorMessage("Select a model before sending a message.");
     return;
@@ -19551,7 +19359,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       runSession.draftSlashCommand = "";
       resetChatInput();
     }
-    if (activeChatSessionId === runSession.id) addUserMessage(text, initialInput.id, runImages.map((image) => ({ thumb: image.thumbUrl, id: image.storedId })));
+    if (appState.activeChatSessionId === runSession.id) addUserMessage(text, initialInput.id, runImages.map((image) => ({ thumb: image.thumbUrl, id: image.storedId })));
   }
   const userMessage = {
     role: "user",
@@ -19578,7 +19386,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     model: runModel,
     mode: runMode,
     family: runFamily,
-    workspace: rootPath,
+    workspace: appState.rootPath,
     contextPlan: runContextPlan,
     contextFilesCache: [],
     activeStreamContent: "",
@@ -19614,7 +19422,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     syncChatRunSession(run, { persist: false });
     await finishChatHistoryBlock({ session: runSession, assistant, outcome });
   };
-  const runIsVisible = () => activeChatSessionId === runSession.id && !run.viewHost;
+  const runIsVisible = () => appState.activeChatSessionId === runSession.id && !run.viewHost;
   const updateRunContextUsage = () => { if (runIsVisible()) updateContextUsage(); };
   const scrollRunMessages = (options) => { if (runIsVisible()) scrollMessages(options); };
   const setRunAgentStatus = (value) => { if (runIsVisible()) setAgentStatus(value); };
@@ -19626,7 +19434,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       : providedContextFiles.length
         ? providedContextFiles
         : await collectMentionedFiles(text);
-    if (runIsVisible()) contextFilesCache = run.contextFilesCache;
+    if (runIsVisible()) appState.contextFilesCache = run.contextFilesCache;
     syncChatRunSession(run);
     runHistory = run.history;
     updateRunContextUsage();
@@ -19750,7 +19558,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
       assistant.appendContent(delta);
       run.activeStreamContent = assistant.rawContent;
       syncAssistantDraftToHistory(run, assistant, { persist: false });
-      if (runIsVisible()) activeStreamContent = run.activeStreamContent;
+      if (runIsVisible()) appState.activeStreamContent = run.activeStreamContent;
       lastAgentText = assistant.rawContent;
       return;
     }
@@ -19908,7 +19716,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     });
 
     agentRunResult = await window.api.agentRun({
-      workspace: rootPath,
+      workspace: appState.rootPath,
       model: runModel,
       numCtx: runContextPlan.provider === "ollama" ? runContextPlan.effectiveLimitTokens : null,
       contextBudget: runContextPlan.effectiveLimitTokens,
@@ -19917,13 +19725,13 @@ async function sendMessageWithAgentRuntime(options = {}) {
       reasoningEffort: runContextPlan.provider === "openrouter" ? runSettings.reasoningEffort : null,
       mode: runMode,
       modeFamily: runFamily,
-      authorityProfile: authoritySettingsData.superMode,
+      authorityProfile: appState.authoritySettingsData.superMode,
        chatHistory: workingHistoryMessages(runHistory.filter((message) => !isInternalRuntimeInputMessage(message)), runSession),
       rawSourceTokens: estimateMessagesTokens(runHistory.filter((message) => !isInternalRuntimeInputMessage(message))),
        sessionId: runSession?.memorySessionId || runSession?.id || "",
        chatSessionId: runSession?.id || "",
        blockId: runSession?.memoryBlockId || "",
-      dirMap: dirMapCache,
+      dirMap: appState.dirMapCache,
       activeFile: runActiveFile,
       extraFiles: run.contextFilesCache,
       subagentModel: getExploreSubagentModel(),
@@ -20063,7 +19871,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
     run.activeStreamContent = "";
     if (!stillWorking) assistant?.pruneIfEmpty();
     syncChatRunSession(run);
-    const completedInBackground = activeChatSessionId !== runSession.id;
+    const completedInBackground = appState.activeChatSessionId !== runSession.id;
     if (stillWorking) {
       run.state = "running";
       run.visibleSettled = false;
@@ -20075,20 +19883,20 @@ async function sendMessageWithAgentRuntime(options = {}) {
       run.visibleSettled = true;
       if (activeChatRuns.get(runSession.id) === run) activeChatRuns.delete(runSession.id);
     }
-    if (!stillWorking && run.taskList?.source === "agent" && activeChatSessionId === runSession.id) clearComposerTaskList();
+    if (!stillWorking && run.taskList?.source === "agent" && appState.activeChatSessionId === runSession.id) clearComposerTaskList();
     if (completedInBackground) chatSessionsNeedingAttention.add(runSession.id);
     else chatSessionsNeedingAttention.delete(runSession.id);
-    if (activeChatSessionId === runSession.id && !stillWorking) activeStreamContent = "";
-    if (activeChatSessionId === runSession.id) setAgentStatus(stillWorking ? `${modeLabel()} orchestrating…` : `${modeLabel()} ready`);
+    if (appState.activeChatSessionId === runSession.id && !stillWorking) appState.activeStreamContent = "";
+    if (appState.activeChatSessionId === runSession.id) setAgentStatus(stillWorking ? `${modeLabel()} orchestrating…` : `${modeLabel()} ready`);
     updateSendBtn();
     renderChatSessionSelect();
-    if (activeChatSessionId === runSession.id) {
+    if (appState.activeChatSessionId === runSession.id) {
       updateContextUsage();
       refreshStoredContextCapacity();
     }
 
-    if (activeChatSessionId === runSession.id) syncActiveChatSession();
-    if (activeChatSessionId === runSession.id && !contextCheckpointing && !stillWorking) {
+    if (appState.activeChatSessionId === runSession.id) syncActiveChatSession();
+    if (appState.activeChatSessionId === runSession.id && !appState.contextCheckpointing && !stillWorking) {
       chatInput.disabled = false;
       chatInput.readOnly = false;
       chatInput.removeAttribute("aria-disabled");
@@ -20105,7 +19913,7 @@ async function sendMessageWithAgentRuntime(options = {}) {
         initial.status = "failed";
         paintLiveInputRecord(session, initial);
         if (!session.draftText) session.draftText = initial.text;
-        if (activeChatSessionId === session.id && !effectiveChatInputValue().trim()) { chatInput.value = initial.text; resizeChatInput(); }
+        if (appState.activeChatSessionId === session.id && !effectiveChatInputValue().trim()) { chatInput.value = initial.text; resizeChatInput(); }
         schedulePersistChatSessions();
       }
       chatSendInFlight.delete(targetSessionId);
@@ -20175,11 +19983,11 @@ function stopGeneration() {
   dropAutoContinuationsForSession(run.sessionId);
   dropAutoContinuationsForSession(run.memorySessionId || run.session?.memorySessionId || "");
   syncAssistantDraftToHistory(run, run.assistant, { persist: false });
-  void persistChatHistorySnapshot(activeChatPersistenceScope, run.session);
-  activeStreamContent = "";
+  void persistChatHistorySnapshot(appState.activeChatPersistenceScope, run.session);
+  appState.activeStreamContent = "";
   settleDelegatedChildrenOf(run);
   settleStoppedRun(run);
-  if (chatInput && activeChatSessionId === run.sessionId) {
+  if (chatInput && appState.activeChatSessionId === run.sessionId) {
     chatInput.disabled = false;
     chatInput.readOnly = false;
     chatInput.removeAttribute("aria-disabled");
@@ -20217,7 +20025,7 @@ function isChatSessionStoppedByOperator(sessionId = "") {
 
 function abortActiveChatRun(run) {
   if (run.taskId || run.session?.taskId) {
-    window.api.agentCancelTask?.({ workspace: run.workspace || rootPath, sessionId: run.session?.parentMemorySessionId || run.memorySessionId || run.session?.memorySessionId || run.sessionId, taskId: run.taskId || run.session.taskId, scope: "task" })?.catch?.(reportChatHistoryWarning);
+    window.api.agentCancelTask?.({ workspace: run.workspace || appState.rootPath, sessionId: run.session?.parentMemorySessionId || run.memorySessionId || run.session?.memorySessionId || run.sessionId, taskId: run.taskId || run.session.taskId, scope: "task" })?.catch?.(reportChatHistoryWarning);
     return;
   }
   const ids = chatStopIdsForRun(run);
@@ -20245,10 +20053,10 @@ function dropAutoContinuationsForSession(sessionId = "") {
     if (candidate === id) return true;
     return chatSessionIdForRuntimeId(candidate) === id;
   };
-  pendingSubagentResults = pendingSubagentResults.filter((item) => (
+  appState.pendingSubagentResults = appState.pendingSubagentResults.filter((item) => (
     !matches(item.parentSessionId) && !matches(item.payload?.parentSessionId) && !matches(item.payload?.sessionId)
   ));
-  pendingBackgroundWaitEvents = pendingBackgroundWaitEvents.filter((item) => (
+  appState.pendingBackgroundWaitEvents = appState.pendingBackgroundWaitEvents.filter((item) => (
     !matches(item.payload?.sessionId) && !matches(item.payload?.parentSessionId)
   ));
 }
@@ -20256,7 +20064,7 @@ function dropAutoContinuationsForSession(sessionId = "") {
 bindLiveInputComposer({ sendButton: sendBtn, onSend: submitChatComposer });
 
 btnTopTerminal?.addEventListener("click", () => {
-  setTerminalCollapsed(!terminalCollapsed);
+  setTerminalCollapsed(!appState.terminalCollapsed);
 });
 
 btnTopFileTree?.addEventListener("click", () => {
@@ -20264,7 +20072,7 @@ btnTopFileTree?.addEventListener("click", () => {
 });
 
 btnTopChat?.addEventListener("click", () => {
-  if (chatCollapsed) {
+  if (appState.chatCollapsed) {
     openChatPane({ createIfEmpty: true });
   } else {
     setChatCollapsed(true);
@@ -20392,7 +20200,7 @@ function ensureVisibleDelegatedPrompt(session) {
 }
 
 function runIsChildVisible(childSessionId = "") {
-  return activeChatSessionId === childSessionId;
+  return appState.activeChatSessionId === childSessionId;
 }
 
 function childAssistant(run) {
@@ -20746,7 +20554,7 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
     applyContextCheckpointUi(run, payload);
     if (runIsChildVisible(childSessionId)) updateContextUsage();
   } else if (type === "context_usage" && payload.usage) {
-    storeLastContextUsage(payload.usage, { session: run.session, model: run.model || selectedModel, contextPlan: run.contextPlan });
+    storeLastContextUsage(payload.usage, { session: run.session, model: run.model || appState.selectedModel, contextPlan: run.contextPlan });
     if (runIsChildVisible(childSessionId)) updateContextUsage();
   }
   scheduleDelegatedLiveSnapshot(run);
@@ -20756,9 +20564,9 @@ async function handleDelegatedChildRuntimeEvent(payload = {}) {
 
 function scheduleSubagentResultDrain(delay = 0) {
   if (Number(delay) > 0) {
-    if (subagentDrainRetryTimer) return;
-    subagentDrainRetryTimer = setTimeout(() => {
-      subagentDrainRetryTimer = null;
+    if (appState.subagentDrainRetryTimer) return;
+    appState.subagentDrainRetryTimer = setTimeout(() => {
+      appState.subagentDrainRetryTimer = null;
       drainPendingSubagentResults();
     }, Number(delay));
     return;
@@ -20770,17 +20578,17 @@ function enqueueSubagentResult(payload = {}, { authoritative = false } = {}) {
   const resultId = String(payload.resultId || "");
   const parentSessionId = chatSessionIdForRuntimeId(payload.parentSessionId || payload.sessionId || "");
   if (!resultId || !parentSessionId) return;
-  if (pendingSubagentResults.some((item) => item.resultId === resultId)) return;
+  if (appState.pendingSubagentResults.some((item) => item.resultId === resultId)) return;
   if (seenSubagentResultIds.has(resultId) && !authoritative) return;
   if (authoritative) seenSubagentResultIds.delete(resultId);
   seenSubagentResultIds.add(resultId);
-  pendingSubagentResults.push({ resultId, parentSessionId, payload });
+  appState.pendingSubagentResults.push({ resultId, parentSessionId, payload });
   drainPendingSubagentResults();
 }
 
 function drainPendingSubagentResults() {
-  if (!pendingSubagentResults.length) return;
-  const next = pendingSubagentResults[0];
+  if (!appState.pendingSubagentResults.length) return;
+  const next = appState.pendingSubagentResults[0];
   if (next) {
     const resolvedParentSessionId = chatSessionIdForRuntimeId(
       next.payload?.parentSessionId || next.payload?.sessionId || next.parentSessionId,
@@ -20788,14 +20596,14 @@ function drainPendingSubagentResults() {
     if (resolvedParentSessionId) next.parentSessionId = resolvedParentSessionId;
   }
   if (isChatSessionStoppedByOperator(next.parentSessionId)) {
-    pendingSubagentResults.shift();
+    appState.pendingSubagentResults.shift();
     return;
   }
   if (!next
     || !chatSessions.some((session) => session.id === next.parentSessionId)
     || isChatSessionRunning(next.parentSessionId)
     || subagentContinuationRuns.has(next.parentSessionId)) return;
-  pendingSubagentResults.shift();
+  appState.pendingSubagentResults.shift();
   subagentContinuationRuns.add(next.parentSessionId);
   let retryLater = false;
   Promise.resolve(sendMessageWithAgentRuntime({
@@ -20816,7 +20624,7 @@ function drainPendingSubagentResults() {
     // a reload-time loop around a permanently stale result id.
     if (result?.ok === false && result.code === "PARENT_BUSY") {
       seenSubagentResultIds.delete(next.resultId);
-      pendingSubagentResults.unshift(next);
+      appState.pendingSubagentResults.unshift(next);
       retryLater = true;
     }
   }).catch(() => {}).finally(() => {
@@ -20866,7 +20674,7 @@ function ensureParentContinuationRun(payload = {}) {
     return run;
   }
   if (!run || !run.parentContinuation) {
-    const host = activeChatSessionId === parentSessionId
+    const host = appState.activeChatSessionId === parentSessionId
       ? messages
       : (() => {
         const detached = document.createElement("div");
@@ -20923,7 +20731,7 @@ async function renderParentContinuationEvent(payload = {}) {
   const run = ensureParentContinuationRun(payload);
   if (!run?.assistant) return;
   const assistant = run.assistant;
-  const visible = activeChatSessionId === run.sessionId && !run.viewHost;
+  const visible = appState.activeChatSessionId === run.sessionId && !run.viewHost;
   if (type === "thinking") {
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
     assistant.appendThinking(payload.token || payload.delta || "");
@@ -21110,7 +20918,7 @@ window.api?.onAgentEvent?.((payload) => {
       run.memorySessionId = session.memorySessionId;
       const prompt = session.history?.find((message) => message.id === run.initialInputId || message.source_message_id === run.initialInputId);
       if (prompt) prompt.task_id = payload.taskId;
-      const host = run.viewHost || (activeChatSessionId === session.id ? messages : null);
+      const host = run.viewHost || (appState.activeChatSessionId === session.id ? messages : null);
       const userTurn = [...(host?.querySelectorAll(".chat-turn.user") || [])].find((turn) => turn.dataset.sourceMessageId === run.initialInputId);
       if (userTurn) userTurn.dataset.taskId = payload.taskId;
     }
@@ -21188,19 +20996,19 @@ window.api?.onAgentEvent?.((payload) => {
   }
   const phase = type.endsWith("_checkpoint") ? "checkpoint" : "complete";
   const kind = type.startsWith("subagent_") ? "subagent" : "terminal";
-  if (!anyChatSessionRunning() && !subagentCompletionPending) {
+  if (!anyChatSessionRunning() && !appState.subagentCompletionPending) {
     handleBackgroundWaitEvent(payload, kind, phase);
     return;
   }
   const waitId = String(payload.subagentId || payload.waitId || payload.processId || payload.terminalId || "");
   // Drop a checkpoint that was outrun by its completion while the chat was busy.
   if (phase === "checkpoint" && hasCompleteForWait(waitId)) return;
-  pendingBackgroundWaitEvents.push({ payload, kind, phase });
+  appState.pendingBackgroundWaitEvents.push({ payload, kind, phase });
 });
 
 function hasCompleteForWait(waitId) {
   if (!waitId) return false;
-  if (pendingBackgroundWaitEvents.some((item) => item.phase === "complete" && String(item.payload.subagentId || item.payload.waitId || item.payload.processId || item.payload.terminalId || "") === waitId)) {
+  if (appState.pendingBackgroundWaitEvents.some((item) => item.phase === "complete" && String(item.payload.subagentId || item.payload.waitId || item.payload.processId || item.payload.terminalId || "") === waitId)) {
     return true;
   }
   if (completedBackgroundWaitIds.has(waitId)) return true;
@@ -21210,8 +21018,8 @@ function hasCompleteForWait(waitId) {
 const completedBackgroundWaitIds = new Set();
 
 function drainPendingBackgroundWaitEvents() {
-  if (anyChatSessionRunning() || subagentCompletionPending) return;
-  const next = pendingBackgroundWaitEvents.shift();
+  if (anyChatSessionRunning() || appState.subagentCompletionPending) return;
+  const next = appState.pendingBackgroundWaitEvents.shift();
   if (!next) return;
   handleBackgroundWaitEvent(next.payload, next.kind, next.phase);
 }
@@ -21281,11 +21089,11 @@ function absorbModelRunCommandResult(payload = {}) {
 }
 
 async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "complete") {
-  if (subagentCompletionPending) {
-    pendingBackgroundWaitEvents.unshift({ payload, kind, phase });
+  if (appState.subagentCompletionPending) {
+    appState.pendingBackgroundWaitEvents.unshift({ payload, kind, phase });
     return;
   }
-  subagentCompletionPending = true;
+  appState.subagentCompletionPending = true;
   try {
     const waitId = String(payload.subagentId || payload.waitId || payload.processId || payload.terminalId || "");
     if (phase === "complete" && waitId) completedBackgroundWaitIds.add(waitId);
@@ -21325,7 +21133,7 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
           errClipped ? `stderr:\n\`\`\`\n${errClipped}\n\`\`\`` : "",
           "Review the captured traffic/artifacts and summarize results for the operator.",
         ].filter(Boolean).join("\n\n");
-    const targetSessionId = chatSessionIdForRuntimeId(payload.sessionId || payload.parentSessionId || "") || activeChatSessionId;
+    const targetSessionId = chatSessionIdForRuntimeId(payload.sessionId || payload.parentSessionId || "") || appState.activeChatSessionId;
     if (isChatSessionStoppedByOperator(targetSessionId) || isChatSessionStoppedByOperator(payload.sessionId) || isChatSessionStoppedByOperator(payload.parentSessionId)) {
       return;
     }
@@ -21336,7 +21144,7 @@ async function handleBackgroundWaitEvent(payload, kind = "terminal", phase = "co
       skipContextFiles: true,
     });
   } finally {
-    subagentCompletionPending = false;
+    appState.subagentCompletionPending = false;
     queueMicrotask(drainPendingBackgroundWaitEvents);
   }
 }
@@ -21449,32 +21257,31 @@ btnChatCollapse?.addEventListener("click", (e) => {
   setChatCollapsed(true);
 });
 
-let pressedChatSessionId = "";
 chatSessionSelect?.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
   if (e.target.closest("[data-close-session]")) {
-    pressedChatSessionId = "";
+    appState.pressedChatSessionId = "";
     return;
   }
-  pressedChatSessionId = e.target.closest(".chat-session-tab")?.dataset.sessionId || "";
+  appState.pressedChatSessionId = e.target.closest(".chat-session-tab")?.dataset.sessionId || "";
 });
 chatSessionSelect?.addEventListener("pointerup", (e) => {
   const close = e.target.closest("[data-close-session]");
   if (close) {
     e.preventDefault();
     e.stopPropagation();
-    pressedChatSessionId = "";
+    appState.pressedChatSessionId = "";
     closeChatSession(close.dataset.closeSession);
     return;
   }
   const releasedId = e.target.closest(".chat-session-tab")?.dataset.sessionId || "";
-  const sessionId = releasedId || (e.currentTarget.contains(e.target) ? pressedChatSessionId : "");
-  pressedChatSessionId = "";
-  if (!sessionId || sessionId === activeChatSessionId) return;
+  const sessionId = releasedId || (e.currentTarget.contains(e.target) ? appState.pressedChatSessionId : "");
+  appState.pressedChatSessionId = "";
+  if (!sessionId || sessionId === appState.activeChatSessionId) return;
   loadChatSession(sessionId);
 });
 chatSessionSelect?.addEventListener("pointercancel", () => {
-  pressedChatSessionId = "";
+  appState.pressedChatSessionId = "";
 });
 chatSessionSelect?.addEventListener("click", (e) => {
   if (e.target.closest(".chat-session-tab")) e.preventDefault();
@@ -21506,14 +21313,14 @@ chatInput.addEventListener("keydown", (e) => {
   if (!slashCommandSuggestions?.hidden && ["ArrowDown", "ArrowUp"].includes(e.key)) {
     e.preventDefault();
     const direction = e.key === "ArrowDown" ? 1 : -1;
-    slashSuggestionIndex = slashSuggestionIndex < 0
-      ? (direction > 0 ? 0 : slashSuggestionItems.length - 1)
-      : (slashSuggestionIndex + direction + slashSuggestionItems.length) % slashSuggestionItems.length;
+    appState.slashSuggestionIndex = appState.slashSuggestionIndex < 0
+      ? (direction > 0 ? 0 : appState.slashSuggestionItems.length - 1)
+      : (appState.slashSuggestionIndex + direction + appState.slashSuggestionItems.length) % appState.slashSuggestionItems.length;
     renderSlashSuggestions();
     return;
   }
   if (!slashCommandSuggestions?.hidden && ["Tab", "Shift"].includes(e.key)) {
-    e.preventDefault(); chooseSlashSuggestion(slashSuggestionIndex, { clicked: true }); return;
+    e.preventDefault(); chooseSlashSuggestion(appState.slashSuggestionIndex, { clicked: true }); return;
   }
   if (!slashCommandSuggestions?.hidden && e.key === "Enter") {
     e.preventDefault(); chooseSlashSuggestion(); return;
@@ -21544,15 +21351,15 @@ function isExplorerKeyboardTarget() {
 }
 
 function setContextTargetFromSelectedItem() {
-  if (!selectedItem?.dataset?.path) return false;
-  workspaceContextTarget = {
-    path: selectedItem.dataset.path,
-    relativePath: relativePathFromRoot(selectedItem.dataset.path),
-    isDir: selectedItem.dataset.isDir === "true",
-    name: selectedItem.querySelector(".tree-name")?.textContent || basenameOf(selectedItem.dataset.path),
-    item: selectedItem,
+  if (!appState.selectedItem?.dataset?.path) return false;
+  appState.workspaceContextTarget = {
+    path: appState.selectedItem.dataset.path,
+    relativePath: relativePathFromRoot(appState.selectedItem.dataset.path),
+    isDir: appState.selectedItem.dataset.isDir === "true",
+    name: appState.selectedItem.querySelector(".tree-name")?.textContent || basenameOf(appState.selectedItem.dataset.path),
+    item: appState.selectedItem,
   };
-  return Boolean(workspaceContextTarget.relativePath);
+  return Boolean(appState.workspaceContextTarget.relativePath);
 }
 
 document.addEventListener("keydown", async (e) => {
@@ -21560,14 +21367,14 @@ document.addEventListener("keydown", async (e) => {
   const mod = e.ctrlKey || e.metaKey;
 
   const editorSurfaceFocused = Boolean(e.target?.closest?.("#monaco-container") || document.activeElement?.closest?.("#monaco-container"));
-  if (e.altKey && !mod && !e.shiftKey && key === "z" && editorSurfaceFocused && activeTabPath) {
+  if (e.altKey && !mod && !e.shiftKey && key === "z" && editorSurfaceFocused && appState.activeTabPath) {
     e.preventDefault();
     e.stopPropagation();
     EditorManager.toggleWordWrap?.();
     return;
   }
 
-  if (mod && !e.altKey && !e.shiftKey && key === "s" && activeTabPath
+  if (mod && !e.altKey && !e.shiftKey && key === "s" && appState.activeTabPath
     && !editorSurfaceFocused && !isTextEditingTarget(e.target)) {
     e.preventDefault();
     e.stopPropagation();
@@ -21575,7 +21382,7 @@ document.addEventListener("keydown", async (e) => {
     return;
   }
 
-  if (e.key === "Delete" && !e.altKey && !isTextEditingTarget(e.target) && isExplorerKeyboardTarget() && selectedItem) {
+  if (e.key === "Delete" && !e.altKey && !isTextEditingTarget(e.target) && isExplorerKeyboardTarget() && appState.selectedItem) {
     e.preventDefault();
     e.stopPropagation();
     closeWorkspaceContextMenu();
@@ -21583,7 +21390,7 @@ document.addEventListener("keydown", async (e) => {
     return;
   }
 
-  if (mod && !e.altKey && !e.shiftKey && isExplorerKeyboardTarget() && selectedItem && ["x", "c", "v"].includes(key)) {
+  if (mod && !e.altKey && !e.shiftKey && isExplorerKeyboardTarget() && appState.selectedItem && ["x", "c", "v"].includes(key)) {
     // Never hijack copy/cut when the user has an actual text selection
     // (e.g. selecting part of a chat message or a resource preview).
     const selection = window.getSelection?.();
@@ -21602,12 +21409,12 @@ document.addEventListener("keydown", async (e) => {
   // "+" needs Shift on most layouts (Ctrl+Shift+=), so accept it either way.
   if (key === "+" || (!e.shiftKey && key === "=")) {
     e.preventDefault();
-    setUiZoom(uiZoom + 0.1);
+    setUiZoom(appState.uiZoom + 0.1);
     return;
   }
   if (!e.shiftKey && key === "-") {
     e.preventDefault();
-    setUiZoom(uiZoom - 0.1);
+    setUiZoom(appState.uiZoom - 0.1);
     return;
   }
   if (!e.shiftKey && key === "0") {
@@ -21621,7 +21428,7 @@ document.addEventListener("keydown", async (e) => {
     || (!e.shiftKey && key === "f");
   if (quickIsOpen && !opensQuickSurface) return;
 
-  if (!e.shiftKey && key === "s" && resourceCurrentFilePath) {
+  if (!e.shiftKey && key === "s" && appState.resourceCurrentFilePath) {
     e.preventDefault();
     await saveResourceChanges();
     return;
@@ -21651,7 +21458,7 @@ async function migrateLegacyChatInputs(session) {
   if (!session?.promptQueue || queueMigrationInFlight.has(session.id)) return;
   queueMigrationInFlight.add(session.id);
   try {
-    const result = await liveInputController.migrateQueue({ session, workspace: rootPath });
+    const result = await liveInputController.migrateQueue({ session, workspace: appState.rootPath });
     if (!result.ok) addErrorMessage("Saved prompts could not be sent. They are retained and will retry when this chat is opened.");
   } finally { queueMigrationInFlight.delete(session.id); schedulePersistChatSessions(); }
 }
@@ -21659,8 +21466,8 @@ async function migrateLegacyChatInputs(session) {
 async function submitLiveChatInput(session, text) {
   if (!session || !text.trim()) return;
   const record = liveInputController.prepare(session, text);
-  if (activeChatSessionId === session.id) addUserMessage(text, record.id);
-  const receipt = await liveInputController.send({ session, workspace: rootPath, text,
+  if (appState.activeChatSessionId === session.id) addUserMessage(text, record.id);
+  const receipt = await liveInputController.send({ session, workspace: appState.rootPath, text,
     sessionId: session.parentMemorySessionId || session.memorySessionId || session.id,
     targetTaskId: session.kind === "subagent" ? session.taskId : undefined, messageId: record.id,
     deferStart: chatSendInFlight.has(session.id) && !session.taskId });
@@ -21669,7 +21476,7 @@ async function submitLiveChatInput(session, text) {
     return receipt;
   }
   if (!session.history.some((item) => item.id === record.id)) session.history.push({ role: "user", content: text, id: record.id, source_message_id: record.id, task_id: record.taskId, createdAt: new Date().toISOString() });
-  if (activeChatSessionId === session.id && effectiveChatInputValue() === text) { chatInput.value = ""; session.draftText = ""; resetChatInput(); }
+  if (appState.activeChatSessionId === session.id && effectiveChatInputValue() === text) { chatInput.value = ""; session.draftText = ""; resetChatInput(); }
   else if (session.draftText === text) session.draftText = "";
   schedulePersistChatSessions();
   updateSendBtn();
@@ -21690,7 +21497,7 @@ function updateSendBtn() {
   // start a new message but never steer a running one.
   const running = isRunningChatActive();
   const stopMode = running && !hasText;
-  const canSend = hasText || (!running && composerImages.length > 0);
+  const canSend = hasText || (!running && appState.composerImages.length > 0);
   sendBtn.classList.toggle("stop", stopMode);
   sendBtn.title = stopMode ? "Stop" : "Send message";
   sendBtn.setAttribute("aria-label", stopMode ? "Stop the agent" : "Send message");
@@ -21703,8 +21510,8 @@ function updateSendBtn() {
 function renderComposerAttachments() {
   if (!composerAttachmentsEl) return;
   composerAttachmentsEl.replaceChildren();
-  composerAttachmentsEl.hidden = !composerImages.length;
-  for (const image of composerImages) {
+  composerAttachmentsEl.hidden = !appState.composerImages.length;
+  for (const image of appState.composerImages) {
     const item = document.createElement("div");
     item.className = "composer-attachment";
     item.title = image.name;
@@ -21718,25 +21525,25 @@ function renderComposerAttachments() {
     remove.setAttribute("aria-label", `Remove ${image.name}`);
     remove.innerHTML = '<span class="codicon codicon-close" aria-hidden="true"></span>';
     remove.addEventListener("click", () => {
-      composerImages = composerImages.filter((item) => item.id !== image.id);
+      appState.composerImages = appState.composerImages.filter((item) => item.id !== image.id);
       renderComposerAttachments();
       updateSendBtn();
     });
     item.append(img, remove);
     composerAttachmentsEl.appendChild(item);
   }
-  if (attachImageBtn) attachImageBtn.disabled = composerImages.length >= MAX_CHAT_IMAGES;
+  if (attachImageBtn) attachImageBtn.disabled = appState.composerImages.length >= MAX_CHAT_IMAGES;
 }
 
 // Files past the tenth image, unsupported types and unreadable images are
 // skipped silently.
 async function addComposerImageFiles(files = []) {
-  const room = Math.max(0, MAX_CHAT_IMAGES - composerImages.length);
+  const room = Math.max(0, MAX_CHAT_IMAGES - appState.composerImages.length);
   const prepared = [];
   for (const file of [...files].filter(isSupportedImageFile).slice(0, room)) {
     try { prepared.push(await prepareImageAttachment(file)); } catch { /* skipped */ }
   }
-  composerImages = mergeImageAttachments(composerImages, prepared).list;
+  appState.composerImages = mergeImageAttachments(appState.composerImages, prepared).list;
   renderComposerAttachments();
   updateSendBtn();
   chatInput?.focus();
@@ -21752,8 +21559,8 @@ function rememberSentImageOriginals(images = []) {
 }
 
 function takeComposerImages() {
-  const taken = composerImages;
-  composerImages = [];
+  const taken = appState.composerImages;
+  appState.composerImages = [];
   renderComposerAttachments();
   rememberSentImageOriginals(taken);
   return taken;
@@ -21772,7 +21579,7 @@ messages?.addEventListener("click", (event) => {
   const imageId = img.dataset.imageId;
   const session = activeChatSession();
   if (original || !imageId || !view || !window.api?.chatImageRead) return;
-  window.api.chatImageRead({ workspace: rootPath, sessionId: session?.memorySessionId || "", imageId })
+  window.api.chatImageRead({ workspace: appState.rootPath, sessionId: session?.memorySessionId || "", imageId })
     .then((result) => {
       const dataUrl = result?.dataUrl || result?.value?.dataUrl;
       if (!dataUrl) return;
@@ -21839,7 +21646,7 @@ chatInput.addEventListener("paste", () => requestAnimationFrame(onChatInputChang
 chatInput.addEventListener("cut", () => requestAnimationFrame(onChatInputChange));
 window.addEventListener("beforeunload", (event) => {
   window.api.unwatchWorkspace?.();
-  if (resourceDirty) {
+  if (appState.resourceDirty) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -21906,7 +21713,7 @@ chatHistoryBody?.addEventListener("click", (e) => {
   const more = e.target.closest("[data-chat-history-more]");
   if (more) {
     e.stopPropagation();
-    chatHistoryShowAllRecent = more.dataset.chatHistoryMore !== "less";
+    appState.chatHistoryShowAllRecent = more.dataset.chatHistoryMore !== "less";
     renderChatHistory();
     positionChatHistoryPopover();
     return;
@@ -21914,7 +21721,7 @@ chatHistoryBody?.addEventListener("click", (e) => {
   const archiveToggle = e.target.closest("[data-toggle-archived]");
   if (archiveToggle) {
     e.stopPropagation();
-    chatHistoryArchivedOpen = !chatHistoryArchivedOpen;
+    appState.chatHistoryArchivedOpen = !appState.chatHistoryArchivedOpen;
     renderChatHistory();
     positionChatHistoryPopover();
     return;
@@ -22078,8 +21885,8 @@ globalThis.addEventListener("markdown-ready", () => {
     globalThis.MarkdownRenderer.renderToElement(el, el.dataset.rawMd);
     attachAssistantCopyButton(el);
   });
-  const activeTab = activeTabPath ? openTabs.get(activeTabPath) : null;
-  if (activeTab && isMarkdownFileName(activeTab.name) && markdownViewMode === "md") {
+  const activeTab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
+  if (activeTab && isMarkdownFileName(activeTab.name) && appState.markdownViewMode === "md") {
     renderEditor({ focusEditor: false });
   }
 });
@@ -22226,12 +22033,12 @@ securityExchangeSash?.addEventListener("keydown", (e) => {
 });
 
 function setTerminalCollapsed(collapsed, { createIfMissing = true } = {}) {
-  if (collapsed && terminalMaximized) {
-    terminalMaximized = false;
+  if (collapsed && appState.terminalMaximized) {
+    appState.terminalMaximized = false;
     centerPanel.classList.remove("terminal-maximized");
     syncTerminalMaximizeButton();
   }
-  terminalCollapsed = collapsed;
+  appState.terminalCollapsed = collapsed;
   terminalPane.classList.toggle("collapsed", collapsed);
   terminalResize.classList.toggle("collapsed-hint", collapsed);
   btnTopTerminal?.classList.toggle("active", !collapsed);
@@ -22242,7 +22049,7 @@ function setTerminalCollapsed(collapsed, { createIfMissing = true } = {}) {
 
   if (collapsed) {
     if (terminalPane.offsetHeight > TERMINAL_MIN_EXPANDED) {
-      terminalSavedHeight = terminalPane.offsetHeight;
+      appState.terminalSavedHeight = terminalPane.offsetHeight;
     }
     terminalPane.style.height = "0px";
     terminalPane.style.flex = "none";
@@ -22252,14 +22059,14 @@ function setTerminalCollapsed(collapsed, { createIfMissing = true } = {}) {
     const centerH = centerPanel.getBoundingClientRect().height;
     const sashH = terminalResize.offsetHeight || 0;
     const availableH = Math.max(0, centerH - sashH);
-    terminalSavedHeight = Math.min(
-      Math.max(TERMINAL_MIN_EXPANDED, terminalSavedHeight),
+    appState.terminalSavedHeight = Math.min(
+      Math.max(TERMINAL_MIN_EXPANDED, appState.terminalSavedHeight),
       Math.max(TERMINAL_MIN_EXPANDED, availableH - EDITOR_MIN_HEIGHT),
     );
-    terminalPane.style.height = `${terminalSavedHeight}px`;
+    terminalPane.style.height = `${appState.terminalSavedHeight}px`;
     terminalPane.style.flex = "none";
     editorPane.style.flex = "none";
-    const editorH = Math.max(EDITOR_MIN_HEIGHT, availableH - terminalSavedHeight);
+    const editorH = Math.max(EDITOR_MIN_HEIGHT, availableH - appState.terminalSavedHeight);
     editorPane.style.height = `${editorH}px`;
     requestAnimationFrame(() => {
       EditorManager.layout();
@@ -22274,30 +22081,30 @@ function setTerminalCollapsed(collapsed, { createIfMissing = true } = {}) {
 function syncTerminalMaximizeButton() {
   if (!btnTerminalMaximize) return;
   const icon = btnTerminalMaximize.querySelector(".codicon");
-  icon?.classList.toggle("codicon-chevron-up", !terminalMaximized);
-  icon?.classList.toggle("codicon-chevron-down", terminalMaximized);
-  btnTerminalMaximize.title = terminalMaximized ? "Restore Panel Size" : "Maximize Panel";
-  btnTerminalMaximize.setAttribute("aria-pressed", String(terminalMaximized));
+  icon?.classList.toggle("codicon-chevron-up", !appState.terminalMaximized);
+  icon?.classList.toggle("codicon-chevron-down", appState.terminalMaximized);
+  btnTerminalMaximize.title = appState.terminalMaximized ? "Restore Panel Size" : "Maximize Panel";
+  btnTerminalMaximize.setAttribute("aria-pressed", String(appState.terminalMaximized));
 }
 
 function setTerminalMaximized(maximized) {
   const next = Boolean(maximized);
-  if (next && terminalCollapsed) setTerminalCollapsed(false);
-  terminalMaximized = next;
-  centerPanel.classList.toggle("terminal-maximized", terminalMaximized);
+  if (next && appState.terminalCollapsed) setTerminalCollapsed(false);
+  appState.terminalMaximized = next;
+  centerPanel.classList.toggle("terminal-maximized", appState.terminalMaximized);
   syncTerminalMaximizeButton();
 
-  if (!terminalMaximized) {
+  if (!appState.terminalMaximized) {
     const centerH = centerPanel.getBoundingClientRect().height;
     const sashH = terminalResize.offsetHeight || 0;
     const availableH = Math.max(0, centerH - sashH);
-    terminalSavedHeight = Math.min(
-      Math.max(TERMINAL_MIN_EXPANDED, terminalSavedHeight),
+    appState.terminalSavedHeight = Math.min(
+      Math.max(TERMINAL_MIN_EXPANDED, appState.terminalSavedHeight),
       Math.max(TERMINAL_MIN_EXPANDED, availableH - EDITOR_MIN_HEIGHT),
     );
-    terminalPane.style.height = `${terminalSavedHeight}px`;
+    terminalPane.style.height = `${appState.terminalSavedHeight}px`;
     terminalPane.style.flex = "none";
-    editorPane.style.height = `${Math.max(EDITOR_MIN_HEIGHT, availableH - terminalSavedHeight)}px`;
+    editorPane.style.height = `${Math.max(EDITOR_MIN_HEIGHT, availableH - appState.terminalSavedHeight)}px`;
     editorPane.style.flex = "none";
   } else {
     terminalPane.style.height = "";
@@ -22313,7 +22120,7 @@ function setTerminalMaximized(maximized) {
 }
 
 btnTerminalMaximize?.addEventListener("click", () => {
-  setTerminalMaximized(!terminalMaximized);
+  setTerminalMaximized(!appState.terminalMaximized);
 });
 
 btnTerminalClose?.addEventListener("click", () => {
@@ -22323,44 +22130,42 @@ btnTerminalClose?.addEventListener("click", () => {
 globalThis.collapseTerminalPanel = () => setTerminalCollapsed(true, { createIfMissing: false });
 
 globalThis.expandTerminalPanel = ({ createIfMissing = true } = {}) => {
-  if (terminalCollapsed) setTerminalCollapsed(false, { createIfMissing });
+  if (appState.terminalCollapsed) setTerminalCollapsed(false, { createIfMissing });
   else if (createIfMissing && !TerminalManager.hasSessions()) TerminalManager.ensureTerminal();
   return true;
 };
 
 globalThis.toggleTerminalPanel = () => {
-  const nextCollapsed = !terminalCollapsed;
+  const nextCollapsed = !appState.terminalCollapsed;
   setTerminalCollapsed(nextCollapsed);
   return !nextCollapsed;
 };
 
 globalThis.onTerminalSessionStateChange = ({ count }) => {
-  if (count === 0 && !terminalCollapsed) setTerminalCollapsed(true, { createIfMissing: false });
-  else TerminalManager.setPanelOpen?.(!terminalCollapsed && count > 0);
+  if (count === 0 && !appState.terminalCollapsed) setTerminalCollapsed(true, { createIfMissing: false });
+  else TerminalManager.setPanelOpen?.(!appState.terminalCollapsed && count > 0);
 };
 
-let terminalDragShouldCollapse = false;
-let terminalDragLayoutFrame = 0;
-let terminalHeightBeforeDrag = terminalSavedHeight;
+appState.terminalHeightBeforeDrag = appState.terminalSavedHeight;
 
 function scheduleTerminalDragLayout() {
-  if (terminalDragLayoutFrame) return;
-  terminalDragLayoutFrame = requestAnimationFrame(() => {
-    terminalDragLayoutFrame = 0;
+  if (appState.terminalDragLayoutFrame) return;
+  appState.terminalDragLayoutFrame = requestAnimationFrame(() => {
+    appState.terminalDragLayoutFrame = 0;
     EditorManager.layout();
   });
 }
 
 makeDraggable(terminalResize, (e) => {
-  if (terminalMaximized) setTerminalMaximized(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
   const rect = centerPanel.getBoundingClientRect();
   const relY = e.clientY - rect.top;
   const sashH = terminalResize.offsetHeight || 0;
   const availableH = Math.max(0, rect.height - sashH);
   const requestedTerminalH = availableH - relY;
-  terminalDragShouldCollapse = requestedTerminalH <= TERMINAL_HEADER_H + 8;
+  appState.terminalDragShouldCollapse = requestedTerminalH <= TERMINAL_HEADER_H + 8;
 
-  if (terminalCollapsed) {
+  if (appState.terminalCollapsed) {
     setTerminalCollapsed(false);
   }
 
@@ -22368,26 +22173,26 @@ makeDraggable(terminalResize, (e) => {
     availableH - TERMINAL_MIN_EXPANDED,
     Math.max(EDITOR_MIN_HEIGHT, relY),
   );
-  terminalSavedHeight = availableH - editorH;
+  appState.terminalSavedHeight = availableH - editorH;
 
   editorPane.style.height = `${editorH}px`;
   editorPane.style.flex = "none";
-  terminalPane.style.height = `${terminalSavedHeight}px`;
+  terminalPane.style.height = `${appState.terminalSavedHeight}px`;
   terminalPane.style.flex = "none";
 
   scheduleTerminalDragLayout();
 }, {
   onStart() {
-    terminalDragShouldCollapse = false;
-    terminalHeightBeforeDrag = terminalSavedHeight;
+    appState.terminalDragShouldCollapse = false;
+    appState.terminalHeightBeforeDrag = appState.terminalSavedHeight;
     centerPanel.classList.add("terminal-resizing");
   },
   onEnd() {
     centerPanel.classList.remove("terminal-resizing");
-    if (terminalDragLayoutFrame) cancelAnimationFrame(terminalDragLayoutFrame);
-    terminalDragLayoutFrame = 0;
-    if (terminalDragShouldCollapse) {
-      terminalSavedHeight = terminalHeightBeforeDrag;
+    if (appState.terminalDragLayoutFrame) cancelAnimationFrame(appState.terminalDragLayoutFrame);
+    appState.terminalDragLayoutFrame = 0;
+    if (appState.terminalDragShouldCollapse) {
+      appState.terminalSavedHeight = appState.terminalHeightBeforeDrag;
       setTerminalCollapsed(true);
       return;
     }
@@ -22399,17 +22204,17 @@ makeDraggable(terminalResize, (e) => {
 });
 
 function applyTerminalHeight(value) {
-  if (terminalMaximized) setTerminalMaximized(false);
-  if (terminalCollapsed) setTerminalCollapsed(false);
+  if (appState.terminalMaximized) setTerminalMaximized(false);
+  if (appState.terminalCollapsed) setTerminalCollapsed(false);
   const centerH = centerPanel.getBoundingClientRect().height;
   const sashH = terminalResize.offsetHeight || 0;
   const availableH = Math.max(0, centerH - sashH);
-  terminalSavedHeight = Math.max(96, Math.min(availableH - EDITOR_MIN_HEIGHT, value));
-  terminalPane.style.height = `${terminalSavedHeight}px`;
+  appState.terminalSavedHeight = Math.max(96, Math.min(availableH - EDITOR_MIN_HEIGHT, value));
+  terminalPane.style.height = `${appState.terminalSavedHeight}px`;
   terminalPane.style.flex = "none";
-  editorPane.style.height = `${Math.max(EDITOR_MIN_HEIGHT, availableH - terminalSavedHeight)}px`;
+  editorPane.style.height = `${Math.max(EDITOR_MIN_HEIGHT, availableH - appState.terminalSavedHeight)}px`;
   editorPane.style.flex = "none";
-  terminalResize.setAttribute("aria-valuenow", String(Math.round(terminalSavedHeight)));
+  terminalResize.setAttribute("aria-valuenow", String(Math.round(appState.terminalSavedHeight)));
   requestAnimationFrame(() => { EditorManager.layout(); TerminalManager.fitActive(); });
 }
 
@@ -22417,7 +22222,7 @@ terminalResize.addEventListener("dblclick", () => applyTerminalHeight(240));
 terminalResize.addEventListener("keydown", (event) => {
   const centerH = centerPanel.getBoundingClientRect().height;
   const maximum = Math.max(96, centerH - (terminalResize.offsetHeight || 0) - EDITOR_MIN_HEIGHT);
-  let next = terminalCollapsed ? 96 : terminalPane.offsetHeight;
+  let next = appState.terminalCollapsed ? 96 : terminalPane.offsetHeight;
   if (event.key === "ArrowUp") next += 8;
   else if (event.key === "ArrowDown") next -= 8;
   else if (event.key === "Home") next = 96;
@@ -22484,7 +22289,7 @@ window.api.onProxyCapture?.(handleProxyCapture);
 window.api.onProxyStatus?.(syncProxyListenerUi);
 window.api.onProxyBrowserStatus?.(syncProxyBrowserUi);
 window.api.proxyStatus?.().then(syncProxyListenerUi).catch(() => {});
-window.api.proxyBrowserStatus?.({ assessmentPath }).then(syncProxyBrowserUi).catch(() => {});
+window.api.proxyBrowserStatus?.({ assessmentPath: appState.assessmentPath }).then(syncProxyBrowserUi).catch(() => {});
 restoreBugBountyTreeState();
 setSidebarView("project", { persist: false });
 setChatCollapsed(false);

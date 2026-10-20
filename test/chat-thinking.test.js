@@ -1,11 +1,12 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+const renderer = rendererSource();
 const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
 const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
 const workFold = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "chat", "chat-work-fold.js"), "utf8");
@@ -16,7 +17,7 @@ test("thinking streams into a Thinking / Thought for fold", () => {
   assert.match(renderer, /thinking:\s*null,\s*\n\s*thinkingConfigured:\s*false/);
   assert.match(renderer, /return settings\?\.thinking !== false/);
   assert.doesNotMatch(renderer, /createAssistantTurn\(modelThinkingEnabled\(settings\)\)/);
-  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = activeChatSessionId \} = \{\}\)/);
+  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = appState\.activeChatSessionId \} = \{\}\)/);
   assert.match(renderer, /showPrivateReasoning\(\)/);
   assert.doesNotMatch(renderer, /assistant\.setStatus\("Thinking…"\)/);
   assert.match(workFold, /className = "agent-work-header agent-status-line"/);
@@ -159,7 +160,7 @@ test("large Agent work uses a temporary collapsible composer checklist", () => {
   assert.match(renderer, /function renderComposerTaskList\(payload = \{\}\)/);
   assert.match(renderer, /payload\.clear \|\| payload\.completed/);
   assert.match(renderer, /class="composer-task-list-card" aria-expanded=/);
-  assert.match(renderer, /if \(!activeComposerTaskList\?\.expanded \|\| composerTaskListEl\?\.contains\(event\.target\)\) return/);
+  assert.match(renderer, /if \(!appState\.activeComposerTaskList\?\.expanded \|\| composerTaskListEl\?\.contains\(event\.target\)\) return/);
   assert.match(renderer, /const workTools = tools\.filter\(\(tool\) => !isEndTurnTool\(tool\) && !isTaskListTool\(tool\)\)/);
   assert.match(chatStyles, /\.composer-task-list-card \{[\s\S]*?border-radius: 10px/);
   assert.match(chatStyles, /\.composer-task-list-row\[data-task-status="completed"\] \.composer-task-list-title \{[\s\S]*?text-decoration: line-through/);

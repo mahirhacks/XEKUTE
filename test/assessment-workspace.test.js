@@ -1,3 +1,4 @@
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -61,7 +62,7 @@ test("multi-delete removes only selected Custom roots and never assessment files
 
 test("security workspace exposes Traffic Raw history with request and response details", () => {
   const html = readUiShell();
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   assert.ok(html.includes('id="security-history-toggle"'));
   assert.ok(html.includes('id="security-history-rows"'));
   for (const key of ["number", "host", "method", "path", "params", "status", "length", "mime", "tool", "time"]) {
@@ -88,7 +89,7 @@ test("security workspace exposes Traffic Raw history with request and response d
 
 test("workspace editor renders synchronized logical line numbers", () => {
   const html = readUiShell();
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('id="resource-editor-shell"'));
   assert.ok(html.includes('id="resource-line-numbers"'));
@@ -112,7 +113,7 @@ test("chat markdown wraps long security values without horizontal expansion", ()
 });
 
 test("chat sessions are restored per workspace and saved after explicit lifecycle changes", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const preload = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "preload.js"), "utf8");
   assert.match(preload, /loadChatHistory/);
   assert.match(preload, /recordChatEvent/);
@@ -125,13 +126,13 @@ test("chat sessions are restored per workspace and saved after explicit lifecycl
 
 test("authority UI does not offer unrestricted mode", () => {
   const html = readUiShell();
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   assert.doesNotMatch(html, /Unrestricted|data-authority-mode=["']unrestricted["']/);
   assert.doesNotMatch(renderer, /\["unrestricted",\s*"Unrestricted"/);
 });
 
 test("terminal sash resizing is frame-synchronized and deduplicates PTY dimensions", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.match(renderer, /addEventListener\("pointerdown"/);
@@ -161,7 +162,7 @@ test("panel dividers keep a thin line with an expanded pointer hit area", () => 
 
 test("terminal stays collapsed without a session and creates one when expanded", () => {
   const html = readUiShell();
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const terminal = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "terminal", "terminal-controller.js"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
   assert.match(terminal, /function hasSessions\(\)/);
@@ -194,7 +195,7 @@ test("agent-owned terminals stay after exit so the operator can review output", 
 
 test("project workspace exposes a plain folder flow and professional project settings", () => {
   const html = readUiShell();
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   const settingsStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "settings.css"), "utf8");
   const layoutRevampStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
@@ -245,7 +246,7 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(layoutRevampStyles, /\.browser-topbar-icon\.active\s*\{[^}]*#75beff/);
   assert.match(renderer, /function openBrowserTab\(\)[\s\S]*?special: "browser"/);
   assert.match(renderer, /closest\("#security-proxy-browser"\)\) \{\s*event\.stopPropagation\(\);\s*closeProxyBrowserMenu\(\);\s*openBrowserTab\(\);\s*\}/, "the title-bar button opens the Browser workspace without creating a page");
-  assert.match(renderer, /openBrowserTab\(\);\s*await browserWorkspace\?\.open\(\{ identityId:/, "choosing an identity opens a page with it");
+  assert.match(renderer, /openBrowserTab\(\);\s*await appState\.browserWorkspace\?\.open\(\{ identityId:/, "choosing an identity opens a page with it");
   assert.match(renderer, /function showBrowserWorkspaceContent\(\)[\s\S]*?browserWorkspace\?\.setVisible\(true\)/);
   assert.match(renderer, /nextSettings\.listener\.enabled = true/);
   assert.match(renderer, /contextmenu[\s\S]{0,200}chooseProxyBrowserIdentity\(\);/);
@@ -269,8 +270,8 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(layoutRevampStyles, /\.engagement-account-row:hover > \.engagement-account-header \.engagement-account-delete,[\s\S]*?opacity: 1;[\s\S]*?pointer-events: auto/);
   assert.match(layoutRevampStyles, /\.engagement-account-grid \{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.doesNotMatch(certificateMarkup, /id="identity-list"|id="credential-list"|Identity sessions|Authentication accounts/);
-  assert.match(renderer, /onIdentityStatus\?\.\(\(snapshot\) => \{\s*if \(appSettingsSection !== "project"\) return;/);
-  assert.match(renderer, /onIdentityPersistence\?\.\(\(event\) => \{\s*if \(appSettingsSection !== "project"\) return;/);
+  assert.match(renderer, /onIdentityStatus\?\.\(\(snapshot\) => \{\s*if \(appState\.appSettingsSection !== "project"\) return;/);
+  assert.match(renderer, /onIdentityPersistence\?\.\(\(event\) => \{\s*if \(appState\.appSettingsSection !== "project"\) return;/);
   assert.ok(html.includes("<strong>Security Workbench</strong>"));
   assert.ok(!html.includes("Intercept, replay, and test authorized HTTP traffic."));
   assert.doesNotMatch(html, /id="(?:command-settings-save|llm-settings-save|kali-access-save)"/);
@@ -386,7 +387,7 @@ test("project workspace exposes a plain folder flow and professional project set
 
 test("application graph workspace and attack_graph are removed", () => {
   const html = readUiShell();
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
   const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
@@ -418,7 +419,7 @@ test("runtime controls are app-managed Project Settings, not assessment files", 
 });
 
 test("project settings tabs map vertical wheel movement to horizontal scrolling", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "layout-revamp.css"), "utf8");
   assert.match(renderer, /projectSettingsNav\?\.addEventListener\("wheel"/);
   assert.match(renderer, /projectSettingsNav\.scrollLeft \+ delta/);
@@ -430,7 +431,7 @@ test("project settings tabs map vertical wheel movement to horizontal scrolling"
 
 test("Custom actions are hover-revealed and Scope/Config files are not workspace items", () => {
   const html = readUiShell();
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('class="bounty-subsection-label bounty-custom-label"'));
   assert.doesNotMatch(html, /data-bounty-file="settings\.config"/);
@@ -454,7 +455,7 @@ test("Custom actions are hover-revealed and Scope/Config files are not workspace
 
 test("incomplete assessments keep the tree visible and expose a repair review dialog", () => {
   const html = readUiShell();
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.ok(html.includes('id="assessment-repair-overlay"'));
   assert.ok(html.includes('id="assessment-repair-list"'));
@@ -766,7 +767,7 @@ test("traffic history delete removes selected exchanges from Traffic Raw", () =>
 });
 
 test("interceptor Browser click opens immediately and keeps the proxy listener up", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
   const projectIpc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "ipc", "project.js"), "utf8");
   assert.match(renderer, /contextmenu[\s\S]{0,200}chooseProxyBrowserIdentity\(\);/);

@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -51,13 +52,13 @@ test("released blocks render greyed with no pin control and live blocks get one"
 });
 
 test("the renderer, preload and main process are wired for blocks, pinning and release notices", () => {
-  const bootstrap = read("src/ui/bootstrap.js");
+  const bootstrap = rendererSource();
   assert.match(read("src/ui/core/runtime-modules.js"), /import "\.\.\/features\/chat\/context-blocks-view\.js";/);
   assert.match(bootstrap, /blocks: globalThis\.XekuteContextBlocksView\?\.normalizeContextBlocks\(value\.blocks\) \|\| \[\]/);
   assert.match(bootstrap, /blocks: storedIsTier1 \? \(storedUsage\.blocks \|\| \[\]\) : \[\]/);
   assert.match(bootstrap, /renderContextBlocksPanel\(breakdown\.blocks, breakdown\.pinBudgetTokens\)/);
   assert.match(bootstrap, /renderContextBlocksHtml\(list, \{ escapeHtml, formatTokenCount, pinBudgetTokens \}\)/);
-  assert.match(bootstrap, /window\.api\.contextPinBlock\(\{ workspace: rootPath \|\| "", memorySessionId: session\.memorySessionId \|\| "", index, pinned \}\)/);
+  assert.match(bootstrap, /window\.api\.contextPinBlock\(\{ workspace: appState\.rootPath \|\| "", memorySessionId: session\.memorySessionId \|\| "", index, pinned \}\)/);
   assert.match(bootstrap, /if \(payload\.type === "context_release"\) \{\s+applyContextReleaseUi\(run, payload\);/);
   assert.match(read("src/app/electron/preload.js"), /contextPinBlock: \(payload = \{\}\) => ipcRenderer\.invoke\("context:pinBlock", payload\)/);
   const main = read("src/app/electron/main.js");

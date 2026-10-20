@@ -1,13 +1,14 @@
 "use strict";
 
+const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8");
-const webcloneStart = source.indexOf("let webcloneFileRequestGeneration = 0;");
+const source = rendererSource();
+const webcloneStart = source.indexOf("async function openWebCloneFile(relativePath)");
 const webcloneEnd = source.indexOf("\nasync function buildWebClone", webcloneStart);
 const webcloneFunctions = source.slice(webcloneStart, webcloneEnd);
 const deferred = () => {
@@ -36,7 +37,7 @@ function fixture(api) {
     renderWebCloneFiles() {},
     addErrorMessage(message) { visible.error = message; },
   };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(webcloneFunctions, context);
   return { context, visible };
 }

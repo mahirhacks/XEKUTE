@@ -1,3 +1,4 @@
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -22,7 +23,7 @@ test("WebClone workspace keeps the central view separate from the right file dra
 
 test("WebClone preview uses a dedicated no-preload view and a loopback-only document server", () => {
   const main = fs.readFileSync(require.resolve("../src/app/electron/main.js"), "utf8");
-  const renderer = fs.readFileSync(require.resolve("../src/ui/bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   assert.match(main, /new WebContentsView/);
   assert.match(main, /server\.listen\(0, "127\.0\.0\.1"/);
   assert.match(main, /connect-src 'none'/);
