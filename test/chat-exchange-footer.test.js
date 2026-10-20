@@ -8,16 +8,8 @@ const bootstrapSource = rendererSource();
 const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
 const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
 
-function functionBody(name, nextName) {
-  const pattern = new RegExp(`function ${name}\\([^]*?\\r?\\n}\\r?\\n\\r?\\nfunction ${nextName}\\(`);
-  const match = bootstrapSource.match(pattern);
-  assert.ok(match, `Could not find ${name}`);
-  return match[0];
-}
-
-
 test("assistant exchange footer is rebuilt only after the entire AI chunk is idle", () => {
-  const body = functionBody("attachAssistantCopyButton", "toolIconClass");
+  const body = rendererDefinitions("attachAssistantCopyButton");
   const removeAt = body.indexOf('querySelectorAll(".assistant-reply-footer")');
   const busyCheckAt = body.indexOf('getAttribute("aria-busy") === "true"');
   const appendAt = body.lastIndexOf("host.appendChild(footer)");

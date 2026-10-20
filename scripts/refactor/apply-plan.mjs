@@ -24,7 +24,7 @@ for (let index = Number(startArg || 0); index < plan.length; index++) {
   // A few process and socket tests flake under load; a real break fails twice.
   for (let attempt = 1; ; attempt++) {
     try {
-      run("npm test");
+      run("npm test", { timeout: 10 * 60 * 1000 });
       break;
     } catch (error) {
       const out = String(error.stdout);
