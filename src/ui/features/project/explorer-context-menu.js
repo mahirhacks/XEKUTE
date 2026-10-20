@@ -16,7 +16,7 @@ import {
 } from "../chat/chat-sessions.js";
 import {
   remapOpenTabsUnderWorkspacePath, closeTabsUnderWorkspacePath, openFile,
-} from "../../bootstrap.js";
+} from "../editor/editor-tabs.js";
 import {
   createChatSession, clearChatSessionState, schedulePersistChatSessions,
 } from "../chat/chat-persistence.js";

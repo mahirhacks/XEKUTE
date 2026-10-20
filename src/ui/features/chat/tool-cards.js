@@ -14,9 +14,8 @@ import {
   minimalToolSuccessLabel,
 } from "./tool-labels.js";
 import { activeChatRuns } from "./chat-run-state.js";
-import {
-  openTabs, openFile, isMarkdownFileName, renderTabs, renderEditor, closeTab,
-} from "../../bootstrap.js";
+import { isMarkdownFileName, renderTabs, renderEditor } from "../../bootstrap.js";
+import { openTabs, openFile, closeTab } from "../editor/editor-tabs.js";
 import { refreshWorkspaceUi, reconcileDeletedWorkspacePath } from "../project/explorer-tree.js";
 import { loadGuidanceSettings } from "../settings/guidance-settings.js";
 import { startWaitCardTicker } from "../agents/background-waits.js";

@@ -9,9 +9,9 @@ import {
 import { appState } from "../../core/app-state.js";
 import { loadGuidanceSettings } from "./guidance-settings.js";
 import {
-  openTabs, showCodeEditorWorkspace, renderTabs, syncWorkspaceActivity, commitActiveTab,
-  setTerminalMaximized, renderEditor,
+  showCodeEditorWorkspace, renderTabs, syncWorkspaceActivity, setTerminalMaximized, renderEditor,
 } from "../../bootstrap.js";
+import { openTabs, commitActiveTab } from "../editor/editor-tabs.js";
 import { projectName } from "../project/project-activation.js";
 import { loadProjectProfile } from "../project/project-profile.js";
 import { refreshAssessmentSettingsCache } from "./settings-tab-editor.js";

@@ -4,9 +4,8 @@ import {
   resourceViewerContent, resourceViewerCopy, checklistUIView, scopeUIView, explorerRootToggle,
   explorerRootChevron, fileTree, explorerTitle, projectSetup, sidebarHeader, statusWorkspace,
 } from "../../core/dom-refs.js";
-import {
-  settingsViewSwitch, showResourceWorkspace, appController, openFile,
-} from "../../bootstrap.js";
+import { settingsViewSwitch, showResourceWorkspace, appController } from "../../bootstrap.js";
+import { openFile } from "../editor/editor-tabs.js";
 import { refreshSecurityHistoryIfVisible } from "../security/traffic-history.js";
 import { selectedCustomEntries } from "../assessment/custom-entries.js";
 import { setResourceDirty } from "../assessment/resource-viewer.js";

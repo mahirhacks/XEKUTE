@@ -4,7 +4,7 @@ import {
   guidanceSettingsList, chatInput,
 } from "../../core/dom-refs.js";
 import { escapeHtml } from "../../core/text-format.js";
-import { openFile } from "../../bootstrap.js";
+import { openFile } from "../editor/editor-tabs.js";
 import { openChatPane } from "../chat/chat-sessions.js";
 import { setChatMode } from "../chat/chat-mode.js";
 import { resizeChatInput, setChatInputCaretToEnd, updateSendBtn } from "../chat/composer-input.js";

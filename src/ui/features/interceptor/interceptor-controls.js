@@ -1,7 +1,7 @@
 import {
-  openTabs, showCodeEditorWorkspace, renderTabs, commitActiveTab, renderEditor,
-  setTerminalMaximized, openBrowserTab,
+  showCodeEditorWorkspace, renderTabs, renderEditor, setTerminalMaximized, openBrowserTab,
 } from "../../bootstrap.js";
+import { openTabs, commitActiveTab } from "../editor/editor-tabs.js";
 import {
   ingestLiveSecurityHistory, refreshSecurityHistoryIfVisible,
 } from "../security/traffic-history.js";

@@ -1,4 +1,4 @@
-import { openTabs, commitActiveTab } from "../../bootstrap.js";
+import { openTabs, commitActiveTab } from "../editor/editor-tabs.js";
 import { AUTO_CONTEXT_ESTIMATE } from "../models/model-settings.js";
 import { appState } from "../../core/app-state.js";
 import { relativePathFromRoot, joinWorkspacePath } from "../../core/workspace-paths.js";

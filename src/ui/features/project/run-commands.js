@@ -1,6 +1,6 @@
 import { appState } from "../../core/app-state.js";
 import { menuRunCode } from "../../core/dom-refs.js";
-import { openTabs } from "../../bootstrap.js";
+import { openTabs } from "../editor/editor-tabs.js";
 import { TerminalManager } from "../../core/runtime-globals.js";
 import { basenameOf, joinWorkspacePath } from "../../core/workspace-paths.js";
 

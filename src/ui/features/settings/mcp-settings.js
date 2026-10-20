@@ -5,7 +5,7 @@ import {
   commandSettingsStatus, kaliAccessTest,
 } from "../../core/dom-refs.js";
 import { escapeHtml } from "../../core/text-format.js";
-import { openFile } from "../../bootstrap.js";
+import { openFile } from "../editor/editor-tabs.js";
 
 export const MCP_KIND_DESCRIPTION = "Configure standard MCP servers using the same command, arguments, and environment fields used by other MCP clients.";
 export const MCP_KIND_ICON = "codicon-plug";
