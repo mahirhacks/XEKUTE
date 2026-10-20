@@ -51,12 +51,112 @@ import {
   splitFileTags,
 } from "./features/chat/file-tags.js";
 import { appState } from "./core/app-state.js";
+import {
+  $, btnNewFile, btnNewFolder, explorerTitle, explorerRootToggle, explorerRootChevron,
+  btnOpenFolder, fileTree, activityExplorer, activitySearch, activityRun, activityBugBounty,
+  activitySecurity, activityTerminal, activityChat, activitySettings, btnSidebarMore,
+  btnCreateProjectHeader, sidebarViewTitle, explorerSidebarView, projectSetup, sidebarHeader,
+  btnCreateProjectSidebar, btnOpenProjectSidebar, bugBountySidebarView, bugBountyTree,
+  btnBugBountyMore, bugBountyTargetLabel, bugBountySetup, bugBountyStateIcon, bugBountyStateTitle,
+  bugBountyStateMessage, btnCreateProject, btnCreateAssessment, btnOpenAssessment,
+  bugBountyRepair, bugBountyRepairLabel, assessmentRepairOverlay, assessmentRepairClose,
+  assessmentRepairCancel, assessmentRepairConfirm, assessmentRepairSubtitle,
+  assessmentRepairDescription, assessmentRepairSummary, assessmentRepairList, editorTabBar,
+  editorTabContextMenu, editorPathBar, editorPathLabel, editorBody, editorEmpty, editorView,
+  editorError, monacoContainer, markdownPreview, settingsEditorToolbar, settingsUIView,
+  settingsViewJson, settingsViewUi, proxyListenerStatus, proxyCaPath, btnShowProxyCa, messages,
+  chatInput, sendBtn, attachImageBtn, attachImageInput, composerAttachmentsEl, chatModeToggle,
+  chatModeButton, chatModeIcon, chatModeButtonLabel, chatModeMenu, appMenu, helpGuideOverlay,
+  helpGuideClose, menuRunCode, commandCenter, quickOverlay, quickPanel, quickIcon, quickInput,
+  quickMeta, quickResults, quickSearchHelp, quickSearchAssist, quickSearchSuggestions,
+  quickSearchChips, chatHeader, btnTopFileTree, btnTopTerminal, btnTopChat, btnTopSettings,
+  btnNotifications, notificationCount, notificationPanel, notificationList, notificationClear,
+  btnWindowMinimize, btnWindowMaximize, btnWindowClose, chatSessionSelect, btnChatNew,
+  btnChatDelete, btnChatHistory, chatHistoryPopover, chatHistoryBody, chatHistoryEmpty,
+  chatHistorySearch, btnChatMore, btnChatCollapse, contextUsageBtn, contextRingFill,
+  contextUsagePopover, contextUsageHeadingValue, inputBar, chatHistorySecurityWarning,
+  memorySaveBanner, composerQuestionsEl, composerTaskListEl, slashCommandSuggestions,
+  selectedSlashCommandEl, contextUsageFill, contextUsageUsed, contextUsagePct,
+  contextUsageBreakdown, contextUsageSource, contextUsageClose, contextUsageSegments,
+  contextUsageMenu, contextWindowTrigger, contextWindowValue, contextBlocksTrigger,
+  contextBlocksValue, contextBlocksPanel, contextBlocksList, modelPicker, modelLabel,
+  authorityPicker, authorityLabel, authorityMenu, modelMenu, modelControlsMenu,
+  modelContextTrigger, modelEffortTrigger, modelBrowseTrigger, modelContextValue,
+  modelEffortValue, modelCurrentName, modelSearch, modelList, modelAddBtn, modelAddForm,
+  modelCustom, modelCustomAdd, modelEditMenu, thinkingToggle, ollamaThinkingRow,
+  ollamaThinkingSection, openRouterReasoningRow, reasoningOptions, contextOptions, sidebar,
+  sidebarResize, chatPane, chatResize, terminalPane, terminalResize, centerPanel,
+  btnTerminalMaximize, btnTerminalClose, editorPane, resourceViewer, resourceViewerTitle,
+  resourceViewerMeta, resourceViewerIcon, resourceViewerEmpty, resourceViewerContent,
+  resourceLineNumbers, resourceViewerSave, resourceViewerCopy, resourceViewerActions,
+  appSettingsWorkspace, appSettingsPageTitle, appSettingsPageSubtitle, appSettingsSearch,
+  appSettingsProfileName, appSettingsProfilePlan, appSettingsGeneralPanel, generalStatusBarToggle,
+  generalUpdatesToggle, generalCurrentVersion, statusbar, updateToast, updateToastVersion,
+  updateToastInstall, updateToastIgnore, appSettingsProjectPanel, projectSettingsUnavailable,
+  projectSettingsShell, projectSettingsForm, projectSettingsSections, projectSettingsName,
+  projectSettingsRoot, projectSettingsCreate, projectSettingsOpen, projectSettingsNav,
+  projectSettingsNavButtons, commandSettingsStatus, appSettingsCommandsPanel, mcpSettingsList,
+  mcpSettingsTabs, kaliAccessForm, kaliAccessEnabled, kaliAccessFields, kaliAccessHost,
+  kaliAccessPort, kaliAccessUsername, kaliAccessKey, kaliAccessAcceptHostKey, kaliAccessKeyBrowse,
+  kaliAccessOpenMcp, kaliAccessTest, kaliAccessStatus, appSettingsAuthorityPanel,
+  appSettingsPromptsPanel, guidanceSettingsList, guidanceSettingsEmpty, guidanceSettingsDetail,
+  guidanceScopeTabs, guidanceNew, guidanceEmptyNew, guidanceImport, appSettingsCertificatesPanel,
+  appSettingsKnowledgePanel, appSettingsLlmPanel, llmProvider, llmProviderOllama,
+  llmProviderOpenRouter, llmOllamaConfig, llmOpenRouterConfig, openRouterBaseUrl, openRouterModel,
+  openRouterApiKey, llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle,
+  llmOpenRouterKeyStatus, llmOpenRouterKeyFields, llmOpenRouterBaseToggle,
+  llmOpenRouterBaseFields, llmOllamaEnableToggle, llmOllamaEndpointToggle,
+  llmOllamaEndpointStatus, llmOllamaEndpointFields, modelsSettingsSearch, modelsSettingsRefresh,
+  modelsSettingsList, modelsViewAllBtn, modelsExploreSubagent, ollamaHostInput,
+  ollamaLocationBadge, ollamaActiveEndpoint, ollamaConnectionStatus, ollamaHostTest,
+  ollamaHostReset, certificateDirectory, certificateLocationBadge, certificateBrowse,
+  certificateOpenFolder, certificateReset, identityRuntimeStatus, identityRefresh, identityNewId,
+  identityNewName, identityNewRole, identityCreate, identityList, identityImportTarget,
+  identityImportFormat, identityImportData, identityImport, identitySettingsStatus,
+  projectAuthSource, credentialNewId, credentialNewLabel, credentialNewUsername,
+  credentialNewPassword, credentialNewRole, credentialCreate, credentialList,
+  engagementAccountList, engagementAccountAdd, appSettingsSectionButtons, checklistUIView,
+  checklistFrameworkName, checklistFrameworkVersion, checklistProgress, checklistSearch,
+  checklistStatusFilter, checklistGroups, scopeUIView, scopeUITitle, scopeUIDescription,
+  scopeUIForm, assessmentModuleView, assessmentModuleTitle, assessmentModuleDescription,
+  assessmentModuleSummary, assessmentModuleContent, assessmentModuleOpenJson,
+  assessmentReportGenerate, assessmentRunProfile, assessmentRunStart, assessmentRunStop,
+  securityWorkspace, webcloneWorkspace, webcloneBuildAction, webclonePreviewAction,
+  webclonePreviewClose, webcloneTarget, webcloneFilesToggle, webcloneStatus, webcloneEmpty,
+  webcloneContent, webcloneFileList, webcloneFileCount, webcloneFileTitle, webcloneFileMeta,
+  webcloneFileContent, webcloneEditorPane, webclonePreviewPane, webclonePreviewFrame,
+  customTreeItems, customContextMenu, customContextDelete, customContextDeleteLabel,
+  workspaceContextMenu, appSettingsOverlay, customCommandsInput, commandRegistryInput,
+  securityWorkspaceTools, securityWorkspaceBody, securityToolSwitcher, securityToolButton,
+  securityToolMenu, securityToolIcon, securityToolLabel, securityHistoryAnalyzeButton,
+  securityWorkbench, securityWorkbenchMode, securityWorkbenchStatus, securityProxyBrowser,
+  securityProxyBrowserWrap, securityProxyBrowserMenu, securityHistoryToggle, securityHistoryPanel,
+  securityHistoryRefresh, securityHistorySummary, securityHistoryRows, securityHistoryEmpty,
+  securityHistoryMenu, securityHistoryDeleteLabel, securityHistoryRepeaterLabel,
+  securityHistoryIntruderLabel, securityHistorySortHeaders, securityRepeaterTabs,
+  securityRepeaterTabList, securityRepeaterAdd, securityRepeaterHistoryNav, securityRepeaterPrev,
+  securityRepeaterNext, securityRepeaterPosition, securityIntruderPanel,
+  securityIntruderTabButtons, securityIntruderSections, securityAttackButtons,
+  securityPositionsCount, securityPayloadsCount, securityResultsCount, securityPositionChips,
+  securityPositionMark, securityPositionAuto, securityPositionClear, securityPayloadSetsEl,
+  securityPayloadHint, securityPayloadJsonToggle, securityResultsRows, securityResultsEmpty,
+  securityClearButton, securityDropButton, securityInterceptToggle, securityInterceptToggleIcon,
+  securityInterceptToggleLabel, securityRunButton, securityRunLabel, securityRequestEditor,
+  securityResponseEditor, securityRequestSize, securityResponseSize, securityPayloadPanel,
+  securityPayloadEditor, securityInspector, securityInspectorToggle, securityInspectorPanel,
+  securityInspectorClose, securityInspectorContext, securityInspectorStatus,
+  securityInspectorTabs, securityInspectorPanels, inspectorDecoderFormat, inspectorDecoderInput,
+  inspectorDecoderOutput, inspectorJwtToken, inspectorJwtHeader, inspectorJwtPayload,
+  inspectorJwtAlg, inspectorJwtSecret, inspectorJwtAnalysis, inspectorCookieInput,
+  inspectorCookieOutput, inspectorCookieResults, terminalShellTab, securityExchangeEl,
+  securityExchangeSash, securityWorkbenchResize, statusLnCol, statusOllamaPort, statusWorkspace,
+  statusAgent,
+} from "./core/dom-refs.js";
 
 const ExplorerSelection = globalThis.XekuteExplorerSelection;
 const SetiIconTheme = globalThis.XekuteSetiIconTheme;
 const MessageIdentity = globalThis.XekuteMessageIdentity;
 
-const $ = (id) => globalThis.XekuteDom?.getById(id) || document.getElementById(id);
 const xekuteStore = globalThis.XekuteCore.createAppStore();
 const appController = new globalThis.XekuteCore.AppController(xekuteStore);
 const appLifecycle = new globalThis.XekuteCore.LifecycleCollection();
@@ -141,147 +241,9 @@ globalThis.addEventListener("beforeunload", () => {
 
 const EditorManager = globalThis.XekuteEditorManager;
 const TerminalManager = globalThis.XekuteTerminalManager;
-const btnNewFile       = $("btn-new-file");
-const btnNewFolder     = $("btn-new-folder");
-const explorerTitle    = $("explorer-title");
-const explorerRootToggle = $("explorer-root-toggle");
-const explorerRootChevron = $("explorer-root-chevron");
-const btnOpenFolder    = $("btn-open-folder");
-const fileTree         = $("file-tree");
-const activityExplorer = $("activity-explorer");
-const activitySearch   = $("activity-search");
-const activityRun      = $("activity-run");
-const activityBugBounty = $("activity-bugbounty");
-const activitySecurity = $("activity-security");
-const activityTerminal = $("activity-terminal");
-const activityChat     = $("activity-chat");
-const activitySettings = $("activity-settings");
-const btnSidebarMore   = $("btn-sidebar-more");
-const btnCreateProjectHeader = $("btn-create-project-header");
-const sidebarViewTitle = $("sidebar-view-title");
-const explorerSidebarView = $("explorer-sidebar-view");
-const projectSetup = $("project-setup");
-const sidebarHeader = $("sidebar-header");
-const btnCreateProjectSidebar = $("btn-create-project-sidebar");
-const btnOpenProjectSidebar = $("btn-open-project-sidebar");
-const bugBountySidebarView = $("bugbounty-sidebar-view");
-const bugBountyTree    = $("bugbounty-tree");
-const btnBugBountyMore = $("btn-bugbounty-more");
-const bugBountyTargetLabel = $("bugbounty-target-label");
-const bugBountySetup   = $("bugbounty-setup");
-const bugBountyStateIcon = $("bugbounty-state-icon");
-const bugBountyStateTitle = $("bugbounty-state-title");
-const bugBountyStateMessage = $("bugbounty-state-message");
-const btnCreateProject = $("btn-create-project");
-const btnCreateAssessment = $("btn-create-assessment");
-const btnOpenAssessment = $("btn-open-assessment");
-const bugBountyRepair = $("bugbounty-repair");
-const bugBountyRepairLabel = $("bugbounty-repair-label");
-const assessmentRepairOverlay = $("assessment-repair-overlay");
-const assessmentRepairClose = $("assessment-repair-close");
-const assessmentRepairCancel = $("assessment-repair-cancel");
-const assessmentRepairConfirm = $("assessment-repair-confirm");
-const assessmentRepairSubtitle = $("assessment-repair-subtitle");
-const assessmentRepairDescription = $("assessment-repair-description");
-const assessmentRepairSummary = $("assessment-repair-summary");
-const assessmentRepairList = $("assessment-repair-list");
-const editorTabBar     = $("editor-tab-bar");
-const editorTabContextMenu = $("editor-tab-context-menu");
-const editorPathBar    = $("editor-path-bar");
-const editorPathLabel  = $("editor-path-label");
-const editorBody       = $("editor-body");
-const editorEmpty      = $("editor-empty");
-const editorView       = $("editor-view");
-const editorError      = $("editor-error");
-const monacoContainer  = $("monaco-container");
-const markdownPreview  = $("markdown-preview");
-const settingsEditorToolbar = $("settings-editor-toolbar");
-const settingsUIView  = $("settings-ui-view");
-const settingsViewJson = $("settings-view-json");
-const settingsViewUi  = $("settings-view-ui");
-const proxyListenerStatus = $("proxy-listener-status");
-const proxyCaPath = $("proxy-ca-path");
-const btnShowProxyCa = $("btn-show-proxy-ca");
-const messages         = $("messages");
-const chatInput        = $("chat-input");
-const sendBtn          = $("send-btn");
-const attachImageBtn   = $("attach-image-btn");
-const attachImageInput = $("attach-image-input");
-const composerAttachmentsEl = $("composer-attachments");
-// Declared with the elements: updateSendBtn reads it during startup.
-const chatModeToggle   = $("chat-mode-toggle");
-const chatModeButton   = $("chat-mode-button");
-const chatModeIcon     = $("chat-mode-icon");
-const chatModeButtonLabel = $("chat-mode-button-label");
-const chatModeMenu     = $("chat-mode-menu");
-const appMenu          = $("app-menu");
-const helpGuideOverlay = $("help-guide-overlay");
-const helpGuideClose   = $("help-guide-close");
-const menuRunCode      = $("menu-run-code");
-const commandCenter    = $("command-center");
-const quickOverlay     = $("quick-overlay");
-const quickPanel       = $("quick-panel");
-const quickIcon        = $("quick-icon");
-const quickInput       = $("quick-input");
-const quickMeta        = $("quick-meta");
-const quickResults     = $("quick-results");
-const quickSearchHelp  = $("quick-search-help");
-const quickSearchAssist = $("quick-search-assist");
-const quickSearchPresets = $("quick-search-presets");
-const quickSearchReference = $("quick-search-reference");
-const quickSearchSuggestions = $("quick-search-suggestions");
-const quickSearchChips = $("quick-search-chips");
-const chatHeader       = $("chat-header");
-const btnTopFileTree  = $("btn-top-filetree");
-const btnTopTerminal  = $("btn-top-terminal");
-const btnTopChat      = $("btn-top-chat");
-const btnTopSettings  = $("btn-top-settings");
-const btnNotifications = $("btn-notifications");
-const notificationCount = $("notification-count");
-const notificationPanel = $("notification-panel");
-const notificationList = $("notification-list");
-const notificationClear = $("notification-clear");
-const btnWindowMinimize = $("btn-window-minimize");
-const btnWindowMaximize = $("btn-window-maximize");
-const btnWindowClose = $("btn-window-close");
-const chatSessionSelect = $("chat-session-select");
-const btnChatNew      = $("btn-chat-new");
-const btnChatDelete   = $("btn-chat-delete");
-const btnChatHistory  = $("btn-chat-history");                    
-const chatHistoryPopover = $("chat-history-popover");            
-const chatHistoryBody = $("chat-history-body");                  
-const chatHistoryEmpty = $("chat-history-empty");                
-const chatHistorySearch = $("chat-history-search");              
-const btnChatMore     = $("btn-chat-more");
-const btnChatCollapse = $("btn-chat-collapse");
-const contextUsageBtn  = $("context-usage-btn");
-const contextRingFill  = $("context-ring-fill");
-const contextUsagePopover = $("context-usage-popover");
-const contextUsageHeadingValue = $("context-usage-heading-value");
-const inputBar         = $("input-bar");
-const chatHistorySecurityWarning = $("chat-history-security-warning");
-const memorySaveBanner = $("memory-save-banner");
 const composerEl       = inputBar?.querySelector(".composer") || null;
-const composerQuestionsEl = $("composer-questions");
-const composerTaskListEl = $("composer-task-list");
 const pendingComposerQuestionsBySession = new Map();
 const pendingOrchestratorEscalatedQuestions = new Map();
-const slashCommandSuggestions = $("slash-command-suggestions");
-const selectedSlashCommandEl = $("selected-slash-command");
-const contextUsageFill = $("context-usage-fill");
-const contextUsageUsed = $("context-usage-used");
-const contextUsagePct  = $("context-usage-pct");
-const contextUsageBreakdown = $("context-usage-breakdown");
-const contextUsageSource = $("context-usage-source");
-const contextUsageClose = $("context-usage-close");
-const contextUsageSegments = $("context-usage-segments");
-const contextUsageMenu = $("context-usage-menu");
-const contextWindowTrigger = $("context-window-trigger");
-const contextWindowValue = $("context-window-value");
-const contextBlocksTrigger = $("context-blocks-trigger");
-const contextBlocksValue = $("context-blocks-value");
-const contextBlocksPanel = $("context-blocks-panel");
-const contextBlocksList = $("context-blocks-list");
 const CONTEXT_USAGE_SECTIONS = Object.freeze([
   Object.freeze({ key: "system_prompt", label: "System Prompt", color: "#a7a7ab" }),
   Object.freeze({ key: "tool_definitions", label: "Tool Definitions", color: "#77a8d8" }),
@@ -316,165 +278,6 @@ const CONTEXT_USAGE_SECTION_ALIASES = Object.freeze({
   knowledge: "skills",
   knowledge_lease: "skills",
 });
-const modelPicker      = $("model-picker");
-const modelLabel       = $("model-label");
-const authorityPicker  = $("authority-picker");
-const authorityLabel   = $("authority-label");
-const authorityMenu    = $("authority-menu");
-const modelMenu        = $("model-menu");
-const modelControlsMenu = $("model-controls-menu");
-const modelContextTrigger = $("model-context-trigger");
-const modelEffortTrigger = $("model-effort-trigger");
-const modelBrowseTrigger = $("model-browse-trigger");
-const modelContextValue = $("model-context-value");
-const modelEffortValue = $("model-effort-value");
-const modelCurrentName = $("model-current-name");
-const modelSearch      = $("model-search");
-const modelList        = $("model-list");
-const modelAddBtn      = $("model-add-btn");
-const modelAddForm     = $("model-add-form");
-const modelCustom      = $("model-custom");
-const modelCustomAdd   = $("model-custom-add");
-const modelEditMenu    = $("model-edit-menu");
-const modelRuntimeNote = $("model-runtime-note");
-const thinkingToggle   = $("thinking-toggle");
-const ollamaThinkingRow = $("ollama-thinking-row");
-const ollamaThinkingSection = $("ollama-thinking-section");
-const openRouterReasoningRow = $("openrouter-reasoning-row");
-const reasoningOptions = $("reasoning-options");
-const contextOptions   = $("context-options");
-const sidebar          = $("sidebar");
-const sidebarResize    = $("sidebar-resize");
-const chatPane         = $("chat-pane");
-const chatResize       = $("chat-resize");
-const terminalPane     = $("terminal-pane");
-const terminalResize   = $("terminal-resize");
-const centerPanel      = $("center-panel");
-const btnTerminalMaximize = $("btn-terminal-maximize");
-const btnTerminalClose = $("btn-terminal-close");
-const editorPane       = $("editor-pane");
-const resourceViewer = $("resource-viewer");
-const resourceViewerTitle = $("resource-viewer-title");
-const resourceViewerMeta = $("resource-viewer-meta");
-const resourceViewerIcon = $("resource-viewer-icon");
-const resourceViewerEmpty = $("resource-viewer-empty");
-const resourceViewerContent = $("resource-viewer-content");
-const resourceLineNumbers = $("resource-line-numbers");
-const resourceViewerSave = $("resource-viewer-save");
-const resourceViewerCopy = $("resource-viewer-copy");
-const resourceViewerActions = $("resource-viewer-actions");
-const appSettingsWorkspace = $("app-settings-workspace");
-const appSettingsPageTitle = $("app-settings-page-title");
-const appSettingsPageSubtitle = $("app-settings-page-subtitle");
-const appSettingsSearch = $("app-settings-search");
-const appSettingsProfileName = $("app-settings-profile-name");
-const appSettingsProfilePlan = $("app-settings-profile-plan");
-const appSettingsGeneralPanel = $("app-settings-general-panel");
-const generalStatusBarToggle = $("general-status-bar-toggle");
-const generalUpdatesToggle = $("general-updates-toggle");
-const generalCurrentVersion = $("general-current-version");
-const statusbar = $("statusbar");
-const updateToast = $("update-toast");
-const updateToastVersion = $("update-toast-version");
-const updateToastInstall = $("update-toast-install");
-const updateToastIgnore = $("update-toast-ignore");
-const appSettingsProjectPanel = $("app-settings-project-panel");
-const projectSettingsUnavailable = $("project-settings-unavailable");
-const projectSettingsShell = $("project-settings-shell");
-const projectSettingsForm = $("project-settings-form");
-const projectSettingsSections = [...document.querySelectorAll("#project-settings-form > .project-settings-section")];
-const projectSettingsName = $("project-settings-name");
-const projectSettingsRoot = $("project-settings-root");
-const projectSettingsCreate = $("project-settings-create");
-const projectSettingsOpen = $("project-settings-open");
-const projectSettingsNav = document.querySelector(".project-settings-nav");
-const projectSettingsNavButtons = [...document.querySelectorAll("[data-project-settings-target]")];
-const commandSettingsStatus = $("command-settings-status");
-const appSettingsCommandsPanel = $("app-settings-commands-panel");
-const mcpSettingsList = $("mcp-settings-list");
-const mcpSettingsTabs = $("mcp-settings-tabs");
-const kaliAccessForm = $("kali-access-form");
-const kaliAccessEnabled = $("kali-access-enabled");
-const kaliAccessFields = $("kali-access-fields");
-const kaliAccessHost = $("kali-access-host");
-const kaliAccessPort = $("kali-access-port");
-const kaliAccessUsername = $("kali-access-username");
-const kaliAccessKey = $("kali-access-key");
-const kaliAccessAcceptHostKey = $("kali-access-accept-host-key");
-const kaliAccessKeyBrowse = $("kali-access-key-browse");
-const kaliAccessOpenMcp = $("kali-access-open-mcp");
-const kaliAccessTest = $("kali-access-test");
-const kaliAccessStatus = $("kali-access-status");
-const appSettingsAuthorityPanel = $("app-settings-authority-panel");
-const appSettingsPromptsPanel = $("app-settings-prompts-panel");
-const guidanceSettingsList = $("guidance-settings-list");
-const guidanceSettingsEmpty = $("guidance-settings-empty");
-const guidanceSettingsDetail = $("guidance-settings-detail");
-const guidanceScopeTabs = $("guidance-scope-tabs");
-const guidanceNew = $("guidance-new");
-const guidanceEmptyNew = $("guidance-empty-new");
-const guidanceImport = $("guidance-import");
-const appSettingsCertificatesPanel = $("app-settings-certificates-panel");
-const appSettingsKnowledgePanel = $("app-settings-knowledge-panel");
-const appSettingsLlmPanel = $("app-settings-llm-panel");
-const llmProvider = $("llm-provider");
-const llmProviderOllama = $("llm-provider-ollama");
-const llmProviderOpenRouter = $("llm-provider-openrouter");
-const llmOllamaConfig = $("llm-ollama-config");
-const llmOpenRouterConfig = $("llm-openrouter-config");
-const openRouterBaseUrl = $("openrouter-base-url");
-const openRouterModel = $("openrouter-model");
-const openRouterApiKey = $("openrouter-api-key");
-const llmSettingsTest = $("llm-settings-test");
-const llmSettingsStatus = $("llm-settings-status");
-const llmOpenRouterKeyToggle = $("llm-openrouter-key-toggle");
-const llmOpenRouterKeyStatus = $("llm-openrouter-key-status");
-const llmOpenRouterKeyFields = $("llm-openrouter-key-fields");
-const llmOpenRouterBaseToggle = $("llm-openrouter-base-toggle");
-const llmOpenRouterBaseFields = $("llm-openrouter-base-fields");
-const llmOllamaEnableToggle = $("llm-ollama-enable-toggle");
-const llmOllamaEndpointToggle = $("llm-ollama-endpoint-toggle");
-const llmOllamaEndpointStatus = $("llm-ollama-endpoint-status");
-const llmOllamaEndpointFields = $("llm-ollama-endpoint-fields");
-const modelsSettingsSearch = $("models-settings-search");
-const modelsSettingsRefresh = $("models-settings-refresh");
-const modelsSettingsList = $("models-settings-list");
-const modelsViewAllBtn = $("models-view-all");
-const modelsExploreSubagent = $("models-explore-subagent");
-const ollamaHostInput = $("ollama-host-input");
-const ollamaLocationBadge = $("ollama-location-badge");
-const ollamaActiveEndpoint = $("ollama-active-endpoint");
-const ollamaConnectionStatus = $("ollama-connection-status");
-const ollamaHostTest = $("ollama-host-test");
-const ollamaHostReset = $("ollama-host-reset");
-const certificateDirectory = $("certificate-directory");
-const certificateLocationBadge = $("certificate-location-badge");
-const certificateBrowse = $("certificate-browse");
-const certificateOpenFolder = $("certificate-open-folder");
-const certificateReset = $("certificate-reset");
-const identityRuntimeStatus = $("identity-runtime-status");
-const identityRefresh = $("identity-refresh");
-const identityNewId = $("identity-new-id");
-const identityNewName = $("identity-new-name");
-const identityNewRole = $("identity-new-role");
-const identityCreate = $("identity-create");
-const identityList = $("identity-list");
-const identityImportTarget = $("identity-import-target");
-const identityImportFormat = $("identity-import-format");
-const identityImportData = $("identity-import-data");
-const identityImport = $("identity-import");
-const identitySettingsStatus = $("identity-settings-status");
-const projectAuthSource = $("project-auth-source");
-const credentialNewId = $("credential-new-id");
-const credentialNewLabel = $("credential-new-label");
-const credentialNewUsername = $("credential-new-username");
-const credentialNewPassword = $("credential-new-password");
-const credentialNewRole = $("credential-new-role");
-const credentialCreate = $("credential-create");
-const credentialList = $("credential-list");
-const engagementAccountList = $("engagement-account-list");
-const engagementAccountAdd = $("engagement-account-add");
-const appSettingsSectionButtons = [...document.querySelectorAll("[data-app-settings-section]")];
 
 const APP_SETTINGS_SECTION_META = Object.freeze({
   general: { title: "General", subtitle: "" },
@@ -485,149 +288,17 @@ const APP_SETTINGS_SECTION_META = Object.freeze({
   llm: { title: "Models", subtitle: "" },
   certificates: { title: "Browser & Network", subtitle: "Manage certificates and isolated authorized identities" },
 });
-const checklistUIView = $("checklist-ui-view");
-const checklistFrameworkName = $("checklist-framework-name");
-const checklistFrameworkVersion = $("checklist-framework-version");
-const checklistProgress = $("checklist-progress");
-const checklistSearch = $("checklist-search");
-const checklistStatusFilter = $("checklist-status-filter");
-const checklistGroups = $("checklist-groups");
-const scopeUIView = $("scope-ui-view");
-const scopeUITitle = $("scope-ui-title");
-const scopeUIDescription = $("scope-ui-description");
-const scopeUIForm = $("scope-ui-form");
-const assessmentModuleView = $("assessment-module-view");
-const assessmentModuleTitle = $("assessment-module-title");
-const assessmentModuleDescription = $("assessment-module-description");
-const assessmentModuleSummary = $("assessment-module-summary");
-const assessmentModuleContent = $("assessment-module-content");
-const assessmentModuleOpenJson = $("assessment-module-open-json");
-const assessmentReportGenerate = $("assessment-report-generate");
-const assessmentRunProfile = $("assessment-run-profile");
-const assessmentRunStart = $("assessment-run-start");
-const assessmentRunStop = $("assessment-run-stop");
-const securityWorkspace = $("security-workspace");
-const webcloneWorkspace = $("webclone-workspace");
-const webcloneBuildAction = $("webclone-build-action");
-const webclonePreviewAction = $("webclone-preview-action");
-const webclonePreviewClose = $("webclone-preview-close");
-const webcloneTarget = $("webclone-target");
-const webcloneFilesToggle = $("webclone-files-toggle");
-const webcloneStatus = $("webclone-status");
-const webcloneEmpty = $("webclone-empty");
-const webcloneContent = $("webclone-content");
-const webcloneFileList = $("webclone-file-list");
-const webcloneFileCount = $("webclone-file-count");
-const webcloneFileTitle = $("webclone-file-title");
-const webcloneFileMeta = $("webclone-file-meta");
-const webcloneFileContent = $("webclone-file-content");
-const webcloneEditorPane = document.querySelector(".webclone-editor-pane");
-const webclonePreviewPane = document.querySelector(".webclone-preview-pane");
-const webclonePreviewFrame = $("webclone-preview-frame");
-const customTreeItems = $("custom-tree-items");
-const customContextMenu = $("custom-context-menu");
-const customContextDelete = $("custom-context-delete");
-const customContextDeleteLabel = $("custom-context-delete-label");
-const workspaceContextMenu = $("workspace-context-menu");
-const appSettingsOverlay = $("app-settings-overlay");
-const customCommandsInput = $("custom-commands-input");
-const commandRegistryInput = $("command-registry-input");
-const securityWorkspaceTools = $("security-workspace-tools");
-const securityWorkspaceBody = $("security-workspace-body");
 const settingsViewSwitch = settingsViewJson?.closest(".settings-view-switch") || null;
 if (resourceViewer && settingsUIView) resourceViewer.appendChild(settingsUIView);
 if (resourceViewerActions && settingsViewSwitch) resourceViewerActions.prepend(settingsViewSwitch);
 if (settingsViewSwitch) settingsViewSwitch.hidden = true;
 if (settingsUIView) settingsUIView.hidden = true;
-const securityToolSwitcher = $("security-tool-switcher");
-const securityToolButton = $("security-tool-button");
-const securityToolMenu = $("security-tool-menu");
-const securityToolIcon = $("security-tool-icon");
-const securityToolLabel = $("security-tool-label");
-const securityHistoryAnalyzeButton = $("security-history-analyze");
-const securityWorkbench = $("security-workbench");
-const securityWorkbenchMode = $("security-workbench-mode");
-const securityWorkbenchStatus = $("security-workbench-status");
-const securityProxyBrowser = $("security-proxy-browser");
-const securityProxyBrowserWrap = $("security-proxy-browser-wrap");
-const securityProxyBrowserMenu = $("security-proxy-browser-menu");
 appState.proxyBrowserMenuHome = securityProxyBrowserMenu?.parentElement || null;
-const securityHistoryToggle = $("security-history-toggle");
-const securityHistoryPanel = $("security-history-panel");
-const securityHistoryRefresh = $("security-history-refresh");
-const securityHistorySummary = $("security-history-summary");
-const securityHistoryRows = $("security-history-rows");
-const securityHistoryEmpty = $("security-history-empty");
-const securityHistoryMenu = $("security-history-menu");
-const securityHistoryDeleteLabel = $("security-history-delete-label");
-const securityHistoryRepeaterLabel = $("security-history-repeater-label");
-const securityHistoryIntruderLabel = $("security-history-intruder-label");
-const securityHistorySortHeaders = [...document.querySelectorAll(".security-history-table th[data-history-sort]")];
-const securityRepeaterTabs = $("security-repeater-tabs");
-const securityRepeaterTabList = $("security-repeater-tab-list");
-const securityRepeaterAdd = $("security-repeater-add");
-const securityRepeaterHistoryNav = $("security-repeater-history");
-const securityRepeaterPrev = $("security-repeater-prev");
-const securityRepeaterNext = $("security-repeater-next");
-const securityRepeaterPosition = $("security-repeater-position");
-const securityIntruderPanel = $("security-intruder-panel");
-const securityIntruderTabButtons = [...document.querySelectorAll("[data-intruder-tab]")];
-const securityIntruderSections = [...document.querySelectorAll("[data-intruder-panel]")];
-const securityAttackButtons = [...document.querySelectorAll("[data-attack-type]")];
-const securityPositionsCount = $("security-positions-count");
-const securityPayloadsCount = $("security-payloads-count");
-const securityResultsCount = $("security-results-count");
-const securityPositionChips = $("security-position-chips");
-const securityPositionMark = $("security-position-mark");
-const securityPositionAuto = $("security-position-auto");
-const securityPositionClear = $("security-position-clear");
-const securityPayloadSetsEl = $("security-payload-sets");
-const securityPayloadHint = $("security-payload-hint");
-const securityPayloadJsonToggle = $("security-payload-json-toggle");
-const securityResultsRows = $("security-results-rows");
-const securityResultsEmpty = $("security-results-empty");
-const securityClearButton = $("security-clear-button");
-const securityDropButton = $("security-drop-button");
-const securityInterceptToggle = $("security-intercept-toggle");
-const securityInterceptToggleIcon = $("security-intercept-toggle-icon");
-const securityInterceptToggleLabel = $("security-intercept-toggle-label");
-const securityRunButton = $("security-run-button");
-const securityRunLabel = $("security-run-label");
-const securityRequestEditor = $("security-request-editor");
-const securityResponseEditor = $("security-response-editor");
-const securityRequestSize = $("security-request-size");
-const securityResponseSize = $("security-response-size");
-const securityPayloadPanel = $("security-payload-panel");
-const securityPayloadEditor = $("security-payload-editor");
-const securityInspector = $("security-inspector");
-const securityInspectorToggle = $("security-inspector-toggle");
-const securityInspectorPanel = $("security-inspector-panel");
-const securityInspectorClose = $("security-inspector-close");
-const securityInspectorContext = $("security-inspector-context");
-const securityInspectorStatus = $("security-inspector-status");
-const securityInspectorTabs = [...document.querySelectorAll("[data-inspector-tab]")];
-const securityInspectorPanels = [...document.querySelectorAll("[data-inspector-panel]")];
-const inspectorDecoderFormat = $("inspector-decoder-format");
-const inspectorDecoderInput = $("inspector-decoder-input");
-const inspectorDecoderOutput = $("inspector-decoder-output");
-const inspectorJwtToken = $("inspector-jwt-token");
-const inspectorJwtHeader = $("inspector-jwt-header");
-const inspectorJwtPayload = $("inspector-jwt-payload");
-const inspectorJwtAlg = $("inspector-jwt-alg");
-const inspectorJwtSecret = $("inspector-jwt-secret");
-const inspectorJwtAnalysis = $("inspector-jwt-analysis");
-const inspectorCookieInput = $("inspector-cookie-input");
-const inspectorCookieOutput = $("inspector-cookie-output");
-const inspectorCookieResults = $("inspector-cookie-results");
-const terminalShellTab = $("terminal-shell-tab");
 if (securityWorkspaceTools && securityToolSwitcher) securityWorkspaceTools.appendChild(securityToolSwitcher);
 if (securityWorkspaceBody && securityWorkbench) securityWorkspaceBody.appendChild(securityWorkbench);
 if (securityToolSwitcher) securityToolSwitcher.hidden = false;
 if (securityWorkbench) securityWorkbench.hidden = false;
 
-const securityExchangeEl   = $("security-exchange");
-const securityExchangeSash = $("security-exchange-sash");
-const securityWorkbenchResize = $("security-workbench-resize");
 
 const TERMINAL_HEADER_H = 35;
 const TERMINAL_MIN_EXPANDED = 80;
@@ -637,10 +308,6 @@ const WORKBENCH_TOOL_MIN_H = 120; // min height for the tool panel (interceptor 
 appState.resourceWrapLines = localStorage.getItem("xekute.resourceWrapLines") === "true";
 appState.resourceSettingsSaveChain = Promise.resolve();
 const selectedCustomEntries = new Set();
-const statusLnCol      = $("status-ln-col");
-const statusOllamaPort = $("status-ollama-port");
-const statusWorkspace  = $("status-workspace");
-const statusAgent      = $("status-agent");
 
 const OLLAMA_PORT = 11435;
 
