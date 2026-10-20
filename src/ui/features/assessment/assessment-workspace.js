@@ -9,9 +9,10 @@ import { appState } from "../../core/app-state.js";
 import { escapeHtml } from "../../core/text-format.js";
 import { projectName, loadWorkspace } from "../project/project-activation.js";
 import {
-  setNotifications, refreshCustomEntries, syncInterceptorToggleUi, configureProxyListener,
-  selectedCustomEntries, refreshSecurityHistoryIfVisible,
+  setNotifications, syncInterceptorToggleUi, configureProxyListener,
+  refreshSecurityHistoryIfVisible,
 } from "../../bootstrap.js";
+import { refreshCustomEntries, selectedCustomEntries } from "./custom-entries.js";
 import { refreshAssessmentSettingsCache } from "../settings/settings-tab-editor.js";
 
 export const BUG_BOUNTY_EXPANSION_KEY = "pointer:bugBountyExpansion";
