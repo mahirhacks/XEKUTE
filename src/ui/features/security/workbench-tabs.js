@@ -3,10 +3,10 @@ import {
   securityRequestEditor, securityResponseEditor, securityRepeaterTabList, securityRepeaterPrev,
   securityRepeaterNext, securityRepeaterPosition, securityPayloadEditor,
 } from "../../core/dom-refs.js";
+import { syncSecurityExchangeSizes, setSecurityStatus } from "../../bootstrap.js";
 import {
-  syncSecurityExchangeSizes, setSecurityStatus, intruderSlots, syncIntruderUi, setAttackType,
-  setIntruderTab, renderIntruderResults,
-} from "../../bootstrap.js";
+  intruderSlots, syncIntruderUi, setAttackType, setIntruderTab, renderIntruderResults,
+} from "./intruder-payloads.js";
 
 export const securityDrafts = new Map();
 export const DEFAULT_SECURITY_REQUEST = "GET / HTTP/1.1\nHost: authorized.example\nAccept: */*";
