@@ -1,9 +1,10 @@
 import {
   openTabs, showCodeEditorWorkspace, SECURITY_TOOL_META, renderTabs, commitActiveTab,
-  renderEditor, setTerminalMaximized, setSecurityStatus, openBrowserTab, securityDrafts,
+  renderEditor, setTerminalMaximized, setSecurityStatus, openBrowserTab,
   securityExchangeSignature, syncSecurityExchangeSizes, setSecurityTool,
   ingestLiveSecurityHistory, refreshSecurityHistoryIfVisible,
 } from "../../bootstrap.js";
+import { securityDrafts } from "../security/workbench-tabs.js";
 import { appState } from "../../core/app-state.js";
 import {
   securityInterceptToggle, securityInterceptToggleIcon, securityInterceptToggleLabel,

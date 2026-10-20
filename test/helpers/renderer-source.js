@@ -60,6 +60,7 @@ const RENDERER_FILES = [
   "features/assessment/custom-entries.js",
   "features/assessment/webclone-view.js",
   "features/interceptor/interceptor-controls.js",
+  "features/security/workbench-tabs.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
