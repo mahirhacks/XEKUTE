@@ -4,7 +4,8 @@ import {
   commandSettingsStatus, projectSettingsSections, projectSettingsNav, projectSettingsNavButtons,
   projectSettingsUnavailable, projectSettingsShell,
 } from "../../core/dom-refs.js";
-import { projectName, configureProxyListener } from "../../bootstrap.js";
+import { configureProxyListener } from "../../bootstrap.js";
+import { projectName } from "./project-activation.js";
 import {
   collectEngagementAccountSnapshots, loadIdentitySettings, saveEngagementAccounts,
 } from "../settings/identity-settings.js";
