@@ -1,4 +1,4 @@
-import { explorerPathKey } from "../bootstrap.js";
+import { explorerPathKey } from "../features/project/explorer-tree.js";
 import { appState } from "./app-state.js";
 
 export function normPath(p) {

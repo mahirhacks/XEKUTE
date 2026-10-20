@@ -1,5 +1,5 @@
 import { appState } from "../../core/app-state.js";
-import { restoreChatComposerAfterUiAction } from "../../bootstrap.js";
+import { restoreChatComposerAfterUiAction } from "../project/explorer-tree.js";
 import {
   refreshAssessmentSettingsCache, syncOpenSettingsTabContent,
 } from "./settings-tab-editor.js";

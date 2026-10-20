@@ -15,9 +15,9 @@ import {
 } from "./tool-labels.js";
 import { activeChatRuns } from "./chat-run-state.js";
 import {
-  openTabs, openFile, isMarkdownFileName, renderTabs, renderEditor, refreshWorkspaceUi, closeTab,
-  reconcileDeletedWorkspacePath,
+  openTabs, openFile, isMarkdownFileName, renderTabs, renderEditor, closeTab,
 } from "../../bootstrap.js";
+import { refreshWorkspaceUi, reconcileDeletedWorkspacePath } from "../project/explorer-tree.js";
 import { loadGuidanceSettings } from "../settings/guidance-settings.js";
 import { startWaitCardTicker } from "../agents/background-waits.js";
 import { isTaskListTool } from "./composer-questions.js";

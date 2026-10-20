@@ -7,9 +7,11 @@ import {
 import {
   settingsViewSwitch, selectedCustomEntries, BUG_BOUNTY_PATH_KEY, showResourceWorkspace,
   setResourceDirty, setAssessmentUiState, refreshAssessmentState, refreshSecurityHistoryIfVisible,
-  appController, selectedExplorerPaths, expandedTreePaths, setExplorerActionsEnabled, renderTree,
-  openFile,
+  appController, openFile,
 } from "../../bootstrap.js";
+import {
+  selectedExplorerPaths, expandedTreePaths, setExplorerActionsEnabled, renderTree,
+} from "./explorer-tree.js";
 import { updateRunMenuState } from "./run-commands.js";
 import { TerminalManager } from "../../core/runtime-globals.js";
 import { restoreChatSessionsForCurrentWorkspace } from "../chat/chat-sessions.js";
