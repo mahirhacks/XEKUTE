@@ -43,15 +43,21 @@ function rendererSource() {
 }
 
 let declarationIndex = null;
+let statementTexts = null;
 function declarations() {
   if (declarationIndex) return declarationIndex;
   const acorn = require("acorn");
   declarationIndex = new Map();
+  statementTexts = [];
   for (const file of RENDERER_FILES) {
     const text = fs.readFileSync(path.join(uiRoot, file), "utf8");
     for (const node of acorn.parse(text, { ecmaVersion: "latest", sourceType: "module" }).body) {
       const declaration = node.type === "ExportNamedDeclaration" ? node.declaration : node;
       if (!declaration) continue;
+      if (/Statement$/.test(declaration.type)) {
+        statementTexts.push(text.slice(declaration.start, declaration.end));
+        continue;
+      }
       const names = declaration.type === "VariableDeclaration" ? declaration.declarations.map(item => item.id.name) : [declaration.id?.name];
       for (const name of names) if (name) declarationIndex.set(name, text.slice(declaration.start, declaration.end));
     }
@@ -69,6 +75,17 @@ function rendererDefinitions(...names) {
   }).join("\n");
 }
 
+// Top-level renderer statements (startup wiring such as event listeners),
+// each picked by how its text begins.
+function rendererStatements(...prefixes) {
+  declarations();
+  return prefixes.map(prefix => {
+    const matches = statementTexts.filter(text => text.replace(/\r\n/g, "\n").startsWith(prefix));
+    if (matches.length !== 1) throw new Error(`Expected one top-level renderer statement starting ${prefix}, found ${matches.length}`);
+    return matches[0];
+  }).join("\n");
+}
+
 // Renderer state lives on `appState`. Pointing it at the vm context keeps
 // `appState.x` resolving exactly where a sliced `x` used to, and seeds every
 // field the test did not provide with the renderer's own initial value.
@@ -82,4 +99,4 @@ function withAppState(context) {
   return context;
 }
 
-module.exports = { rendererSource, rendererDefinitions, withAppState };
+module.exports = { rendererSource, rendererDefinitions, rendererStatements, withAppState };
