@@ -50,6 +50,7 @@ function mergeEngagementContext({ workspace = null, projectProfile = null, artif
     rulesOfEngagement: { ...(profile.rulesOfEngagement || {}) },
     review: { ...(profile.review || {}) },
     dataHandling: { ...(profile.dataHandling || {}) },
+    ...(profile.testAccounts ? { testAccounts: profile.testAccounts } : {}),
     application: { ...(profile.context || {}) },
     settings: { ...(profile.runtime || {}) },
     checklist: {},
@@ -110,6 +111,13 @@ function renderEngagementContext(context = {}, { header = true } = {}) {
   if (eng.successCriteria?.length) lines.push(`- Success criteria: ${eng.successCriteria.map((item) => clip(item, 120)).join("; ")}`);
   if (eng.deliverables?.length) lines.push(`- Deliverables: ${eng.deliverables.map((item) => clip(item, 120)).join("; ")}`);
   if (eng.notes) lines.push(`- Engagement notes: ${clip(eng.notes, 600)}`);
+
+  if (context.testAccounts?.accounts?.length) {
+    lines.push("", "## Test accounts", `- ${context.testAccounts.usage}`);
+    for (const account of context.testAccounts.accounts) {
+      lines.push(`- ${clip(account.label, 120)} (${clip(account.role, 60)}), username ${clip(account.username, 200)}: ${Object.values(account.variables).join(", ")}`);
+    }
+  }
 
   lines.push("", "## Application context");
   const app = context.application || {};

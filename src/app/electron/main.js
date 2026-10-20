@@ -28,6 +28,7 @@ const { normalizeAuthorityProfile } = require("../../agent/authority/profiles/pr
 const Tunables = require("../../agent/runtime/tunables.js");
 const { createAgentSessionRuntime, assignTaskWave } = require("../../agent/runtime/agent-session-runtime.js");
 const { createChatReferenceResolver } = require("../../agent/runtime/chat-references.js");
+const { accountMasks, describeAccounts, loadAccounts, maskAccountSecrets, resolveAccountVariables } = require("../../agent/runtime/account-variables.js");
 const { createResourceReservations } = require("../../agent/runtime/resource-reservations.js");
 const { createDelegatedChildStore } = require("../../agent/runtime/delegated-child-store.js");
 const { createAssessmentWorkspace, validateCustomEntryPath, JSON_TEMPLATES } = require("../../domain/assessment/assessment-workspace");
@@ -119,6 +120,8 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     return { ok: false, error: `Unknown tool '${name}'`, code: "UNKNOWN_TOOL", retryable: false };
   }
   const projectProfile = readProjectProfile(workspace)?.profile || null;
+  const accounts = loadAccounts(container?.identityVault?.(), workspace);
+  const masks = accountMasks(accounts);
   const memoryProjectBinding = workspace && container?.memoryProjectIdentityStore
     ? (typeof container.memoryProjectIdentityStore.resolveV3Project === "function"
       ? container.memoryProjectIdentityStore.resolveV3Project(workspace, { persist: false })
@@ -220,6 +223,11 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
         ...(processManager ? { processManager } : {}),
       }
       : monitorRuntime;
+    // Approval, audit and the transcript keep the {{account...}} variables;
+    // only the tool itself receives the stored values.
+    const accountArgs = resolveAccountVariables(args, accounts);
+    if (!accountArgs.ok) return accountArgs;
+    const toolArgs = accountArgs.args;
     let result;
     if (name === CREATE_GUIDANCE_TOOL && specialEntry) {
       result = executeCreateGuidance({
@@ -230,12 +238,12 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
       });
     } else {
       result = dynamicEntry
-      ? await container.mcpRuntime.execute(name, args, dynamicContext, {
+      ? await container.mcpRuntime.execute(name, toolArgs, dynamicContext, {
         signal: monitorRuntime.signal,
         onProgress: monitorRuntime.progress,
         onHeartbeat: monitorRuntime.heartbeat,
       })
-        : await entry.adapter.execute(args, rawContext, name === "exec_command" || name === "view_active_terminal"
+        : await entry.adapter.execute(toolArgs, rawContext, name === "exec_command" || name === "view_active_terminal"
           ? commandRuntime
           : {
           ...monitorRuntime,
@@ -255,7 +263,7 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
         if (BROWSER_STANDING_NOTE[standing.standing] && !granted) result.value.scope = { standing: standing.standing, reason: `${standing.reason} ${BROWSER_STANDING_NOTE[standing.standing]}` };
       }
     }
-    return result;
+    return maskAccountSecrets(result, masks);
   };
   try {
     const result = await container.invocationPipeline.invoke({
@@ -297,9 +305,9 @@ async function executeToolCall({ workspace, toolCall, signal = null, sessionId =
     });
     const materialAssessmentTool = ["replay_request", "browser_action", "manage_identity"].includes(name);
     if (materialAssessmentTool) container.assessmentIntelligence.refresh(workspace).catch(mainLog.ignored("intelligence.refresh"));
-    return result;
+    return maskAccountSecrets(result, masks);
   } catch (error) {
-    return { ok: false, error: error.message, code: "TOOL_EXECUTION_FAILED", retryable: false };
+    return maskAccountSecrets({ ok: false, error: error.message, code: "TOOL_EXECUTION_FAILED", retryable: false }, masks);
   }
 }
 
@@ -796,6 +804,14 @@ function readProjectProfile(root) {
   if (!root) return null;
   const result = projectProfileStore().read(root);
   return result?.error ? null : result;
+}
+
+// The profile an agent run is prompted with: the operator's settings plus the
+// project's test accounts as variables, never their passwords or cookies.
+function agentProjectProfile(root) {
+  const profile = readProjectProfile(root)?.profile || null;
+  const testAccounts = describeAccounts(loadAccounts(container?.identityVault?.(), root));
+  return testAccounts ? { ...(profile || {}), testAccounts } : profile;
 }
 
 function effectiveProjectRuntimeSettings(root) {
@@ -3644,7 +3660,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     mode: payload.mode || "agent",
     modeFamily: payload.modeFamily || "xekute",
     authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
-    projectProfile: readProjectProfile(payload.workspace)?.profile || null,
+    projectProfile: agentProjectProfile(payload.workspace),
     sessionId,
     tools: toolCatalogFromRegistry(container.toolRegistry).tools,
     getTools: () => selectedCatalog?.tools || toolCatalogFromRegistry(container.toolRegistry).tools,
@@ -3919,7 +3935,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     catalogMode,
     mode: payload.mode || "agent",
     modeFamily: payload.modeFamily || "xekute",
-    projectProfile: readProjectProfile(payload.workspace)?.profile || null,
+    projectProfile: agentProjectProfile(payload.workspace),
     runId: durableRunId,
     roundAccountingSnapshot,
     ...(supervisedRun ? { liveInput: supervisedRun.liveInput, engineSnapshot: supervisedRun.engineSnapshot, initialInputId: supervisedRun.initialInputId } : {}),
