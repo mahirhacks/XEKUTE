@@ -30,6 +30,7 @@ async function setup(t, initial = []) {
       return Promise.resolve({ ok: true, tab: input.command === "close" ? undefined : tab, tabs });
     },
     browserLayout(input) { layouts.push(input); return Promise.resolve({ ok: true }); },
+    browserCapture(input) { calls.push(["capture", input]); return Promise.resolve({ ok: true, dataUrl: "data:image/png;base64,ZnJvemVu" }); },
     onBrowserEvent(callback) { listener = callback; return () => { listener = null; }; },
   };
   const controller = createBrowserWorkspace({ document, api, host: document.querySelector("main"), getAssessmentPath: () => project, getSessionId: () => chat });
@@ -121,6 +122,26 @@ test("native views hide for app dialogs and inactive workspaces, then restore on
   assert.equal(env.controller.root.hidden, true);
   env.controller.setVisible(true); await env.flush();
   assert.equal(env.layouts.at(-1).tabId, "page");
+});
+
+test("a menu over the viewport freezes a snapshot instead of blanking the page, and clears it on close", async t => {
+  const env = await setup(t, [makeTab("page")]);
+  env.controller.setVisible(true); await env.flush();
+  const image = env.controller.root.querySelector(".browser-freeze");
+  assert.equal(image.hidden, true, "no snapshot while the page is shown");
+  // A non-modal menu overlapping the viewport rect {left:120,top:160,right:820,bottom:660}.
+  const menu = env.document.createElement("div");
+  menu.setAttribute("role", "menu");
+  menu.getBoundingClientRect = () => ({ left: 400, top: 400, right: 700, bottom: 620, width: 300, height: 220 });
+  env.document.body.append(menu); await env.flush();
+  assert.equal(env.calls.at(-1)[0], "hide", "the live view is hidden so the menu shows");
+  assert.ok(env.calls.some(([name]) => name === "capture"), "a snapshot was captured");
+  assert.equal(image.hidden, false, "the frozen snapshot keeps the page visible");
+  assert.match(image.getAttribute("src"), /^data:image\/png/);
+  const layoutsBefore = env.layouts.length;
+  menu.remove(); await env.flush();
+  assert.equal(image.hidden, true, "the snapshot clears once the menu closes");
+  assert.equal(env.layouts.length, layoutsBefore + 1, "the live view is shown again");
 });
 
 test("closing selected pages selects the remaining page and an empty browser hides the view", async t => {

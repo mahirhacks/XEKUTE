@@ -88,6 +88,7 @@ function createAgentRunHandlerFixture() {
     toolCatalogFromRegistry: () => ({ mode: "native", tools: [] }),
     normalizeAuthorityProfile: (profile) => profile || "approve_for_me",
     readProjectProfile: () => null,
+    agentProjectProfile: () => null,
     normalizeProfile: (family, key) => ({ family, key }),
     defaultRegistry: {},
     selectInternalSkill: () => ({ ok: false }),

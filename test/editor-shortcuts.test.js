@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -9,7 +10,7 @@ const read = (relativePath) => fs.readFileSync(path.join(__dirname, "..", relati
 const { readUiShell } = require("./helpers/ui-shell.js");
 
 test("Alt+Z toggles line wrapping while Ctrl+Z remains available for undo", () => {
-  const bootstrap = read("src/ui/bootstrap.js");
+  const bootstrap = rendererSource();
   const index = readUiShell();
 
   assert.match(bootstrap, /Line wrapping on · Alt\+Z to unwrap/);

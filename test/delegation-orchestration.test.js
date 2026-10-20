@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -45,7 +46,7 @@ test("main wires shared continuation dedupe helpers", () => {
 });
 
 test("bootstrap keeps parent turn open while orchestrationHold is true", () => {
-  const bootstrap = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const bootstrap = rendererSource();
   assert.match(bootstrap, /run\.orchestrationHold/);
   assert.match(bootstrap, /holdActive/);
   assert.match(bootstrap, /childEventLanes/);
@@ -53,7 +54,7 @@ test("bootstrap keeps parent turn open while orchestrationHold is true", () => {
 
 test("escalated delegated questions surface in the orchestrator with a sub-agent label", () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "app", "electron", "main.js"), "utf8");
-  const bootstrap = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const bootstrap = rendererSource();
   assert.match(main, /type: "subagent_question_escalated"/);
   assert.match(main, /subagentLabel/);
   assert.match(bootstrap, /presentOrchestratorEscalatedQuestion/);

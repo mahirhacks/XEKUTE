@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -11,7 +12,7 @@ const { readUiShell } = require("./helpers/ui-shell.js");
 
 test("authority selector offers the three bounded profiles while Agents settings exposes only the sub-agent model", () => {
   const html = readUiShell();
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const styles = read("src/ui/styles/base.css");
   const chatStyles = read("src/ui/styles/chat.css");
   assert.doesNotMatch(html, /Unrestricted|data-authority-mode=["']unrestricted["']/i);
@@ -26,7 +27,7 @@ test("authority selector offers the three bounded profiles while Agents settings
   assert.match(styles, /\.model-menu \{[\s\S]*?background: var\(--revamp-surface, var\(--bg-0\)\);[\s\S]*?border: 1px solid var\(--revamp-divider, var\(--border\)\);/);
   assert.doesNotMatch(renderer, /renderAuthoritySettings|data-authority-permission|input\.permissions/);
   assert.match(renderer, /permissions:\s*\{ \.\.\.AUTHORITY_DEFAULTS\.permissions \}/);
-  assert.match(renderer, /authorityProfile:\s*authoritySettingsData\.superMode/);
+  assert.match(renderer, /authorityProfile:\s*appState\.authoritySettingsData\.superMode/);
 });
 
 test("all agent tool calls use the central authority pipeline while scope remains independently enforced", () => {
@@ -41,7 +42,7 @@ test("all agent tool calls use the central authority pipeline while scope remain
 });
 
 test("direct operator actions remain available through ordinary feature handlers", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   for (const name of ["saveResourceChanges", "runSecurityWorkbench", "deleteSelectedCustomEntries", "saveActiveTab"]) {
     assert.match(renderer, new RegExp(`function ${name}`), name);
   }

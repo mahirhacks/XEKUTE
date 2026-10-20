@@ -1,12 +1,13 @@
 "use strict";
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
-const source = fs.readFileSync(require("node:path").join(__dirname, "../src/ui/bootstrap.js"), "utf8");
-const picker = source.slice(source.indexOf("let fileTagSuggestions ="), source.indexOf("function expandSlashCommand("));
-const scoring = source.slice(source.indexOf("function scoreQuickMatch("), source.indexOf("function buildCommandItems("));
+const source = rendererSource();
+const picker = rendererDefinitions("refreshTerminalsForTags", "fileTagProjectFiles", "fileTagQueryAtCaret", "closeFileTagSuggestions", "fileTagSuggestionsElement", "renderFileTagSuggestions", "chooseFileTag", "adjacentFileTag", "handleFileTagKeydown");
+const scoring = rendererDefinitions("scoreQuickMatch");
 
 async function fixture(text = "@", terminals = []) {
   const tags = await import("../src/ui/features/chat/file-tags.js");
@@ -31,7 +32,7 @@ async function fixture(text = "@", terminals = []) {
     assert.equal(workspace, "G:/project");
     return { ok: true, terminals: typeof terminals === "function" ? terminals(includeHistory) : terminals };
   } };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext(`${scoring}\n${picker}\nfunction onChatInputChange(){ renderFileTagSuggestions(); }`, context);
   context.renderFileTagSuggestions();
   return { context, input, document: dom.window.document, window: dom.window };

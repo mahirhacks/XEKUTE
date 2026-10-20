@@ -1,10 +1,11 @@
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const renderer = fs.readFileSync(path.join(root, "src", "ui", "bootstrap.js"), "utf8");
+const renderer = rendererSource();
 const css = fs.readFileSync(path.join(root, "src", "ui", "styles", "base.css"), "utf8");
 const layoutCss = fs.readFileSync(path.join(root, "src", "ui", "styles", "layout-revamp.css"), "utf8");
 

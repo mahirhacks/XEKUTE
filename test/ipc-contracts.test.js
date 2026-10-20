@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -17,7 +18,7 @@ test("canonical IPC contracts validate bounded payloads and result envelopes", (
 });
 
 test("renderer sends prompts without model schemas and main owns registry catalog", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const main = read("src/app/electron/main.js");
   const agentRunPayload = renderer.match(/window\.api\.agentRun\(\{([\s\S]*?)\n\s*\}\);/)?.[1] || "";
   assert.ok(agentRunPayload);

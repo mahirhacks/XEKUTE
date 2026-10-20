@@ -39,6 +39,9 @@ stopwords = [
   "abcd1234",
   "abcdefgh12345678",
   "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+  # Fake account password in test/account-variables.test.js, where a resolved
+  # account variable must appear in a curl command.
+  "pw-user-9",
 ]
 paths = [
   '''(^|/)node_modules/''',

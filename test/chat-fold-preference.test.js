@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -7,7 +8,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
 
-const source = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8").replace(/\r\n/g, "\n");
+const source = rendererSource().replace(/\r\n/g, "\n");
 
 function functionSource(name) {
   const start = source.indexOf(`function ${name}(`);
@@ -18,7 +19,7 @@ function functionSource(name) {
 async function setup() {
   const { thinkingElapsedMs } = await import("../src/ui/features/chat/chat-transcript.js");
   const dom = new JSDOM('<div class="agent-thinking-fold" data-expanded="true"><button class="agent-thinking-toggle" aria-expanded="true"><span class="agent-thinking-text">Thinking</span></button><div class="agent-thinking-content streaming">Reasoning</div></div>');
-  const context = vm.createContext({ thinkingElapsedMs, Date });
+  const context = vm.createContext(withAppState({ thinkingElapsedMs, Date }));
   for (const name of ["setCollapsibleFoldExpanded", "toggleCollapsibleFold", "thinkingContentOf", "thinkingFoldLabel", "setThinkingFoldLabel", "finishThinkingFold", "formatAgentWorkDuration"]) {
     vm.runInContext(functionSource(name), context);
   }

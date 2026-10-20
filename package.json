@@ -1,6 +1,6 @@
 {
   "name": "xekute-app",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "productName": "XEKUTE",
   "description": "XEKUTE - local-first penetration testing and vulnerability assessment workspace",
   "main": "src/app/electron/main.js",
@@ -16,6 +16,7 @@
     "verify:context-blocks": "npm run build:ui && node scripts/browser-dev/verify-context-blocks.cjs",
     "verify:checkpoint-interrupt": "npm run build:ui && node scripts/browser-dev/verify-checkpoint-interrupt.cjs",
     "verify:memory-save": "npm run build:ui && node scripts/browser-dev/verify-memory-save.cjs",
+    "verify:account-variables": "npm run build:ui && node scripts/browser-dev/verify-account-variables.cjs",
     "dev:electron": "npm run build:ui && electronmon --inspect=5858 . --dev",
     "dev:ui": "vite --config src/ui/vite.config.mjs",
     "build:ui": "vite build --config src/ui/vite.config.mjs && node scripts/copy-ui-assets.mjs",
@@ -32,15 +33,17 @@
     "audit:runtime": "npm audit --omit=dev --audit-level=high"
   },
   "devDependencies": {
-    "@electron/asar": "3.4.1",
     "@electron-forge/cli": "7.11.2",
     "@electron-forge/plugin-fuses": "7.11.2",
+    "@electron/asar": "3.4.1",
     "@electron/fuses": "1.8.0",
     "@electron/rebuild": "4.2.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "acorn": "8.17.0",
     "electron": "43.4.0",
     "electron-builder": "^26.15.3",
     "electronmon": "2.0.4",
+    "eslint-scope": "5.1.1",
     "jsdom": "^29.1.1",
     "vite": "^8.2.2"
   },

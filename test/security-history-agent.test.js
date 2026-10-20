@@ -1,4 +1,5 @@
 "use strict";
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -6,7 +7,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
 const { readUiShell } = require("./helpers/ui-shell.js");
-const source = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8");
+const source = rendererSource();
 const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const shell = fs.readFileSync(path.join(__dirname, "../src/ui/index.legacy.html"), "utf8");
 const menu = shell.slice(shell.indexOf('  <div id="security-history-menu"'), shell.indexOf('  <div id="chat-mode-menu"'));
@@ -33,13 +34,13 @@ function fixture() {
     lookups.push(input);
     return { records: [{ requestId: "target", request: "GET /target HTTP/1.1\r\nHost: example.test", response: "HTTP/1.1 200 OK\r\n\r\nTarget response" }] };
   } };
-  vm.createContext(context);
+  vm.createContext(withAppState(context));
   vm.runInContext([
-    slice("function closeSecurityHistoryMenu()", "function selectedSecurityHistoryRecords()"),
-    slice("async function hydrateSecurityHistoryRecords(", "async function loadSecurityHistoryRecord("),
-    slice("function openSecurityHistoryMenu(", "async function deleteSelectedSecurityHistoryRecords("),
-    slice("function bindSecurityHistoryRow(", "function createSecurityHistoryRow("),
-    slice("async function analyzeSecurityExchange(", "function clearSecurityExchange("),
+    rendererDefinitions("closeSecurityHistoryMenu"),
+    rendererDefinitions("hydrateSecurityHistoryRecords"),
+    rendererDefinitions("openSecurityHistoryMenu"),
+    rendererDefinitions("bindSecurityHistoryRow"),
+    rendererDefinitions("analyzeSecurityExchange"),
     slice('securityHistoryMenu?.addEventListener("click"', 'document.addEventListener("click"'),
   ].join("\n"), context);
   for (const record of context.securityHistoryRecords) context.bindSecurityHistoryRow(dom.window.document.getElementById(record.requestId === "old" ? "old" : "target"), record);

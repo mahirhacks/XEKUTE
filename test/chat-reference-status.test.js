@@ -1,12 +1,13 @@
 "use strict";
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
-const renderer = fs.readFileSync(path.join(__dirname, "../src/ui/bootstrap.js"), "utf8");
-const notices = renderer.slice(renderer.indexOf("const CONTEXT_SUMMARIZING_NOTICE ="), renderer.indexOf("function setContextCheckpointUi("));
+const renderer = rendererSource();
+const notices = rendererDefinitions("CONTEXT_SUMMARIZING_NOTICE", "CONTEXT_SUMMARIZED_NOTICE", "CONTEXT_SUMMARIZATION_INTERRUPTED_NOTICE", "pendingContextCheckpointNotice", "lastAgentRunChunk", "checkpointNoticeHost", "ensureContextCheckpointNotice", "setContextCheckpointNoticeText", "hydrateContextCheckpointNotices", "finishContextCheckpointNotice", "applyContextCheckpointUi", "applyChatReferenceImportUi");
 
 function fixture() {
   const dom = new JSDOM('<div id="messages"><div id="destination"></div><div id="other"></div></div>');
@@ -17,7 +18,7 @@ function fixture() {
     appendChatStreamNode: (host, node) => host.append(node), setContextCheckpointUi() {},
     setAgentStatus: value => labels.push(value), modeLabel: () => "Agent", scrollMessages() {}, syncChatRunSession() {}, updateContextUsage() {},
   };
-  vm.createContext(context); vm.runInContext(notices, context);
+  vm.createContext(withAppState(context)); vm.runInContext(notices, context);
   return { context, labels, document: dom.window.document, run: { session: { id: "destination" }, mode: "agent", container: dom.window.document.querySelector("#destination") } };
 }
 
@@ -84,7 +85,7 @@ test("saved completed imports retain the expandable chat names after sanitizatio
   context.stripFailedToolCardStubs = () => {};
   context.pruneEmptyWorkFolds = () => {};
   context.redactThinkingDisclosures = () => {};
-  vm.runInContext(renderer.slice(renderer.indexOf("function sanitizePersistedChatHtml("), renderer.indexOf("function normalizePersistedChatSession(")), context);
+  vm.runInContext(rendererDefinitions("sanitizePersistedChatHtml"), context);
   const html = context.sanitizePersistedChatHtml(run.container.innerHTML);
   run.container.innerHTML = html;
   context.hydrateContextCheckpointNotices(run.container);

@@ -1,3 +1,4 @@
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -56,7 +57,7 @@ test("live OpenRouter chat does not turn context reserve into an output cap", ()
 });
 
 test("renderer keeps Ollama thinking separate from OpenRouter effort selection", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   const markup = readUiShell();
   const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
   assert.match(markup, /id="ollama-thinking-row"/);
@@ -67,13 +68,13 @@ test("renderer keeps Ollama thinking separate from OpenRouter effort selection",
   assert.match(renderer, /className = "reasoning-option"[\s\S]*?codicon codicon-check/);
   assert.match(markup, /id="model-effort-value"/);
   assert.match(renderer, /modelEffortValue\.textContent = selected \? reasoningEffortLabel\(selected\)/);
-  assert.match(renderer, /if \(!editingModel \|\| isOpenRouterProvider\(\)\) return;/);
+  assert.match(renderer, /if \(!appState\.editingModel \|\| isOpenRouterProvider\(\)\) return;/);
   assert.match(styles, /\.model-edit-section\[hidden\],[\s\S]*?display: none !important;/);
   assert.match(styles, /\.reasoning-options\s*\{[\s\S]*?flex-direction: column;/);
 });
 
 test("Models settings pins enabled models above disabled models without changing group order", () => {
-  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const renderer = rendererSource();
   assert.match(renderer, /function enabledModelsFirst\(models, enabled = loadEnabledModels\(\)\)/);
   assert.match(renderer, /\.\.\.catalog\.filter\(\(name\) => enabled\.has\(name\)\)[\s\S]*?\.\.\.catalog\.filter\(\(name\) => !enabled\.has\(name\)\)/);
   assert.match(renderer, /const catalog = enabledModelsFirst\(modelsSettingsCatalog\(\)\);/);

@@ -1,11 +1,12 @@
 "use strict";
 
+const { rendererSource, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+const renderer = rendererSource();
 const styles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
 const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
 const workFold = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "features", "chat", "chat-work-fold.js"), "utf8");
@@ -16,7 +17,7 @@ test("thinking streams into a Thinking / Thought for fold", () => {
   assert.match(renderer, /thinking:\s*null,\s*\n\s*thinkingConfigured:\s*false/);
   assert.match(renderer, /return settings\?\.thinking !== false/);
   assert.doesNotMatch(renderer, /createAssistantTurn\(modelThinkingEnabled\(settings\)\)/);
-  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = activeChatSessionId \} = \{\}\)/);
+  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = appState\.activeChatSessionId \} = \{\}\)/);
   assert.match(renderer, /showPrivateReasoning\(\)/);
   assert.doesNotMatch(renderer, /assistant\.setStatus\("Thinking…"\)/);
   assert.match(workFold, /className = "agent-work-header agent-status-line"/);
@@ -159,7 +160,7 @@ test("large Agent work uses a temporary collapsible composer checklist", () => {
   assert.match(renderer, /function renderComposerTaskList\(payload = \{\}\)/);
   assert.match(renderer, /payload\.clear \|\| payload\.completed/);
   assert.match(renderer, /class="composer-task-list-card" aria-expanded=/);
-  assert.match(renderer, /if \(!activeComposerTaskList\?\.expanded \|\| composerTaskListEl\?\.contains\(event\.target\)\) return/);
+  assert.match(renderer, /if \(!appState\.activeComposerTaskList\?\.expanded \|\| composerTaskListEl\?\.contains\(event\.target\)\) return/);
   assert.match(renderer, /const workTools = tools\.filter\(\(tool\) => !isEndTurnTool\(tool\) && !isTaskListTool\(tool\)\)/);
   assert.match(chatStyles, /\.composer-task-list-card \{[\s\S]*?border-radius: 10px/);
   assert.match(chatStyles, /\.composer-task-list-row\[data-task-status="completed"\] \.composer-task-list-title \{[\s\S]*?text-decoration: line-through/);
@@ -359,7 +360,7 @@ test("send button stays disabled while orchestration or command hold keeps paren
 test("stopping the orchestrator clears the hold so the send button returns", () => {
   const settleStart = renderer.indexOf("function settleStoppedRun(");
   const stopEnd = renderer.indexOf("function chatStopIdsForRun", settleStart);
-  const stopBody = renderer.slice(settleStart, stopEnd);
+  const stopBody = rendererDefinitions("settleStoppedRun", "settleDelegatedChildrenOf", "stopGeneration");
   assert.match(stopBody, /orchestrationHold = false/);
   assert.match(stopBody, /pendingEndTurn = false/);
   assert.match(stopBody, /settleDelegatedChildrenOf\(run\)/);
@@ -382,7 +383,7 @@ test("detached delegated streams reuse the same reply block via streamingNodeLiv
 test("delegated child thinking and content share the main markdown scheduler", () => {
   const childAssistantStart = renderer.indexOf("function childAssistant(run)");
   const childAssistantEnd = renderer.indexOf("function handleDelegatedChildEvent", childAssistantStart);
-  const childAssistantBody = renderer.slice(childAssistantStart, childAssistantEnd);
+  const childAssistantBody = rendererDefinitions("childAssistant");
   assert.match(childAssistantBody, /function delegatedAppendThinking\(token\)[\s\S]*?renderMarkdown\(content, this.thinkingRaw, \{ streaming: true \}\)/);
   assert.match(childAssistantBody, /function delegatedSyncDisplay[\s\S]*?renderMarkdown\(/);
   assert.doesNotMatch(childAssistantBody, /baseAppendThinking\(token\)/);

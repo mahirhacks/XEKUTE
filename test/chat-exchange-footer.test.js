@@ -1,29 +1,15 @@
+const { rendererSource, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const bootstrapSource = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+const bootstrapSource = rendererSource();
 const baseStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "base.css"), "utf8");
 const chatStyles = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "styles", "chat.css"), "utf8");
 
-function functionBody(name, nextName) {
-  const pattern = new RegExp(`function ${name}\\([^]*?\\r?\\n}\\r?\\n\\r?\\nfunction ${nextName}\\(`);
-  const match = bootstrapSource.match(pattern);
-  assert.ok(match, `Could not find ${name}`);
-  return match[0];
-}
-
-function sourceBetween(startMarker, endMarker) {
-  const start = bootstrapSource.indexOf(startMarker);
-  const end = bootstrapSource.indexOf(endMarker, start + startMarker.length);
-  assert.ok(start >= 0, `Could not find ${startMarker}`);
-  assert.ok(end > start, `Could not find ${endMarker} after ${startMarker}`);
-  return bootstrapSource.slice(start, end);
-}
-
 test("assistant exchange footer is rebuilt only after the entire AI chunk is idle", () => {
-  const body = functionBody("attachAssistantCopyButton", "toolIconClass");
+  const body = rendererDefinitions("attachAssistantCopyButton");
   const removeAt = body.indexOf('querySelectorAll(".assistant-reply-footer")');
   const busyCheckAt = body.indexOf('getAttribute("aria-busy") === "true"');
   const appendAt = body.lastIndexOf("host.appendChild(footer)");
@@ -35,7 +21,7 @@ test("assistant exchange footer is rebuilt only after the entire AI chunk is idl
 });
 
 test("starting an assistant continuation clears prior exchange metadata", () => {
-  const body = sourceBetween("function createAssistantTurn(", "const SYSTEM_SKILL_SLASH_COMMANDS");
+  const body = rendererDefinitions("createAssistantTurn");
   const appendTurnAt = body.indexOf("appendChatTurn(turn, { container })");
   const removeFooterAt = body.indexOf('querySelectorAll(".assistant-reply-footer")');
 
@@ -55,7 +41,7 @@ test("assistant finalization settles the live run before adding exchange metadat
 });
 
 test("restored exchanges attach metadata after text and tool-only assistant turns", () => {
-  const body = sourceBetween("function renderCanonicalChatHistory(history = [])", "function hydrateSubagentRunCards");
+  const body = rendererDefinitions("renderCanonicalChatHistory", "captureSessionTranscript", "toolFromTranscriptItem", "applyThinkingRecord", "createRestoredWorkFold", "createTranscriptChatReply", "createToolCardFromRecord", "createCommandFromRecord", "restoreHistoryCommandContexts", "createFileStackFromRecord", "appendTranscriptEvent", "replyEndsWithStopped", "markSteeringAnswer", "appendStoppedPlainText", "isDurationWorkLabel", "commandResultFailed", "renderTranscriptRun", "renderStructuredChatTranscript", "restoreHistorySubagentCards");
   const renderLoopAt = body.indexOf("for (const message of sourceHistory)");
   const renderAllAt = body.indexOf("renderMessage(message, fragment)", renderLoopAt);
   const exchangePassAt = body.indexOf('fragment.querySelectorAll(".chat-exchange")');
@@ -80,7 +66,7 @@ test("assistant footer keeps copy visible and always shows time on the latest ex
   assert.match(source, /justify-content: flex-start/);
   assert.match(bootstrapSource, /footer\.appendChild\(button\);\s*footer\.appendChild\(forkButton\);\s*footer\.appendChild\(timeLabel\)/);
   assert.match(bootstrapSource, /assets\/icons\/fork\.svg/);
-  assert.match(bootstrapSource, /function forkChatSession\(sourceId = activeChatSessionId\)/);
+  assert.match(bootstrapSource, /function forkChatSession\(sourceId = appState\.activeChatSessionId\)/);
   assert.match(bootstrapSource, /fork\.memorySessionId = ""/);
   assert.match(bootstrapSource, /fork\.forkedFromSessionId = forkRootSessionId\(source\)/);
   assert.match(

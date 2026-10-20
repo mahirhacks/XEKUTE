@@ -1,3 +1,4 @@
+const { rendererSource, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -25,7 +26,7 @@ test("Agent tasks keep the two-mode catalog without a temporary checklist tool",
 });
 
 test("chat keeps runtime plans internal and renders a compact activity feed", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const controller = read("src/agent/controller/agent-controller.js");
   const styles = read("src/ui/styles/base.css");
   const chatStyles = read("src/ui/styles/chat.css");
@@ -80,7 +81,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
   assert.match(styles, /\.quick-panel\.quick-panel-minimal \{[\s\S]*?background: #181818;[\s\S]*?border-color: #303030;/);
   assert.match(styles, /\.quick-meta\[hidden\],[\s\S]*?\.quick-results\[hidden\][\s\S]*?display: none;/);
   assert.match(renderer, /const QUICK_SEARCH_RESULT_LIMIT = 10000/);
-  assert.match(renderer, /searchWorkspace\(\{ workspace: rootPath, query, limit: QUICK_SEARCH_RESULT_LIMIT, requestId \}\)/);
+  assert.match(renderer, /searchWorkspace\(\{ workspace: appState\.rootPath, query, limit: QUICK_SEARCH_RESULT_LIMIT, requestId \}\)/);
   assert.match(renderer, /cancelWorkspaceSearch\?\.\(\{ requestId \}\)/);
   assert.match(renderer, /onWorkspaceSearchBatch\?\.\(\(payload\) =>/);
   assert.match(renderer, /const QUICK_SEARCH_DEBOUNCE_MS = 225/);
@@ -170,7 +171,7 @@ test("chat keeps runtime plans internal and renders a compact activity feed", ()
 });
 
 test("chat history is compact, searchable, and keeps archive/delete actions hover-only", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const history = read("src/ui/features/history/history-model.js");
   const chatStyles = read("src/ui/styles/chat.css");
   const html = readUiShell();
@@ -194,7 +195,7 @@ test("chat history is compact, searchable, and keeps archive/delete actions hove
   assert.match(history, /label: "Today"/);
   assert.match(history, /label: "Previous 7 days"/);
   assert.match(chatStyles, /\.chat-history-group-label/);
-  assert.match(renderer, /function scrollChatSessionIntoView\(sessionId = activeChatSessionId\)/);
+  assert.match(renderer, /function scrollChatSessionIntoView\(sessionId = appState\.activeChatSessionId\)/);
   assert.match(renderer, /renderChatSessionSelect\(\);\s*scrollChatSessionIntoView\(session\.id\);/);
   assert.match(chatStyles, /\.chat-history-session-actions\s*\{[\s\S]*?opacity:\s*0[\s\S]*?pointer-events:\s*none/);
   assert.match(chatStyles, /\.chat-history-session:hover \.chat-history-session-actions[\s\S]*?opacity:\s*1[\s\S]*?pointer-events:\s*auto/);
@@ -203,18 +204,18 @@ test("chat history is compact, searchable, and keeps archive/delete actions hove
 });
 
 test("running chats stay navigable and signal background completion per tab", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const main = read("src/app/electron/main.js");
   const styles = read("src/ui/styles/base.css");
   const renderStart = renderer.indexOf("function renderChatSessionSelect");
   const renderEnd = renderer.indexOf("function scrollChatSessionIntoView", renderStart);
-  const tabRenderer = renderer.slice(renderStart, renderEnd);
+  const tabRenderer = rendererDefinitions("renderChatSessionSelect");
   const loadStart = renderer.indexOf("function loadChatSession");
   const loadEnd = renderer.indexOf("function newChatSession", loadStart);
-  const loadSession = renderer.slice(loadStart, loadEnd);
+  const loadSession = rendererDefinitions("loadChatSession", "allKnownChatSessions", "forkRootSessionId", "forkBaseTitle", "nextForkTitle", "cloneSessionValue", "forkChatSession");
   const scrollStart = renderer.indexOf("function scrollChatSessionIntoView");
   const scrollEnd = renderer.indexOf("chatSessionSelect?.addEventListener", scrollStart);
-  const scrollSession = renderer.slice(scrollStart, scrollEnd);
+  const scrollSession = rendererDefinitions("scrollChatSessionIntoView");
 
   assert.match(renderer, /const activeChatRuns = new Map\(\)/);
   assert.match(renderer, /function activeSessionRun\(\)/);
@@ -250,7 +251,7 @@ test("running chats stay navigable and signal background completion per tab", ()
   assert.match(renderer, /if \(isChatSessionRunning\(id\)\) return/);
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /eventSessionId !== runEventSessionId/);
-  assert.match(renderer, /const canSend = hasText \|\| \(!running && composerImages\.length > 0\);/);
+  assert.match(renderer, /const canSend = hasText \|\| \(!running && appState\.composerImages\.length > 0\);/);
   assert.match(renderer, /sendBtn\.disabled = stopMode \? false : !canSend/);
   assert.doesNotMatch(renderer, /Another agent is running/);
   assert.match(main, /sender\.send\("agent:event", \{ \.\.\.data, sessionId \}\)/);
@@ -259,17 +260,17 @@ test("running chats stay navigable and signal background completion per tab", ()
 });
 
 test("question-tool cards use the refreshed UI and stay scoped to their owning chat", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const chatStyles = read("src/ui/styles/chat.css");
   const html = readUiShell();
 
   assert.match(html, /id="composer-questions"[^>]*hidden/);
   assert.match(renderer, /const pendingComposerQuestionsBySession = new Map\(\)/);
-  assert.match(renderer, /function syncComposerQuestionsForActiveSession\(\)[\s\S]*?pendingComposerQuestionsBySession\.get\(String\(activeChatSessionId \|\| ""\)\)[\s\S]*?composerQuestionsEl\.replaceChildren\(\)/);
+  assert.match(renderer, /function syncComposerQuestionsForActiveSession\(\)[\s\S]*?pendingComposerQuestionsBySession\.get\(String\(appState\.activeChatSessionId \|\| ""\)\)[\s\S]*?composerQuestionsEl\.replaceChildren\(\)/);
   assert.match(renderer, /function applyActiveChatSession\(session\)[\s\S]*?syncComposerQuestionsForActiveSession\(\)/);
-  assert.match(renderer, /function showComposerQuestionsPanel\(\{[\s\S]*?sessionId = activeChatSessionId[\s\S]*?pendingComposerQuestionsBySession\.set\(ownerSessionId/);
-  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = activeChatSessionId \} = \{\}\)/);
-  assert.match(renderer, /sessionId: String\(sessionId \|\| activeChatSessionId \|\| ""\)/);
+  assert.match(renderer, /function showComposerQuestionsPanel\(\{[\s\S]*?sessionId = appState\.activeChatSessionId[\s\S]*?pendingComposerQuestionsBySession\.set\(ownerSessionId/);
+  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = appState\.activeChatSessionId \} = \{\}\)/);
+  assert.match(renderer, /sessionId: String\(sessionId \|\| appState\.activeChatSessionId \|\| ""\)/);
   assert.match(renderer, /requestQuestions\([\s\S]*?sessionId: this\.sessionId/);
   assert.match(renderer, /createAssistantTurn\(\{ container: chatRunContainer\(run\), sessionId: run\.sessionId \}\)/);
   assert.doesNotMatch(renderer, /let pendingComposerQuestions\s*=/);
@@ -288,7 +289,7 @@ test("question-tool cards use the refreshed UI and stay scoped to their owning c
 });
 
 test("mouse-picked slash commands use a yellow chip while typed commands remain plain", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const html = readUiShell();
   const chatStyles = read("src/ui/styles/chat.css");
   const parser = read("src/app/commands/command-parser.js");
@@ -298,9 +299,9 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   assert.match(html, /id="chat-input"[\s\S]*?id="selected-slash-command"/);
   assert.doesNotMatch(html, /id="selected-slash-command"[^>]*contenteditable="false"/);
   assert.match(renderer, /function modePlaceholder\(/);
-  assert.match(renderer, /chatInput\.placeholder = selectedSlashCommand \? "" : modePlaceholder\(\)/);
+  assert.match(renderer, /chatInput\.placeholder = appState\.selectedSlashCommand \? "" : modePlaceholder\(\)/);
   assert.match(renderer, /chooseSlashSuggestion\(index, \{ clicked: true \}\)/);
-  assert.match(renderer, /function chooseSlashSuggestion\(index = slashSuggestionIndex, \{ clicked = false \} = \{\}\)/);
+  assert.match(renderer, /function chooseSlashSuggestion\(index = appState\.slashSuggestionIndex, \{ clicked = false \} = \{\}\)/);
   assert.match(renderer, /function effectiveChatInputValue\(\)/);
   assert.match(renderer, /const SYSTEM_SKILL_SLASH_COMMANDS = Object\.freeze\(\[/);
   assert.match(renderer, /"system-command": "System Commands"/);
@@ -309,7 +310,7 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
   assert.match(renderer, /let text = hasExplicitText[\s\S]*?: effectiveChatInputValue\(\)/);
   assert.match(html, /class="composer-input-row">[\s\S]*?id="chat-input"[\s\S]*?id="selected-slash-command"/);
   assert.doesNotMatch(html, /selected-slash-command-clear/);
-  assert.match(renderer, /\["Tab", "Shift"\]\.includes\(e\.key\)[\s\S]*?chooseSlashSuggestion\(slashSuggestionIndex, \{ clicked: true \}\)/);
+  assert.match(renderer, /\["Tab", "Shift"\]\.includes\(e\.key\)[\s\S]*?chooseSlashSuggestion\(appState\.slashSuggestionIndex, \{ clicked: true \}\)/);
   assert.match(renderer, /e\.key === "Backspace" && isChatInputCaretAtArgumentStart\(\)[\s\S]*?clearSelectedSlashCommand\(\)/);
   assert.match(renderer, /function installChatInputEditorAdapter\(\)[\s\S]*?Object\.defineProperties\(chatInput[\s\S]*?value:[\s\S]*?get: \(\) => chatInputEditorValue\(\)/);
   assert.match(renderer, /function setChatInputCaretToEnd\(\)[\s\S]*?range\.selectNodeContents\(chatInput\)/);
@@ -323,7 +324,7 @@ test("mouse-picked slash commands use a yellow chip while typed commands remain 
 });
 
 test("background terminal continuations remain internal to the agent runtime", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const main = read("src/app/electron/main.js");
   const chatStyles = read("src/ui/styles/chat.css");
 
@@ -344,7 +345,7 @@ test("background terminal continuations remain internal to the agent runtime", (
 });
 
 test("hidden background runtime remains isolated from the visible chat surface", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const main = read("src/app/electron/main.js");
   const prompt = read("src/prompts/instructions/system-prompt.js");
 
@@ -363,7 +364,7 @@ test("hidden background runtime remains isolated from the visible chat surface",
 });
 
 test("assistant messages render a relative-time label beside the copy button", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const styles = read("src/ui/styles/base.css");
 
   // The formatter follows the documented compact tiers:
@@ -395,7 +396,7 @@ test("assistant messages render a relative-time label beside the copy button", (
 });
 
 test("long user prompts clamp to two lines and expand only on demand", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const chatStyles = read("src/ui/styles/chat.css");
 
   assert.match(renderer, /function syncUserPromptDisclosure\(box\)[\s\S]*?content\.scrollHeight > content\.clientHeight \+ 1/);
@@ -412,32 +413,32 @@ test("long user prompts clamp to two lines and expand only on demand", () => {
 });
 
 test("V3 checkpointing never hides or removes visible chat history", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const renderStart = renderer.indexOf("function renderCanonicalChatHistory");
   const renderEnd = renderer.indexOf("function ensureChatEmptyState", renderStart);
-  const renderBody = renderer.slice(renderStart, renderEnd);
+  const renderBody = rendererDefinitions("renderCanonicalChatHistory", "captureSessionTranscript", "toolFromTranscriptItem", "applyThinkingRecord", "createRestoredWorkFold", "createTranscriptChatReply", "createToolCardFromRecord", "createCommandFromRecord", "restoreHistoryCommandContexts", "createFileStackFromRecord", "appendTranscriptEvent", "replyEndsWithStopped", "markSteeringAnswer", "appendStoppedPlainText", "isDurationWorkLabel", "commandResultFailed", "renderTranscriptRun", "renderStructuredChatTranscript", "restoreHistorySubagentCards", "hydrateSubagentRunCards");
 
   assert.match(renderBody, /for \(const message of sourceHistory\) renderMessage\(message, fragment\);/);
   assert.doesNotMatch(renderBody, /previousUserContent/);
   assert.match(renderBody, /messages\.replaceChildren\(fragment\)/);
   assert.doesNotMatch(renderBody, /archivedThroughMessageId|chat-archive-marker/);
-  assert.doesNotMatch(renderer, /maybeCompactContext|v3_checkpoint_owned|renderCanonicalChatHistory\(chatHistory\)/);
+  assert.doesNotMatch(renderer, /maybeCompactContext|v3_checkpoint_owned|renderCanonicalChatHistory\((?:appState\.)?chatHistory\)/);
 });
 
 test("stopped streamed responses enter history before the durable outcome is written", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const main = read("src/app/electron/main.js");
   const finalizeStart = renderer.indexOf("const finalizeChatHistory = async (outcome) =>");
   const finalizeEnd = renderer.indexOf("const runIsVisible", finalizeStart);
   const finalizeBody = renderer.slice(finalizeStart, finalizeEnd);
   const stopStart = renderer.indexOf("function stopGeneration()");
   const stopEnd = renderer.indexOf("bindLiveInputComposer({", stopStart);
-  const stopBody = renderer.slice(stopStart, stopEnd);
+  const stopBody = rendererDefinitions("stopGeneration", "chatStopIdsForRun", "markChatSessionStoppedByOperator", "clearChatSessionStoppedByOperator", "isChatSessionStoppedByOperator", "abortActiveChatRun", "dismissComposerQuestionsForStop", "dropAutoContinuationsForSession");
 
   assert.match(renderer, /function syncAssistantDraftToHistory\([\s\S]*?history\.push\(message\)[\s\S]*?schedulePersistChatSessions\(session\)/);
   assert.match(renderer, /assistant\.appendContent\(delta\);[\s\S]*?syncAssistantDraftToHistory\(run, assistant, \{ persist: false \}\)/);
   assert.match(finalizeBody, /syncAssistantDraftToHistory\(run, assistant, \{ persist: false \}\)[\s\S]*?syncChatRunSession\(run, \{ persist: false \}\)[\s\S]*?finishChatHistoryBlock/);
-  assert.match(stopBody, /syncAssistantDraftToHistory\(run, run\.assistant, \{ persist: false \}\)[\s\S]*?persistChatHistorySnapshot\(activeChatPersistenceScope, run\.session\)/);
+  assert.match(stopBody, /syncAssistantDraftToHistory\(run, run\.assistant, \{ persist: false \}\)[\s\S]*?persistChatHistorySnapshot\(appState\.activeChatPersistenceScope, run\.session\)/);
   assert.match(stopBody, /abortActiveChatRun\(run\)/);
   assert.match(stopBody, /dropAutoContinuationsForSession/);
   // The send control becomes a stop button while a run is active, and clicking
@@ -456,10 +457,10 @@ test("stopped streamed responses enter history before the durable outcome is wri
 });
 
 test("successful agent runs are not finalized as failed in finally", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const sendStart = renderer.indexOf("async function sendMessageWithAgentRuntime");
   const sendEnd = renderer.indexOf("function stopGeneration()", sendStart);
-  const sendBody = renderer.slice(sendStart, sendEnd);
+  const sendBody = rendererDefinitions("sendMessageWithAgentRuntime", "collapseStoppedOrchestratorTurns", "settleStoppedRun", "settleDelegatedChildrenOf");
   const finallyStart = sendBody.indexOf("} finally {");
   const finallyBody = sendBody.slice(finallyStart);
   assert.match(sendBody, /await finalizeChatHistory\(assistant\.rawContent\.trim\(\) \? "completed" : "incomplete"\)/);
@@ -537,14 +538,14 @@ test("encrypted V3 chat sessions preserve the exact sanitized display transcript
 });
 
 test("every rendered agent event refreshes the durable display transcript", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const store = read("src/app/storage/memory/v3-session-store.js");
   const delegation = read("src/agent/runtime/delegation-provider.js");
 
   assert.match(renderer, /displayHtml: session\.messagesHtml \|\| ""/);
   assert.match(renderer, /uiTranscript: normalizeUiTranscript\(session\.transcript\)/);
   assert.match(renderer, /function renderStructuredChatTranscript/);
-  assert.match(renderer, /from "\.\/features\/chat\/chat-transcript\.js"/);
+  assert.match(renderer, /from "[./\w-]*\/chat-transcript\.js"/);
   assert.match(renderer, /captureChatTranscript\(/);
   assert.match(renderer, /await handleAgentEvent\(payload\);\s*scheduleLiveChatSnapshot\(run\)/);
   assert.match(renderer, /function scheduleLiveChatSnapshot/);
@@ -560,7 +561,7 @@ test("every rendered agent event refreshes the durable display transcript", () =
 });
 
 test("agent turns retain tool and command rows without a redundant progress checklist", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const chatStyles = read("src/ui/styles/chat.css");
   const prompt = read("src/prompts/instructions/system-prompt.js");
 
@@ -588,7 +589,7 @@ test("agent turns retain tool and command rows without a redundant progress chec
 });
 
 test("command execution renders as sequential collapsed chat events without entering copied prose", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const chatStyles = read("src/ui/styles/chat.css");
 
   assert.match(renderer, /function createCommandTimelineRow/);
@@ -611,7 +612,7 @@ test("command execution renders as sequential collapsed chat events without ente
 });
 
 test("command completion settles timers immediately across call, process, and terminal identities", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
 
   assert.match(renderer, /commandCallId/);
   assert.match(renderer, /function commandLifecycleIds/);
@@ -627,10 +628,10 @@ test("command completion settles timers immediately across call, process, and te
 });
 
 test("saved command transcripts reopen through the browser-safe tool normalizer", () => {
-  const renderer = read("src/ui/bootstrap.js");
+  const renderer = rendererSource();
   const start = renderer.indexOf("function commandToolFromHistoryCall");
   const end = renderer.indexOf("function agentTerminalCommandForTool", start);
-  const restoreHelper = renderer.slice(start, end);
+  const restoreHelper = rendererDefinitions("commandToolFromHistoryCall", "agentCommandContextForTool");
 
   assert.match(restoreHelper, /ToolMap\.normalizeToolCall\?\.\(call\)/);
   assert.doesNotMatch(restoreHelper, /ToolMap\.parseArguments/);
@@ -639,27 +640,12 @@ test("saved command transcripts reopen through the browser-safe tool normalizer"
 });
 
 test("chat mode picker stays usable during a reply and only the next user turn uses the new mode", () => {
-  const renderer = read("src/ui/bootstrap.js");
-  const openMenu = renderer.slice(
-    renderer.indexOf("function openChatModeMenu"),
-    renderer.indexOf("function closeChatModeMenu"),
-  );
-  const toggleMenu = renderer.slice(
-    renderer.indexOf("function toggleChatModeMenu"),
-    renderer.indexOf("function positionChatModeMenu"),
-  );
-  const setMode = renderer.slice(
-    renderer.indexOf("function setChatMode"),
-    renderer.indexOf("function setChatFamily"),
-  );
-  const syncRun = renderer.slice(
-    renderer.indexOf("function syncChatRunSession"),
-    renderer.indexOf("function prepareActiveChatSessionForSwitch"),
-  );
-  const hiddenRuntime = renderer.slice(
-    renderer.indexOf("async function executeHiddenAgentRuntime"),
-    renderer.indexOf("function sendHiddenAgentRuntime"),
-  );
+  const renderer = rendererSource();
+  const openMenu = rendererDefinitions("openChatModeMenu");
+  const toggleMenu = rendererDefinitions("toggleChatModeMenu");
+  const setMode = rendererDefinitions("setChatMode");
+  const syncRun = rendererDefinitions("syncChatRunSession");
+  const hiddenRuntime = rendererDefinitions("executeHiddenAgentRuntime");
   const sendStart = renderer.indexOf("async function sendMessageWithAgentRuntime");
   const sendRuntime = renderer.slice(
     sendStart,
@@ -672,9 +658,9 @@ test("chat mode picker stays usable during a reply and only the next user turn u
   assert.doesNotMatch(syncRun, /session\.chatMode = run\.mode/);
   assert.match(sendRuntime, /runSession\.turnMode = runMode/);
   assert.match(sendRuntime, /ensureChatMemorySessionId\(runSession\)/);
-  assert.match(hiddenRuntime, /runSession\.turnMode \|\| runSession\.chatMode \|\| chatMode/);
+  assert.match(hiddenRuntime, /runSession\.turnMode \|\| runSession\.chatMode \|\| appState\.chatMode/);
   assert.match(hiddenRuntime, /ensureChatMemorySessionId\(runSession\)/);
-  assert.match(renderer, /modeLabel\(liveRun\?\.mode \|\| chatMode\)/);
-  assert.match(renderer, /from "\.\/features\/history\/chat-memory-session\.js"/);
-  assert.doesNotMatch(renderer.slice(renderer.indexOf("function createChatSession"), renderer.indexOf("function memoryRecord")), /ensureChatMemorySessionId/);
+  assert.match(renderer, /modeLabel\(liveRun\?\.mode \|\| appState\.chatMode\)/);
+  assert.match(renderer, /from "[./\w-]*\/chat-memory-session\.js"/);
+  assert.doesNotMatch(rendererDefinitions("createChatSession"), /ensureChatMemorySessionId/);
 });

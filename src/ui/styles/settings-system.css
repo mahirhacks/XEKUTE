@@ -160,7 +160,7 @@
 }
 
 /* Project section strip: keeps its sticky horizontal scroll. */
-#app-settings-workspace .app-settings-content .project-settings-nav { gap: 2px !important; margin-bottom: 18px !important; padding-bottom: 8px !important; border-bottom: 1px solid var(--st-divider) !important; background: transparent !important; }
+#app-settings-workspace .app-settings-content .project-settings-nav { gap: 2px !important; margin-bottom: 18px !important; padding-top: 8px !important; padding-bottom: 8px !important; border-bottom: 1px solid var(--st-divider) !important; background: var(--settings-bg) !important; }
 #app-settings-workspace .app-settings-content .project-settings-nav > button {
   flex: 0 0 auto;
   min-height: 28px !important;

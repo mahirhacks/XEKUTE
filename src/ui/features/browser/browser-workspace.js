@@ -48,6 +48,7 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
     </form>
     <div class="browser-status" role="status" hidden></div>
     <div class="browser-viewport" data-native-surface>
+      <img class="browser-freeze" alt="" aria-hidden="true" hidden>
       <div class="browser-empty">
         <span class="browser-empty-icon codicon codicon-globe" aria-hidden="true"></span>
         <strong>No page open</strong>
@@ -59,10 +60,11 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   const $ = selector => root.querySelector(selector);
   const strip = $(".browser-web-tabs"), address = $(".browser-address"), viewport = $(".browser-viewport");
   const status = $(".browser-status"), empty = $(".browser-empty"), creator = $(".browser-new-page");
+  const freeze = $(".browser-freeze");
   const purpose = $('[aria-label="New tab purpose"]'), identity = $('[aria-label="New tab identity"]');
   const resumeSessions = new Map();
   let project = "", tabs = [], identities = [], selectedId = null, visible = false, disposed = false;
-  let layoutFrame = 0, lastLayout = "", loadSequence = 0, loading = false;
+  let layoutFrame = 0, lastLayout = "", loadSequence = 0, loading = false, freezeSeq = 0;
   const active = () => tabs.find(tab => tab.id === selectedId) || null;
   function setStatus(message = "", error = false) {
     status.textContent = message;
@@ -72,6 +74,8 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   }
   function hideNative() {
     lastLayout = "";
+    freezeSeq++;
+    setFreeze(null);
     Promise.resolve(api.browserHide?.()).catch(() => {});
   }
   function syncProject() {
@@ -98,19 +102,44 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
     }
     return false;
   }
+  function setFreeze(dataUrl) {
+    if (dataUrl) { freeze.src = dataUrl; freeze.hidden = false; }
+    else if (!freeze.hidden || freeze.getAttribute("src")) { freeze.hidden = true; freeze.removeAttribute("src"); }
+  }
+  // While an overlay covers the viewport the native view is hidden so the overlay
+  // shows, but a frozen snapshot keeps the page visible underneath instead of a gap.
+  async function freezeNative(tabId, expectedProject) {
+    const token = ++freezeSeq;
+    try {
+      const result = await api.browserCapture?.({ assessmentPath: expectedProject, tabId });
+      if (token !== freezeSeq || disposed || project !== expectedProject || selectedId !== tabId) return;
+      if (result?.ok && result.dataUrl) setFreeze(result.dataUrl);
+    } catch { /* a missing snapshot just falls back to hiding the view */ }
+    finally { if (token === freezeSeq && !disposed) Promise.resolve(api.browserHide?.()).catch(() => {}); }
+  }
   function syncLayout() {
     layoutFrame = 0;
     if (disposed) return;
     const rect = viewport.getBoundingClientRect();
-    const shown = visible && !root.hidden && isShown(root) && active() && !obstructed(rect) && rect.width > 0 && rect.height > 0;
+    const open = visible && !root.hidden && isShown(root) && active() && rect.width > 0 && rect.height > 0;
+    const blocked = open && obstructed(rect);
+    const shown = open && !blocked;
     const bounds = { x: Math.max(0, Math.round(rect.left)), y: Math.max(0, Math.round(rect.top)), width: Math.max(0, Math.round(Math.min(rect.right, win.innerWidth) - Math.max(0, rect.left))), height: Math.max(0, Math.round(Math.min(rect.bottom, win.innerHeight) - Math.max(0, rect.top))) };
-    const signature = JSON.stringify([project, selectedId, Boolean(shown), bounds]);
+    const signature = JSON.stringify([project, selectedId, shown ? "shown" : blocked && bounds.width && bounds.height ? "frozen" : "hidden", bounds]);
     if (signature === lastLayout) return;
     lastLayout = signature;
-    if (!shown || !bounds.width || !bounds.height) { Promise.resolve(api.browserHide?.()).catch(() => {}); return; }
-    Promise.resolve(api.browserLayout?.({ assessmentPath: project, tabId: selectedId, bounds, visible: true })).then(result => {
-      if (result?.ok === false) throw new Error(result.error?.message || result.error || "Browser view could not be displayed.");
-    }).catch(error => { if (lastLayout === signature) setStatus(error.message, true); });
+    if (shown && bounds.width && bounds.height) {
+      freezeSeq++;
+      setFreeze(null);
+      Promise.resolve(api.browserLayout?.({ assessmentPath: project, tabId: selectedId, bounds, visible: true })).then(result => {
+        if (result?.ok === false) throw new Error(result.error?.message || result.error || "Browser view could not be displayed.");
+      }).catch(error => { if (lastLayout === signature) setStatus(error.message, true); });
+      return;
+    }
+    if (blocked && bounds.width && bounds.height && api.browserCapture) { void freezeNative(selectedId, project); return; }
+    freezeSeq++;
+    setFreeze(null);
+    Promise.resolve(api.browserHide?.()).catch(() => {});
   }
   function scheduleLayout() {
     // Hidden, the native view is already detached; page-wide DOM changes need no layout reads.

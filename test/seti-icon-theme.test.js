@@ -1,3 +1,4 @@
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -7,7 +8,7 @@ const root = path.resolve(__dirname, "..");
 const theme = require("../src/ui/features/project/seti-icon-theme.js");
 const { readUiShell } = require("./helpers/ui-shell.js");
 const html = readUiShell();
-const renderer = fs.readFileSync(path.join(root, "src", "ui", "bootstrap.js"), "utf8");
+const renderer = rendererSource();
 const styles = fs.readFileSync(path.join(root, "src", "ui", "styles", "base.css"), "utf8");
 const layoutStyles = fs.readFileSync(path.join(root, "src", "ui", "styles", "layout-revamp.css"), "utf8");
 

@@ -1,5 +1,6 @@
 "use strict";
 
+const { rendererSource } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -58,7 +59,7 @@ test("workspace has no findings API; verified evidence is E-#### and leftover fi
 });
 
 test("Explorer has no leftover findings layer", () => {
-  const bootstrap = fs.readFileSync(path.join(__dirname, "..", "src", "ui", "bootstrap.js"), "utf8");
+  const bootstrap = rendererSource();
   const html = readUiShell();
   assert.doesNotMatch(bootstrap, /\.xekute\/findings\/index\.md/);
   assert.doesNotMatch(html, /data-bounty-file="\.xekute\/findings\/index\.md"/);
