@@ -1,5 +1,6 @@
 import { appState } from "../../core/app-state.js";
-import { guidanceEntryKind, SYSTEM_SKILL_COMMANDS, composerEl } from "../../bootstrap.js";
+import { SYSTEM_SKILL_COMMANDS, composerEl } from "../../bootstrap.js";
+import { guidanceEntryKind } from "../settings/guidance-settings.js";
 import {
   syncChatInputEmptyState, chatInputEditorValue, renderChatInputEditorValue,
   setChatInputCaretToEnd, resizeChatInput, updateSendBtn,
