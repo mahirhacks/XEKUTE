@@ -16,6 +16,7 @@ const RENDERER_FILES = [
   "features/chat/turn-structure.js",
   "features/chat/transcript-replay.js",
   "features/chat/chat-run-state.js",
+  "features/chat/chat-sessions.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

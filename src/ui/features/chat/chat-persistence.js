@@ -2,9 +2,12 @@ import { appState } from "../../core/app-state.js";
 import { messages, chatHistorySecurityWarning } from "../../core/dom-refs.js";
 import {
   isBareToolVerbLabel, decorateBareToolLabel, renderToolStatusLabelFromText, canonicalChatMode,
-  normalizeContextUsageSnapshot, chatSessions, closedChatSessions, archivedChatSessions,
-  setAgentStatus, activeChatSession, syncActiveChatSession,
+  normalizeContextUsageSnapshot, setAgentStatus,
 } from "../../bootstrap.js";
+import {
+  chatSessions, closedChatSessions, archivedChatSessions, activeChatSession,
+  syncActiveChatSession,
+} from "./chat-sessions.js";
 import {
   activeChatRuns, isChatSessionRunning, isRunningChatActive, syncChatRunSession,
 } from "./chat-run-state.js";
