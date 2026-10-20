@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.4] - 2026-10-20
+
+This release refreshes the update prompt and the empty project panel, and
+fixes the File menu and lost keystrokes after creating a file.
+
+### Changed
+
+- Redesign the update prompt with 6px corners, gray 4px buttons, the offered
+  version, a flat download bar with a close button, and a check icon on
+  completion.
+- Use gray, evenly spaced buttons in the No Project Open and assessment setup
+  panels.
+
+### Fixed
+
+- Disable File > Create New File, Create New Folder, Save File and Close
+  Editor until a project or an editor is open.
+- Keep keyboard focus in a newly created file, and stop background explorer
+  refreshes from moving focus out of the editor or chat.
+
 ## [0.6.3] - 2026-10-20
 
 This release lets the agent sign in with the project's test accounts without
