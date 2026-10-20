@@ -15,10 +15,11 @@ import {
 } from "./tool-labels.js";
 import { activeChatRuns } from "./chat-run-state.js";
 import {
-  isAgentTerminalTool, isTaskListTool, openTabs, openFile, isMarkdownFileName, renderTabs,
-  renderEditor, refreshWorkspaceUi, closeTab, loadGuidanceSettings, reconcileDeletedWorkspacePath,
-  agentTerminalCommandForTool, startWaitCardTicker,
+  isTaskListTool, openTabs, openFile, isMarkdownFileName, renderTabs, renderEditor,
+  refreshWorkspaceUi, closeTab, loadGuidanceSettings, reconcileDeletedWorkspacePath,
+  startWaitCardTicker,
 } from "../../bootstrap.js";
+import { isAgentTerminalTool, agentTerminalCommandForTool } from "./command-timeline.js";
 import { appState } from "../../core/app-state.js";
 import { EditorManager, TerminalManager } from "../../core/runtime-globals.js";
 import { normPath, joinWorkspacePath } from "../../core/workspace-paths.js";

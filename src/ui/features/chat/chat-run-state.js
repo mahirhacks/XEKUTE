@@ -3,9 +3,11 @@ import { messages, chatInput } from "../../core/dom-refs.js";
 import {
   subagentCardBlocksParent, syncSubagentOrchestrationWaitStatus, updateSendBtn,
   chatSessionIdForRuntimeId, ensureParentContinuationRun, drainPendingBackgroundWaitEvents,
-  commandCompletionForRow, updateCommandTimelineRow, stopCommandTimelineTicker,
   coalesceDelegatedAssistantReplyFragments,
 } from "../../bootstrap.js";
+import {
+  commandCompletionForRow, updateCommandTimelineRow, stopCommandTimelineTicker,
+} from "./command-timeline.js";
 import { setAgentStatus } from "./chat-messages.js";
 import { hydrateContextCheckpointNotices } from "./context-checkpoints.js";
 import { modeLabel } from "./chat-mode.js";

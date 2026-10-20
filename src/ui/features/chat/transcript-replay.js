@@ -8,10 +8,12 @@ import {
   createThinkingFold, absorbFileRow, isEmptyAssistantReply, restackFileRows,
 } from "./turn-structure.js";
 import {
-  isAgentTerminalTool, commandToolFromHistoryCall, createCommandTimelineRow,
-  createSubagentRunCard, agentCommandContextForTool, agentTerminalCommandForTool,
-  renderCommandTimelineLabel, wireSubagentRunCard, setSubagentCardState,
+  createSubagentRunCard, wireSubagentRunCard, setSubagentCardState,
 } from "../../bootstrap.js";
+import {
+  isAgentTerminalTool, commandToolFromHistoryCall, createCommandTimelineRow,
+  agentCommandContextForTool, agentTerminalCommandForTool, renderCommandTimelineLabel,
+} from "./command-timeline.js";
 import { createToolCard, setToolCardStatus } from "./tool-cards.js";
 import { toolActionName } from "./tool-labels.js";
 import { renderMarkdown, attachAssistantCopyButton, syncChatStickyMask } from "./chat-messages.js";

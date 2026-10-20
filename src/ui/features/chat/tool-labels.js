@@ -1,6 +1,7 @@
 import { compactText } from "../../core/text-format.js";
 import { isPlaceholderTarget, isEmptyAssistantReply } from "./turn-structure.js";
-import { ToolMap, isAgentTerminalTool, agentCommandContextForTool } from "../../bootstrap.js";
+import { ToolMap } from "../../bootstrap.js";
+import { isAgentTerminalTool, agentCommandContextForTool } from "./command-timeline.js";
 import { KEEPABLE_TOOL_LABEL, isStubToolStatusLabel } from "./chat-persistence.js";
 
 export function toolIconClass(tool = {}) {
