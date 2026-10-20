@@ -19,23 +19,22 @@ import {
   attachImageBtn, attachImageInput, chatModeToggle, chatModeButton, chatModeMenu, appMenu,
   helpGuideOverlay, helpGuideClose, commandCenter, quickOverlay, quickPanel, quickInput,
   quickResults, quickSearchHelp, quickSearchAssist, quickSearchSuggestions, chatHeader,
-  btnTopFileTree, btnTopTerminal, btnTopChat, btnTopSettings, btnNotifications, notificationCount,
-  notificationPanel, notificationList, notificationClear, btnWindowMinimize, btnWindowMaximize,
-  btnWindowClose, chatSessionSelect, btnChatNew, btnChatDelete, btnChatHistory,
-  chatHistoryPopover, chatHistoryBody, chatHistorySearch, btnChatMore, btnChatCollapse,
-  contextUsageBtn, contextUsagePopover, inputBar, memorySaveBanner, composerTaskListEl,
-  slashCommandSuggestions, contextUsageClose, contextUsageMenu, contextWindowTrigger,
-  contextBlocksTrigger, contextBlocksPanel, contextBlocksList, modelPicker, authorityPicker,
-  authorityMenu, modelMenu, modelControlsMenu, modelContextTrigger, modelEffortTrigger,
-  modelBrowseTrigger, modelSearch, modelAddBtn, modelCustom, modelCustomAdd, modelEditMenu,
-  thinkingToggle, sidebar, sidebarResize, chatPane, chatResize, terminalPane, terminalResize,
-  centerPanel, btnTerminalMaximize, btnTerminalClose, editorPane, resourceViewer,
-  resourceViewerMeta, resourceViewerContent, resourceLineNumbers, resourceViewerSave,
-  resourceViewerCopy, resourceViewerActions, appSettingsSearch, generalStatusBarToggle,
-  generalUpdatesToggle, updateToastInstall, updateToastIgnore, projectSettingsForm,
-  projectSettingsName, projectSettingsCreate, projectSettingsOpen, projectSettingsNav,
-  projectSettingsNavButtons, commandSettingsStatus, mcpSettingsTabs, kaliAccessForm,
-  kaliAccessEnabled, kaliAccessFields, kaliAccessKey, kaliAccessAcceptHostKey,
+  btnTopFileTree, btnTopTerminal, btnTopChat, btnTopSettings, btnNotifications, notificationPanel,
+  notificationClear, btnWindowMinimize, btnWindowMaximize, btnWindowClose, chatSessionSelect,
+  btnChatNew, btnChatDelete, btnChatHistory, chatHistoryPopover, chatHistoryBody,
+  chatHistorySearch, btnChatMore, btnChatCollapse, contextUsageBtn, contextUsagePopover, inputBar,
+  memorySaveBanner, composerTaskListEl, slashCommandSuggestions, contextUsageClose,
+  contextUsageMenu, contextWindowTrigger, contextBlocksTrigger, contextBlocksPanel,
+  contextBlocksList, modelPicker, authorityPicker, authorityMenu, modelMenu, modelControlsMenu,
+  modelContextTrigger, modelEffortTrigger, modelBrowseTrigger, modelSearch, modelAddBtn,
+  modelCustom, modelCustomAdd, modelEditMenu, thinkingToggle, sidebar, sidebarResize, chatPane,
+  chatResize, terminalPane, terminalResize, centerPanel, btnTerminalMaximize, btnTerminalClose,
+  editorPane, resourceViewer, resourceViewerMeta, resourceViewerContent, resourceLineNumbers,
+  resourceViewerSave, resourceViewerCopy, resourceViewerActions, appSettingsSearch,
+  generalStatusBarToggle, generalUpdatesToggle, updateToastInstall, updateToastIgnore,
+  projectSettingsForm, projectSettingsName, projectSettingsCreate, projectSettingsOpen,
+  projectSettingsNav, projectSettingsNavButtons, commandSettingsStatus, mcpSettingsTabs,
+  kaliAccessForm, kaliAccessEnabled, kaliAccessFields, kaliAccessKey, kaliAccessAcceptHostKey,
   kaliAccessKeyBrowse, kaliAccessOpenMcp, kaliAccessTest, guidanceScopeTabs, guidanceNew,
   guidanceEmptyNew, guidanceImport, llmProvider, openRouterBaseUrl, openRouterApiKey,
   llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle, llmOpenRouterBaseToggle,
@@ -62,7 +61,7 @@ import {
   securityWorkbenchResize, statusLnCol, statusOllamaPort,
 } from "./core/dom-refs.js";
 import { EditorManager, TerminalManager } from "./core/runtime-globals.js";
-import { escapeHtml, formatWaitClock } from "./core/text-format.js";
+import { formatWaitClock } from "./core/text-format.js";
 import { normPath, basenameOf, joinWorkspacePath } from "./core/workspace-paths.js";
 import {
   paintLiveInputRecord, createChatSession, clearChatSessionState, reportChatHistoryWarning,
@@ -265,9 +264,11 @@ import {
   formattedSearchSources, setQuickSearchMeta, flushWorkspaceSearchRows,
 } from "./features/search/workspace-search.js";
 import {
-  beginUpdateInstallFromNotification, updatesState, loadUpdateSettings, runUpdateCheck,
-  beginUpdateInstall, ignoreCurrentUpdate, handleUpdateEvent,
+  loadUpdateSettings, runUpdateCheck, beginUpdateInstall, ignoreCurrentUpdate, handleUpdateEvent,
 } from "./features/updates/update-flow.js";
+import {
+  setNotifications, positionNotificationPanel,
+} from "./features/notifications/notification-center.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -734,46 +735,7 @@ appState.uiZoom = Number(localStorage.getItem(UI_ZOOM_KEY)) || 1;
 
 
 
-function setNotifications(items = []) {
-  const baseItems = (Array.isArray(items) ? items : [])
-    .filter(Boolean)
-    .filter((item) => item.id !== "update-available");
-  const merged = updatesState.pendingNotification
-    ? [updatesState.pendingNotification, ...baseItems]
-    : baseItems;
-  appState.notificationItems = merged.filter(Boolean);
-  if (notificationCount) {
-    notificationCount.textContent = String(appState.notificationItems.length);
-    notificationCount.hidden = appState.notificationItems.length === 0;
-  }
-  if (btnNotifications) {
-    btnNotifications.classList.toggle("has-notifications", appState.notificationItems.length > 0);
-    btnNotifications.title = appState.notificationItems.length ? `${appState.notificationItems.length} notification${appState.notificationItems.length === 1 ? "" : "s"}` : "Notifications";
-  }
-  if (!notificationList) return;
-  notificationList.innerHTML = appState.notificationItems.length
-    ? appState.notificationItems.map((item) => `<article class="notification-item ${escapeHtml(item.tone || "warning")}"><span class="codicon ${escapeHtml(item.icon || "codicon-warning")}"></span><div><strong>${escapeHtml(item.title || "Notification")}</strong><p>${escapeHtml(item.message || "")}</p>${item.action ? `<button type="button" class="notification-action" data-notification-action="${escapeHtml(item.action)}">${escapeHtml(item.actionLabel || "Review")}</button>` : ""}</div></article>`).join("")
-    : '<div class="notification-empty">No notifications</div>';
-  notificationList.querySelectorAll("[data-notification-action]").forEach((button) => button.addEventListener("click", () => {
-      if (button.dataset.notificationAction === "assessment-repair") openAssessmentRepairDialog();
-      if (button.dataset.notificationAction === "update-install") beginUpdateInstallFromNotification();
-      if (notificationPanel) notificationPanel.hidden = true;
-      btnNotifications?.setAttribute("aria-expanded", "false");
-    }));
-  }
 
-function positionNotificationPanel() {
-  if (!notificationPanel || notificationPanel.hidden || !btnNotifications) return;
-  const anchor = btnNotifications.getBoundingClientRect();
-  const margin = 8;
-  const width = notificationPanel.offsetWidth || 320;
-  const height = notificationPanel.offsetHeight || 0;
-  const left = Math.max(margin, Math.min(anchor.right - width, window.innerWidth - width - margin));
-  const top = Math.max(margin, Math.min(anchor.bottom + 8, window.innerHeight - height - margin));
-  notificationPanel.style.left = `${Math.round(left)}px`;
-  notificationPanel.style.top = `${Math.round(top)}px`;
-  notificationPanel.style.right = "auto";
-}
 
 
 
@@ -3408,6 +3370,5 @@ loadUpdateSettings().then(() => runUpdateCheck(false));
 
 export {
   ADVANCED_SEARCH_OPERATORS, CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SYSTEM_SKILL_COMMANDS,
-  ToolMap, appController, chatScroller, composerEl, liveInputController, setNotifications,
-  settingsViewSwitch,
+  ToolMap, appController, chatScroller, composerEl, liveInputController, settingsViewSwitch,
 };

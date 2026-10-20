@@ -1,5 +1,5 @@
 import { appState } from "../../core/app-state.js";
-import { setNotifications } from "../../bootstrap.js";
+import { setNotifications } from "../notifications/notification-center.js";
 import {
   generalUpdatesToggle, generalCurrentVersion, updateToast, updateToastVersion,
   updateToastInstall, updateToastIgnore,

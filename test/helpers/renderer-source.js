@@ -74,6 +74,7 @@ const RENDERER_FILES = [
   "features/search/quick-palette.js",
   "features/search/workspace-search.js",
   "features/updates/update-flow.js",
+  "features/notifications/notification-center.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
