@@ -5,9 +5,10 @@ import {
   explorerRootChevron, fileTree, explorerTitle, projectSetup, sidebarHeader, statusWorkspace,
 } from "../../core/dom-refs.js";
 import {
-  settingsViewSwitch, selectedCustomEntries, showResourceWorkspace, setResourceDirty,
+  settingsViewSwitch, selectedCustomEntries, showResourceWorkspace,
   refreshSecurityHistoryIfVisible, appController, openFile,
 } from "../../bootstrap.js";
+import { setResourceDirty } from "../assessment/resource-viewer.js";
 import {
   BUG_BOUNTY_PATH_KEY, setAssessmentUiState, refreshAssessmentState,
 } from "../assessment/assessment-workspace.js";
