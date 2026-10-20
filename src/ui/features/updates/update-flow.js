@@ -2,7 +2,7 @@ import { appState } from "../../core/app-state.js";
 import { setNotifications } from "../notifications/notification-center.js";
 import {
   generalUpdatesToggle, generalCurrentVersion, updateToast, updateToastVersion,
-  updateToastInstall, updateToastIgnore,
+  updateToastInstall, updateToastIgnore, updateToastClose,
 } from "../../core/dom-refs.js";
 
   export function beginUpdateInstallFromNotification() {
@@ -40,24 +40,27 @@ export function runUpdateCheck(manual = false) {
   window.api.updatesCheck?.({ manual }).catch(() => {});
 }
 
-export function showUpdateToast(version) {
+// The toast shows one update state at a time. Each state starts from a clean
+// toast so a previous state's buttons, progress or icon never carry over.
+function presentToast({ title, sub = "", actions = false, closable = false, success = false }) {
   if (!updateToast) return;
-  updatesState.availableVersion = String(version || "");
-  if (updateToastVersion) updateToastVersion.textContent = updatesState.availableVersion;
-  const title = updateToast.querySelector(".update-toast-title");
-  if (title) title.textContent = "New version is available";
-  const sub = updateToast.querySelector(".update-toast-version");
-  if (sub) sub.textContent = "";
+  clearTimeout(updatesState.transientTimer);
+  const titleEl = updateToast.querySelector(".update-toast-title");
+  if (titleEl) titleEl.textContent = title;
+  const subEl = updateToast.querySelector(".update-toast-version");
+  if (subEl) subEl.textContent = sub;
   updateToast.classList.remove("update-toast-downloading");
-  updateToast.querySelectorAll(".update-toast-progress, .update-toast-progress-label").forEach((el) => el.remove());
+  updateToast.classList.toggle("update-toast-success", success);
+  updateToast.querySelectorAll(".update-toast-progress-row").forEach((el) => el.remove());
   if (updateToastInstall) {
-    updateToastInstall.hidden = false;
+    updateToastInstall.hidden = !actions;
     updateToastInstall.textContent = "Install";
   }
   if (updateToastIgnore) {
-    updateToastIgnore.hidden = false;
+    updateToastIgnore.hidden = !actions;
     updateToastIgnore.textContent = "Ignore";
   }
+  if (updateToastClose) updateToastClose.hidden = !closable;
   updateToast.hidden = false;
   // Restart the entrance animation.
   updateToast.style.animation = "none";
@@ -65,26 +68,29 @@ export function showUpdateToast(version) {
   updateToast.style.animation = "";
 }
 
+export function showUpdateToast(version) {
+  updatesState.availableVersion = String(version || "");
+  if (updateToastVersion) updateToastVersion.textContent = updatesState.availableVersion;
+  presentToast({
+    title: "Update available",
+    sub: updatesState.availableVersion ? `XEKUTE ${updatesState.availableVersion} is ready to install.` : "",
+    actions: true,
+  });
+}
+
 export function hideUpdateToast() {
   if (updateToast) updateToast.hidden = true;
 }
 
-export function showTransientUpdateNotice(titleText, subText) {
-  if (!updateToast) return;
+export function dismissUpdateToast() {
   clearTimeout(updatesState.transientTimer);
+  hideUpdateToast();
+}
+
+export function showTransientUpdateNotice(titleText, subText, { success = false } = {}) {
+  if (!updateToast) return;
   if (updateToastVersion) updateToastVersion.textContent = "";
-  const title = updateToast.querySelector(".update-toast-title");
-  if (title) title.textContent = titleText;
-  const sub = updateToast.querySelector(".update-toast-version");
-  if (sub) sub.textContent = subText;
-  updateToast.classList.remove("update-toast-downloading");
-  updateToast.querySelectorAll(".update-toast-progress, .update-toast-progress-label").forEach((el) => el.remove());
-  if (updateToastInstall) updateToastInstall.hidden = true;
-  if (updateToastIgnore) updateToastIgnore.hidden = true;
-  updateToast.hidden = false;
-  updateToast.style.animation = "none";
-  void updateToast.offsetWidth;
-  updateToast.style.animation = "";
+  presentToast({ title: titleText, sub: subText, closable: true, success });
   updatesState.transientTimer = setTimeout(hideUpdateToast, 4000);
 }
 
@@ -102,9 +108,12 @@ export function showUpdateDownloading(version) {
   showUpdateToast(version);
   if (updateToast) updateToast.classList.add("update-toast-downloading");
   const title = updateToast?.querySelector(".update-toast-title");
-  if (title) title.textContent = "Downloading update…";
+  if (title) title.textContent = "Downloading update";
+  const sub = updateToast?.querySelector(".update-toast-version");
+  if (sub) sub.textContent = "";
   if (updateToastInstall) updateToastInstall.hidden = true;
   if (updateToastIgnore) updateToastIgnore.hidden = true;
+  if (updateToastClose) updateToastClose.hidden = false;
 }
 
 // A download that finished during an agent run waits for the operator. It
@@ -179,11 +188,12 @@ export function handleUpdateEvent(payload = {}) {
     updateToast.classList.add("update-toast-downloading");
     if (updateToastInstall) updateToastInstall.hidden = true;
     if (updateToastIgnore) updateToastIgnore.hidden = true;
+    if (updateToastClose) updateToastClose.hidden = false;
     let bar = updateToast.querySelector(".update-toast-progress");
     if (!bar) {
-      updateToast.querySelector(".update-toast-actions")?.insertAdjacentHTML(
+      updateToast.querySelector(".update-toast-text")?.insertAdjacentHTML(
         "beforeend",
-        '<span class="update-toast-progress"><i></i></span><span class="update-toast-progress-label">0%</span>'
+        '<div class="update-toast-progress-row"><span class="update-toast-progress"><i></i></span><span class="update-toast-progress-label">0%</span></div>'
       );
       bar = updateToast.querySelector(".update-toast-progress");
     }
@@ -219,14 +229,14 @@ export function handleUpdateEvent(payload = {}) {
       updatesState.deferredVersion = "";
       updatesState.pendingNotification = null;
       setNotifications(appState.notificationItems);
-      showTransientUpdateNotice("XEKUTE is up to date", "You're on the latest version.");
+      showTransientUpdateNotice("XEKUTE is up to date", "You're on the latest version.", { success: true });
     }
   } else if (type === "updated") {
     updatesState.ignoredVersion = "";
     updatesState.deferredVersion = "";
     updatesState.pendingNotification = null;
     setNotifications(appState.notificationItems);
-    showTransientUpdateNotice("XEKUTE is now up to date", `Updated successfully to version ${String(payload.version || "").trim()}.`);
+    showTransientUpdateNotice("XEKUTE is up to date", `Updated to version ${String(payload.version || "").trim()}.`, { success: true });
   } else if (type === "disabled") {
     if (payload.manual || payload.reason === "install") {
       showTransientUpdateNotice("Development build", "Production updates are disabled. Set XEKUTE_UPDATE_MOCK=1 to test the update flow.");

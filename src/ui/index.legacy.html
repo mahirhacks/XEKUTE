@@ -1166,9 +1166,10 @@
 
   <div id="update-toast" class="update-toast" role="status" aria-label="Update available" hidden>
     <div class="update-toast-body">
-      <img class="update-toast-icon" src="assets/icons/gift_update_icon.svg" alt="" aria-hidden="true">
+      <img class="update-toast-icon update-toast-gift" src="assets/icons/gift_update_icon.svg" alt="" aria-hidden="true">
+      <svg class="update-toast-icon update-toast-check" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4.8 8.2l2.1 2.1 4.3-4.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <div class="update-toast-text">
-        <strong class="update-toast-title">New version is available</strong>
+        <strong class="update-toast-title">Update available</strong>
         <p class="update-toast-version"></p>
         <span id="update-toast-version" hidden></span>
       </div>
@@ -1177,6 +1178,9 @@
       <button type="button" id="update-toast-ignore" class="update-toast-btn update-toast-ignore">Ignore</button>
       <button type="button" id="update-toast-install" class="update-toast-btn update-toast-install">Install</button>
     </div>
+    <button type="button" id="update-toast-close" class="update-toast-close" aria-label="Dismiss" hidden>
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    </button>
   </div>
 
   <footer id="statusbar">
