@@ -10,6 +10,7 @@ const RENDERER_FILES = [
   "core/dom-refs.js",
   "core/runtime-globals.js",
   "core/text-format.js",
+  "core/workspace-paths.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

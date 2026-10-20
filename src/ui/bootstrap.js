@@ -160,6 +160,10 @@ import {
   formatTokenCount, formatContextWindowLabel, escapeHtml, formatRelativeMessageTime, compactText,
   formatAgentWorkDuration, formatWaitClock, formatCommandWaitClock,
 } from "./core/text-format.js";
+import {
+  normPath, basenameOf, workspaceParentRelative, remapWorkspacePath, pathIsAtOrUnder,
+  relativePathFromRoot, joinWorkspacePath,
+} from "./core/workspace-paths.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -10045,9 +10049,6 @@ async function createNewItemInput(isFolder) {
   });
 }
 
-function normPath(p) {
-  return p.replace(/\\/g, "/");
-}
 
 function isExpandedTreePath(filePath) {
   return expandedTreePaths.has(normPath(filePath));
@@ -11228,9 +11229,6 @@ function quickShortcutLabel(keys) {
   return keys.replace(/Ctrl/g, isMac ? "Cmd" : "Ctrl");
 }
 
-function basenameOf(filePath) {
-  return String(filePath || "").replace(/\\/g, "/").split("/").pop() || "";
-}
 
 function scoreQuickMatch(text, query) {
   const hay = String(text || "").toLowerCase();
@@ -12100,11 +12098,6 @@ function openWorkspaceContextMenu(event, entry, item) {
   workspaceContextActionButton("open")?.focus();
 }
 
-function workspaceParentRelative(relativePath) {
-  const normalized = normPath(relativePath || "").replace(/^\/+|\/+$/g, "");
-  const index = normalized.lastIndexOf("/");
-  return index < 0 ? "" : normalized.slice(0, index);
-}
 
 function workspacePasteDestination(target, sourceRelativePath) {
   const targetDir = target?.isDir ? target.relativePath : workspaceParentRelative(target?.relativePath);
@@ -12128,13 +12121,6 @@ function workspaceRenameValidationError(name) {
   return "";
 }
 
-function remapWorkspacePath(pathValue, sourceAbsolute, destinationAbsolute) {
-  const value = normPath(pathValue || "");
-  const source = normPath(sourceAbsolute || "");
-  const destination = normPath(destinationAbsolute || "");
-  if (value === source) return destination;
-  return value.startsWith(`${source}/`) ? `${destination}${value.slice(source.length)}` : value;
-}
 
 function remapOpenTabsUnderWorkspacePath(sourceAbsolute, destinationAbsolute) {
   commitActiveTab();
@@ -12799,11 +12785,6 @@ function closeTabsUnderWorkspacePath(absPath, { force = false } = {}) {
   }
 }
 
-function pathIsAtOrUnder(candidatePath, parentPath) {
-  const candidate = explorerPathKey(candidatePath);
-  const parent = explorerPathKey(parentPath);
-  return Boolean(parent) && (candidate === parent || candidate.startsWith(`${parent}/`));
-}
 
 function selectedExplorerTargets() {
   const rows = [...(fileTree?.querySelectorAll?.(".tree-item[data-path]") || [])];
@@ -14859,21 +14840,6 @@ async function refreshDirMap() {
   appState.dirMapCache = result.map || "";
 }
 
-function relativePathFromRoot(absPath) {
-  if (!appState.rootPath || !absPath) return null;
-  const root = normPath(appState.rootPath).replace(/\/$/, "");
-  const file = normPath(absPath);
-  const caseInsensitive = root.includes("\\") || /^[a-zA-Z]:/.test(root);
-  if (caseInsensitive) {
-    if (file.toLowerCase() === root.toLowerCase()) return "";
-    const prefix = `${root.toLowerCase()}/`;
-    if (!file.toLowerCase().startsWith(prefix)) return null;
-  } else {
-    if (file === root) return "";
-    if (!file.startsWith(`${root}/`)) return null;
-  }
-  return file.slice(root.length + 1);
-}
 
 function getActiveFileContext() {
   if (!appState.activeTabPath || !openTabs.has(appState.activeTabPath)) return null;
@@ -15685,11 +15651,6 @@ function ensureToolCard(turn, contentEl, tool, { pending = false } = {}) {
   return card;
 }
 
-function joinWorkspacePath(relPath) {
-  if (!appState.rootPath) return relPath;
-  const sep = appState.rootPath.includes("\\") ? "\\" : "/";
-  return appState.rootPath + sep + relPath.replace(/[/\\]/g, sep);
-}
 
 async function applyEditToEditor(tool, newContent, previousContent = null, { openIfMissing = true, preserveDirty = true } = {}) {
   if (newContent == null) return;
@@ -21885,3 +21846,5 @@ chatInput.focus();
 restoreLastWorkspace();
 window.api.onUpdateEvent?.(handleUpdateEvent);
 loadUpdateSettings().then(() => runUpdateCheck(false));
+
+export { explorerPathKey };
