@@ -55,6 +55,7 @@ const RENDERER_FILES = [
   "features/assessment/assessment-workspace.js",
   "features/assessment/resource-viewer.js",
   "features/assessment/checklist-view.js",
+  "features/assessment/scope-view.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
