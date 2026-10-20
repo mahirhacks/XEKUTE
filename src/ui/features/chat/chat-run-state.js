@@ -1,6 +1,6 @@
 import { appState } from "../../core/app-state.js";
 import { messages, chatInput } from "../../core/dom-refs.js";
-import { drainPendingBackgroundWaitEvents } from "../../bootstrap.js";
+import { drainPendingBackgroundWaitEvents } from "../agents/background-waits.js";
 import { ensureParentContinuationRun } from "../agents/parent-continuation.js";
 import { chatSessionIdForRuntimeId } from "../agents/delegated-child-runs.js";
 import {

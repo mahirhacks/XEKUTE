@@ -12,10 +12,10 @@ import {
   applyContextReleaseUi,
 } from "./context-usage.js";
 import { getActiveFileContext, refreshDirMap, collectMentionedFiles } from "./prompt-context.js";
+import { getExploreSubagentModel, getModelSettings, liveInputController } from "../../bootstrap.js";
 import {
-  getExploreSubagentModel, getModelSettings, drainPendingBackgroundWaitEvents,
-  completedAgentProcessIds, liveInputController, beginModelRunCommandWait,
-} from "../../bootstrap.js";
+  drainPendingBackgroundWaitEvents, completedAgentProcessIds, beginModelRunCommandWait,
+} from "../agents/background-waits.js";
 import { scheduleSubagentResultDrain } from "../agents/parent-continuation.js";
 import {
   summarizeSubagentActivity, createSubagentRunCard, setSubagentCardState,

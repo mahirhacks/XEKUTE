@@ -37,6 +37,7 @@ const RENDERER_FILES = [
   "features/agents/subagent-cards.js",
   "features/agents/delegated-child-runs.js",
   "features/agents/parent-continuation.js",
+  "features/agents/background-waits.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
