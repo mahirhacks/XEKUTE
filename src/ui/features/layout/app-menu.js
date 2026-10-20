@@ -14,7 +14,8 @@ import { saveResourceChanges } from "../assessment/resource-viewer.js";
 import { saveActiveTab, closeTab } from "../editor/editor-tabs.js";
 import { showSecurityWorkspace, activateSidebarView } from "./workspace-switcher.js";
 import { setUiZoom } from "./panel-resize.js";
-import { runUpdateCheck, openQuickPalette } from "../../bootstrap.js";
+import { runUpdateCheck } from "../../bootstrap.js";
+import { openQuickPalette } from "../search/quick-palette.js";
 import { setTerminalCollapsed } from "../terminal/terminal-panel.js";
 
 export function syncMinimapMenu() {
