@@ -176,11 +176,9 @@ import {
 } from "./features/project/project-profile.js";
 import {
   createProject, projectName, setExplorerRootExpanded, restoreLastWorkspace, openProject,
-  openFolder, openFileDialog,
+  openFolder,
 } from "./features/project/project-activation.js";
-import {
-  updateRunMenuState, configureRunCommand, runConfiguredCommand,
-} from "./features/project/run-commands.js";
+import { updateRunMenuState } from "./features/project/run-commands.js";
 import {
   setExplorerActionsEnabled, createNewItemInput, selectItem, refreshWorkspaceUi,
   restoreChatComposerAfterUiAction, deleteSelectedExplorerItem, isExplorerKeyboardTarget,
@@ -240,7 +238,6 @@ import {
 } from "./features/security/traffic-history.js";
 import {
   openTabs, openFile, saveActiveTab, closeEditorTabContextMenu, handleEditorTabContextMenuAction,
-  closeTab,
 } from "./features/editor/editor-tabs.js";
 import {
   isMarkdownFileName, updateTabDirtyIndicator, renderEditor,
@@ -253,6 +250,9 @@ import {
   makeDraggable, chatViewportMinWidth, chatViewportMaxWidth, syncChatResizeLimit,
   installSeparatorKeyboard,
 } from "./features/layout/panel-resize.js";
+import {
+  syncMinimapMenu, closeHelpGuide, closeAppMenus, toggleAppMenu, runMenuAction,
+} from "./features/layout/app-menu.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -1894,205 +1894,16 @@ explorerRootToggle?.addEventListener("click", () => {
 
 window.addEventListener("resize", applyUiZoom);
 
-function syncMinimapMenu() {
-  const button = appMenu?.querySelector('[data-action="toggle-minimap"]');
-  if (!button) return;
-  const enabled = Boolean(EditorManager?.isMinimapEnabled?.());
-  button.textContent = enabled ? "Hide Minimap" : "Show Minimap";
-  button.setAttribute("aria-checked", String(enabled));
-}
 
-function showHelpGuide() {
-  closeAppMenus();
-  if (!helpGuideOverlay) return;
-  helpGuideOverlay.hidden = false;
-  helpGuideClose?.focus();
-}
 
-function closeHelpGuide() {
-  if (helpGuideOverlay) helpGuideOverlay.hidden = true;
-}
 
-function closeAppMenus() {
-  appMenu?.querySelectorAll(".app-menu-dropdown").forEach((panel) => {
-    panel.hidden = true;
-  });
-  appMenu?.querySelectorAll(".app-menu-button.active").forEach((button) => {
-    button.classList.remove("active");
-    button.setAttribute("aria-expanded", "false");
-  });
-}
 
-function toggleAppMenu(name) {
-  if (!appMenu) return;
-  const panel = appMenu.querySelector(`[data-menu-panel="${CSS.escape(name)}"]`);
-  const button = appMenu.querySelector(`[data-menu="${CSS.escape(name)}"]`);
-  if (!panel || !button) return;
-  const opening = panel.hidden;
-  closeAppMenus();
-  panel.hidden = !opening;
-  button.classList.toggle("active", opening);
-  button.setAttribute("aria-expanded", String(opening));
-  if (name === "run") updateRunMenuState();
-}
 
 setUiZoom(appState.uiZoom);
 syncMinimapMenu();
 
 
 
-async function runMenuAction(action) {
-  const focusedActions = new Set([
-    "new-file",
-    "new-folder",
-    "new-terminal",
-    "clear-terminal",
-    "kill-terminal",
-    "toggle-terminal",
-    "toggle-chat",
-    "command-palette",
-    "quick-open",
-    "workspace-search",
-    "create-project",
-    "open-project",
-    "open-file",
-    "save-file",
-    "close-editor",
-    "open-folder",
-    "undo",
-    "redo",
-    "cut",
-    "copy",
-    "paste",
-    "select-all",
-    "zoom-in",
-    "zoom-out",
-    "zoom-reset",
-    "toggle-minimap",
-    "show-project",
-    "show-security",
-    "show-settings",
-    "help-guide",
-    "new-chat",
-    "about",
-    "configure-run",
-        "run-code",
-        "check-updates",
-      ]);
-  if (!focusedActions.has(action)) return;
-  switch (action) {
-    case "new-file":
-      if (!appState.rootPath) {
-        await AppDialog.alert("Open a folder first.", { title: "Folder required" });
-        return;
-      }
-      createNewItemInput(false);
-      break;
-    case "new-folder":
-      if (!appState.rootPath) {
-        await AppDialog.alert("Open a folder first.", { title: "Folder required" });
-        return;
-      }
-      createNewItemInput(true);
-      break;
-    case "open-file":
-      openFileDialog();
-      break;
-    case "open-folder":
-      openFolder();
-      break;
-    case "new-terminal":
-      TerminalManager.createTerminalAndShow();
-      break;
-    case "clear-terminal":
-      TerminalManager.clearActive();
-      break;
-    case "kill-terminal":
-      TerminalManager.killTerminal();
-      break;
-    case "undo":
-    case "redo":
-    case "cut":
-    case "copy":
-    case "paste":
-      document.execCommand(action);
-      break;
-    case "toggle-terminal":
-      setTerminalCollapsed(!appState.terminalCollapsed);
-      break;
-    case "toggle-chat":
-      if (appState.chatCollapsed) openChatPane({ createIfEmpty: true });
-      else setChatCollapsed(true);
-      break;
-    case "command-palette":
-      openQuickPalette("command");
-      break;
-    case "quick-open":
-      openQuickPalette("file");
-      break;
-    case "workspace-search":
-      openQuickPalette("search");
-      break;
-    case "create-project":
-      createProject();
-      break;
-    case "open-project":
-      openProject();
-      break;
-    case "save-file":
-      if (appState.resourceCurrentFilePath && resourceViewer && !resourceViewer.hidden) saveResourceChanges();
-      else saveActiveTab();
-      break;
-    case "close-editor":
-      if (appState.activeTabPath) closeTab(appState.activeTabPath);
-      break;
-    case "select-all":
-      document.execCommand("selectAll");
-      break;
-    case "zoom-in":
-      setUiZoom(appState.uiZoom + 0.1);
-      break;
-    case "zoom-out":
-      setUiZoom(appState.uiZoom - 0.1);
-      break;
-    case "zoom-reset":
-      setUiZoom(1);
-      break;
-    case "toggle-minimap":
-      EditorManager?.toggleMinimap?.();
-      syncMinimapMenu();
-      break;
-    case "show-project":
-      activateSidebarView("project");
-      break;
-    case "show-security":
-      showSecurityWorkspace();
-      break;
-    case "show-settings":
-      openAppSettings();
-      break;
-    case "help-guide":
-          showHelpGuide();
-          break;
-        case "check-updates":
-          runUpdateCheck(true);
-          break;
-    case "new-chat":
-      newChatSession();
-      break;
-    case "about":
-      await AppDialog.alert("XEKUTE — local-first penetration testing and vulnerability assessment workspace", { title: "About XEKUTE" });
-      break;
-    case "configure-run":
-      configureRunCommand();
-      break;
-    case "run-code":
-      runConfiguredCommand();
-      break;
-    default:
-      break;
-  }
-}
 
 document.addEventListener("click", (e) => {
   if (appMenu?.contains(e.target)) return;
@@ -4499,6 +4310,7 @@ loadUpdateSettings().then(() => runUpdateCheck(false));
 
 export {
   CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SYSTEM_SKILL_COMMANDS, ToolMap, appController,
-  chatScroller, composerEl, liveInputController, scoreQuickMatch, setNotifications,
-  setTerminalMaximized, settingsViewSwitch,
+  chatScroller, composerEl, liveInputController, openQuickPalette, runUpdateCheck,
+  scoreQuickMatch, setNotifications, setTerminalCollapsed, setTerminalMaximized,
+  settingsViewSwitch,
 };

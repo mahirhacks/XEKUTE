@@ -69,6 +69,7 @@ const RENDERER_FILES = [
   "features/editor/editor-render.js",
   "features/layout/workspace-switcher.js",
   "features/layout/panel-resize.js",
+  "features/layout/app-menu.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
