@@ -3,7 +3,7 @@ import {
   settingsUIView, settingsViewJson, settingsViewUi, editorError,
 } from "../../core/dom-refs.js";
 import { appState } from "../../core/app-state.js";
-import { renderEditor, updateTabDirtyIndicator } from "../../bootstrap.js";
+import { renderEditor, updateTabDirtyIndicator } from "../editor/editor-render.js";
 import { openTabs, commitActiveTab, saveActiveTab } from "../editor/editor-tabs.js";
 import {
   syncInterceptorToggleUi, configureProxyListener,

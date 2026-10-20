@@ -4,9 +4,11 @@ import {
   normPath, basenameOf, remapWorkspacePath, relativePathFromRoot, joinWorkspacePath,
 } from "../../core/workspace-paths.js";
 import {
-  renderTabs, renderEditor, MARKDOWN_VIEW_MODE_KEY, showCodeEditorWorkspace, isMarkdownFileName,
-  isBrowserTab, switchToBrowserTab, setSidebarCollapsed, setSidebarView,
+  showCodeEditorWorkspace, isBrowserTab, switchToBrowserTab, setSidebarCollapsed, setSidebarView,
 } from "../../bootstrap.js";
+import {
+  renderTabs, renderEditor, MARKDOWN_VIEW_MODE_KEY, isMarkdownFileName,
+} from "./editor-render.js";
 import {
   editorTabBar, editorError, editorTabContextMenu, appSettingsWorkspace,
 } from "../../core/dom-refs.js";

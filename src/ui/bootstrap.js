@@ -15,30 +15,29 @@ import {
   explorerSidebarView, btnCreateProjectSidebar, btnOpenProjectSidebar, bugBountySidebarView,
   bugBountyTree, btnBugBountyMore, btnCreateProject, btnCreateAssessment, btnOpenAssessment,
   bugBountyRepair, assessmentRepairOverlay, assessmentRepairClose, assessmentRepairCancel,
-  assessmentRepairConfirm, editorTabBar, editorTabContextMenu, editorPathBar, editorPathLabel,
-  editorBody, editorEmpty, editorView, editorError, monacoContainer, markdownPreview,
-  settingsEditorToolbar, settingsUIView, settingsViewJson, settingsViewUi, btnShowProxyCa,
-  messages, chatInput, sendBtn, attachImageBtn, attachImageInput, chatModeToggle, chatModeButton,
-  chatModeMenu, appMenu, helpGuideOverlay, helpGuideClose, commandCenter, quickOverlay,
-  quickPanel, quickIcon, quickInput, quickMeta, quickResults, quickSearchHelp, quickSearchAssist,
-  quickSearchSuggestions, quickSearchChips, chatHeader, btnTopFileTree, btnTopTerminal,
-  btnTopChat, btnTopSettings, btnNotifications, notificationCount, notificationPanel,
-  notificationList, notificationClear, btnWindowMinimize, btnWindowMaximize, btnWindowClose,
-  chatSessionSelect, btnChatNew, btnChatDelete, btnChatHistory, chatHistoryPopover,
-  chatHistoryBody, chatHistorySearch, btnChatMore, btnChatCollapse, contextUsageBtn,
-  contextUsagePopover, inputBar, memorySaveBanner, composerTaskListEl, slashCommandSuggestions,
-  contextUsageClose, contextUsageMenu, contextWindowTrigger, contextBlocksTrigger,
-  contextBlocksPanel, contextBlocksList, modelPicker, authorityPicker, authorityMenu, modelMenu,
-  modelControlsMenu, modelContextTrigger, modelEffortTrigger, modelBrowseTrigger, modelSearch,
-  modelAddBtn, modelCustom, modelCustomAdd, modelEditMenu, thinkingToggle, sidebar, sidebarResize,
-  chatPane, chatResize, terminalPane, terminalResize, centerPanel, btnTerminalMaximize,
-  btnTerminalClose, editorPane, resourceViewer, resourceViewerMeta, resourceViewerContent,
-  resourceLineNumbers, resourceViewerSave, resourceViewerCopy, resourceViewerActions,
-  appSettingsWorkspace, appSettingsSearch, generalStatusBarToggle, generalUpdatesToggle,
-  generalCurrentVersion, updateToast, updateToastVersion, updateToastInstall, updateToastIgnore,
-  projectSettingsForm, projectSettingsName, projectSettingsCreate, projectSettingsOpen,
-  projectSettingsNav, projectSettingsNavButtons, commandSettingsStatus, mcpSettingsTabs,
-  kaliAccessForm, kaliAccessEnabled, kaliAccessFields, kaliAccessKey, kaliAccessAcceptHostKey,
+  assessmentRepairConfirm, editorTabBar, editorTabContextMenu, editorBody, settingsUIView,
+  settingsViewJson, settingsViewUi, btnShowProxyCa, messages, chatInput, sendBtn, attachImageBtn,
+  attachImageInput, chatModeToggle, chatModeButton, chatModeMenu, appMenu, helpGuideOverlay,
+  helpGuideClose, commandCenter, quickOverlay, quickPanel, quickIcon, quickInput, quickMeta,
+  quickResults, quickSearchHelp, quickSearchAssist, quickSearchSuggestions, quickSearchChips,
+  chatHeader, btnTopFileTree, btnTopTerminal, btnTopChat, btnTopSettings, btnNotifications,
+  notificationCount, notificationPanel, notificationList, notificationClear, btnWindowMinimize,
+  btnWindowMaximize, btnWindowClose, chatSessionSelect, btnChatNew, btnChatDelete, btnChatHistory,
+  chatHistoryPopover, chatHistoryBody, chatHistorySearch, btnChatMore, btnChatCollapse,
+  contextUsageBtn, contextUsagePopover, inputBar, memorySaveBanner, composerTaskListEl,
+  slashCommandSuggestions, contextUsageClose, contextUsageMenu, contextWindowTrigger,
+  contextBlocksTrigger, contextBlocksPanel, contextBlocksList, modelPicker, authorityPicker,
+  authorityMenu, modelMenu, modelControlsMenu, modelContextTrigger, modelEffortTrigger,
+  modelBrowseTrigger, modelSearch, modelAddBtn, modelCustom, modelCustomAdd, modelEditMenu,
+  thinkingToggle, sidebar, sidebarResize, chatPane, chatResize, terminalPane, terminalResize,
+  centerPanel, btnTerminalMaximize, btnTerminalClose, editorPane, resourceViewer,
+  resourceViewerMeta, resourceViewerContent, resourceLineNumbers, resourceViewerSave,
+  resourceViewerCopy, resourceViewerActions, appSettingsWorkspace, appSettingsSearch,
+  generalStatusBarToggle, generalUpdatesToggle, generalCurrentVersion, updateToast,
+  updateToastVersion, updateToastInstall, updateToastIgnore, projectSettingsForm,
+  projectSettingsName, projectSettingsCreate, projectSettingsOpen, projectSettingsNav,
+  projectSettingsNavButtons, commandSettingsStatus, mcpSettingsTabs, kaliAccessForm,
+  kaliAccessEnabled, kaliAccessFields, kaliAccessKey, kaliAccessAcceptHostKey,
   kaliAccessKeyBrowse, kaliAccessOpenMcp, kaliAccessTest, guidanceScopeTabs, guidanceNew,
   guidanceEmptyNew, guidanceImport, llmProvider, openRouterBaseUrl, openRouterApiKey,
   llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle, llmOpenRouterBaseToggle,
@@ -65,11 +64,9 @@ import {
   terminalShellTab, securityExchangeEl, securityExchangeSash, securityWorkbenchResize,
   statusLnCol, statusOllamaPort,
 } from "./core/dom-refs.js";
-import { SetiIconTheme, EditorManager, TerminalManager } from "./core/runtime-globals.js";
+import { EditorManager, TerminalManager } from "./core/runtime-globals.js";
 import { escapeHtml, formatWaitClock } from "./core/text-format.js";
-import {
-  normPath, basenameOf, relativePathFromRoot, joinWorkspacePath,
-} from "./core/workspace-paths.js";
+import { normPath, basenameOf, joinWorkspacePath } from "./core/workspace-paths.js";
 import {
   paintLiveInputRecord, createChatSession, clearChatSessionState, reportChatHistoryWarning,
   schedulePersistChatSessions, flushChatSessionsBeforeClose,
@@ -103,8 +100,8 @@ import {
 } from "./features/chat/context-usage.js";
 import { refreshDirMap } from "./features/chat/prompt-context.js";
 import {
-  setAgentStatus, renderMarkdown, writeChatClipboardText, attachAssistantCopyButton,
-  syncChatStickyMask, bindScrollbarHoverLane, addErrorMessage,
+  setAgentStatus, writeChatClipboardText, attachAssistantCopyButton, syncChatStickyMask,
+  bindScrollbarHoverLane, addErrorMessage,
 } from "./features/chat/chat-messages.js";
 import { toolRowOpensFile } from "./features/chat/tool-cards.js";
 import { updateCommandTimelineLabel } from "./features/chat/command-timeline.js";
@@ -156,7 +153,7 @@ import {
 } from "./features/settings/guidance-settings.js";
 import {
   updateGeneralSettings, filterAppSettingsNavigation, setAppSettingsSection,
-  chooseCertificateDirectory, resetCertificateDirectory, openAppSettings, loadSettingsWorkspace,
+  chooseCertificateDirectory, resetCertificateDirectory, openAppSettings,
 } from "./features/settings/app-settings-shell.js";
 import {
   OLLAMA_PORT, syncLlmProviderUi, MODELS_SETTINGS_PAGE_SIZE, queueLlmSettingsAutosave,
@@ -175,8 +172,7 @@ import {
   handleIdentityAction, importIdentityStateFromSettings,
 } from "./features/settings/identity-settings.js";
 import {
-  SETTINGS_EDITOR_MODE_KEY, isAssessmentSettingsTab, isSettingsTab, setNestedSettingValue,
-  renderSettingsForm, syncSettingsEditorButtons, setSettingsEditorMode, updateSettingFromInput,
+  SETTINGS_EDITOR_MODE_KEY, setNestedSettingValue, setSettingsEditorMode, updateSettingFromInput,
 } from "./features/settings/settings-tab-editor.js";
 import {
   scheduleProjectProfileAutosave, setProjectSettingsTarget,
@@ -220,9 +216,8 @@ import {
   showWebCloneWorkspace,
 } from "./features/assessment/webclone-view.js";
 import {
-  openInterceptorTab, isInterceptorTab, toggleInterceptorCapture, syncProxyListenerUi,
-  syncProxyBrowserUi, closeProxyBrowserMenu, chooseProxyBrowserIdentity, launchProxyBrowser,
-  handleProxyCapture,
+  openInterceptorTab, toggleInterceptorCapture, syncProxyListenerUi, syncProxyBrowserUi,
+  closeProxyBrowserMenu, chooseProxyBrowserIdentity, launchProxyBrowser, handleProxyCapture,
 } from "./features/interceptor/interceptor-controls.js";
 import { stepRepeaterHistory, createWorkbenchTab } from "./features/security/workbench-tabs.js";
 import {
@@ -248,10 +243,12 @@ import {
   refreshSecurityHistoryIfVisible,
 } from "./features/security/traffic-history.js";
 import {
-  openTabs, clearEditorTabDropIndicators, setEditorTabDropIndicator, reorderOpenTabs,
-  unpinEditorTab, openFile, commitActiveTab, switchToTab, saveActiveTab,
-  closeEditorTabContextMenu, openEditorTabContextMenu, handleEditorTabContextMenuAction, closeTab,
+  openTabs, openFile, commitActiveTab, saveActiveTab, closeEditorTabContextMenu,
+  handleEditorTabContextMenuAction, closeTab,
 } from "./features/editor/editor-tabs.js";
+import {
+  isMarkdownFileName, renderTabs, updateEditorPathBar, updateTabDirtyIndicator, renderEditor,
+} from "./features/editor/editor-render.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -410,7 +407,6 @@ const ADVANCED_SEARCH_PRESETS = [
 ];
 
 const SIDEBAR_VIEW_KEY = "pointer:sidebarView";
-const MARKDOWN_VIEW_MODE_KEY = "pointer:markdownViewMode";
 const CHAT_PROFILE_KEYS = new Set(Object.keys(CHAT_PROFILE_DEFS));
 appState.selectedModel = localStorage.getItem("pointer:model") || "";
 appState.resolvedContextCapacity = {
@@ -3155,306 +3151,11 @@ function isBrowserTab(tab) {
 
 
 
-function isMarkdownFileName(fileName = "") {
-  return /\.(?:md|markdown)$/i.test(String(fileName || ""));
-}
 
-function setMarkdownViewMode(mode) {
-  appState.markdownViewMode = mode === "md" ? "md" : "text";
-  localStorage.setItem(MARKDOWN_VIEW_MODE_KEY, appState.markdownViewMode);
-  renderTabs();
-  renderEditor({ focusEditor: false });
-}
 
-function renderTabs() {
-  editorTabBar.innerHTML = "";
 
-  for (const [path, tab] of openTabs) {
-    const el = document.createElement("div");
-    el.className = "editor-tab"
-      + (path === appState.activeTabPath ? " active" : "")
-      + (tab.pinned ? " editor-tab-pinned" : "");
-    const specialWorkspaceTab = isSettingsTab(tab) || isInterceptorTab(tab) || isBrowserTab(tab);
-    if (specialWorkspaceTab) el.classList.add("special-workspace-tab");
-    el.title = specialWorkspaceTab
-      ? tab.name
-      : (relativePathFromRoot(tab.diskPath) || tab.diskPath || tab.name);
-    el.draggable = true;
-    el.addEventListener("click", () => switchToTab(path));
-    el.addEventListener("dblclick", (event) => {
-      event.stopPropagation();
-      switchToTab(path, { focusEditor: true });
-    });
-    el.addEventListener("contextmenu", (event) => {
-      if (event.target.closest(".tab-close, .tab-pin")) return;
-      event.preventDefault();
-      event.stopPropagation();
-      openEditorTabContextMenu(event.clientX, event.clientY, path);
-    });
-    el.addEventListener("dragstart", (event) => {
-      if (event.target.closest(".tab-close, .tab-pin")) {
-        event.preventDefault();
-        return;
-      }
-      appState.draggedEditorTabPath = path;
-      el.classList.add("tab-dragging");
-      event.dataTransfer?.setData("application/x-xekute-editor-tab", path);
-      event.dataTransfer?.setData("text/plain", path);
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-    });
-    el.addEventListener("dragover", (event) => {
-      const draggedPath = appState.draggedEditorTabPath || event.dataTransfer?.getData("application/x-xekute-editor-tab");
-      if (!draggedPath || draggedPath === path) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-      setEditorTabDropIndicator(el, event);
-    });
-    el.addEventListener("dragleave", (event) => {
-      if (!el.contains(event.relatedTarget)) el.classList.remove("tab-drop-before", "tab-drop-after");
-    });
-    el.addEventListener("drop", (event) => {
-      const draggedPath = appState.draggedEditorTabPath || event.dataTransfer?.getData("application/x-xekute-editor-tab");
-      if (!draggedPath || draggedPath === path) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const after = setEditorTabDropIndicator(el, event);
-      clearEditorTabDropIndicators();
-      reorderOpenTabs(draggedPath, path, { after });
-    });
-    el.addEventListener("dragend", () => {
-      appState.draggedEditorTabPath = null;
-      el.classList.remove("tab-dragging");
-      clearEditorTabDropIndicators();
-    });
 
-    const icon = document.createElement("span");
-    const specialIcon = isSettingsTab(tab)
-      ? "codicon-settings-gear"
-      : isInterceptorTab(tab)
-        ? "codicon-debug-disconnect"
-        : isBrowserTab(tab) ? "codicon-globe" : "";
-    if (specialIcon) {
-      icon.className = `tab-icon codicon ${specialIcon}`;
-    } else {
-      const info = SetiIconTheme.iconForFile(tab.name);
-      icon.className = "tab-icon seti-icon";
-      icon.textContent = info.glyph;
-      icon.style.color = info.color;
-    }
-    icon.setAttribute("aria-hidden", "true");
 
-    const label = document.createElement("span");
-    label.className = "tab-label" + (tab.dirty ? " tab-dirty" : "");
-    label.textContent = tab.name;
-
-    let pin = null;
-    if (tab.pinned) {
-      pin = document.createElement("button");
-      pin.className = "tab-pin";
-      pin.title = "Unpin";
-      pin.draggable = false;
-      pin.innerHTML = '<span class="codicon codicon-pinned"></span>';
-      pin.addEventListener("click", (event) => {
-        event.stopPropagation();
-        unpinEditorTab(path);
-      });
-    }
-
-    const close = document.createElement("button");
-    close.className = "tab-close";
-    close.title = "Close";
-    close.draggable = false;
-    close.innerHTML = '<span class="codicon codicon-close"></span>';
-    close.addEventListener("click", (e) => { void closeTab(path, e); });
-
-    el.appendChild(icon);
-    el.appendChild(label);
-    if (pin) el.appendChild(pin);
-    el.appendChild(close);
-    editorTabBar.appendChild(el);
-  }
-
-  const activeTab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
-  if (activeTab && isMarkdownFileName(activeTab.name)) {
-    const actions = document.createElement("div");
-    actions.className = "editor-tab-actions";
-    actions.setAttribute("role", "group");
-    actions.setAttribute("aria-label", "Markdown view");
-
-    const switcher = document.createElement("div");
-    switcher.className = "editor-tab-view-switch";
-    for (const mode of ["md", "text"]) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = mode === "md" ? "MD" : "Text";
-      button.dataset.markdownView = mode;
-      button.setAttribute("aria-pressed", String(appState.markdownViewMode === mode));
-      button.classList.toggle("active", appState.markdownViewMode === mode);
-      button.addEventListener("click", (event) => {
-        event.stopPropagation();
-        setMarkdownViewMode(mode);
-      });
-      switcher.appendChild(button);
-    }
-    actions.appendChild(switcher);
-    editorTabBar.appendChild(actions);
-  }
-
-  updateEditorPathBar();
-}
-
-function updateEditorPathBar() {
-  if (!editorPathBar || !editorPathLabel) return;
-  const activeTab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
-  if (!activeTab || isSettingsTab(activeTab) || isInterceptorTab(activeTab) || isBrowserTab(activeTab)) {
-    editorPathBar.hidden = true;
-    editorPathLabel.textContent = "";
-    editorPathLabel.removeAttribute("title");
-    return;
-  }
-  const filePath = activeTab.diskPath || activeTab.path || "";
-  const relativePath = relativePathFromRoot(filePath);
-  const projectPath = relativePath === null ? (activeTab.name || "") : relativePath;
-  const displayPath = normPath(projectPath).replace(/^\/+/, "");
-  editorPathLabel.textContent = displayPath;
-  editorPathBar.hidden = !displayPath;
-  editorPathLabel.title = displayPath;
-}
-
-function updateTabDirtyIndicator() {
-  const idx = [...openTabs.keys()].indexOf(appState.activeTabPath);
-  const tabEl = editorTabBar.children[idx];
-  const tab = openTabs.get(appState.activeTabPath);
-  tabEl?.querySelector(".tab-label")?.classList.toggle("tab-dirty", !!tab?.dirty);
-}
-
-async function renderEditor({ focusEditor = true } = {}) {
-  if (markdownPreview) markdownPreview.hidden = true;
-
-  const activeTab = appState.activeTabPath ? openTabs.get(appState.activeTabPath) : null;
-  if (isBrowserTab(activeTab)) {
-    showBrowserWorkspaceContent();
-    return;
-  }
-  appState.browserWorkspace?.setVisible(false);
-  if (isSettingsTab(activeTab)) {
-    if (editorEmpty) editorEmpty.setAttribute("hidden", "");
-    if (editorView) editorView.setAttribute("hidden", "");
-    if (monacoContainer) monacoContainer.hidden = true;
-    if (settingsUIView) settingsUIView.hidden = true;
-    if (markdownPreview) markdownPreview.hidden = true;
-    if (settingsEditorToolbar) settingsEditorToolbar.hidden = true;
-    appState.currentWorkspaceMode = "settings";
-    if (editorTabBar) editorTabBar.hidden = false;
-    if (editorBody) editorBody.hidden = true;
-    updateEditorPathBar();
-    if (resourceViewer) resourceViewer.hidden = true;
-    if (securityWorkspace) securityWorkspace.hidden = true;
-    if (webcloneWorkspace) webcloneWorkspace.hidden = true;
-    if (assessmentModuleView) { assessmentModuleView.hidden = true; appState.assessmentModuleActive = false; }
-    window.api.webCloneHidePreview?.();
-    if (appSettingsWorkspace) appSettingsWorkspace.hidden = false;
-    editorPane?.setAttribute("aria-label", "XEKUTE Settings");
-    loadSettingsWorkspace();
-    syncWorkspaceActivity();
-    return;
-  }
-
-  if (isInterceptorTab(activeTab)) {
-    if (editorEmpty) editorEmpty.setAttribute("hidden", "");
-    if (editorView) editorView.setAttribute("hidden", "");
-    if (monacoContainer) monacoContainer.hidden = true;
-    if (settingsUIView) settingsUIView.hidden = true;
-    if (markdownPreview) markdownPreview.hidden = true;
-    if (settingsEditorToolbar) settingsEditorToolbar.hidden = true;
-    showSecurityWorkspaceContent(activeTab.securityTool || "");
-    return;
-  }
-
-  if (!appState.activeTabPath || !openTabs.has(appState.activeTabPath)) {
-    if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
-    if (securityWorkspace) securityWorkspace.hidden = true;
-    appState.currentWorkspaceMode = "editor";
-    if (editorBody) editorBody.hidden = false;
-    editorEmpty.removeAttribute("hidden");
-    editorView.setAttribute("hidden", "");
-    appState.editorLoadedPath = null;
-    EditorManager.clear();
-    return;
-  }
-
-  const tab = openTabs.get(appState.activeTabPath);
-  const settingsTab = isAssessmentSettingsTab(tab);
-  const markdownTab = isMarkdownFileName(tab.name);
-  if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
-  if (securityWorkspace) securityWorkspace.hidden = true;
-  appState.currentWorkspaceMode = "editor";
-  if (editorBody) editorBody.hidden = false;
-  editorEmpty.setAttribute("hidden", "");
-  editorView.removeAttribute("hidden");
-  settingsEditorToolbar.hidden = !settingsTab;
-  settingsUIView.hidden = true;
-  monacoContainer.hidden = false;
-  if (settingsTab) syncSettingsEditorButtons();
-
-  if (tab.content === null && !tab.error) {
-    editorError.hidden = true;
-    appState.editorLoadedPath = null;
-    try {
-      await EditorManager.showTab(appState.activeTabPath, tab.name, "", { loading: true, focus: focusEditor });
-    } catch (error) {
-      editorError.hidden = false;
-      editorError.textContent = `Editor failed to load: ${error?.message || error?.type || "Unknown editor error"}`;
-    }
-    return;
-  }
-
-  if (tab.error) {
-    editorError.hidden = false;
-    editorError.textContent = tab.error;
-    appState.editorLoadedPath = null;
-    EditorManager.clear();
-    return;
-  }
-
-  editorError.hidden = true;
-  const text = tab.content ?? "";
-
-  if (markdownTab && appState.markdownViewMode === "md") {
-    monacoContainer.hidden = true;
-    settingsUIView.hidden = true;
-    markdownPreview.hidden = false;
-    renderMarkdown(markdownPreview, text);
-    return;
-  }
-
-  if (settingsTab && appState.settingsEditorMode === "ui") {
-    const rendered = renderSettingsForm(tab);
-    if (rendered.error) {
-      editorError.hidden = false;
-      editorError.textContent = rendered.error;
-      monacoContainer.hidden = false;
-      settingsUIView.hidden = true;
-      return;
-    }
-    monacoContainer.hidden = true;
-    settingsUIView.hidden = false;
-    appState.editorLoadedPath = null;
-    EditorManager.clear();
-    return;
-  }
-
-  if (appState.editorLoadedPath !== appState.activeTabPath) {
-    try {
-      await EditorManager.showTab(appState.activeTabPath, tab.name, text, { focus: focusEditor });
-      appState.editorLoadedPath = appState.activeTabPath;
-    } catch (error) {
-      editorError.hidden = false;
-      editorError.textContent = `Editor failed to load: ${error?.message || error?.type || "Unknown editor error"}`;
-    }
-  }
-}
 
 EditorManager.setOnChange((path) => {
   if (path !== appState.activeTabPath) return;
@@ -5069,10 +4770,9 @@ window.api.onUpdateEvent?.(handleUpdateEvent);
 loadUpdateSettings().then(() => runUpdateCheck(false));
 
 export {
-  CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, MARKDOWN_VIEW_MODE_KEY, SYSTEM_SKILL_COMMANDS,
-  ToolMap, appController, chatScroller, composerEl, isBrowserTab, isMarkdownFileName,
-  liveInputController, openBrowserTab, renderEditor, renderTabs, scoreQuickMatch,
+  CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SYSTEM_SKILL_COMMANDS, ToolMap, appController,
+  chatScroller, composerEl, isBrowserTab, liveInputController, openBrowserTab, scoreQuickMatch,
   setCodeEditorVisible, setNotifications, setSidebarCollapsed, setSidebarView,
-  setTerminalMaximized, settingsViewSwitch, showCodeEditorWorkspace, showResourceWorkspace,
-  switchToBrowserTab, syncWorkspaceActivity, updateTabDirtyIndicator,
+  setTerminalMaximized, settingsViewSwitch, showBrowserWorkspaceContent, showCodeEditorWorkspace,
+  showResourceWorkspace, showSecurityWorkspaceContent, switchToBrowserTab, syncWorkspaceActivity,
 };

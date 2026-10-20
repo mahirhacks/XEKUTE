@@ -66,6 +66,7 @@ const RENDERER_FILES = [
   "features/security/inspector-panel.js",
   "features/security/traffic-history.js",
   "features/editor/editor-tabs.js",
+  "features/editor/editor-render.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

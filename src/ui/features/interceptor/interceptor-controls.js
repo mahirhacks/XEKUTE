@@ -1,6 +1,5 @@
-import {
-  showCodeEditorWorkspace, renderTabs, renderEditor, setTerminalMaximized, openBrowserTab,
-} from "../../bootstrap.js";
+import { showCodeEditorWorkspace, setTerminalMaximized, openBrowserTab } from "../../bootstrap.js";
+import { renderTabs, renderEditor } from "../editor/editor-render.js";
 import { openTabs, commitActiveTab } from "../editor/editor-tabs.js";
 import {
   ingestLiveSecurityHistory, refreshSecurityHistoryIfVisible,
