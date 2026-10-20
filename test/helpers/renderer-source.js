@@ -73,6 +73,7 @@ const RENDERER_FILES = [
   "features/terminal/terminal-panel.js",
   "features/search/quick-palette.js",
   "features/search/workspace-search.js",
+  "features/updates/update-flow.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
