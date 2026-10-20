@@ -1,9 +1,9 @@
 import { appState } from "../../core/app-state.js";
+import { guidanceEntryKind, SYSTEM_SKILL_COMMANDS, composerEl } from "../../bootstrap.js";
 import {
-  guidanceEntryKind, SYSTEM_SKILL_COMMANDS, composerEl, syncChatInputEmptyState,
-  chatInputEditorValue, renderChatInputEditorValue, setChatInputCaretToEnd, resizeChatInput,
-  updateSendBtn,
-} from "../../bootstrap.js";
+  syncChatInputEmptyState, chatInputEditorValue, renderChatInputEditorValue,
+  setChatInputCaretToEnd, resizeChatInput, updateSendBtn,
+} from "./composer-input.js";
 import { slashCommandSuggestions, chatInput, selectedSlashCommandEl } from "../../core/dom-refs.js";
 import { syncChatInputPlaceholder } from "./chat-mode.js";
 import { isRunningChatActive } from "./chat-run-state.js";

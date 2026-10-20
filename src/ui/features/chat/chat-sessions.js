@@ -21,9 +21,11 @@ import {
   restoreHistorySubagentCards, captureSessionTranscript,
 } from "./transcript-replay.js";
 import {
-  resizeChatInput, resetChatInput, ensureVisibleDelegatedPrompt, scheduleSubagentResultDrain,
-  migrateLegacyChatInputs, updateSendBtn, recoverPendingSubagentResults,
+  ensureVisibleDelegatedPrompt, scheduleSubagentResultDrain, recoverPendingSubagentResults,
 } from "../../bootstrap.js";
+import {
+  resizeChatInput, resetChatInput, migrateLegacyChatInputs, updateSendBtn,
+} from "./composer-input.js";
 import { setSelectedSlashCommand } from "./slash-commands.js";
 import {
   clearComposerTaskList, renderComposerTaskList, syncComposerQuestionsForActiveSession,

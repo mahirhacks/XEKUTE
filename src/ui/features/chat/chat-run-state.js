@@ -1,9 +1,10 @@
 import { appState } from "../../core/app-state.js";
 import { messages, chatInput } from "../../core/dom-refs.js";
 import {
-  subagentCardBlocksParent, syncSubagentOrchestrationWaitStatus, updateSendBtn,
-  chatSessionIdForRuntimeId, ensureParentContinuationRun, drainPendingBackgroundWaitEvents,
+  subagentCardBlocksParent, syncSubagentOrchestrationWaitStatus, chatSessionIdForRuntimeId,
+  ensureParentContinuationRun, drainPendingBackgroundWaitEvents,
 } from "../../bootstrap.js";
+import { updateSendBtn } from "./composer-input.js";
 import { coalesceDelegatedAssistantReplyFragments } from "./assistant-turn.js";
 import {
   commandCompletionForRow, updateCommandTimelineRow, stopCommandTimelineTicker,

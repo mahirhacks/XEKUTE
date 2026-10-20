@@ -9,7 +9,8 @@ import {
   chatSessions, closedChatSessions, archivedChatSessions, activeChatSession,
 } from "./chat-sessions.js";
 import { refreshDirMap } from "./prompt-context.js";
-import { scoreQuickMatch, onChatInputChange } from "../../bootstrap.js";
+import { scoreQuickMatch } from "../../bootstrap.js";
+import { onChatInputChange } from "./composer-input.js";
 
 export function refreshTerminalsForTags(includeHistory = false) {
   window.clearTimeout(appState.terminalTagTimer);
