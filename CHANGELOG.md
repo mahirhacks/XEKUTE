@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.6.3] - 2026-10-20
+
+This release lets the agent sign in with the project's test accounts without
+seeing their secrets, fixes three interface bugs, and splits the renderer into
+feature modules.
+
+### Added
+
+- Test account variables. The agent's project context lists each saved
+  account's label, role, username and `{{account.<id>.username}}`,
+  `{{account.<id>.password}}` and `{{account.<id>.cookie}}` variables. A
+  variable in any tool input is replaced by the stored value only when the
+  tool runs; approvals, the audit log and the transcript keep the variable.
+- Tool results mask the project's stored passwords and cookies as their
+  variables, including URL-encoded, form-encoded and HTTP Basic forms. An
+  unknown account or unsaved field fails the tool call.
+
+### Fixed
+
+- Keep the embedded browser visible under menus and popovers by showing a
+  frozen snapshot until the overlay closes.
+- Make the Settings > Project section navigation opaque.
+- Keep the question card icon at the top left on multi-line prompts.
+
+### Changed
+
+- Split the renderer composition root into feature modules under
+  `src/ui/features` and `src/ui/core`, with shared state in `appState`.
+  Renderer tests load code by declaration name, and the production gate
+  checks every renderer module.
+
 ## [0.6.2] - 2026-10-19
 
 This release hardens long-running agent sessions, project switching,
