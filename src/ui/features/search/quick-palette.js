@@ -13,7 +13,7 @@ import {
 import {
   setQuickSearchAssistVisible, initializeAdvancedSearchHelp, QUICK_SEARCH_ROW_HEIGHT,
   QUICK_SEARCH_OVERSCAN, renderWorkspaceSearch, cancelActiveWorkspaceSearch,
-} from "../../bootstrap.js";
+} from "./workspace-search.js";
 import { escapeHtml } from "../../core/text-format.js";
 import { refreshDirMap } from "../chat/prompt-context.js";
 
