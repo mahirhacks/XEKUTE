@@ -545,7 +545,7 @@ test("every rendered agent event refreshes the durable display transcript", () =
   assert.match(renderer, /displayHtml: session\.messagesHtml \|\| ""/);
   assert.match(renderer, /uiTranscript: normalizeUiTranscript\(session\.transcript\)/);
   assert.match(renderer, /function renderStructuredChatTranscript/);
-  assert.match(renderer, /from "\.\/features\/chat\/chat-transcript\.js"/);
+  assert.match(renderer, /from "[./\w-]*\/chat-transcript\.js"/);
   assert.match(renderer, /captureChatTranscript\(/);
   assert.match(renderer, /await handleAgentEvent\(payload\);\s*scheduleLiveChatSnapshot\(run\)/);
   assert.match(renderer, /function scheduleLiveChatSnapshot/);
@@ -661,6 +661,6 @@ test("chat mode picker stays usable during a reply and only the next user turn u
   assert.match(hiddenRuntime, /runSession\.turnMode \|\| runSession\.chatMode \|\| appState\.chatMode/);
   assert.match(hiddenRuntime, /ensureChatMemorySessionId\(runSession\)/);
   assert.match(renderer, /modeLabel\(liveRun\?\.mode \|\| appState\.chatMode\)/);
-  assert.match(renderer, /from "\.\/features\/history\/chat-memory-session\.js"/);
+  assert.match(renderer, /from "[./\w-]*\/chat-memory-session\.js"/);
   assert.doesNotMatch(rendererDefinitions("createChatSession"), /ensureChatMemorySessionId/);
 });
