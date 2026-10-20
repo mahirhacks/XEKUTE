@@ -49,6 +49,7 @@ const RENDERER_FILES = [
   "features/settings/settings-tab-editor.js",
   "features/project/project-profile.js",
   "features/project/project-activation.js",
+  "features/project/run-commands.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
