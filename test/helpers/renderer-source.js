@@ -18,6 +18,7 @@ function rendererSource() {
   return RENDERER_FILES
     .map(file => fs.readFileSync(path.join(uiRoot, file), "utf8"))
     .join("\n")
+    .replace(/^export \{[^}]*\};[^\S\n]*\r?$/gm, "")
     .replace(/^export (?=(?:async )?function|const |let |class )/gm, "");
 }
 
