@@ -45,6 +45,7 @@ const RENDERER_FILES = [
   "features/settings/app-settings-shell.js",
   "features/settings/llm-provider-settings.js",
   "features/settings/mcp-settings.js",
+  "features/settings/identity-settings.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
