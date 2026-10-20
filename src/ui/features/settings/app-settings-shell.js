@@ -11,8 +11,8 @@ import { loadGuidanceSettings } from "./guidance-settings.js";
 import {
   loadProjectProfile, projectName, openTabs, showCodeEditorWorkspace, renderTabs,
   syncWorkspaceActivity, commitActiveTab, setTerminalMaximized, renderEditor,
-  refreshAssessmentSettingsCache,
 } from "../../bootstrap.js";
+import { refreshAssessmentSettingsCache } from "./settings-tab-editor.js";
 import { loadMcpSettings } from "./mcp-settings.js";
 import {
   renderExploreSubagentSelect, initModelsSettingsPanel, loadLlmSettings, loadOllamaSettings,

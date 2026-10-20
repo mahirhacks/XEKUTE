@@ -1,7 +1,8 @@
 import { appState } from "../../core/app-state.js";
+import { restoreChatComposerAfterUiAction } from "../../bootstrap.js";
 import {
-  refreshAssessmentSettingsCache, syncOpenSettingsTabContent, restoreChatComposerAfterUiAction,
-} from "../../bootstrap.js";
+  refreshAssessmentSettingsCache, syncOpenSettingsTabContent,
+} from "./settings-tab-editor.js";
 import { authorityPicker, authorityLabel, authorityMenu } from "../../core/dom-refs.js";
 import { addErrorMessage } from "../chat/chat-messages.js";
 import { closeChatModeMenu } from "../chat/chat-mode.js";
