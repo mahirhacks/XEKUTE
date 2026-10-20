@@ -9,10 +9,11 @@ import {
 import { appState } from "../../core/app-state.js";
 import { loadGuidanceSettings } from "./guidance-settings.js";
 import {
-  loadProjectProfile, loadMcpSettings, projectName, openTabs, showCodeEditorWorkspace, renderTabs,
+  loadProjectProfile, projectName, openTabs, showCodeEditorWorkspace, renderTabs,
   syncWorkspaceActivity, commitActiveTab, setTerminalMaximized, renderEditor,
   refreshAssessmentSettingsCache,
 } from "../../bootstrap.js";
+import { loadMcpSettings } from "./mcp-settings.js";
 import {
   renderExploreSubagentSelect, initModelsSettingsPanel, loadLlmSettings, loadOllamaSettings,
 } from "./llm-provider-settings.js";
