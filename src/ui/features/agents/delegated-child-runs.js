@@ -15,7 +15,7 @@ import { renderMarkdown, scrollMessages } from "../chat/chat-messages.js";
 import { streamingNodeLive, createAssistantTurn } from "../chat/assistant-turn.js";
 import { dismissOrchestratorEscalatedForChild } from "../chat/composer-questions.js";
 import { updateSendBtn } from "../chat/composer-input.js";
-import { handleParentSubagentLifecycle } from "../../bootstrap.js";
+import { handleParentSubagentLifecycle } from "./parent-continuation.js";
 
 export function childRunSession(payload = {}) {
   const childSessionId = String(payload.childSessionId || payload.sessionId || "");

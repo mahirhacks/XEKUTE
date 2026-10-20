@@ -13,10 +13,10 @@ import {
 } from "./context-usage.js";
 import { getActiveFileContext, refreshDirMap, collectMentionedFiles } from "./prompt-context.js";
 import {
-  getExploreSubagentModel, getModelSettings, scheduleSubagentResultDrain,
-  drainPendingBackgroundWaitEvents, completedAgentProcessIds, liveInputController,
-  beginModelRunCommandWait,
+  getExploreSubagentModel, getModelSettings, drainPendingBackgroundWaitEvents,
+  completedAgentProcessIds, liveInputController, beginModelRunCommandWait,
 } from "../../bootstrap.js";
+import { scheduleSubagentResultDrain } from "../agents/parent-continuation.js";
 import {
   summarizeSubagentActivity, createSubagentRunCard, setSubagentCardState,
   syncSubagentOrchestrationWaitStatus, handleSubagentCardEvent, ensureSubagentSessionTab,
