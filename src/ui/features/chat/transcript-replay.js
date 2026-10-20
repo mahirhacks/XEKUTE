@@ -9,7 +9,7 @@ import {
 } from "./turn-structure.js";
 import {
   createSubagentRunCard, wireSubagentRunCard, setSubagentCardState,
-} from "../../bootstrap.js";
+} from "../agents/subagent-cards.js";
 import {
   isAgentTerminalTool, commandToolFromHistoryCall, createCommandTimelineRow,
   agentCommandContextForTool, agentTerminalCommandForTool, renderCommandTimelineLabel,

@@ -15,10 +15,13 @@ import { getActiveFileContext, refreshDirMap, collectMentionedFiles } from "./pr
 import {
   getExploreSubagentModel, getModelSettings, scheduleSubagentResultDrain,
   drainPendingBackgroundWaitEvents, completedAgentProcessIds, liveInputController,
+  beginModelRunCommandWait,
+} from "../../bootstrap.js";
+import {
   summarizeSubagentActivity, createSubagentRunCard, setSubagentCardState,
   syncSubagentOrchestrationWaitStatus, handleSubagentCardEvent, ensureSubagentSessionTab,
-  finalizeSubagentSessionTab, beginModelRunCommandWait,
-} from "../../bootstrap.js";
+  finalizeSubagentSessionTab,
+} from "../agents/subagent-cards.js";
 import { clearChatSessionStoppedByOperator } from "./run-stop.js";
 import { chatInput } from "../../core/dom-refs.js";
 import { MessageIdentity, TerminalManager } from "../../core/runtime-globals.js";

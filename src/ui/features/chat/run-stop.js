@@ -1,8 +1,8 @@
 import { replyEndsWithStopped, appendStoppedPlainText } from "./transcript-replay.js";
+import { chatSessionIdForRuntimeId } from "../../bootstrap.js";
 import {
   setSubagentCardState, subagentCardBlocksParent, syncSubagentOrchestrationWaitStatus,
-  chatSessionIdForRuntimeId,
-} from "../../bootstrap.js";
+} from "../agents/subagent-cards.js";
 import {
   activeChatRuns, isChatSessionRunning, activeSessionRun, syncAssistantDraftToHistory,
 } from "./chat-run-state.js";
