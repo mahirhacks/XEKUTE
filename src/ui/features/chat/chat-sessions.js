@@ -26,9 +26,11 @@ import {
   syncChatStickyMask, scrollMessages, hideChatErrorToast, clearComposerTaskList,
   renderComposerTaskList, syncComposerQuestionsForActiveSession, setSelectedSlashCommand,
   ensureVisibleDelegatedPrompt, scheduleSubagentResultDrain, migrateLegacyChatInputs,
-  updateSendBtn, recoverPendingSubagentResults, updateContextUsage, renderChatHistory,
-  positionChatHistoryPopover, closeChatHistoryPopover,
+  updateSendBtn, recoverPendingSubagentResults, updateContextUsage,
 } from "../../bootstrap.js";
+import {
+  renderChatHistory, positionChatHistoryPopover, closeChatHistoryPopover,
+} from "./chat-history-popover.js";
 import { fileTagDisplayText } from "./file-tags.js";
 
 export const chatSessionsNeedingAttention = new Set();
