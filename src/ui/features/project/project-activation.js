@@ -5,10 +5,12 @@ import {
   explorerRootChevron, fileTree, explorerTitle, projectSetup, sidebarHeader, statusWorkspace,
 } from "../../core/dom-refs.js";
 import {
-  settingsViewSwitch, selectedCustomEntries, BUG_BOUNTY_PATH_KEY, showResourceWorkspace,
-  setResourceDirty, setAssessmentUiState, refreshAssessmentState, refreshSecurityHistoryIfVisible,
-  appController, openFile,
+  settingsViewSwitch, selectedCustomEntries, showResourceWorkspace, setResourceDirty,
+  refreshSecurityHistoryIfVisible, appController, openFile,
 } from "../../bootstrap.js";
+import {
+  BUG_BOUNTY_PATH_KEY, setAssessmentUiState, refreshAssessmentState,
+} from "../assessment/assessment-workspace.js";
 import {
   selectedExplorerPaths, expandedTreePaths, setExplorerActionsEnabled, renderTree,
 } from "./explorer-tree.js";
