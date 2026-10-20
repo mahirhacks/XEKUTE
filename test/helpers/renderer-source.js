@@ -38,6 +38,7 @@ const RENDERER_FILES = [
   "features/agents/delegated-child-runs.js",
   "features/agents/parent-continuation.js",
   "features/agents/background-waits.js",
+  "features/models/model-settings.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

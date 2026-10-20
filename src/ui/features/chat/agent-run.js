@@ -12,7 +12,8 @@ import {
   applyContextReleaseUi,
 } from "./context-usage.js";
 import { getActiveFileContext, refreshDirMap, collectMentionedFiles } from "./prompt-context.js";
-import { getExploreSubagentModel, getModelSettings, liveInputController } from "../../bootstrap.js";
+import { liveInputController } from "../../bootstrap.js";
+import { getExploreSubagentModel, getModelSettings } from "../models/model-settings.js";
 import {
   drainPendingBackgroundWaitEvents, completedAgentProcessIds, beginModelRunCommandWait,
 } from "../agents/background-waits.js";

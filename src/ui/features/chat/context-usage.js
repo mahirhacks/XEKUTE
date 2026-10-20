@@ -1,10 +1,10 @@
 import { ContextBudget, MessageIdentity } from "../../core/runtime-globals.js";
 import { appState } from "../../core/app-state.js";
+import { isOpenRouterProvider, CONTEXT_USAGE_ROW_LABELS, closeModelMenu } from "../../bootstrap.js";
 import {
-  isOpenRouterProvider, contextPreferenceFor, resolveModelContextPlan,
-  refreshModelContextCapacity, AUTO_CONTEXT, AUTO_CONTEXT_ESTIMATE, getModelSettings,
-  CONTEXT_USAGE_ROW_LABELS, closeModelMenu,
-} from "../../bootstrap.js";
+  contextPreferenceFor, resolveModelContextPlan, refreshModelContextCapacity, AUTO_CONTEXT,
+  AUTO_CONTEXT_ESTIMATE, getModelSettings,
+} from "../models/model-settings.js";
 import { getActiveFileContext } from "./prompt-context.js";
 import { setContextCheckpointUi, checkpointNoticeHost } from "./context-checkpoints.js";
 import { isInternalRuntimeInputMessage } from "./turn-structure.js";
