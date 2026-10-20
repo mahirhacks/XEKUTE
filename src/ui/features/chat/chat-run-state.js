@@ -1,11 +1,12 @@
 import { appState } from "../../core/app-state.js";
 import { messages, chatInput } from "../../core/dom-refs.js";
 import {
-  subagentCardBlocksParent, modeLabel, setAgentStatus, syncSubagentOrchestrationWaitStatus,
-  updateSendBtn, chatSessionIdForRuntimeId, ensureParentContinuationRun,
-  drainPendingBackgroundWaitEvents, hydrateContextCheckpointNotices, commandCompletionForRow,
-  updateCommandTimelineRow, stopCommandTimelineTicker, coalesceDelegatedAssistantReplyFragments,
+  subagentCardBlocksParent, setAgentStatus, syncSubagentOrchestrationWaitStatus, updateSendBtn,
+  chatSessionIdForRuntimeId, ensureParentContinuationRun, drainPendingBackgroundWaitEvents,
+  hydrateContextCheckpointNotices, commandCompletionForRow, updateCommandTimelineRow,
+  stopCommandTimelineTicker, coalesceDelegatedAssistantReplyFragments,
 } from "../../bootstrap.js";
+import { modeLabel } from "./chat-mode.js";
 import { renderChatSessionSelect, activeChatSession } from "./chat-sessions.js";
 import {
   sanitizePersistedChatHtml, redactThinkingDisclosures, stripFailedToolCardStubs,
