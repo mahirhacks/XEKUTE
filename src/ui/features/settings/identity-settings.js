@@ -6,7 +6,9 @@ import {
   credentialNewLabel, credentialNewUsername, credentialNewPassword, credentialNewRole,
   identityImportFormat, identityImportData,
 } from "../../core/dom-refs.js";
-import { scheduleProjectProfileAutosave, setProjectFieldValue } from "../../bootstrap.js";
+import {
+  scheduleProjectProfileAutosave, setProjectFieldValue,
+} from "../project/project-profile.js";
 import { escapeHtml } from "../../core/text-format.js";
 
 export function identityWorkspacePath() { return appState.rootPath || appState.assessmentPath || ""; }
