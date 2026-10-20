@@ -1,8 +1,7 @@
 import { appState } from "../../core/app-state.js";
 import { messages, chatInput } from "../../core/dom-refs.js";
-import {
-  chatSessionIdForRuntimeId, ensureParentContinuationRun, drainPendingBackgroundWaitEvents,
-} from "../../bootstrap.js";
+import { ensureParentContinuationRun, drainPendingBackgroundWaitEvents } from "../../bootstrap.js";
+import { chatSessionIdForRuntimeId } from "../agents/delegated-child-runs.js";
 import {
   subagentCardBlocksParent, syncSubagentOrchestrationWaitStatus,
 } from "../agents/subagent-cards.js";

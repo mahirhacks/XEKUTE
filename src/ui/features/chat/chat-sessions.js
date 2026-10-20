@@ -20,9 +20,8 @@ import {
   renderCanonicalChatHistory, restoreHistoryCommandContexts, renderStructuredChatTranscript,
   restoreHistorySubagentCards, captureSessionTranscript,
 } from "./transcript-replay.js";
-import {
-  ensureVisibleDelegatedPrompt, scheduleSubagentResultDrain, recoverPendingSubagentResults,
-} from "../../bootstrap.js";
+import { scheduleSubagentResultDrain, recoverPendingSubagentResults } from "../../bootstrap.js";
+import { ensureVisibleDelegatedPrompt } from "../agents/delegated-child-runs.js";
 import {
   resizeChatInput, resetChatInput, migrateLegacyChatInputs, updateSendBtn,
 } from "./composer-input.js";

@@ -35,6 +35,7 @@ const RENDERER_FILES = [
   "features/chat/agent-run.js",
   "features/chat/run-stop.js",
   "features/agents/subagent-cards.js",
+  "features/agents/delegated-child-runs.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

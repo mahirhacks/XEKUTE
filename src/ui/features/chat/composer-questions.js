@@ -3,7 +3,7 @@ import { appState } from "../../core/app-state.js";
 import { inputBar, composerTaskListEl, composerQuestionsEl } from "../../core/dom-refs.js";
 import { escapeHtml } from "../../core/text-format.js";
 import { QUESTION_ICON_SRC } from "./question-answers.js";
-import { chatSessionIdForRuntimeId } from "../../bootstrap.js";
+import { chatSessionIdForRuntimeId } from "../agents/delegated-child-runs.js";
 import { chatStopIdsForRun } from "./run-stop.js";
 
 export const pendingComposerQuestionsBySession = new Map();
