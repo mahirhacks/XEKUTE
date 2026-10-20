@@ -30,6 +30,7 @@ String.prototype.slice = function recordedSlice(start, end) {
 
 process.on("exit", () => {
   if (!out || !records.length) return;
-  const previous = fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) : [];
+  let previous = [];
+  try { previous = JSON.parse(fs.readFileSync(out, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
   fs.writeFileSync(out, JSON.stringify(previous.concat(records)));
 });

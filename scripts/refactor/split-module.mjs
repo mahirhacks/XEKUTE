@@ -11,11 +11,10 @@
 // the root, which re-exports it; other renderer modules that imported a moved
 // name from the root are redirected to the new module.
 //
-// --match <regex> narrows the move to consts whose initializer text matches.
 // --names a,b,c selects declarations by name instead of by line range. An
 // existing target module is extended, and its imports are merged.
 //
-// Usage: node scripts/refactor/split-module.mjs <root.js> <target.js> <fromLine> <toLine> [--match <regex>]
+// Usage: node scripts/refactor/split-module.mjs <root.js> <target.js> <fromLine> <toLine>
 //        node scripts/refactor/split-module.mjs <root.js> <target.js> --names <name,name,...>
 import fs from "node:fs";
 import path from "node:path";
@@ -30,7 +29,14 @@ const [rootFile, targetFile] = args;
 const byName = args[2] === "--names" ? new Set(args[3].split(",").map(name => name.trim()).filter(Boolean)) : null;
 const fromLine = byName ? 1 : Number(args[2]);
 const toLine = byName ? Infinity : Number(args[3]);
-const initMatch = !byName && args[4] === "--match" ? new RegExp(args[5]) : null;
+const readIfPresent = file => {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+};
 const parse = text => acorn.parse(text, { ecmaVersion: "latest", sourceType: "module", ranges: true, locations: true });
 const relative = (fromFile, toFile) => {
   const spec = path.relative(path.dirname(fromFile), toFile).replace(/\\/g, "/");
@@ -103,7 +109,6 @@ for (const unit of units) {
   if (byName && !unit.names.some(name => byName.has(name))) continue;
   const node = astByStart.get(unit.range[0]);
   const declaration = node.type === "ExportNamedDeclaration" ? node.declaration : node;
-  if (initMatch && !(unit.kind === "const" && declaration.declarations.every(item => item.init && initMatch.test(rootSource.slice(...item.init.range))))) continue;
   if (unit.kind === "FunctionDeclaration" || unit.kind === "ClassDeclaration" || unit.kind === "ExportNamedDeclaration") {
     moved.add(unit);
     continue;
@@ -149,8 +154,8 @@ for (const unit of moved) {
 const rootPath = path.resolve(rootFile);
 const targetPath = path.resolve(targetFile);
 let targetBody = "";
-if (fs.existsSync(targetFile)) {
-  const existing = fs.readFileSync(targetFile, "utf8");
+const existing = readIfPresent(targetFile);
+if (existing !== null) {
   const ast = parse(existing);
   const imports = ast.body.filter(node => node.type === "ImportDeclaration");
   for (const node of imports) {
@@ -284,8 +289,8 @@ if (rootExports.size) rootOutput = `${rootOutput.replace(/\s*$/, "\n")}\n${named
 fs.writeFileSync(rootFile, rootOutput);
 
 const helperFile = path.join(uiRoot, "..", "..", "test", "helpers", "renderer-source.js");
-if (fs.existsSync(helperFile)) {
-  const helper = fs.readFileSync(helperFile, "utf8");
+const helper = readIfPresent(helperFile);
+if (helper !== null) {
   const entry = path.relative(uiRoot, targetFile).replace(/\\/g, "/");
   if (!helper.includes(`"${entry}"`)) fs.writeFileSync(helperFile, helper.replace(/(const RENDERER_FILES = \[[\s\S]*?)(\r?\n\];)/, `$1\n  "${entry}",$2`));
 }
