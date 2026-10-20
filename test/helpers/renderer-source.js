@@ -40,6 +40,7 @@ const RENDERER_FILES = [
   "features/agents/background-waits.js",
   "features/models/model-settings.js",
   "features/models/model-picker.js",
+  "features/settings/authority-settings.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

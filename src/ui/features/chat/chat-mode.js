@@ -1,4 +1,5 @@
-import { CHAT_PROFILE_KEYS, ToolMap, closeAuthorityMenu } from "../../bootstrap.js";
+import { CHAT_PROFILE_KEYS, ToolMap } from "../../bootstrap.js";
+import { closeAuthorityMenu } from "../settings/authority-settings.js";
 import { closeModelMenu } from "../models/model-picker.js";
 import { setAgentStatus } from "./chat-messages.js";
 import { updateContextUsage } from "./context-usage.js";

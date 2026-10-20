@@ -15,8 +15,9 @@ import {
   addCustomModelName, modelsVisibleInPicker, applyOpenRouterModelDefaults,
 } from "./model-settings.js";
 import {
-  isOpenRouterProvider, closeAuthorityMenu, renderExploreSubagentSelect, renderModelsSettingsList,
+  isOpenRouterProvider, renderExploreSubagentSelect, renderModelsSettingsList,
 } from "../../bootstrap.js";
+import { closeAuthorityMenu } from "../settings/authority-settings.js";
 import { closeChatModeMenu } from "../chat/chat-mode.js";
 import { ContextBudget } from "../../core/runtime-globals.js";
 import { formatContextWindowLabel, formatTokenCount, escapeHtml } from "../../core/text-format.js";
