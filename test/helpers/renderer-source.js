@@ -27,6 +27,7 @@ const RENDERER_FILES = [
   "features/chat/tool-cards.js",
   "features/chat/command-timeline.js",
   "features/chat/composer-questions.js",
+  "features/chat/assistant-turn.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

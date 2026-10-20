@@ -3,8 +3,8 @@ import { messages, chatInput } from "../../core/dom-refs.js";
 import {
   subagentCardBlocksParent, syncSubagentOrchestrationWaitStatus, updateSendBtn,
   chatSessionIdForRuntimeId, ensureParentContinuationRun, drainPendingBackgroundWaitEvents,
-  coalesceDelegatedAssistantReplyFragments,
 } from "../../bootstrap.js";
+import { coalesceDelegatedAssistantReplyFragments } from "./assistant-turn.js";
 import {
   commandCompletionForRow, updateCommandTimelineRow, stopCommandTimelineTicker,
 } from "./command-timeline.js";

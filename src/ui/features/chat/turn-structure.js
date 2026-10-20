@@ -2,7 +2,7 @@ import {
   turnWorkFold, workFoldBody, isWorkNode, ensureTurnWorkFold, hasWorkNode, isFinishedWorkFold,
   promoteFinalAnswer, setWorkFoldExpanded, unwrapWorkFold,
 } from "./chat-work-fold.js";
-import { streamingNodeLive } from "../../bootstrap.js";
+import { streamingNodeLive } from "./assistant-turn.js";
 import {
   toolTargetBasename, splitToolStatusLabel, renderToolStatusLabel, hydrateToolStatusLabels,
 } from "./tool-labels.js";
