@@ -7,7 +7,7 @@ import {
   bugBountySidebarView,
 } from "../../core/dom-refs.js";
 import { EditorManager, TerminalManager } from "../../core/runtime-globals.js";
-import { setTerminalMaximized } from "../../bootstrap.js";
+import { setTerminalMaximized } from "../terminal/terminal-panel.js";
 import { openInterceptorTab } from "../interceptor/interceptor-controls.js";
 import {
   SECURITY_TOOL_KEY, setSecurityTool, syncSecurityToolsVisibility,

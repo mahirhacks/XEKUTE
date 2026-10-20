@@ -253,6 +253,10 @@ import {
 import {
   syncMinimapMenu, closeHelpGuide, closeAppMenus, toggleAppMenu, runMenuAction,
 } from "./features/layout/app-menu.js";
+import {
+  TERMINAL_HEADER_H, TERMINAL_MIN_EXPANDED, setTerminalCollapsed, setTerminalMaximized,
+  scheduleTerminalDragLayout, applyTerminalHeight,
+} from "./features/terminal/terminal-panel.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -354,8 +358,6 @@ if (securityToolSwitcher) securityToolSwitcher.hidden = false;
 if (securityWorkbench) securityWorkbench.hidden = false;
 
 
-const TERMINAL_HEADER_H = 35;
-const TERMINAL_MIN_EXPANDED = 80;
 appState.resourceWrapLines = localStorage.getItem("xekute.resourceWrapLines") === "true";
 appState.resourceSettingsSaveChain = Promise.resolve();
 
@@ -4064,92 +4066,8 @@ securityExchangeSash?.addEventListener("keydown", (e) => {
   }
 });
 
-function setTerminalCollapsed(collapsed, { createIfMissing = true } = {}) {
-  if (collapsed && appState.terminalMaximized) {
-    appState.terminalMaximized = false;
-    centerPanel.classList.remove("terminal-maximized");
-    syncTerminalMaximizeButton();
-  }
-  appState.terminalCollapsed = collapsed;
-  terminalPane.classList.toggle("collapsed", collapsed);
-  terminalResize.classList.toggle("collapsed-hint", collapsed);
-  btnTopTerminal?.classList.toggle("active", !collapsed);
-  btnTopTerminal?.classList.toggle("inactive", collapsed);
-  activityTerminal?.classList.toggle("panel-visible", !collapsed);
-  activityTerminal?.setAttribute("aria-pressed", String(!collapsed));
-  TerminalManager.setPanelOpen?.(!collapsed);
 
-  if (collapsed) {
-    if (terminalPane.offsetHeight > TERMINAL_MIN_EXPANDED) {
-      appState.terminalSavedHeight = terminalPane.offsetHeight;
-    }
-    terminalPane.style.height = "0px";
-    terminalPane.style.flex = "none";
-    editorPane.style.flex = "1";
-    editorPane.style.height = "";
-  } else {
-    const centerH = centerPanel.getBoundingClientRect().height;
-    const sashH = terminalResize.offsetHeight || 0;
-    const availableH = Math.max(0, centerH - sashH);
-    appState.terminalSavedHeight = Math.min(
-      Math.max(TERMINAL_MIN_EXPANDED, appState.terminalSavedHeight),
-      Math.max(TERMINAL_MIN_EXPANDED, availableH - EDITOR_MIN_HEIGHT),
-    );
-    terminalPane.style.height = `${appState.terminalSavedHeight}px`;
-    terminalPane.style.flex = "none";
-    editorPane.style.flex = "none";
-    const editorH = Math.max(EDITOR_MIN_HEIGHT, availableH - appState.terminalSavedHeight);
-    editorPane.style.height = `${editorH}px`;
-    requestAnimationFrame(() => {
-      EditorManager.layout();
-      TerminalManager.fitActive();
-    });
-    if (createIfMissing && !TerminalManager.hasSessions()) {
-      TerminalManager.ensureTerminal();
-    }
-  }
-}
 
-function syncTerminalMaximizeButton() {
-  if (!btnTerminalMaximize) return;
-  const icon = btnTerminalMaximize.querySelector(".codicon");
-  icon?.classList.toggle("codicon-chevron-up", !appState.terminalMaximized);
-  icon?.classList.toggle("codicon-chevron-down", appState.terminalMaximized);
-  btnTerminalMaximize.title = appState.terminalMaximized ? "Restore Panel Size" : "Maximize Panel";
-  btnTerminalMaximize.setAttribute("aria-pressed", String(appState.terminalMaximized));
-}
-
-function setTerminalMaximized(maximized) {
-  const next = Boolean(maximized);
-  if (next && appState.terminalCollapsed) setTerminalCollapsed(false);
-  appState.terminalMaximized = next;
-  centerPanel.classList.toggle("terminal-maximized", appState.terminalMaximized);
-  syncTerminalMaximizeButton();
-
-  if (!appState.terminalMaximized) {
-    const centerH = centerPanel.getBoundingClientRect().height;
-    const sashH = terminalResize.offsetHeight || 0;
-    const availableH = Math.max(0, centerH - sashH);
-    appState.terminalSavedHeight = Math.min(
-      Math.max(TERMINAL_MIN_EXPANDED, appState.terminalSavedHeight),
-      Math.max(TERMINAL_MIN_EXPANDED, availableH - EDITOR_MIN_HEIGHT),
-    );
-    terminalPane.style.height = `${appState.terminalSavedHeight}px`;
-    terminalPane.style.flex = "none";
-    editorPane.style.height = `${Math.max(EDITOR_MIN_HEIGHT, availableH - appState.terminalSavedHeight)}px`;
-    editorPane.style.flex = "none";
-  } else {
-    terminalPane.style.height = "";
-    terminalPane.style.flex = "1 1 auto";
-    editorPane.style.height = "";
-    editorPane.style.flex = "1";
-  }
-
-  requestAnimationFrame(() => {
-    EditorManager.layout();
-    TerminalManager.fitActive();
-  });
-}
 
 btnTerminalMaximize?.addEventListener("click", () => {
   setTerminalMaximized(!appState.terminalMaximized);
@@ -4180,13 +4098,6 @@ globalThis.onTerminalSessionStateChange = ({ count }) => {
 
 appState.terminalHeightBeforeDrag = appState.terminalSavedHeight;
 
-function scheduleTerminalDragLayout() {
-  if (appState.terminalDragLayoutFrame) return;
-  appState.terminalDragLayoutFrame = requestAnimationFrame(() => {
-    appState.terminalDragLayoutFrame = 0;
-    EditorManager.layout();
-  });
-}
 
 makeDraggable(terminalResize, (e) => {
   if (appState.terminalMaximized) setTerminalMaximized(false);
@@ -4235,20 +4146,6 @@ makeDraggable(terminalResize, (e) => {
   },
 });
 
-function applyTerminalHeight(value) {
-  if (appState.terminalMaximized) setTerminalMaximized(false);
-  if (appState.terminalCollapsed) setTerminalCollapsed(false);
-  const centerH = centerPanel.getBoundingClientRect().height;
-  const sashH = terminalResize.offsetHeight || 0;
-  const availableH = Math.max(0, centerH - sashH);
-  appState.terminalSavedHeight = Math.max(96, Math.min(availableH - EDITOR_MIN_HEIGHT, value));
-  terminalPane.style.height = `${appState.terminalSavedHeight}px`;
-  terminalPane.style.flex = "none";
-  editorPane.style.height = `${Math.max(EDITOR_MIN_HEIGHT, availableH - appState.terminalSavedHeight)}px`;
-  editorPane.style.flex = "none";
-  terminalResize.setAttribute("aria-valuenow", String(Math.round(appState.terminalSavedHeight)));
-  requestAnimationFrame(() => { EditorManager.layout(); TerminalManager.fitActive(); });
-}
 
 terminalResize.addEventListener("dblclick", () => applyTerminalHeight(240));
 terminalResize.addEventListener("keydown", (event) => {
@@ -4311,6 +4208,5 @@ loadUpdateSettings().then(() => runUpdateCheck(false));
 export {
   CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SYSTEM_SKILL_COMMANDS, ToolMap, appController,
   chatScroller, composerEl, liveInputController, openQuickPalette, runUpdateCheck,
-  scoreQuickMatch, setNotifications, setTerminalCollapsed, setTerminalMaximized,
-  settingsViewSwitch,
+  scoreQuickMatch, setNotifications, settingsViewSwitch,
 };

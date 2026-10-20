@@ -8,7 +8,7 @@ import {
 } from "../../core/dom-refs.js";
 import { appState } from "../../core/app-state.js";
 import { loadGuidanceSettings } from "./guidance-settings.js";
-import { setTerminalMaximized } from "../../bootstrap.js";
+import { setTerminalMaximized } from "../terminal/terminal-panel.js";
 import { showCodeEditorWorkspace, syncWorkspaceActivity } from "../layout/workspace-switcher.js";
 import { renderTabs, renderEditor } from "../editor/editor-render.js";
 import { openTabs, commitActiveTab } from "../editor/editor-tabs.js";

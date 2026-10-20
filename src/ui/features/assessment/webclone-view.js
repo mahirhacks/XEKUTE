@@ -8,7 +8,7 @@ import {
 } from "../../core/dom-refs.js";
 import { escapeHtml } from "../../core/text-format.js";
 import { addErrorMessage } from "../chat/chat-messages.js";
-import { setTerminalMaximized } from "../../bootstrap.js";
+import { setTerminalMaximized } from "../terminal/terminal-panel.js";
 import { syncWorkspaceActivity, setCodeEditorVisible } from "../layout/workspace-switcher.js";
 
 export function webcloneTargetFromScope() {
