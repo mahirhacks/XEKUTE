@@ -117,8 +117,8 @@ import {
 } from "./core/workspace-paths.js";
 import {
   paintLiveInputRecord, createChatSession, applyCheckpointToSession, clearChatSessionState,
-  sanitizePersistedChatHtml, reportChatHistoryWarning, persistChatHistorySnapshot,
-  scheduleLiveChatSnapshot, schedulePersistChatSessions, flushChatSessionsBeforeClose,
+  sanitizePersistedChatHtml, reportChatHistoryWarning, scheduleLiveChatSnapshot,
+  schedulePersistChatSessions, flushChatSessionsBeforeClose,
 } from "./features/chat/chat-persistence.js";
 import {
   refreshUserPromptDisclosures, createUserPromptBox, collapseExpandedUserPrompts,
@@ -130,13 +130,11 @@ import {
   setThinkingFoldLabel, appendChatStreamNode, createChatExchange, chatExchangeBody,
   currentChatExchange,
 } from "./features/chat/turn-structure.js";
-import {
-  captureSessionTranscript, replyEndsWithStopped, appendStoppedPlainText,
-} from "./features/chat/transcript-replay.js";
+import { captureSessionTranscript } from "./features/chat/transcript-replay.js";
 import {
   activeChatRuns, isChatSessionRunning, settleVisibleParentRun, noteParentContinuationStarted,
-  noteParentRunSettled, isRunningChatActive, activeSessionRun, anyChatSessionRunning,
-  chatRunContainer, syncAssistantDraftToHistory, discardAssistantDraft, syncChatRunSession,
+  noteParentRunSettled, isRunningChatActive, anyChatSessionRunning, chatRunContainer,
+  syncAssistantDraftToHistory, discardAssistantDraft, syncChatRunSession,
 } from "./features/chat/chat-run-state.js";
 import {
   chatSessions, closedChatSessions, archivedChatSessions, applyActiveChatSession,
@@ -179,10 +177,8 @@ import {
   rememberCommandCompletion, updateCommandTimelineRow, updateCommandTimelineLabel,
 } from "./features/chat/command-timeline.js";
 import {
-  pendingComposerQuestionsBySession, isTaskListTool, renderComposerTaskList,
-  composerQuestionSessionId, dismissEscalatedQuestionSurfaces,
+  isTaskListTool, renderComposerTaskList, dismissEscalatedQuestionSurfaces,
   presentOrchestratorEscalatedQuestion, dismissOrchestratorEscalatedForChild,
-  dismissOrchestratorEscalatedQuestionsForStop,
 } from "./features/chat/composer-questions.js";
 import { streamingNodeLive, createAssistantTurn } from "./features/chat/assistant-turn.js";
 import {
@@ -203,6 +199,7 @@ import {
   addComposerImageFiles, sentImageOriginals, imageFilesFrom, hasDraggedFiles,
 } from "./features/chat/composer-images.js";
 import { sendMessageWithAgentRuntime } from "./features/chat/agent-run.js";
+import { stopGeneration, isChatSessionStoppedByOperator } from "./features/chat/run-stop.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -328,7 +325,6 @@ const OLLAMA_PORT = 11435;
 const selectedExplorerPaths = new Set();
 const expandedTreePaths = new Set();
 appState.workspaceUiRefreshQueue = Promise.resolve();
-const chatSessionsStoppedByOperator = new Set();
   const subagentContinuationRuns = new Set();
   const seenSubagentResultIds = new Set();
 const waitCardTickers = new Map();
@@ -11592,144 +11588,16 @@ const SYSTEM_SKILL_COMMANDS = new Set(SYSTEM_SKILL_SLASH_COMMANDS.map((command) 
 
 
 
-function collapseStoppedOrchestratorTurns(run) {
-  const primary = run?.assistant?.rootTurn || run?.assistant?.turn;
-  const exchange = primary?.closest?.(".chat-exchange");
-  if (!primary || !exchange) return;
-  const host = primary.querySelector(".agent-work-fold-body") || primary;
-  for (const turn of [...exchange.querySelectorAll(".chat-turn.assistant")]) {
-    if (turn === primary || turn.dataset.steeringSegment === "true") continue;
-    for (const card of [...turn.querySelectorAll(".subagent-run-card")]) host.appendChild(card);
-    const chunk = turn.closest(".agent-run-chunk");
-    if (chunk && chunk !== primary.closest(".agent-run-chunk")) chunk.remove();
-    else turn.remove();
-  }
-  const stoppedReplies = [...exchange.querySelectorAll(".assistant-reply")].filter(replyEndsWithStopped);
-  stoppedReplies.slice(1).forEach((node) => node.remove());
-  if (!stoppedReplies.length) appendStoppedPlainText(primary);
-  for (const card of host.querySelectorAll(".subagent-run-card")) {
-    if (subagentCardBlocksParent(card)) {
-      setSubagentCardState(card, "stopped");
-    }
-  }
-}
 
-function settleStoppedRun(run) {
-  if (!run) return;
-  run.stopRequested = true;
-  run.orchestrationHold = false;
-  run.pendingEndTurn = false;
-  run.state = "complete";
-  run.activeStreamContent = "";
-  for (const turn of run.assistant?.assistantTurns?.() || [run.assistant?.turn]) {
-    turn?.setAttribute("aria-busy", "false");
-  }
-  run.assistant?.finishLiveState?.("stopped");
-  collapseStoppedOrchestratorTurns(run);
-  syncSubagentOrchestrationWaitStatus(run);
-  if (activeChatRuns.get(run.sessionId) === run) activeChatRuns.delete(run.sessionId);
-}
 
-function settleDelegatedChildrenOf(run) {
-  const parentIds = new Set(chatStopIdsForRun(run));
-  if (!parentIds.size) return;
-  for (const [sessionId, childRun] of [...activeChatRuns.entries()]) {
-    if (!childRun?.delegated || childRun === run) continue;
-    const parentId = String(childRun.session?.parentSessionId || "");
-    const mappedParentId = chatSessionIdForRuntimeId(parentId);
-    if (!parentId || (!parentIds.has(parentId) && !parentIds.has(mappedParentId))) continue;
-    settleStoppedRun(childRun);
-    if (activeChatRuns.get(sessionId) === childRun) activeChatRuns.delete(sessionId);
-  }
-}
 
-function stopGeneration() {
-  const run = activeSessionRun();
-  // Same condition that puts the composer into stop mode (see updateSendBtn).
-  if (!run || !isChatSessionRunning(run.sessionId)) return;
-  run.stopRequested = true;
-  markChatSessionStoppedByOperator(run);
-  dismissComposerQuestionsForStop(run);
-  dropAutoContinuationsForSession(run.sessionId);
-  dropAutoContinuationsForSession(run.memorySessionId || run.session?.memorySessionId || "");
-  syncAssistantDraftToHistory(run, run.assistant, { persist: false });
-  void persistChatHistorySnapshot(appState.activeChatPersistenceScope, run.session);
-  appState.activeStreamContent = "";
-  settleDelegatedChildrenOf(run);
-  settleStoppedRun(run);
-  if (chatInput && appState.activeChatSessionId === run.sessionId) {
-    chatInput.disabled = false;
-    chatInput.readOnly = false;
-    chatInput.removeAttribute("aria-disabled");
-  }
-  setAgentStatus(`${modeLabel()} ready`);
-  abortActiveChatRun(run);
-  updateSendBtn();
-  updateContextUsage();
-}
 
-function chatStopIdsForRun(run) {
-  return [...new Set([
-    run?.memorySessionId,
-    run?.session?.memorySessionId,
-    run?.sessionId,
-  ].map((value) => String(value || "")).filter(Boolean))];
-}
 
-function markChatSessionStoppedByOperator(run) {
-  for (const id of chatStopIdsForRun(run)) chatSessionsStoppedByOperator.add(id);
-}
 
-function clearChatSessionStoppedByOperator(session) {
-  chatSessionsStoppedByOperator.delete(String(session?.id || ""));
-  chatSessionsStoppedByOperator.delete(String(session?.memorySessionId || ""));
-}
 
-function isChatSessionStoppedByOperator(sessionId = "") {
-  const id = String(sessionId || "");
-  if (!id) return false;
-  if (chatSessionsStoppedByOperator.has(id)) return true;
-  const mapped = chatSessionIdForRuntimeId(id);
-  return Boolean(mapped && chatSessionsStoppedByOperator.has(mapped));
-}
 
-function abortActiveChatRun(run) {
-  if (run.taskId || run.session?.taskId) {
-    window.api.agentCancelTask?.({ workspace: run.workspace || appState.rootPath, sessionId: run.session?.parentMemorySessionId || run.memorySessionId || run.session?.memorySessionId || run.sessionId, taskId: run.taskId || run.session.taskId, scope: "task" })?.catch?.(reportChatHistoryWarning);
-    return;
-  }
-  const ids = chatStopIdsForRun(run);
-  if (!ids.length) {
-    window.api.abortChat?.({});
-    return;
-  }
-  for (const sessionId of ids) window.api.abortChat?.({ sessionId });
-}
 
-function dismissComposerQuestionsForStop(run) {
-  for (const sessionId of chatStopIdsForRun(run)) {
-    const pending = pendingComposerQuestionsBySession.get(composerQuestionSessionId(sessionId));
-    pending?.abort?.();
-  }
-  dismissOrchestratorEscalatedQuestionsForStop(run);
-}
 
-function dropAutoContinuationsForSession(sessionId = "") {
-  const id = String(sessionId || "");
-  if (!id) return;
-  const matches = (value) => {
-    const candidate = String(value || "");
-    if (!candidate) return false;
-    if (candidate === id) return true;
-    return chatSessionIdForRuntimeId(candidate) === id;
-  };
-  appState.pendingSubagentResults = appState.pendingSubagentResults.filter((item) => (
-    !matches(item.parentSessionId) && !matches(item.payload?.parentSessionId) && !matches(item.payload?.sessionId)
-  ));
-  appState.pendingBackgroundWaitEvents = appState.pendingBackgroundWaitEvents.filter((item) => (
-    !matches(item.payload?.sessionId) && !matches(item.payload?.parentSessionId)
-  ));
-}
 
 bindLiveInputComposer({ sendButton: sendBtn, onSend: submitChatComposer });
 
@@ -13847,15 +13715,15 @@ loadUpdateSettings().then(() => runUpdateCheck(false));
 export {
   AUTO_CONTEXT, AUTO_CONTEXT_ESTIMATE, CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS,
   SYSTEM_SKILL_COMMANDS, ToolMap, beginModelRunCommandWait, chatScroller,
-  chatSessionIdForRuntimeId, chatStopIdsForRun, clearChatSessionStoppedByOperator,
-  closeAuthorityMenu, closeModelMenu, closeTab, commitActiveTab, completedAgentProcessIds,
-  composerEl, contextPreferenceFor, createSubagentRunCard, drainPendingBackgroundWaitEvents,
-  ensureParentContinuationRun, ensureSubagentSessionTab, ensureVisibleDelegatedPrompt,
-  explorerPathKey, finalizeSubagentSessionTab, getExploreSubagentModel, getModelSettings,
-  guidanceEntryKind, handleSubagentCardEvent, isMarkdownFileName, isOpenRouterProvider,
-  liveInputController, loadGuidanceSettings, openFile, openTabs, reconcileDeletedWorkspacePath,
-  recoverPendingSubagentResults, refreshModelContextCapacity, refreshWorkspaceUi, renderEditor,
-  renderTabs, resolveModelContextPlan, scheduleSubagentResultDrain, scoreQuickMatch,
-  setSubagentCardState, startWaitCardTicker, stopGeneration, subagentCardBlocksParent,
-  summarizeSubagentActivity, syncSubagentOrchestrationWaitStatus, wireSubagentRunCard,
+  chatSessionIdForRuntimeId, closeAuthorityMenu, closeModelMenu, closeTab, commitActiveTab,
+  completedAgentProcessIds, composerEl, contextPreferenceFor, createSubagentRunCard,
+  drainPendingBackgroundWaitEvents, ensureParentContinuationRun, ensureSubagentSessionTab,
+  ensureVisibleDelegatedPrompt, explorerPathKey, finalizeSubagentSessionTab,
+  getExploreSubagentModel, getModelSettings, guidanceEntryKind, handleSubagentCardEvent,
+  isMarkdownFileName, isOpenRouterProvider, liveInputController, loadGuidanceSettings, openFile,
+  openTabs, reconcileDeletedWorkspacePath, recoverPendingSubagentResults,
+  refreshModelContextCapacity, refreshWorkspaceUi, renderEditor, renderTabs,
+  resolveModelContextPlan, scheduleSubagentResultDrain, scoreQuickMatch, setSubagentCardState,
+  startWaitCardTicker, subagentCardBlocksParent, summarizeSubagentActivity,
+  syncSubagentOrchestrationWaitStatus, wireSubagentRunCard,
 };

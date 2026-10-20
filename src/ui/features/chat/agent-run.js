@@ -17,8 +17,9 @@ import {
   drainPendingBackgroundWaitEvents, completedAgentProcessIds, liveInputController,
   summarizeSubagentActivity, createSubagentRunCard, setSubagentCardState,
   syncSubagentOrchestrationWaitStatus, handleSubagentCardEvent, ensureSubagentSessionTab,
-  finalizeSubagentSessionTab, clearChatSessionStoppedByOperator, beginModelRunCommandWait,
+  finalizeSubagentSessionTab, beginModelRunCommandWait,
 } from "../../bootstrap.js";
+import { clearChatSessionStoppedByOperator } from "./run-stop.js";
 import { chatInput } from "../../core/dom-refs.js";
 import { MessageIdentity, TerminalManager } from "../../core/runtime-globals.js";
 import {
