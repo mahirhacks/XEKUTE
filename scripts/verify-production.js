@@ -18,6 +18,16 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8");
 }
 
+// The renderer is bootstrap.js plus the core and feature modules it imports;
+// renderer checks read all of them.
+function rendererText() {
+  return rendererModules().map(read).join("\n");
+}
+
+function rendererModules() {
+  return ["src/ui/bootstrap.js", ...["src/ui/core", "src/ui/features"].flatMap(sourceFiles).filter(file => file.endsWith(".js")).map(posixRelative)];
+}
+
 function exists(relativePath) {
   return fs.existsSync(path.join(root, relativePath));
 }
@@ -125,7 +135,7 @@ assert.match(main, /!app\.isPackaged\s*\?\s*createDisabledUpdateBackend\(\)/);
 assert.match(main, /updatedLaunch:\s*process\.argv\.includes\(["']--updated["']\)/);
 assert.match(read("src/app/services/updates/update-service.js"), /pendingInstalledVersion/);
 assert.match(read("src/app/services/updates/update-service.js"), /deferredVersion/);
-assert.match(read("src/ui/bootstrap.js"), /type === "updated"/);
+assert.match(rendererText(), /type === "updated"/);
 assert.doesNotMatch(forgeConfig, /src\/automation/);
 
 const canonicalNames = ToolPort.REGISTRY_TOOL_NAMES;
@@ -334,13 +344,12 @@ assert.doesNotMatch(read("src/agent/runtime/prompt-compiler.js"), /prompt-source
 assert.match(html, /<script type="module" src="\/react\/main\.jsx"><\/script>/);
 assert.match(read("src/ui/react/App.jsx"), /startRenderer\(\)/);
 assert.doesNotMatch(html, /data-app-settings-section="memory"|id="app-settings-memory-panel"|id="memory-health-reset"|Memory Health/);
-assert.doesNotMatch(read("src/ui/bootstrap.js"), /loadMemoryHealthPanel/);
+assert.doesNotMatch(rendererText(), /loadMemoryHealthPanel/);
 assert.doesNotMatch(html, /presentation\/ui|application\/prompt|prompts\/instructs|src\/preload\.js/);
-const rendererSyntax = spawnSync(process.execPath, ["--input-type=module", "--check"], {
-  input: read("src/ui/bootstrap.js"),
-  encoding: "utf8",
-});
-assert.equal(rendererSyntax.status, 0, `renderer ES module must parse: ${rendererSyntax.stderr || rendererSyntax.stdout}`);
+for (const module of rendererModules()) {
+  const rendererSyntax = spawnSync(process.execPath, ["--input-type=module", "--check"], { input: read(module), encoding: "utf8" });
+  assert.equal(rendererSyntax.status, 0, `${module} must parse as an ES module: ${rendererSyntax.stderr || rendererSyntax.stdout}`);
+}
 for (const match of html.matchAll(/<script(?:\s+type="module")?\s+src="([^"]+)"\s*><\/script>/g)) {
   const relativeSrc = String(match[1] || "").replace(/^\//, "");
   const scriptPath = path.join(root, "src/ui", relativeSrc);
@@ -351,7 +360,7 @@ for (const match of html.matchAll(/<script(?:\s+type="module")?\s+src="([^"]+)"\
 assert.doesNotMatch(main, /evaluateAction|classifyAction|requestAgentActionApproval|agentResolveApproval|GATES_DISABLED/);
 assert.doesNotMatch(read("src/agent/controller/agent-controller.js"), /evaluateAction|requestApproval|approval_required|GATES_DISABLED/);
 assert.doesNotMatch(read("src/prompts/instructions/initial-context.js"), /authority\s+gate|approval\s+token|bypass/i);
-assert.doesNotMatch(read("src/ui/bootstrap.js"), /Unrestricted|unrestricted/);
+assert.doesNotMatch(rendererText(), /Unrestricted|unrestricted/);
 assert.match(read("src/app/ipc/project.js"), /function registerProjectIpc\(/);
 
 for (const [pattern, message] of [
@@ -453,7 +462,7 @@ assert.equal(internalSkillIdForIntent("/pentest example.com"), "", "/pentest mus
 assert.equal(internalSkillIdForIntent("Please run a penetration test against the configured target"), "", "ordinary pentest requests must stay in Agent or Ask rather than a hidden skill");
 assert.doesNotMatch(electronMain, /special-skills:list|special-skills:resolve/, "internal skills must not expose renderer IPC");
 assert.doesNotMatch(electronMain, /pentestOrchestrator|pentestStateStore|executeManagePentest|MANAGE_PENTEST_TOOL|createPentestLoopController|createPentestCheckpointToolDefinition|pentestLoopController|pentest_checkpoint/, "the pentest skill and loop coordinator must not remain");
-const rendererBootstrap = read("src/ui/bootstrap.js");
+const rendererBootstrap = rendererText();
 assert.doesNotMatch(rendererBootstrap, /name:\s*"\/pentest"/, "/pentest must not remain a system slash command");
 assert.doesNotMatch(rendererBootstrap, /schedulePentestContinuation|cancelPentestContinuation|pentestContinuationTimers|pentestLoop/, "pentest continuation must not remain in the renderer");
 assert.ok(!exists("src/agent/tools/assessment/attack-graph.js"), "the attack_graph tool must not remain");
@@ -515,7 +524,7 @@ assert.deepEqual(Object.values(AssessmentWorkspace.ASSESSMENT_ITEM_FILES).sort()
 ].sort(), "assessment bootstrap files must match the clean-slate workspace contract");
 assert.equal(ModeRegistry.MODE_TOOL_GROUPS.ask.includes("update_project_artifacts"), false, "Ask must not receive a removed artifact writer");
 assert.notDeepEqual(ModeRegistry.MODE_TOOL_GROUPS.ask, ModeRegistry.MODE_TOOL_GROUPS.agent, "all modes must not have all tools");
-assert.doesNotMatch(read("src/ui/bootstrap.js"), /every selected mode receives the canonical catalog/);
+assert.doesNotMatch(rendererText(), /every selected mode receives the canonical catalog/);
 
 const containerSource = read("src/infrastructure/di/container.js");
 assert.match(
