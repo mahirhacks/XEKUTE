@@ -11,58 +11,55 @@ import { appState } from "./core/app-state.js";
 import {
   $, btnNewFile, btnNewFolder, explorerRootToggle, btnOpenFolder, fileTree, activityExplorer,
   activitySearch, activityRun, activityBugBounty, activitySecurity, activityTerminal,
-  activityChat, activitySettings, btnSidebarMore, btnCreateProjectHeader, sidebarViewTitle,
-  explorerSidebarView, btnCreateProjectSidebar, btnOpenProjectSidebar, bugBountySidebarView,
-  bugBountyTree, btnBugBountyMore, btnCreateProject, btnCreateAssessment, btnOpenAssessment,
-  bugBountyRepair, assessmentRepairOverlay, assessmentRepairClose, assessmentRepairCancel,
-  assessmentRepairConfirm, editorTabBar, editorTabContextMenu, editorBody, settingsUIView,
-  settingsViewJson, settingsViewUi, btnShowProxyCa, messages, chatInput, sendBtn, attachImageBtn,
-  attachImageInput, chatModeToggle, chatModeButton, chatModeMenu, appMenu, helpGuideOverlay,
-  helpGuideClose, commandCenter, quickOverlay, quickPanel, quickIcon, quickInput, quickMeta,
-  quickResults, quickSearchHelp, quickSearchAssist, quickSearchSuggestions, quickSearchChips,
-  chatHeader, btnTopFileTree, btnTopTerminal, btnTopChat, btnTopSettings, btnNotifications,
-  notificationCount, notificationPanel, notificationList, notificationClear, btnWindowMinimize,
-  btnWindowMaximize, btnWindowClose, chatSessionSelect, btnChatNew, btnChatDelete, btnChatHistory,
-  chatHistoryPopover, chatHistoryBody, chatHistorySearch, btnChatMore, btnChatCollapse,
-  contextUsageBtn, contextUsagePopover, inputBar, memorySaveBanner, composerTaskListEl,
-  slashCommandSuggestions, contextUsageClose, contextUsageMenu, contextWindowTrigger,
-  contextBlocksTrigger, contextBlocksPanel, contextBlocksList, modelPicker, authorityPicker,
-  authorityMenu, modelMenu, modelControlsMenu, modelContextTrigger, modelEffortTrigger,
-  modelBrowseTrigger, modelSearch, modelAddBtn, modelCustom, modelCustomAdd, modelEditMenu,
-  thinkingToggle, sidebar, sidebarResize, chatPane, chatResize, terminalPane, terminalResize,
-  centerPanel, btnTerminalMaximize, btnTerminalClose, editorPane, resourceViewer,
+  activityChat, activitySettings, btnSidebarMore, btnCreateProjectHeader, btnCreateProjectSidebar,
+  btnOpenProjectSidebar, bugBountyTree, btnBugBountyMore, btnCreateProject, btnCreateAssessment,
+  btnOpenAssessment, bugBountyRepair, assessmentRepairOverlay, assessmentRepairClose,
+  assessmentRepairCancel, assessmentRepairConfirm, editorTabBar, editorTabContextMenu,
+  settingsUIView, settingsViewJson, settingsViewUi, btnShowProxyCa, messages, chatInput, sendBtn,
+  attachImageBtn, attachImageInput, chatModeToggle, chatModeButton, chatModeMenu, appMenu,
+  helpGuideOverlay, helpGuideClose, commandCenter, quickOverlay, quickPanel, quickIcon,
+  quickInput, quickMeta, quickResults, quickSearchHelp, quickSearchAssist, quickSearchSuggestions,
+  quickSearchChips, chatHeader, btnTopFileTree, btnTopTerminal, btnTopChat, btnTopSettings,
+  btnNotifications, notificationCount, notificationPanel, notificationList, notificationClear,
+  btnWindowMinimize, btnWindowMaximize, btnWindowClose, chatSessionSelect, btnChatNew,
+  btnChatDelete, btnChatHistory, chatHistoryPopover, chatHistoryBody, chatHistorySearch,
+  btnChatMore, btnChatCollapse, contextUsageBtn, contextUsagePopover, inputBar, memorySaveBanner,
+  composerTaskListEl, slashCommandSuggestions, contextUsageClose, contextUsageMenu,
+  contextWindowTrigger, contextBlocksTrigger, contextBlocksPanel, contextBlocksList, modelPicker,
+  authorityPicker, authorityMenu, modelMenu, modelControlsMenu, modelContextTrigger,
+  modelEffortTrigger, modelBrowseTrigger, modelSearch, modelAddBtn, modelCustom, modelCustomAdd,
+  modelEditMenu, thinkingToggle, sidebar, sidebarResize, chatPane, chatResize, terminalPane,
+  terminalResize, centerPanel, btnTerminalMaximize, btnTerminalClose, editorPane, resourceViewer,
   resourceViewerMeta, resourceViewerContent, resourceLineNumbers, resourceViewerSave,
-  resourceViewerCopy, resourceViewerActions, appSettingsWorkspace, appSettingsSearch,
-  generalStatusBarToggle, generalUpdatesToggle, generalCurrentVersion, updateToast,
-  updateToastVersion, updateToastInstall, updateToastIgnore, projectSettingsForm,
-  projectSettingsName, projectSettingsCreate, projectSettingsOpen, projectSettingsNav,
-  projectSettingsNavButtons, commandSettingsStatus, mcpSettingsTabs, kaliAccessForm,
-  kaliAccessEnabled, kaliAccessFields, kaliAccessKey, kaliAccessAcceptHostKey,
-  kaliAccessKeyBrowse, kaliAccessOpenMcp, kaliAccessTest, guidanceScopeTabs, guidanceNew,
-  guidanceEmptyNew, guidanceImport, llmProvider, openRouterBaseUrl, openRouterApiKey,
-  llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle, llmOpenRouterBaseToggle,
-  llmOllamaEnableToggle, llmOllamaEndpointToggle, modelsSettingsSearch, modelsSettingsRefresh,
-  modelsViewAllBtn, modelsExploreSubagent, ollamaHostInput, ollamaHostTest, ollamaHostReset,
-  certificateBrowse, certificateOpenFolder, certificateReset, identityRefresh, identityCreate,
-  identityList, identityImport, projectAuthSource, credentialCreate, credentialList,
-  engagementAccountList, engagementAccountAdd, appSettingsSectionButtons, checklistSearch,
-  checklistStatusFilter, checklistGroups, scopeUIForm, assessmentModuleView,
-  assessmentModuleOpenJson, assessmentReportGenerate, assessmentRunStart, assessmentRunStop,
-  securityWorkspace, webcloneWorkspace, webcloneBuildAction, webclonePreviewAction,
-  webclonePreviewClose, webcloneFilesToggle, webclonePreviewPane, webclonePreviewFrame,
-  customContextDelete, workspaceContextMenu, appSettingsOverlay, customCommandsInput,
-  commandRegistryInput, securityWorkspaceTools, securityWorkspaceBody, securityToolSwitcher,
-  securityToolButton, securityToolMenu, securityWorkbench, securityProxyBrowserWrap,
-  securityProxyBrowserMenu, securityHistoryToggle, securityHistoryPanel, securityHistoryRefresh,
-  securityHistoryMenu, securityHistorySortHeaders, securityRepeaterAdd, securityRepeaterPrev,
-  securityRepeaterNext, securityIntruderTabButtons, securityAttackButtons, securityPositionMark,
-  securityPositionAuto, securityPositionClear, securityPayloadJsonToggle, securityClearButton,
-  securityDropButton, securityInterceptToggle, securityRunButton, securityRequestEditor,
-  securityResponseEditor, securityPayloadPanel, securityPayloadEditor, securityInspector,
-  securityInspectorToggle, securityInspectorClose, securityInspectorTabs, inspectorDecoderInput,
-  inspectorDecoderOutput, inspectorJwtToken, inspectorCookieInput, inspectorCookieOutput,
-  terminalShellTab, securityExchangeEl, securityExchangeSash, securityWorkbenchResize,
-  statusLnCol, statusOllamaPort,
+  resourceViewerCopy, resourceViewerActions, appSettingsSearch, generalStatusBarToggle,
+  generalUpdatesToggle, generalCurrentVersion, updateToast, updateToastVersion,
+  updateToastInstall, updateToastIgnore, projectSettingsForm, projectSettingsName,
+  projectSettingsCreate, projectSettingsOpen, projectSettingsNav, projectSettingsNavButtons,
+  commandSettingsStatus, mcpSettingsTabs, kaliAccessForm, kaliAccessEnabled, kaliAccessFields,
+  kaliAccessKey, kaliAccessAcceptHostKey, kaliAccessKeyBrowse, kaliAccessOpenMcp, kaliAccessTest,
+  guidanceScopeTabs, guidanceNew, guidanceEmptyNew, guidanceImport, llmProvider,
+  openRouterBaseUrl, openRouterApiKey, llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle,
+  llmOpenRouterBaseToggle, llmOllamaEnableToggle, llmOllamaEndpointToggle, modelsSettingsSearch,
+  modelsSettingsRefresh, modelsViewAllBtn, modelsExploreSubagent, ollamaHostInput, ollamaHostTest,
+  ollamaHostReset, certificateBrowse, certificateOpenFolder, certificateReset, identityRefresh,
+  identityCreate, identityList, identityImport, projectAuthSource, credentialCreate,
+  credentialList, engagementAccountList, engagementAccountAdd, appSettingsSectionButtons,
+  checklistSearch, checklistStatusFilter, checklistGroups, scopeUIForm, assessmentModuleOpenJson,
+  assessmentReportGenerate, assessmentRunStart, assessmentRunStop, webcloneBuildAction,
+  webclonePreviewAction, webclonePreviewClose, webcloneFilesToggle, webclonePreviewPane,
+  webclonePreviewFrame, customContextDelete, workspaceContextMenu, appSettingsOverlay,
+  customCommandsInput, commandRegistryInput, securityWorkspaceTools, securityWorkspaceBody,
+  securityToolSwitcher, securityToolButton, securityToolMenu, securityWorkbench,
+  securityProxyBrowserWrap, securityProxyBrowserMenu, securityHistoryToggle, securityHistoryPanel,
+  securityHistoryRefresh, securityHistoryMenu, securityHistorySortHeaders, securityRepeaterAdd,
+  securityRepeaterPrev, securityRepeaterNext, securityIntruderTabButtons, securityAttackButtons,
+  securityPositionMark, securityPositionAuto, securityPositionClear, securityPayloadJsonToggle,
+  securityClearButton, securityDropButton, securityInterceptToggle, securityRunButton,
+  securityRequestEditor, securityResponseEditor, securityPayloadPanel, securityPayloadEditor,
+  securityInspector, securityInspectorToggle, securityInspectorClose, securityInspectorTabs,
+  inspectorDecoderInput, inspectorDecoderOutput, inspectorJwtToken, inspectorCookieInput,
+  inspectorCookieOutput, terminalShellTab, securityExchangeEl, securityExchangeSash,
+  securityWorkbenchResize, statusLnCol, statusOllamaPort,
 } from "./core/dom-refs.js";
 import { EditorManager, TerminalManager } from "./core/runtime-globals.js";
 import { escapeHtml, formatWaitClock } from "./core/text-format.js";
@@ -216,8 +213,8 @@ import {
   showWebCloneWorkspace,
 } from "./features/assessment/webclone-view.js";
 import {
-  openInterceptorTab, toggleInterceptorCapture, syncProxyListenerUi, syncProxyBrowserUi,
-  closeProxyBrowserMenu, chooseProxyBrowserIdentity, launchProxyBrowser, handleProxyCapture,
+  toggleInterceptorCapture, syncProxyListenerUi, syncProxyBrowserUi, closeProxyBrowserMenu,
+  chooseProxyBrowserIdentity, launchProxyBrowser, handleProxyCapture,
 } from "./features/interceptor/interceptor-controls.js";
 import { stepRepeaterHistory, createWorkbenchTab } from "./features/security/workbench-tabs.js";
 import {
@@ -225,10 +222,10 @@ import {
   clearPayloadPositions, setAttackType, setIntruderTab,
 } from "./features/security/intruder-payloads.js";
 import {
-  SECURITY_TOOL_KEY, SECURITY_INSPECTOR_OPEN_KEY, SECURITY_INSPECTOR_TAB_KEY, SECURITY_TOOL_META,
+  SECURITY_INSPECTOR_OPEN_KEY, SECURITY_INSPECTOR_TAB_KEY, SECURITY_TOOL_META,
   syncSecurityExchangeSizes, setSecurityStatus, saveSecurityDraft, closeSecurityToolMenu,
-  setSecurityTool, syncSecurityToolsVisibility, runSecurityWorkbench, logSecurityExchangeIfNeeded,
-  analyzeSecurityExchange, clearSecurityExchange, dropInterceptedRequest,
+  runSecurityWorkbench, logSecurityExchangeIfNeeded, analyzeSecurityExchange,
+  clearSecurityExchange, dropInterceptedRequest,
 } from "./features/security/workbench-runner.js";
 import {
   setSecurityInspectorStatus, setSecurityInspectorTab, setSecurityInspectorOpen,
@@ -240,15 +237,17 @@ import {
   setSecurityHistorySort, closeSecurityHistoryMenu, selectedSecurityHistoryRecords,
   sendHistoryRecordsToRepeater, sendHistoryRecordsToIntruder,
   deleteSelectedSecurityHistoryRecords, loadSecurityHistory, setSecurityHistoryVisible,
-  refreshSecurityHistoryIfVisible,
 } from "./features/security/traffic-history.js";
 import {
-  openTabs, openFile, commitActiveTab, saveActiveTab, closeEditorTabContextMenu,
-  handleEditorTabContextMenuAction, closeTab,
+  openTabs, openFile, saveActiveTab, closeEditorTabContextMenu, handleEditorTabContextMenuAction,
+  closeTab,
 } from "./features/editor/editor-tabs.js";
 import {
-  isMarkdownFileName, renderTabs, updateEditorPathBar, updateTabDirtyIndicator, renderEditor,
+  isMarkdownFileName, updateTabDirtyIndicator, renderEditor,
 } from "./features/editor/editor-render.js";
+import {
+  showSecurityWorkspace, setSidebarCollapsed, setSidebarView, activateSidebarView, openBrowserTab,
+} from "./features/layout/workspace-switcher.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -368,7 +367,6 @@ appState.chatPersistenceQueue = Promise.resolve();
 appState.chatHistoryWriteQueue = Promise.resolve();
 
 
-const BROWSER_TAB_PATH = "xekute:browser";
 appState.markdownViewMode = localStorage.getItem("pointer:markdownViewMode") === "md" ? "md" : "text";
 const QUICK_SEARCH_DEBOUNCE_MS = 225;
 const QUICK_SEARCH_ROW_HEIGHT = 53;
@@ -406,7 +404,6 @@ const ADVANCED_SEARCH_PRESETS = [
   { label: "Auth headers", query: "source:traffic (header:authorization OR cookie:session)" },
 ];
 
-const SIDEBAR_VIEW_KEY = "pointer:sidebarView";
 const CHAT_PROFILE_KEYS = new Set(Object.keys(CHAT_PROFILE_DEFS));
 appState.selectedModel = localStorage.getItem("pointer:model") || "";
 appState.resolvedContextCapacity = {
@@ -586,80 +583,11 @@ appState.uiZoom = Number(localStorage.getItem(UI_ZOOM_KEY)) || 1;
 
 
 
-function syncWorkspaceActivity() {
-  const securityActive = appState.currentWorkspaceMode === "security";
-  const settingsActive = appState.currentWorkspaceMode === "settings";
-  activitySecurity?.classList.toggle("active", securityActive);
-  activitySecurity?.setAttribute("aria-pressed", String(securityActive));
-  activitySettings?.classList.toggle("active", settingsActive);
-  activitySettings?.setAttribute("aria-pressed", String(settingsActive));
-  syncSidebarActivity();
-}
 
-function setCodeEditorVisible(visible) {
-  if (editorTabBar) editorTabBar.hidden = !visible;
-  if (editorBody) editorBody.hidden = !visible;
-  if (visible) requestAnimationFrame(() => EditorManager.layout());
-}
 
-function showCodeEditorWorkspace() {
-  appState.browserWorkspace?.setVisible(false);
-  if (appState.terminalMaximized) setTerminalMaximized(false);
-  appState.currentWorkspaceMode = "editor";
-  if (assessmentModuleView) assessmentModuleView.hidden = true;
-  appState.assessmentModuleActive = false;
-  if (resourceViewer) resourceViewer.hidden = true;
-  if (securityWorkspace) securityWorkspace.hidden = true;
-  if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
-  if (webcloneWorkspace) webcloneWorkspace.hidden = true;
-  window.api.webCloneHidePreview?.();
-  setCodeEditorVisible(true);
-  editorPane?.setAttribute("aria-label", "Code editor");
-  syncWorkspaceActivity();
-}
 
-function showResourceWorkspace({ focus = false } = {}) {
-  appState.browserWorkspace?.setVisible(false);
-  if (appState.terminalMaximized) setTerminalMaximized(false);
-  appState.currentWorkspaceMode = "resource";
-  setCodeEditorVisible(false);
-  if (assessmentModuleView) assessmentModuleView.hidden = true;
-  appState.assessmentModuleActive = false;
-  if (resourceViewer) resourceViewer.hidden = false;
-  if (securityWorkspace) securityWorkspace.hidden = true;
-  if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
-  if (webcloneWorkspace) webcloneWorkspace.hidden = true;
-  window.api.webCloneHidePreview?.();
-  editorPane?.setAttribute("aria-label", "Workspace editor");
-  syncWorkspaceActivity();
-  if (focus && !resourceViewerContent?.hidden) requestAnimationFrame(() => resourceViewerContent.focus());
-}
 
-function showSecurityWorkspace(tool = "") {
-  openInterceptorTab(tool);
-}
 
-function showSecurityWorkspaceContent(tool = "") {
-  appState.browserWorkspace?.setVisible(false);
-  if (appState.terminalMaximized) setTerminalMaximized(false);
-  appState.currentWorkspaceMode = "security";
-  if (editorTabBar) editorTabBar.hidden = false;
-  if (editorBody) editorBody.hidden = true;
-  updateEditorPathBar();
-  if (assessmentModuleView) assessmentModuleView.hidden = true;
-  appState.assessmentModuleActive = false;
-  if (resourceViewer) resourceViewer.hidden = true;
-  if (securityWorkspace) securityWorkspace.hidden = false;
-  if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
-  if (webcloneWorkspace) webcloneWorkspace.hidden = true;
-  window.api.webCloneHidePreview?.();
-  editorPane?.setAttribute("aria-label", "Security workspace");
-  const saved = tool || localStorage.getItem(SECURITY_TOOL_KEY) || "interceptor";
-  setSecurityTool(saved, { persist: Boolean(tool) });
-  syncWorkspaceActivity();
-  refreshSecurityHistoryIfVisible();
-  requestAnimationFrame(() => securityRequestEditor?.focus());
-}
 
 
 
@@ -795,64 +723,9 @@ function showSecurityWorkspaceContent(tool = "") {
 
 
 
-function setSidebarCollapsed(collapsed) {
-  appState.sidebarCollapsed = Boolean(collapsed);
-  sidebar?.classList.toggle("collapsed", appState.sidebarCollapsed);
-  sidebarResize?.classList.toggle("collapsed", appState.sidebarCollapsed);
-  syncSidebarActivity();
-  requestAnimationFrame(() => {
-    EditorManager.layout();
-    TerminalManager.fitActive();
-  });
-}
 
-function syncSidebarActivity() {
-  const projectActive = !appState.sidebarCollapsed
-    && appState.currentSidebarView === "project";
-  btnTopFileTree?.classList.toggle("active", projectActive);
-  btnTopFileTree?.classList.toggle("inactive", !projectActive);
-  btnTopFileTree?.setAttribute("aria-pressed", String(projectActive));
-  activityExplorer?.classList.toggle("active", projectActive);
-  activityExplorer?.setAttribute("aria-pressed", String(projectActive));
-  activityBugBounty?.classList.toggle("active", projectActive);
-  activityBugBounty?.setAttribute("aria-pressed", String(projectActive));
-}
 
-function setSidebarView(view, { persist = true } = {}) {
-  const next = "project";
-  appState.currentSidebarView = next;
-  if (explorerSidebarView) {
-    const visible = next === "project";
-    explorerSidebarView.hidden = !visible;
-    explorerSidebarView.setAttribute("aria-hidden", String(!visible));
-  }
-  if (bugBountySidebarView) {
-    bugBountySidebarView.hidden = true;
-    bugBountySidebarView.setAttribute("aria-hidden", "true");
-  }
-  if (sidebarViewTitle) sidebarViewTitle.textContent = "Project";
-  if (btnSidebarMore) {
-    btnSidebarMore.hidden = false;
-    btnSidebarMore.title = "Project Actions";
-    btnSidebarMore.setAttribute("aria-label", btnSidebarMore.title);
-  }
-  if (persist) localStorage.setItem(SIDEBAR_VIEW_KEY, next);
-  syncSidebarActivity();
-  syncSecurityToolsVisibility(true);
-  requestAnimationFrame(() => {
-    EditorManager.layout();
-    TerminalManager.fitActive();
-  });
-}
 
-function activateSidebarView(view) {
-  if (!appState.sidebarCollapsed && appState.currentSidebarView === view) {
-    setSidebarCollapsed(true);
-    return;
-  }
-  setSidebarView(view);
-  if (appState.sidebarCollapsed) setSidebarCollapsed(false);
-}
 
 
 
@@ -1571,44 +1444,8 @@ activityChat?.addEventListener("click", () => {
 
 
 
-function openBrowserTab() {
-  if (!openTabs.has(BROWSER_TAB_PATH)) openTabs.set(BROWSER_TAB_PATH, {
-    path: BROWSER_TAB_PATH,
-    diskPath: BROWSER_TAB_PATH,
-    name: "Browser",
-    content: null,
-    savedContent: "",
-    dirty: false,
-    error: null,
-    special: "browser",
-  });
-  switchToBrowserTab();
-}
 
-function switchToBrowserTab() {
-  if (appState.terminalMaximized) setTerminalMaximized(false);
-  commitActiveTab();
-  appState.activeTabPath = BROWSER_TAB_PATH;
-  appState.editorLoadedPath = null;
-  renderTabs();
-  renderEditor({ focusEditor: false });
-}
 
-function showBrowserWorkspaceContent() {
-  appState.currentWorkspaceMode = "browser";
-  if (editorTabBar) editorTabBar.hidden = false;
-  if (editorBody) editorBody.hidden = true;
-  if (resourceViewer) resourceViewer.hidden = true;
-  if (securityWorkspace) securityWorkspace.hidden = true;
-  if (appSettingsWorkspace) appSettingsWorkspace.hidden = true;
-  if (webcloneWorkspace) webcloneWorkspace.hidden = true;
-  if (assessmentModuleView) { assessmentModuleView.hidden = true; appState.assessmentModuleActive = false; }
-  window.api.webCloneHidePreview?.();
-  editorPane?.setAttribute("aria-label", "Browser workspace");
-  updateEditorPathBar();
-  appState.browserWorkspace?.setVisible(true);
-  syncWorkspaceActivity();
-}
 
 
 
@@ -3099,9 +2936,6 @@ AppDialog?.setAfterCloseHook?.(restoreChatComposerAfterUiAction);
 
 
 
-function isBrowserTab(tab) {
-  return tab?.path === BROWSER_TAB_PATH || tab?.special === "browser";
-}
 
 
 
@@ -4771,8 +4605,6 @@ loadUpdateSettings().then(() => runUpdateCheck(false));
 
 export {
   CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SYSTEM_SKILL_COMMANDS, ToolMap, appController,
-  chatScroller, composerEl, isBrowserTab, liveInputController, openBrowserTab, scoreQuickMatch,
-  setCodeEditorVisible, setNotifications, setSidebarCollapsed, setSidebarView,
-  setTerminalMaximized, settingsViewSwitch, showBrowserWorkspaceContent, showCodeEditorWorkspace,
-  showResourceWorkspace, showSecurityWorkspaceContent, switchToBrowserTab, syncWorkspaceActivity,
+  chatScroller, composerEl, liveInputController, scoreQuickMatch, setNotifications,
+  setTerminalMaximized, settingsViewSwitch,
 };

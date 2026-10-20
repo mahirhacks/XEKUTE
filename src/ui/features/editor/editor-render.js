@@ -17,7 +17,7 @@ import {
 } from "./editor-tabs.js";
 import {
   isBrowserTab, syncWorkspaceActivity, showSecurityWorkspaceContent, showBrowserWorkspaceContent,
-} from "../../bootstrap.js";
+} from "../layout/workspace-switcher.js";
 import { renderMarkdown } from "../chat/chat-messages.js";
 import { loadSettingsWorkspace } from "../settings/app-settings-shell.js";
 

@@ -9,7 +9,8 @@ import {
 } from "../../core/dom-refs.js";
 import { basenameOf } from "../../core/workspace-paths.js";
 import { setResourceDirty, saveResourceChanges, showResourcePreview } from "./resource-viewer.js";
-import { settingsViewSwitch, showResourceWorkspace } from "../../bootstrap.js";
+import { settingsViewSwitch } from "../../bootstrap.js";
+import { showResourceWorkspace } from "../layout/workspace-switcher.js";
 import { assessmentDiskPath } from "./assessment-workspace.js";
 import { canonicalChatMode } from "../chat/chat-mode.js";
 import { setAgentStatus, addErrorMessage } from "../chat/chat-messages.js";

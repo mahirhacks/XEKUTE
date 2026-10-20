@@ -11,7 +11,8 @@ import {
 import {
   SETTINGS_EDITOR_MODE_KEY, syncSettingsEditorButtons,
 } from "../settings/settings-tab-editor.js";
-import { settingsViewSwitch, showResourceWorkspace } from "../../bootstrap.js";
+import { settingsViewSwitch } from "../../bootstrap.js";
+import { showResourceWorkspace } from "../layout/workspace-switcher.js";
 
 export function humanizeScopeKey(key) {
   return String(key || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[-_]/g, " ").replace(/^./, (char) => char.toUpperCase());

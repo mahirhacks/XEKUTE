@@ -5,7 +5,7 @@ import {
 } from "../../core/workspace-paths.js";
 import {
   showCodeEditorWorkspace, isBrowserTab, switchToBrowserTab, setSidebarCollapsed, setSidebarView,
-} from "../../bootstrap.js";
+} from "../layout/workspace-switcher.js";
 import {
   renderTabs, renderEditor, MARKDOWN_VIEW_MODE_KEY, isMarkdownFileName,
 } from "./editor-render.js";

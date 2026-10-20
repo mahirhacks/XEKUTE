@@ -8,9 +8,8 @@ import {
 } from "../../core/dom-refs.js";
 import { appState } from "../../core/app-state.js";
 import { loadGuidanceSettings } from "./guidance-settings.js";
-import {
-  showCodeEditorWorkspace, syncWorkspaceActivity, setTerminalMaximized,
-} from "../../bootstrap.js";
+import { setTerminalMaximized } from "../../bootstrap.js";
+import { showCodeEditorWorkspace, syncWorkspaceActivity } from "../layout/workspace-switcher.js";
 import { renderTabs, renderEditor } from "../editor/editor-render.js";
 import { openTabs, commitActiveTab } from "../editor/editor-tabs.js";
 import { projectName } from "../project/project-activation.js";

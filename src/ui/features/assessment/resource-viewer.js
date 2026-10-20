@@ -10,7 +10,8 @@ import {
   saveAssessmentSettings, nestedSettingValue, SETTINGS_EDITOR_MODE_KEY, syncSettingsEditorButtons,
   setNestedSettingValue,
 } from "../settings/settings-tab-editor.js";
-import { settingsViewSwitch, showResourceWorkspace } from "../../bootstrap.js";
+import { settingsViewSwitch } from "../../bootstrap.js";
+import { showResourceWorkspace } from "../layout/workspace-switcher.js";
 import { syncInterceptorToggleUi } from "../interceptor/interceptor-controls.js";
 import { ASSESSMENT_MODULE_META, showAssessmentModule } from "./module-runs.js";
 import { MANAGED_CORE_RESOURCE_META, showScopeResource } from "./scope-view.js";

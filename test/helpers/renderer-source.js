@@ -67,6 +67,7 @@ const RENDERER_FILES = [
   "features/security/traffic-history.js",
   "features/editor/editor-tabs.js",
   "features/editor/editor-render.js",
+  "features/layout/workspace-switcher.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

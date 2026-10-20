@@ -1,4 +1,5 @@
-import { showCodeEditorWorkspace, setTerminalMaximized, openBrowserTab } from "../../bootstrap.js";
+import { setTerminalMaximized } from "../../bootstrap.js";
+import { showCodeEditorWorkspace, openBrowserTab } from "../layout/workspace-switcher.js";
 import { renderTabs, renderEditor } from "../editor/editor-render.js";
 import { openTabs, commitActiveTab } from "../editor/editor-tabs.js";
 import {
