@@ -32,6 +32,7 @@ const RENDERER_FILES = [
   "features/chat/file-tag-picker.js",
   "features/chat/composer-input.js",
   "features/chat/composer-images.js",
+  "features/chat/agent-run.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
