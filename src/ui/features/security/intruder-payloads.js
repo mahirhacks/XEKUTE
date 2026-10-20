@@ -6,7 +6,7 @@ import {
 } from "../../core/dom-refs.js";
 import {
   saveSecurityDraft, syncSecurityExchangeSizes, setSecurityStatus,
-} from "../../bootstrap.js";
+} from "./workbench-runner.js";
 import { appState } from "../../core/app-state.js";
 import { INTRUDER_ATTACK_TYPES, captureIntruderTab, activeIntruderTab } from "./workbench-tabs.js";
 import { escapeHtml } from "../../core/text-format.js";

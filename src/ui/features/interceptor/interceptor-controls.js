@@ -1,9 +1,12 @@
 import {
-  openTabs, showCodeEditorWorkspace, SECURITY_TOOL_META, renderTabs, commitActiveTab,
-  renderEditor, setTerminalMaximized, setSecurityStatus, openBrowserTab,
-  securityExchangeSignature, syncSecurityExchangeSizes, setSecurityTool,
-  ingestLiveSecurityHistory, refreshSecurityHistoryIfVisible,
+  openTabs, showCodeEditorWorkspace, renderTabs, commitActiveTab, renderEditor,
+  setTerminalMaximized, openBrowserTab, ingestLiveSecurityHistory,
+  refreshSecurityHistoryIfVisible,
 } from "../../bootstrap.js";
+import {
+  SECURITY_TOOL_META, setSecurityStatus, securityExchangeSignature, syncSecurityExchangeSizes,
+  setSecurityTool,
+} from "../security/workbench-runner.js";
 import { securityDrafts } from "../security/workbench-tabs.js";
 import { appState } from "../../core/app-state.js";
 import {

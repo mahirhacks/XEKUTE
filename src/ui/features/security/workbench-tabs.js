@@ -3,7 +3,7 @@ import {
   securityRequestEditor, securityResponseEditor, securityRepeaterTabList, securityRepeaterPrev,
   securityRepeaterNext, securityRepeaterPosition, securityPayloadEditor,
 } from "../../core/dom-refs.js";
-import { syncSecurityExchangeSizes, setSecurityStatus } from "../../bootstrap.js";
+import { syncSecurityExchangeSizes, setSecurityStatus } from "./workbench-runner.js";
 import {
   intruderSlots, syncIntruderUi, setAttackType, setIntruderTab, renderIntruderResults,
 } from "./intruder-payloads.js";
