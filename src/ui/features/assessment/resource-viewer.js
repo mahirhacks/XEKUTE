@@ -11,9 +11,9 @@ import {
   setNestedSettingValue,
 } from "../settings/settings-tab-editor.js";
 import {
-  syncInterceptorToggleUi, settingsViewSwitch, showResourceWorkspace, ASSESSMENT_MODULE_META,
-  showAssessmentModule,
+  syncInterceptorToggleUi, settingsViewSwitch, showResourceWorkspace,
 } from "../../bootstrap.js";
+import { ASSESSMENT_MODULE_META, showAssessmentModule } from "./module-runs.js";
 import { MANAGED_CORE_RESOURCE_META, showScopeResource } from "./scope-view.js";
 import { setAssessmentUiState, assessmentDiskPath } from "./assessment-workspace.js";
 
