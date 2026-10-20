@@ -39,30 +39,26 @@ import {
   centerPanel, btnTerminalMaximize, btnTerminalClose, editorPane, resourceViewer,
   resourceViewerTitle, resourceViewerMeta, resourceViewerIcon, resourceViewerEmpty,
   resourceViewerContent, resourceLineNumbers, resourceViewerSave, resourceViewerCopy,
-  resourceViewerActions, appSettingsWorkspace, appSettingsPageTitle, appSettingsPageSubtitle,
-  appSettingsSearch, appSettingsProfileName, appSettingsProfilePlan, appSettingsGeneralPanel,
-  generalStatusBarToggle, generalUpdatesToggle, generalCurrentVersion, statusbar, updateToast,
-  updateToastVersion, updateToastInstall, updateToastIgnore, appSettingsProjectPanel,
-  projectSettingsUnavailable, projectSettingsShell, projectSettingsForm, projectSettingsSections,
-  projectSettingsName, projectSettingsRoot, projectSettingsCreate, projectSettingsOpen,
-  projectSettingsNav, projectSettingsNavButtons, commandSettingsStatus, appSettingsCommandsPanel,
-  mcpSettingsList, mcpSettingsTabs, kaliAccessForm, kaliAccessEnabled, kaliAccessFields,
-  kaliAccessHost, kaliAccessPort, kaliAccessUsername, kaliAccessKey, kaliAccessAcceptHostKey,
-  kaliAccessKeyBrowse, kaliAccessOpenMcp, kaliAccessTest, kaliAccessStatus,
-  appSettingsAuthorityPanel, appSettingsPromptsPanel, guidanceScopeTabs, guidanceNew,
-  guidanceEmptyNew, guidanceImport, appSettingsCertificatesPanel, appSettingsKnowledgePanel,
-  appSettingsLlmPanel, llmProvider, llmProviderOllama, llmProviderOpenRouter, llmOllamaConfig,
-  llmOpenRouterConfig, openRouterBaseUrl, openRouterModel, openRouterApiKey, llmSettingsTest,
-  llmSettingsStatus, llmOpenRouterKeyToggle, llmOpenRouterKeyStatus, llmOpenRouterKeyFields,
-  llmOpenRouterBaseToggle, llmOpenRouterBaseFields, llmOllamaEnableToggle,
-  llmOllamaEndpointToggle, llmOllamaEndpointStatus, llmOllamaEndpointFields, modelsSettingsSearch,
-  modelsSettingsRefresh, modelsSettingsList, modelsViewAllBtn, modelsExploreSubagent,
-  ollamaHostInput, ollamaLocationBadge, ollamaActiveEndpoint, ollamaConnectionStatus,
-  ollamaHostTest, ollamaHostReset, certificateDirectory, certificateLocationBadge,
-  certificateBrowse, certificateOpenFolder, certificateReset, identityRuntimeStatus,
-  identityRefresh, identityNewId, identityNewName, identityNewRole, identityCreate, identityList,
-  identityImportTarget, identityImportFormat, identityImportData, identityImport,
-  identitySettingsStatus, projectAuthSource, credentialNewId, credentialNewLabel,
+  resourceViewerActions, appSettingsWorkspace, appSettingsSearch, generalStatusBarToggle,
+  generalUpdatesToggle, generalCurrentVersion, updateToast, updateToastVersion,
+  updateToastInstall, updateToastIgnore, projectSettingsUnavailable, projectSettingsShell,
+  projectSettingsForm, projectSettingsSections, projectSettingsName, projectSettingsRoot,
+  projectSettingsCreate, projectSettingsOpen, projectSettingsNav, projectSettingsNavButtons,
+  commandSettingsStatus, mcpSettingsList, mcpSettingsTabs, kaliAccessForm, kaliAccessEnabled,
+  kaliAccessFields, kaliAccessHost, kaliAccessPort, kaliAccessUsername, kaliAccessKey,
+  kaliAccessAcceptHostKey, kaliAccessKeyBrowse, kaliAccessOpenMcp, kaliAccessTest,
+  kaliAccessStatus, guidanceScopeTabs, guidanceNew, guidanceEmptyNew, guidanceImport, llmProvider,
+  llmProviderOllama, llmProviderOpenRouter, llmOllamaConfig, llmOpenRouterConfig,
+  openRouterBaseUrl, openRouterModel, openRouterApiKey, llmSettingsTest, llmSettingsStatus,
+  llmOpenRouterKeyToggle, llmOpenRouterKeyStatus, llmOpenRouterKeyFields, llmOpenRouterBaseToggle,
+  llmOpenRouterBaseFields, llmOllamaEnableToggle, llmOllamaEndpointToggle,
+  llmOllamaEndpointStatus, llmOllamaEndpointFields, modelsSettingsSearch, modelsSettingsRefresh,
+  modelsSettingsList, modelsViewAllBtn, modelsExploreSubagent, ollamaHostInput,
+  ollamaLocationBadge, ollamaActiveEndpoint, ollamaConnectionStatus, ollamaHostTest,
+  ollamaHostReset, certificateBrowse, certificateOpenFolder, certificateReset,
+  identityRuntimeStatus, identityRefresh, identityNewId, identityNewName, identityNewRole,
+  identityCreate, identityList, identityImportTarget, identityImportFormat, identityImportData,
+  identityImport, identitySettingsStatus, projectAuthSource, credentialNewId, credentialNewLabel,
   credentialNewUsername, credentialNewPassword, credentialNewRole, credentialCreate,
   credentialList, engagementAccountList, engagementAccountAdd, appSettingsSectionButtons,
   checklistUIView, checklistFrameworkName, checklistFrameworkVersion, checklistProgress,
@@ -198,6 +194,11 @@ import {
 import {
   beginGuidanceCreate, renderGuidanceSettings, refreshCustomSkillCatalog, loadGuidanceSettings,
 } from "./features/settings/guidance-settings.js";
+import {
+  SETTINGS_TAB_PATH, updateGeneralSettings, filterAppSettingsNavigation, setAppSettingsSection,
+  chooseCertificateDirectory, resetCertificateDirectory, openAppSettings, switchToSettingsTab,
+  loadSettingsWorkspace,
+} from "./features/settings/app-settings-shell.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -287,15 +288,6 @@ const CONTEXT_USAGE_ROW_LABELS = Object.freeze(Object.fromEntries(
   CONTEXT_USAGE_SECTIONS.map((section) => [section.key, section.label]),
 ));
 
-const APP_SETTINGS_SECTION_META = Object.freeze({
-  general: { title: "General", subtitle: "" },
-  project: { title: "Project", subtitle: "Project and engagement configuration" },
-  commands: { title: "Tools & MCPs", subtitle: "Manage slash commands and the tools each one can use" },
-  authority: { title: "Agents", subtitle: "" },
-  prompts: { title: "Rules, Skills, Subagents", subtitle: "Add project guidance files without changing protected system instructions" },
-  llm: { title: "Models", subtitle: "" },
-  certificates: { title: "Browser & Network", subtitle: "Manage certificates and isolated authorized identities" },
-});
 const settingsViewSwitch = settingsViewJson?.closest(".settings-view-switch") || null;
 if (resourceViewer && settingsUIView) resourceViewer.appendChild(settingsUIView);
 if (resourceViewerActions && settingsViewSwitch) resourceViewerActions.prepend(settingsViewSwitch);
@@ -331,7 +323,6 @@ appState.chatPersistenceQueue = Promise.resolve();
 appState.chatHistoryWriteQueue = Promise.resolve();
 
 
-const SETTINGS_TAB_PATH = "xekute:settings";
 const INTERCEPTOR_TAB_PATH = "xekute:interceptor";
 const BROWSER_TAB_PATH = "xekute:browser";
 /** @type {Map<string, { path: string, diskPath: string, name: string, content: string | null, savedContent: string, dirty: boolean, error: string | null, preview?: boolean, special?: string, securityTool?: string }>} */
@@ -942,84 +933,11 @@ async function saveProjectProfile({ autoSave = false, revision = appState.projec
   await configureProxyListener();
 }
 
-const GENERAL_SETTINGS_STORAGE_KEY = "pointer:general-settings";
 
-function readGeneralSettings() {
-  let stored = {};
-  try { stored = JSON.parse(localStorage.getItem(GENERAL_SETTINGS_STORAGE_KEY) || "{}"); } catch { stored = {}; }
-  return {
-    showStatusBar: stored.showStatusBar !== false,
-  };
-}
 
-function renderGeneralSettings() {
-  const settings = readGeneralSettings();
-  if (generalStatusBarToggle) generalStatusBarToggle.checked = settings.showStatusBar;
-  if (statusbar) statusbar.classList.toggle("settings-hidden", !settings.showStatusBar);
-}
 
-function updateGeneralSettings(patch = {}) {
-  const settings = { ...readGeneralSettings(), ...patch };
-  localStorage.setItem(GENERAL_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  renderGeneralSettings();
-}
 
-function filterAppSettingsNavigation(query = "") {
-  const normalizedQuery = String(query || "").trim().toLowerCase();
-  const navigationGroups = [...document.querySelectorAll(".app-settings-nav-group")];
-  navigationGroups.forEach((group) => {
-    const buttons = [...group.querySelectorAll("button")];
-    buttons.forEach((button) => {
-      const label = button.textContent.replace(/\s+/g, " ").trim().toLowerCase();
-      button.hidden = Boolean(normalizedQuery && !label.includes(normalizedQuery));
-    });
-    group.hidden = buttons.length > 0 && buttons.every((button) => button.hidden);
-  });
-  const visibleGroups = navigationGroups.filter((group) => !group.hidden);
-  [...document.querySelectorAll(".app-settings-nav-divider")].forEach((divider, index) => {
-    divider.hidden = !visibleGroups.length || index >= visibleGroups.length - 1;
-  });
-}
 
-function setAppSettingsSection(section) {
-  appState.appSettingsSection = ["general", "project", "commands", "authority", "prompts", "llm", "ollama", "certificates", "knowledge"].includes(section) ? (section === "ollama" ? "llm" : section) : "general";
-  const sectionMeta = APP_SETTINGS_SECTION_META[appState.appSettingsSection] || APP_SETTINGS_SECTION_META.general;
-  if (appSettingsPageTitle) appSettingsPageTitle.textContent = sectionMeta.title;
-  if (appSettingsPageSubtitle) appSettingsPageSubtitle.textContent = sectionMeta.subtitle;
-  if (appSettingsProfileName) appSettingsProfileName.textContent = "Local workspace";
-  if (appSettingsProfilePlan) appSettingsProfilePlan.textContent = appState.rootPath ? projectName(appState.rootPath) : "XEKUTE";
-  if (appSettingsGeneralPanel) appSettingsGeneralPanel.hidden = appState.appSettingsSection !== "general";
-  appSettingsProjectPanel.hidden = appState.appSettingsSection !== "project";
-  appSettingsCommandsPanel.hidden = appState.appSettingsSection !== "commands";
-  appSettingsAuthorityPanel.hidden = appState.appSettingsSection !== "authority";
-  appSettingsPromptsPanel.hidden = appState.appSettingsSection !== "prompts";
-  appSettingsLlmPanel.hidden = appState.appSettingsSection !== "llm";
-  appSettingsCertificatesPanel.hidden = appState.appSettingsSection !== "certificates";
-  if (appSettingsKnowledgePanel) appSettingsKnowledgePanel.hidden = appState.appSettingsSection !== "knowledge";
-  if (commandSettingsStatus) commandSettingsStatus.hidden = appState.appSettingsSection !== "project";
-  appSettingsSectionButtons.forEach((button) => {
-    const active = button.dataset.appSettingsSection === appState.appSettingsSection;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  if (appState.appSettingsSection === "general") {
-    renderGeneralSettings();
-  }
-  if (appState.appSettingsSection === "project") loadProjectProfile();
-  if (appState.appSettingsSection === "commands") loadMcpSettings();
-  if (appState.appSettingsSection === "authority") {
-    renderExploreSubagentSelect();
-  }
-  if (appState.appSettingsSection === "prompts") loadGuidanceSettings({ preserveSelection: true });
-  if (appState.appSettingsSection === "llm") {
-    loadOllamaSettings();
-    loadLlmSettings();
-    initModelsSettingsPanel();
-  }
-  if (appState.appSettingsSection === "certificates") {
-    loadCertificateSettings();
-  }
-}
 
 function syncLlmProviderUi(provider = "ollama") {
   const active = provider === "openrouter" ? "openrouter" : "ollama";
@@ -1389,38 +1307,9 @@ async function resetOllamaSettings() {
   await loadModels({ showLoading: true });
 }
 
-function renderCertificateSettings(snapshot = appState.certificateSettingsData) {
-  if (!snapshot) return;
-  appState.certificateSettingsData = snapshot;
-  if (certificateDirectory) certificateDirectory.value = snapshot.directory || "";
-  if (certificateLocationBadge) certificateLocationBadge.textContent = snapshot.usingDefault ? "Default" : "Custom";
-  if (certificateReset) certificateReset.disabled = Boolean(snapshot.usingDefault);
-}
 
-async function loadCertificateSettings() {
-  if (!window.api.certificateSettings) return;
-  const result = await window.api.certificateSettings();
-  if (result?.error) {
-    addErrorMessage(result.error);
-    return;
-  }
-  renderCertificateSettings(result);
-}
 
-async function chooseCertificateDirectory() {
-  const result = await window.api.chooseCertificateDirectory?.({ assessmentPath: appState.assessmentPath });
-  if (!result || result.canceled) return;
-  if (result.error) return addErrorMessage(result.error);
-  renderCertificateSettings(result);
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Shared CA location updated";
-}
 
-async function resetCertificateDirectory() {
-  const result = await window.api.resetCertificateDirectory?.({ assessmentPath: appState.assessmentPath });
-  if (result?.error) return addErrorMessage(result.error);
-  renderCertificateSettings(result);
-  if (commandSettingsStatus) commandSettingsStatus.textContent = "Default CA location restored";
-}
 
 const MCP_KIND_DESCRIPTION = "Configure standard MCP servers using the same command, arguments, and environment fields used by other MCP clients.";
 const MCP_KIND_ICON = "codicon-plug";
@@ -5742,32 +5631,7 @@ activityChat?.addEventListener("click", () => {
   if (appState.chatCollapsed) openChatPane({ createIfEmpty: true });
   else setChatCollapsed(true);
 });
-function openAppSettings(section) {
-  const key = typeof section === "string" ? section : "";
-  if (key) setAppSettingsSection(key);
-  openSettingsTab();
-}
 
-function openSettingsTab() {
-  showCodeEditorWorkspace();
-  const existingTab = openTabs.get(SETTINGS_TAB_PATH);
-  if (existingTab) {
-    switchToSettingsTab();
-    return;
-  }
-  openTabs.set(SETTINGS_TAB_PATH, {
-    path: SETTINGS_TAB_PATH,
-    diskPath: SETTINGS_TAB_PATH,
-    name: "Settings",
-    content: null,
-    savedContent: "",
-    dirty: false,
-    error: null,
-    special: "settings",
-  });
-  renderTabs();
-  switchToSettingsTab();
-}
 
 function openInterceptorTab(tool = "") {
   showCodeEditorWorkspace();
@@ -5832,15 +5696,6 @@ function showBrowserWorkspaceContent() {
   syncWorkspaceActivity();
 }
 
-function switchToSettingsTab() {
-  if (appState.terminalMaximized) setTerminalMaximized(false);
-  commitActiveTab();
-  appState.activeTabPath = SETTINGS_TAB_PATH;
-  appState.editorLoadedPath = null;
-  renderTabs();
-  openSettingsWorkspace();
-  syncWorkspaceActivity();
-}
 
 function switchToInterceptorTab() {
   if (appState.terminalMaximized) setTerminalMaximized(false);
@@ -5851,23 +5706,7 @@ function switchToInterceptorTab() {
   renderEditor({ focusEditor: false });
 }
 
-function openSettingsWorkspace() {
-  renderEditor({ focusEditor: false });
-}
 
-function loadSettingsWorkspace() {
-  if (appState.settingsWorkspacePromise) return appState.settingsWorkspacePromise;
-  appState.settingsWorkspacePromise = (async () => {
-    await refreshAssessmentSettingsCache();
-    await loadProjectProfile();
-    await loadGuidanceSettings();
-    await loadAuthoritySettings();
-    await loadCertificateSettings();
-    await loadMcpSettings();
-    setAppSettingsSection(appState.appSettingsSection);
-  })();
-  return appState.settingsWorkspacePromise;
-}
 activitySettings?.addEventListener("click", openAppSettings);
 btnBugBountyMore?.addEventListener("click", () => openQuickPalette("command"));
 btnCreateProjectHeader?.addEventListener("click", createProject);
@@ -11058,9 +10897,11 @@ loadUpdateSettings().then(() => runUpdateCheck(false));
 
 export {
   CHAT_PROFILE_KEYS, CONTEXT_USAGE_ROW_LABELS, SYSTEM_SKILL_COMMANDS, ToolMap, chatScroller,
-  closeTab, commitActiveTab, composerEl, explorerPathKey, isMarkdownFileName,
-  isOpenRouterProvider, liveInputController, openFile, openTabs, reconcileDeletedWorkspacePath,
-  refreshAssessmentSettingsCache, refreshWorkspaceUi, renderEditor, renderExploreSubagentSelect,
-  renderModelsSettingsList, renderTabs, restoreChatComposerAfterUiAction, scoreQuickMatch,
-  selectedLlmProvider, syncOpenSettingsTabContent,
+  closeTab, commitActiveTab, composerEl, explorerPathKey, initModelsSettingsPanel,
+  isMarkdownFileName, isOpenRouterProvider, liveInputController, loadLlmSettings, loadMcpSettings,
+  loadOllamaSettings, loadProjectProfile, openFile, openTabs, projectName,
+  reconcileDeletedWorkspacePath, refreshAssessmentSettingsCache, refreshWorkspaceUi, renderEditor,
+  renderExploreSubagentSelect, renderModelsSettingsList, renderTabs,
+  restoreChatComposerAfterUiAction, scoreQuickMatch, selectedLlmProvider, setTerminalMaximized,
+  showCodeEditorWorkspace, syncOpenSettingsTabContent, syncWorkspaceActivity,
 };
