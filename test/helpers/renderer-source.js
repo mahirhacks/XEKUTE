@@ -51,6 +51,7 @@ const RENDERER_FILES = [
   "features/project/project-activation.js",
   "features/project/run-commands.js",
   "features/project/explorer-tree.js",
+  "features/project/explorer-context-menu.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

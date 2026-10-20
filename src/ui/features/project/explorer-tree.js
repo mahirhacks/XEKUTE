@@ -1,9 +1,7 @@
 import { btnNewFile, btnNewFolder, fileTree, chatInput } from "../../core/dom-refs.js";
 import { appState } from "../../core/app-state.js";
-import {
-  openFile, openWorkspaceContextMenu, closeTabsUnderWorkspacePath, closeWorkspaceContextMenu,
-  openTabs,
-} from "../../bootstrap.js";
+import { openFile, closeTabsUnderWorkspacePath, openTabs } from "../../bootstrap.js";
+import { openWorkspaceContextMenu, closeWorkspaceContextMenu } from "./explorer-context-menu.js";
 import {
   normPath, remapWorkspacePath, relativePathFromRoot, joinWorkspacePath, basenameOf,
   pathIsAtOrUnder,
