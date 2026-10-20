@@ -9,10 +9,10 @@ import {
 } from "./turn-structure.js";
 import {
   isAgentTerminalTool, commandToolFromHistoryCall, createCommandTimelineRow,
-  createSubagentRunCard, createToolCard, setToolCardStatus, agentCommandContextForTool,
-  agentTerminalCommandForTool, renderCommandTimelineLabel, wireSubagentRunCard,
-  setSubagentCardState,
+  createSubagentRunCard, agentCommandContextForTool, agentTerminalCommandForTool,
+  renderCommandTimelineLabel, wireSubagentRunCard, setSubagentCardState,
 } from "../../bootstrap.js";
+import { createToolCard, setToolCardStatus } from "./tool-cards.js";
 import { toolActionName } from "./tool-labels.js";
 import { renderMarkdown, attachAssistantCopyButton, syncChatStickyMask } from "./chat-messages.js";
 import { syncChatEmptyState, activeChatSession } from "./chat-sessions.js";
