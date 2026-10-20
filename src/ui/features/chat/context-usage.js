@@ -1,6 +1,7 @@
 import { ContextBudget, MessageIdentity } from "../../core/runtime-globals.js";
 import { appState } from "../../core/app-state.js";
-import { isOpenRouterProvider, CONTEXT_USAGE_ROW_LABELS, closeModelMenu } from "../../bootstrap.js";
+import { isOpenRouterProvider, CONTEXT_USAGE_ROW_LABELS } from "../../bootstrap.js";
+import { closeModelMenu } from "../models/model-picker.js";
 import {
   contextPreferenceFor, resolveModelContextPlan, refreshModelContextCapacity, AUTO_CONTEXT,
   AUTO_CONTEXT_ESTIMATE, getModelSettings,

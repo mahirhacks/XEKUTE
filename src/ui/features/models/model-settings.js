@@ -1,7 +1,8 @@
+import { selectedLlmProvider, isOpenRouterProvider } from "../../bootstrap.js";
 import {
-  normalizeModelNames, syncModelLabel, selectedLlmProvider, syncModelControlsSummary,
-  isOpenRouterProvider, renderReasoningOptions, renderContextOptions, updateModelRuntimeNote,
-} from "../../bootstrap.js";
+  normalizeModelNames, syncModelLabel, syncModelControlsSummary, renderReasoningOptions,
+  renderContextOptions, updateModelRuntimeNote,
+} from "./model-picker.js";
 import { appState } from "../../core/app-state.js";
 import { ContextBudget } from "../../core/runtime-globals.js";
 import { refreshStoredContextCapacity, updateContextUsage } from "../chat/context-usage.js";

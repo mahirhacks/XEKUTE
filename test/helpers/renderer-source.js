@@ -39,6 +39,7 @@ const RENDERER_FILES = [
   "features/agents/parent-continuation.js",
   "features/agents/background-waits.js",
   "features/models/model-settings.js",
+  "features/models/model-picker.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
