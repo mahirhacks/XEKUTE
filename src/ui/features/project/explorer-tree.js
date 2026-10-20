@@ -150,7 +150,7 @@ export async function createNewItemInput(isFolder) {
         const items = targetContainer.querySelectorAll(".tree-item");
         for (const itemRow of items) {
           if (itemRow.dataset.path === newPath) {
-            selectItem(itemRow);
+            selectItem(itemRow, { focus: false });
             break;
           }
         }
@@ -493,6 +493,10 @@ export async function rerenderExplorer(options = {}) {
     ? (requestedPrimary ? [requestedPrimary] : [])
     : [...selectedExplorerPaths];
   const requestedAnchor = explicitSelection ? requestedPrimary : appState.explorerSelectionAnchorPath;
+  // Background refreshes (file watcher, agent writes) must not pull focus out
+  // of the editor or chat; only a tree that already had focus gets it back.
+  const activeElement = globalThis.document?.activeElement;
+  const treeHadFocus = Boolean(activeElement && typeof fileTree?.contains === "function" && fileTree.contains(activeElement));
   closeWorkspaceContextMenu();
   await renderTree(appState.rootPath, fileTree, 0);
   // Allow dropping a dragged item onto the tree root (empty area) to move it to the project root.
@@ -523,7 +527,7 @@ export async function rerenderExplorer(options = {}) {
   appState.explorerSelectionAnchorPath = availablePaths.has(requestedAnchor)
     ? requestedAnchor
     : ([...selectedExplorerPaths][0] || "");
-  syncExplorerSelectionUI({ primaryPath: requestedPrimary, focus: Boolean(selectedExplorerPaths.size) });
+  syncExplorerSelectionUI({ primaryPath: requestedPrimary, focus: treeHadFocus && Boolean(selectedExplorerPaths.size) });
 }
 
 export function refreshWorkspaceUi(options = {}) {
