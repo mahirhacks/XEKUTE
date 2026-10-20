@@ -1,9 +1,9 @@
 import { appState } from "../../core/app-state.js";
 import { messages, chatHistorySecurityWarning } from "../../core/dom-refs.js";
 import {
-  isBareToolVerbLabel, decorateBareToolLabel, renderToolStatusLabelFromText,
-  normalizeContextUsageSnapshot, setAgentStatus,
+  isBareToolVerbLabel, decorateBareToolLabel, renderToolStatusLabelFromText, setAgentStatus,
 } from "../../bootstrap.js";
+import { normalizeContextUsageSnapshot } from "./context-usage.js";
 import { canonicalChatMode } from "./chat-mode.js";
 import {
   chatSessions, closedChatSessions, archivedChatSessions, activeChatSession,

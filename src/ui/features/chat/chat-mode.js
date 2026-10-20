@@ -1,7 +1,7 @@
 import {
-  CHAT_PROFILE_KEYS, ToolMap, updateContextUsage, setAgentStatus, closeAuthorityMenu,
-  closeModelMenu,
+  CHAT_PROFILE_KEYS, ToolMap, setAgentStatus, closeAuthorityMenu, closeModelMenu,
 } from "../../bootstrap.js";
+import { updateContextUsage } from "./context-usage.js";
 import { appState } from "../../core/app-state.js";
 import {
   chatInput, chatModeButton, chatModeIcon, chatModeButtonLabel, chatModeMenu,

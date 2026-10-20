@@ -7,9 +7,8 @@ import {
   btnChatHistory, chatPane, contextUsageBtn, contextUsagePopover,
 } from "../../core/dom-refs.js";
 import { queueChatHistoryEvent, schedulePersistChatSessions } from "./chat-persistence.js";
-import {
-  updateContextUsage, closeContextPopover, closeModelMenu, openContextPopover,
-} from "../../bootstrap.js";
+import { closeModelMenu } from "../../bootstrap.js";
+import { updateContextUsage, closeContextPopover, openContextPopover } from "./context-usage.js";
 import { appState } from "../../core/app-state.js";
 import {
   fitHistoryTitle, groupHistoryByAge, paginateRecentHistory, sortHistorySessions,
