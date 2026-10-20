@@ -42,7 +42,7 @@
     "@electron/rebuild": "4.2.0",
     "@vitejs/plugin-react": "^6.1.1",
     "acorn": "8.17.0",
-    "electron": "43.4.0",
+    "electron": "44.9.0",
     "electron-builder": "^26.15.3",
     "electronmon": "2.0.4",
     "eslint-scope": "5.1.1",
