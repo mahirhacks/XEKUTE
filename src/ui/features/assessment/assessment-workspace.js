@@ -8,7 +8,8 @@ import {
 import { appState } from "../../core/app-state.js";
 import { escapeHtml } from "../../core/text-format.js";
 import { projectName, loadWorkspace } from "../project/project-activation.js";
-import { setNotifications, refreshSecurityHistoryIfVisible } from "../../bootstrap.js";
+import { setNotifications } from "../../bootstrap.js";
+import { refreshSecurityHistoryIfVisible } from "../security/traffic-history.js";
 import {
   syncInterceptorToggleUi, configureProxyListener,
 } from "../interceptor/interceptor-controls.js";

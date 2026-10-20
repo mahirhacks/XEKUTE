@@ -1,8 +1,10 @@
 import {
   openTabs, showCodeEditorWorkspace, renderTabs, commitActiveTab, renderEditor,
-  setTerminalMaximized, openBrowserTab, ingestLiveSecurityHistory,
-  refreshSecurityHistoryIfVisible,
+  setTerminalMaximized, openBrowserTab,
 } from "../../bootstrap.js";
+import {
+  ingestLiveSecurityHistory, refreshSecurityHistoryIfVisible,
+} from "../security/traffic-history.js";
 import {
   SECURITY_TOOL_META, setSecurityStatus, securityExchangeSignature, syncSecurityExchangeSizes,
   setSecurityTool,

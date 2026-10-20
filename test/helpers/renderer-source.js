@@ -64,6 +64,7 @@ const RENDERER_FILES = [
   "features/security/intruder-payloads.js",
   "features/security/workbench-runner.js",
   "features/security/inspector-panel.js",
+  "features/security/traffic-history.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

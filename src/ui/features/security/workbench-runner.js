@@ -10,7 +10,7 @@ import {
 import {
   syncSecurityHistoryForTool, refreshSecurityHistoryIfVisible, hydrateSecurityHistoryRecords,
   closeSecurityHistoryMenu,
-} from "../../bootstrap.js";
+} from "./traffic-history.js";
 import { refreshSecurityInspectorContext } from "./inspector-panel.js";
 import { appState } from "../../core/app-state.js";
 import {

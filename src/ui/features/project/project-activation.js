@@ -5,9 +5,9 @@ import {
   explorerRootChevron, fileTree, explorerTitle, projectSetup, sidebarHeader, statusWorkspace,
 } from "../../core/dom-refs.js";
 import {
-  settingsViewSwitch, showResourceWorkspace, refreshSecurityHistoryIfVisible, appController,
-  openFile,
+  settingsViewSwitch, showResourceWorkspace, appController, openFile,
 } from "../../bootstrap.js";
+import { refreshSecurityHistoryIfVisible } from "../security/traffic-history.js";
 import { selectedCustomEntries } from "../assessment/custom-entries.js";
 import { setResourceDirty } from "../assessment/resource-viewer.js";
 import {
