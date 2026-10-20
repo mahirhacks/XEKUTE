@@ -1,11 +1,13 @@
 import { appState } from "../../core/app-state.js";
 import { messages, chatHistorySecurityWarning } from "../../core/dom-refs.js";
 import {
-  activeChatRuns, isBareToolVerbLabel, decorateBareToolLabel, renderToolStatusLabelFromText,
-  canonicalChatMode, normalizeContextUsageSnapshot, isChatSessionRunning, chatSessions,
-  closedChatSessions, archivedChatSessions, isRunningChatActive, setAgentStatus,
-  activeChatSession, syncChatRunSession, syncActiveChatSession,
+  isBareToolVerbLabel, decorateBareToolLabel, renderToolStatusLabelFromText, canonicalChatMode,
+  normalizeContextUsageSnapshot, chatSessions, closedChatSessions, archivedChatSessions,
+  setAgentStatus, activeChatSession, syncActiveChatSession,
 } from "../../bootstrap.js";
+import {
+  activeChatRuns, isChatSessionRunning, isRunningChatActive, syncChatRunSession,
+} from "./chat-run-state.js";
 import { hasWorkNode, unwrapWorkFold, workFoldBody } from "./chat-work-fold.js";
 import { normalizeUiTranscript } from "./chat-transcript.js";
 import { normalizeLiveInputs } from "./live-input.js";
