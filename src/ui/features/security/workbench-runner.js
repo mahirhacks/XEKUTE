@@ -8,9 +8,10 @@ import {
   chatInput,
 } from "../../core/dom-refs.js";
 import {
-  refreshSecurityInspectorContext, syncSecurityHistoryForTool, refreshSecurityHistoryIfVisible,
-  hydrateSecurityHistoryRecords, closeSecurityHistoryMenu,
+  syncSecurityHistoryForTool, refreshSecurityHistoryIfVisible, hydrateSecurityHistoryRecords,
+  closeSecurityHistoryMenu,
 } from "../../bootstrap.js";
+import { refreshSecurityInspectorContext } from "./inspector-panel.js";
 import { appState } from "../../core/app-state.js";
 import {
   securityDrafts, DEFAULT_SECURITY_REQUEST, activeRepeaterTab, captureRepeaterTab,
