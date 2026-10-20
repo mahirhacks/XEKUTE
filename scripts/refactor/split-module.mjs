@@ -209,7 +209,7 @@ const movedText = [...moved]
     return separator + comment + (/^\s*export\s/.test(code) ? code : code.replace(/^(\s*)/, "$1export "));
   });
 fs.mkdirSync(path.dirname(targetFile), { recursive: true });
-fs.writeFileSync(targetFile, `${importLines.join("\n")}\n\n${targetBody}${movedText.join("").replace(/^\s*\n/, "")}`);
+fs.writeFileSync(targetFile, `${importLines.length ? `${importLines.join("\n")}\n\n` : ""}${targetBody}${movedText.join("").replace(/^\s*\n/, "")}`);
 
 let rootOutput = rootSource;
 for (const unit of [...moved].sort((a, b) => b.range[0] - a.range[0])) {

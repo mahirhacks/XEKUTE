@@ -152,10 +152,11 @@ import {
   securityExchangeSash, securityWorkbenchResize, statusLnCol, statusOllamaPort, statusWorkspace,
   statusAgent,
 } from "./core/dom-refs.js";
+import {
+  ExplorerSelection, SetiIconTheme, MessageIdentity, EditorManager, TerminalManager,
+  ContextBudget,
+} from "./core/runtime-globals.js";
 
-const ExplorerSelection = globalThis.XekuteExplorerSelection;
-const SetiIconTheme = globalThis.XekuteSetiIconTheme;
-const MessageIdentity = globalThis.XekuteMessageIdentity;
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
 const appController = new globalThis.XekuteCore.AppController(xekuteStore);
@@ -239,8 +240,6 @@ globalThis.addEventListener("beforeunload", () => {
   appLifecycle.dispose();
 }, { once: true });
 
-const EditorManager = globalThis.XekuteEditorManager;
-const TerminalManager = globalThis.XekuteTerminalManager;
 const composerEl       = inputBar?.querySelector(".composer") || null;
 const pendingComposerQuestionsBySession = new Map();
 const pendingOrchestratorEscalatedQuestions = new Map();
@@ -348,7 +347,6 @@ appState.chatHistoryWriteQueue = Promise.resolve();
 
 const CONTEXT_RING_R = 8;
 const CONTEXT_RING_C = 2 * Math.PI * CONTEXT_RING_R;
-const ContextBudget = globalThis.XekuteContextBudget;
 const estimateTokens = ContextBudget.estimateTokenCount;
 const AUTO_CONTEXT = "Auto";
 const AUTO_CONTEXT_ESTIMATE = 4096;

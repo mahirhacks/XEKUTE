@@ -8,6 +8,7 @@ const RENDERER_FILES = [
   "bootstrap.js",
   "core/app-state.js",
   "core/dom-refs.js",
+  "core/runtime-globals.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
