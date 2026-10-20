@@ -1,13 +1,13 @@
 "use strict";
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
 const source = rendererSource();
-const picker = source.slice(source.indexOf("function refreshTerminalsForTags("), source.indexOf("function expandSlashCommand("));
-const scoring = source.slice(source.indexOf("function scoreQuickMatch("), source.indexOf("function buildCommandItems("));
+const picker = rendererDefinitions("refreshTerminalsForTags", "fileTagProjectFiles", "fileTagQueryAtCaret", "closeFileTagSuggestions", "fileTagSuggestionsElement", "renderFileTagSuggestions", "chooseFileTag", "adjacentFileTag", "handleFileTagKeydown");
+const scoring = rendererDefinitions("scoreQuickMatch");
 
 async function fixture(text = "@", terminals = []) {
   const tags = await import("../src/ui/features/chat/file-tags.js");

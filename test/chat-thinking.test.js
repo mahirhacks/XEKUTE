@@ -1,6 +1,6 @@
 "use strict";
 
-const { rendererSource } = require("./helpers/renderer-source.js");
+const { rendererSource, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -360,7 +360,7 @@ test("send button stays disabled while orchestration or command hold keeps paren
 test("stopping the orchestrator clears the hold so the send button returns", () => {
   const settleStart = renderer.indexOf("function settleStoppedRun(");
   const stopEnd = renderer.indexOf("function chatStopIdsForRun", settleStart);
-  const stopBody = renderer.slice(settleStart, stopEnd);
+  const stopBody = rendererDefinitions("settleStoppedRun", "settleDelegatedChildrenOf", "stopGeneration");
   assert.match(stopBody, /orchestrationHold = false/);
   assert.match(stopBody, /pendingEndTurn = false/);
   assert.match(stopBody, /settleDelegatedChildrenOf\(run\)/);
@@ -383,7 +383,7 @@ test("detached delegated streams reuse the same reply block via streamingNodeLiv
 test("delegated child thinking and content share the main markdown scheduler", () => {
   const childAssistantStart = renderer.indexOf("function childAssistant(run)");
   const childAssistantEnd = renderer.indexOf("function handleDelegatedChildEvent", childAssistantStart);
-  const childAssistantBody = renderer.slice(childAssistantStart, childAssistantEnd);
+  const childAssistantBody = rendererDefinitions("childAssistant");
   assert.match(childAssistantBody, /function delegatedAppendThinking\(token\)[\s\S]*?renderMarkdown\(content, this.thinkingRaw, \{ streaming: true \}\)/);
   assert.match(childAssistantBody, /function delegatedSyncDisplay[\s\S]*?renderMarkdown\(/);
   assert.doesNotMatch(childAssistantBody, /baseAppendThinking\(token\)/);

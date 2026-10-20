@@ -1,6 +1,6 @@
 "use strict";
 
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -8,27 +8,13 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const source = rendererSource();
-const settingsStart = source.indexOf("async function refreshAssessmentSettingsCache()");
-const settingsEnd = source.indexOf("\nasync function saveAssessmentSettings", settingsStart);
-const refreshSettingsDefinition = source.slice(settingsStart, settingsEnd);
-const saveStart = source.indexOf("async function saveAssessmentSettings(settings)");
-const saveEnd = source.indexOf("\nasync function toggleInterceptorCapture", saveStart);
-const saveSettingsDefinition = source.slice(saveStart, saveEnd);
-const refreshStateStart = source.indexOf("async function refreshAssessmentState()");
-const refreshStateEnd = source.indexOf("\nasync function createAssessmentFolder", refreshStateStart);
-const refreshStateDefinition = source.slice(refreshStateStart, refreshStateEnd);
-const toggleStart = source.indexOf("async function toggleInterceptorCapture()");
-const toggleEnd = source.indexOf("\nfunction syncProxyListenerUi(", toggleStart);
-const toggleDefinition = source.slice(toggleStart, toggleEnd);
-const proxyConfigureStart = source.indexOf("async function configureProxyListener()");
-const proxyConfigureEnd = source.indexOf("\nfunction syncProxyBrowserUi", proxyConfigureStart);
-const proxyConfigureDefinition = source.slice(proxyConfigureStart, proxyConfigureEnd);
-const authoritySettingsStart = source.indexOf("async function loadAuthoritySettings()");
-const authoritySettingsEnd = source.indexOf("\nfunction syncAuthorityLabel()", authoritySettingsStart);
-const authoritySettingsDefinition = source.slice(authoritySettingsStart, authoritySettingsEnd);
-const persistAuthorityStart = source.indexOf("async function persistAuthoritySettings()");
-const persistAuthorityEnd = source.indexOf("\nasync function setAuthoritySuperMode", persistAuthorityStart);
-const persistAuthorityDefinition = source.slice(persistAuthorityStart, persistAuthorityEnd);
+const refreshSettingsDefinition = rendererDefinitions("refreshAssessmentSettingsCache");
+const saveSettingsDefinition = rendererDefinitions("saveAssessmentSettings");
+const refreshStateDefinition = rendererDefinitions("refreshAssessmentState");
+const toggleDefinition = rendererDefinitions("toggleInterceptorCapture");
+const proxyConfigureDefinition = rendererDefinitions("configureProxyListener");
+const authoritySettingsDefinition = rendererDefinitions("loadAuthoritySettings");
+const persistAuthorityDefinition = rendererDefinitions("persistAuthoritySettings");
 
 const deferred = () => {
   let resolve;

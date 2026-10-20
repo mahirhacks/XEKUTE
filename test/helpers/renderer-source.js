@@ -22,6 +22,33 @@ function rendererSource() {
     .replace(/^export (?=(?:async )?function|const |let |class )/gm, "");
 }
 
+let declarationIndex = null;
+function declarations() {
+  if (declarationIndex) return declarationIndex;
+  const acorn = require("acorn");
+  declarationIndex = new Map();
+  for (const file of RENDERER_FILES) {
+    const text = fs.readFileSync(path.join(uiRoot, file), "utf8");
+    for (const node of acorn.parse(text, { ecmaVersion: "latest", sourceType: "module" }).body) {
+      const declaration = node.type === "ExportNamedDeclaration" ? node.declaration : node;
+      if (!declaration) continue;
+      const names = declaration.type === "VariableDeclaration" ? declaration.declarations.map(item => item.id.name) : [declaration.id?.name];
+      for (const name of names) if (name) declarationIndex.set(name, text.slice(declaration.start, declaration.end));
+    }
+  }
+  return declarationIndex;
+}
+
+// The source of named top-level renderer declarations, wherever they live, in
+// the order given, for tests that run a slice of the renderer in a vm context.
+function rendererDefinitions(...names) {
+  return names.map(name => {
+    const text = declarations().get(name);
+    if (!text) throw new Error(`No top-level renderer declaration named ${name}`);
+    return text;
+  }).join("\n");
+}
+
 // Renderer state lives on `appState`. Pointing it at the vm context keeps
 // `appState.x` resolving exactly where a sliced `x` used to, and seeds every
 // field the test did not provide with the renderer's own initial value.
@@ -35,4 +62,4 @@ function withAppState(context) {
   return context;
 }
 
-module.exports = { rendererSource, withAppState };
+module.exports = { rendererSource, rendererDefinitions, withAppState };

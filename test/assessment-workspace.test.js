@@ -1,4 +1,4 @@
-const { rendererSource } = require("./helpers/renderer-source.js");
+const { rendererSource, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -83,7 +83,7 @@ test("security workspace exposes Traffic Raw history with request and response d
   assert.match(renderer, /selectedSecurityHistoryIndices/);
   assert.match(renderer, /function sortedSecurityHistoryRecords/);
   assert.match(renderer, /function securityHistoryTimeValue/);
-  const analyzeSource = renderer.slice(renderer.indexOf("async function analyzeSecurityExchange"), renderer.indexOf("function clearSecurityExchange"));
+  const analyzeSource = rendererDefinitions("analyzeSecurityExchange");
   assert.doesNotMatch(analyzeSource, /setChatMode\(/);
 });
 

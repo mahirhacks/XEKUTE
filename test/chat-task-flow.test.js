@@ -1,4 +1,4 @@
-const { rendererSource } = require("./helpers/renderer-source.js");
+const { rendererSource, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -209,10 +209,10 @@ test("running chats stay navigable and signal background completion per tab", ()
   const styles = read("src/ui/styles/base.css");
   const renderStart = renderer.indexOf("function renderChatSessionSelect");
   const renderEnd = renderer.indexOf("function scrollChatSessionIntoView", renderStart);
-  const tabRenderer = renderer.slice(renderStart, renderEnd);
+  const tabRenderer = rendererDefinitions("renderChatSessionSelect");
   const loadStart = renderer.indexOf("function loadChatSession");
   const loadEnd = renderer.indexOf("function newChatSession", loadStart);
-  const loadSession = renderer.slice(loadStart, loadEnd);
+  const loadSession = rendererDefinitions("loadChatSession", "allKnownChatSessions", "forkRootSessionId", "forkBaseTitle", "nextForkTitle", "cloneSessionValue", "forkChatSession");
   const scrollStart = renderer.indexOf("function scrollChatSessionIntoView");
   const scrollEnd = renderer.indexOf("chatSessionSelect?.addEventListener", scrollStart);
   const scrollSession = renderer.slice(scrollStart, scrollEnd);
@@ -433,7 +433,7 @@ test("stopped streamed responses enter history before the durable outcome is wri
   const finalizeBody = renderer.slice(finalizeStart, finalizeEnd);
   const stopStart = renderer.indexOf("function stopGeneration()");
   const stopEnd = renderer.indexOf("bindLiveInputComposer({", stopStart);
-  const stopBody = renderer.slice(stopStart, stopEnd);
+  const stopBody = rendererDefinitions("stopGeneration", "chatStopIdsForRun", "markChatSessionStoppedByOperator", "clearChatSessionStoppedByOperator", "isChatSessionStoppedByOperator", "abortActiveChatRun", "dismissComposerQuestionsForStop", "dropAutoContinuationsForSession");
 
   assert.match(renderer, /function syncAssistantDraftToHistory\([\s\S]*?history\.push\(message\)[\s\S]*?schedulePersistChatSessions\(session\)/);
   assert.match(renderer, /assistant\.appendContent\(delta\);[\s\S]*?syncAssistantDraftToHistory\(run, assistant, \{ persist: false \}\)/);
@@ -460,7 +460,7 @@ test("successful agent runs are not finalized as failed in finally", () => {
   const renderer = rendererSource();
   const sendStart = renderer.indexOf("async function sendMessageWithAgentRuntime");
   const sendEnd = renderer.indexOf("function stopGeneration()", sendStart);
-  const sendBody = renderer.slice(sendStart, sendEnd);
+  const sendBody = rendererDefinitions("sendMessageWithAgentRuntime", "collapseStoppedOrchestratorTurns", "settleStoppedRun", "settleDelegatedChildrenOf");
   const finallyStart = sendBody.indexOf("} finally {");
   const finallyBody = sendBody.slice(finallyStart);
   assert.match(sendBody, /await finalizeChatHistory\(assistant\.rawContent\.trim\(\) \? "completed" : "incomplete"\)/);
@@ -631,7 +631,7 @@ test("saved command transcripts reopen through the browser-safe tool normalizer"
   const renderer = rendererSource();
   const start = renderer.indexOf("function commandToolFromHistoryCall");
   const end = renderer.indexOf("function agentTerminalCommandForTool", start);
-  const restoreHelper = renderer.slice(start, end);
+  const restoreHelper = rendererDefinitions("commandToolFromHistoryCall", "agentCommandContextForTool");
 
   assert.match(restoreHelper, /ToolMap\.normalizeToolCall\?\.\(call\)/);
   assert.doesNotMatch(restoreHelper, /ToolMap\.parseArguments/);
@@ -641,26 +641,11 @@ test("saved command transcripts reopen through the browser-safe tool normalizer"
 
 test("chat mode picker stays usable during a reply and only the next user turn uses the new mode", () => {
   const renderer = rendererSource();
-  const openMenu = renderer.slice(
-    renderer.indexOf("function openChatModeMenu"),
-    renderer.indexOf("function closeChatModeMenu"),
-  );
-  const toggleMenu = renderer.slice(
-    renderer.indexOf("function toggleChatModeMenu"),
-    renderer.indexOf("function positionChatModeMenu"),
-  );
-  const setMode = renderer.slice(
-    renderer.indexOf("function setChatMode"),
-    renderer.indexOf("function setChatFamily"),
-  );
-  const syncRun = renderer.slice(
-    renderer.indexOf("function syncChatRunSession"),
-    renderer.indexOf("function prepareActiveChatSessionForSwitch"),
-  );
-  const hiddenRuntime = renderer.slice(
-    renderer.indexOf("async function executeHiddenAgentRuntime"),
-    renderer.indexOf("function sendHiddenAgentRuntime"),
-  );
+  const openMenu = rendererDefinitions("openChatModeMenu");
+  const toggleMenu = rendererDefinitions("toggleChatModeMenu");
+  const setMode = rendererDefinitions("setChatMode");
+  const syncRun = rendererDefinitions("syncChatRunSession");
+  const hiddenRuntime = rendererDefinitions("executeHiddenAgentRuntime");
   const sendStart = renderer.indexOf("async function sendMessageWithAgentRuntime");
   const sendRuntime = renderer.slice(
     sendStart,
@@ -677,5 +662,5 @@ test("chat mode picker stays usable during a reply and only the next user turn u
   assert.match(hiddenRuntime, /ensureChatMemorySessionId\(runSession\)/);
   assert.match(renderer, /modeLabel\(liveRun\?\.mode \|\| appState\.chatMode\)/);
   assert.match(renderer, /from "\.\/features\/history\/chat-memory-session\.js"/);
-  assert.doesNotMatch(renderer.slice(renderer.indexOf("function createChatSession"), renderer.indexOf("function memoryRecord")), /ensureChatMemorySessionId/);
+  assert.doesNotMatch(rendererDefinitions("createChatSession"), /ensureChatMemorySessionId/);
 });

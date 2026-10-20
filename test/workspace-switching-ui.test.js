@@ -1,6 +1,6 @@
 "use strict";
 
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -8,30 +8,14 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const source = rendererSource();
-const start = source.indexOf("async function loadWorkspace(folder)");
-const end = source.indexOf("\nasync function restoreLastWorkspace()", start);
-const loadWorkspaceDefinition = source.slice(start, end);
-const projectActivationStart = source.indexOf("async function activateProjectWorkspace(folder)");
-const projectActivationEnd = source.indexOf("\nasync function createProject", projectActivationStart);
-const projectActivationDefinition = source.slice(projectActivationStart, projectActivationEnd);
-const treeStart = source.indexOf("const treeRenderGenerations = new WeakMap();");
-const treeEnd = source.indexOf("\nfunction clearTreeDropTargets", treeStart);
-const renderTreeDefinition = source.slice(treeStart, treeEnd);
-const dirMapStart = source.indexOf("async function refreshDirMap()");
-const dirMapEnd = source.indexOf("\nfunction relativePathFromRoot", dirMapStart);
-const refreshDirMapDefinition = source.slice(dirMapStart, dirMapEnd);
-const projectProfileStart = source.indexOf("async function loadProjectProfile()");
-const projectProfileEnd = source.indexOf("\nconst GENERAL_SETTINGS_STORAGE_KEY", projectProfileStart);
-const projectProfileDefinitions = source.slice(projectProfileStart, projectProfileEnd);
-const identitySettingsStart = source.indexOf("async function loadIdentitySettings()");
-const identitySettingsEnd = source.indexOf("\nasync function createIdentityFromSettings", identitySettingsStart);
-const identitySettingsDefinition = source.slice(identitySettingsStart, identitySettingsEnd);
-const engagementAccountsStart = source.indexOf("function collectEngagementAccountSnapshots()");
-const engagementAccountsEnd = source.indexOf("\nasync function handleCredentialAction", engagementAccountsStart);
-const engagementAccountsDefinition = source.slice(engagementAccountsStart, engagementAccountsEnd);
-const guidanceStart = source.indexOf("async function refreshCustomSkillCatalog()");
-const guidanceEnd = source.indexOf("\nasync function loadAuthoritySettings", guidanceStart);
-const guidanceDefinitions = source.slice(guidanceStart, guidanceEnd);
+const loadWorkspaceDefinition = rendererDefinitions("loadWorkspace");
+const projectActivationDefinition = rendererDefinitions("activateProjectWorkspace");
+const renderTreeDefinition = rendererDefinitions("treeRenderGenerations", "renderTree");
+const refreshDirMapDefinition = rendererDefinitions("refreshDirMap");
+const projectProfileDefinitions = rendererDefinitions("loadProjectProfile", "saveProjectProfile");
+const identitySettingsDefinition = rendererDefinitions("loadIdentitySettings");
+const engagementAccountsDefinition = rendererDefinitions("collectEngagementAccountSnapshots", "saveEngagementAccounts");
+const guidanceDefinitions = rendererDefinitions("refreshCustomSkillCatalog", "loadGuidanceContext", "loadGuidanceSettings");
 const deferred = () => {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
@@ -544,7 +528,7 @@ test("a pending autosave keeps its original workspace and form snapshot after a 
   const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
   const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
   vm.createContext(withAppState(context));
-  vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}`, context);
+  vm.runInContext(`${rendererDefinitions("queueProjectProfileAutosave", "scheduleProjectProfileAutosave", "isCurrentProjectProfileAutosave", "flushProjectProfileAutosave")}\n${projectProfileDefinitions}`, context);
 
   context.scheduleProjectProfileAutosave();
   context.rootPath = "G:/B";
@@ -608,7 +592,7 @@ for (const rejectedOperation of ["credentialSave", "projectProfileSave"]) {
     const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
     const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
     vm.createContext(withAppState(context));
-    vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}\n${engagementAccountsDefinition}`, context);
+    vm.runInContext(`${rendererDefinitions("queueProjectProfileAutosave", "scheduleProjectProfileAutosave", "isCurrentProjectProfileAutosave", "flushProjectProfileAutosave")}\n${projectProfileDefinitions}\n${engagementAccountsDefinition}`, context);
 
     context.scheduleProjectProfileAutosave();
     await context.flushProjectProfileAutosave();
@@ -659,7 +643,7 @@ test("a project B autosave queued during project A's save still runs afterward",
   const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
   const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
   vm.createContext(withAppState(context));
-  vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}`, context);
+  vm.runInContext(`${rendererDefinitions("queueProjectProfileAutosave", "scheduleProjectProfileAutosave", "isCurrentProjectProfileAutosave", "flushProjectProfileAutosave")}\n${projectProfileDefinitions}`, context);
 
   context.scheduleProjectProfileAutosave();
   const savingA = context.flushProjectProfileAutosave();
@@ -724,7 +708,7 @@ test("an older A autosave cannot overwrite a newer manual save after switching A
   const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
   const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
   vm.createContext(withAppState(context));
-  vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}`, context);
+  vm.runInContext(`${rendererDefinitions("queueProjectProfileAutosave", "scheduleProjectProfileAutosave", "isCurrentProjectProfileAutosave", "flushProjectProfileAutosave")}\n${projectProfileDefinitions}`, context);
 
   context.scheduleProjectProfileAutosave();
   const savingOldA = context.flushProjectProfileAutosave();
@@ -790,7 +774,7 @@ test("autosave queue drains each workspace's latest snapshot across A to B to A"
   const autosaveStart = source.indexOf("function queueProjectProfileAutosave(");
   const autosaveEnd = source.indexOf("\nfunction setProjectSettingsTarget", autosaveStart);
   vm.createContext(withAppState(context));
-  vm.runInContext(`${source.slice(autosaveStart, autosaveEnd)}\n${projectProfileDefinitions}`, context);
+  vm.runInContext(`${rendererDefinitions("queueProjectProfileAutosave", "scheduleProjectProfileAutosave", "isCurrentProjectProfileAutosave", "flushProjectProfileAutosave")}\n${projectProfileDefinitions}`, context);
 
   context.scheduleProjectProfileAutosave();
   const savingOldA = context.flushProjectProfileAutosave();

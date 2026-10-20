@@ -1,6 +1,6 @@
 "use strict";
 
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -8,9 +8,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const source = rendererSource();
-const webcloneStart = source.indexOf("async function openWebCloneFile(relativePath)");
-const webcloneEnd = source.indexOf("\nasync function buildWebClone", webcloneStart);
-const webcloneFunctions = source.slice(webcloneStart, webcloneEnd);
+const webcloneFunctions = rendererDefinitions("openWebCloneFile", "loadWebCloneManifest");
 const deferred = () => {
   let resolve;
   const promise = new Promise(done => { resolve = done; });

@@ -1,5 +1,5 @@
 "use strict";
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -85,7 +85,7 @@ test("saved completed imports retain the expandable chat names after sanitizatio
   context.stripFailedToolCardStubs = () => {};
   context.pruneEmptyWorkFolds = () => {};
   context.redactThinkingDisclosures = () => {};
-  vm.runInContext(renderer.slice(renderer.indexOf("function sanitizePersistedChatHtml("), renderer.indexOf("function normalizePersistedChatSession(")), context);
+  vm.runInContext(rendererDefinitions("sanitizePersistedChatHtml"), context);
   const html = context.sanitizePersistedChatHtml(run.container.innerHTML);
   run.container.innerHTML = html;
   context.hydrateContextCheckpointNotices(run.container);
