@@ -5,7 +5,8 @@ import { turnWorkFold, workFoldBody } from "./chat-work-fold.js";
 import { chatRunContainer, syncChatRunSession, activeChatRuns } from "./chat-run-state.js";
 import { modeLabel } from "./chat-mode.js";
 import { updateContextUsage } from "./context-usage.js";
-import { setAgentStatus, scrollMessages, updateSendBtn } from "../../bootstrap.js";
+import { updateSendBtn } from "../../bootstrap.js";
+import { setAgentStatus, scrollMessages } from "./chat-messages.js";
 
 export const CONTEXT_SUMMARIZING_NOTICE = "Chat context being summarized...";
 export const CONTEXT_SUMMARIZED_NOTICE = "Chat context summarized";

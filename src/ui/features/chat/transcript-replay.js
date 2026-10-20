@@ -8,11 +8,12 @@ import {
   createThinkingFold, absorbFileRow, isEmptyAssistantReply, restackFileRows,
 } from "./turn-structure.js";
 import {
-  renderMarkdown, attachAssistantCopyButton, isAgentTerminalTool, commandToolFromHistoryCall,
-  createCommandTimelineRow, syncChatStickyMask, createSubagentRunCard, toolActionName,
-  createToolCard, setToolCardStatus, agentCommandContextForTool, agentTerminalCommandForTool,
-  renderCommandTimelineLabel, wireSubagentRunCard, setSubagentCardState,
+  isAgentTerminalTool, commandToolFromHistoryCall, createCommandTimelineRow,
+  createSubagentRunCard, toolActionName, createToolCard, setToolCardStatus,
+  agentCommandContextForTool, agentTerminalCommandForTool, renderCommandTimelineLabel,
+  wireSubagentRunCard, setSubagentCardState,
 } from "../../bootstrap.js";
+import { renderMarkdown, attachAssistantCopyButton, syncChatStickyMask } from "./chat-messages.js";
 import { syncChatEmptyState, activeChatSession } from "./chat-sessions.js";
 import {
   captureChatTranscript, thinkingElapsedMs, normalizeUiTranscript,

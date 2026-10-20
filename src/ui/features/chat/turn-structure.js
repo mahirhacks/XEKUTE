@@ -3,9 +3,10 @@ import {
   promoteFinalAnswer, setWorkFoldExpanded, unwrapWorkFold,
 } from "./chat-work-fold.js";
 import {
-  renderMarkdown, streamingNodeLive, toolTargetBasename, splitToolStatusLabel,
-  renderToolStatusLabel, hydrateToolStatusLabels,
+  streamingNodeLive, toolTargetBasename, splitToolStatusLabel, renderToolStatusLabel,
+  hydrateToolStatusLabels,
 } from "../../bootstrap.js";
+import { renderMarkdown } from "./chat-messages.js";
 import {
   pruneEmptyWorkFolds, completedToolLabelFromRunning, stripFailedToolCardStubs,
 } from "./chat-persistence.js";

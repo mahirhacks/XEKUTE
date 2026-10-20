@@ -21,12 +21,14 @@ import {
   restoreHistorySubagentCards, captureSessionTranscript,
 } from "./transcript-replay.js";
 import {
-  resizeChatInput, resetChatInput, attachAssistantCopyButton, syncChatStickyMask, scrollMessages,
-  hideChatErrorToast, clearComposerTaskList, renderComposerTaskList,
+  resizeChatInput, resetChatInput, clearComposerTaskList, renderComposerTaskList,
   syncComposerQuestionsForActiveSession, setSelectedSlashCommand, ensureVisibleDelegatedPrompt,
   scheduleSubagentResultDrain, migrateLegacyChatInputs, updateSendBtn,
   recoverPendingSubagentResults,
 } from "../../bootstrap.js";
+import {
+  attachAssistantCopyButton, syncChatStickyMask, scrollMessages, hideChatErrorToast,
+} from "./chat-messages.js";
 import { renderMemorySaveBanner, updateContextUsage } from "./context-usage.js";
 import {
   CHAT_MODE_KEY, CHAT_FAMILY_KEY, CHAT_FAMILIES, canonicalChatMode, syncChatModeUi,

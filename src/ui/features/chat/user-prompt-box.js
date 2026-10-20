@@ -1,7 +1,7 @@
 import { messages } from "../../core/dom-refs.js";
 import { validPromptImages } from "./image-attachments.js";
 import { appendFileTagText } from "./file-tags.js";
-import { syncChatStickyMask } from "../../bootstrap.js";
+import { syncChatStickyMask } from "./chat-messages.js";
 
 export function syncUserPromptDisclosure(box) {
   const content = box?.querySelector(".chat-box-content.user-prompt-preview");
