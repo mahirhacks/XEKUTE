@@ -20,6 +20,7 @@ const RENDERER_FILES = [
   "features/chat/chat-history-popover.js",
   "features/chat/chat-mode.js",
   "features/chat/context-usage.js",
+  "features/chat/context-checkpoints.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so

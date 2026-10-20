@@ -3,9 +3,10 @@ import { messages, chatInput } from "../../core/dom-refs.js";
 import {
   subagentCardBlocksParent, setAgentStatus, syncSubagentOrchestrationWaitStatus, updateSendBtn,
   chatSessionIdForRuntimeId, ensureParentContinuationRun, drainPendingBackgroundWaitEvents,
-  hydrateContextCheckpointNotices, commandCompletionForRow, updateCommandTimelineRow,
-  stopCommandTimelineTicker, coalesceDelegatedAssistantReplyFragments,
+  commandCompletionForRow, updateCommandTimelineRow, stopCommandTimelineTicker,
+  coalesceDelegatedAssistantReplyFragments,
 } from "../../bootstrap.js";
+import { hydrateContextCheckpointNotices } from "./context-checkpoints.js";
 import { modeLabel } from "./chat-mode.js";
 import { renderChatSessionSelect, activeChatSession } from "./chat-sessions.js";
 import {

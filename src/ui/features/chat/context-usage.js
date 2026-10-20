@@ -3,8 +3,9 @@ import { appState } from "../../core/app-state.js";
 import {
   getActiveFileContext, isOpenRouterProvider, contextPreferenceFor, resolveModelContextPlan,
   refreshModelContextCapacity, AUTO_CONTEXT, AUTO_CONTEXT_ESTIMATE, getModelSettings,
-  CONTEXT_USAGE_ROW_LABELS, setContextCheckpointUi, checkpointNoticeHost, closeModelMenu,
+  CONTEXT_USAGE_ROW_LABELS, closeModelMenu,
 } from "../../bootstrap.js";
+import { setContextCheckpointUi, checkpointNoticeHost } from "./context-checkpoints.js";
 import { isInternalRuntimeInputMessage } from "./turn-structure.js";
 import { activeChatSession, syncActiveChatSession } from "./chat-sessions.js";
 import { memoryRecord, schedulePersistChatSessions } from "./chat-persistence.js";
