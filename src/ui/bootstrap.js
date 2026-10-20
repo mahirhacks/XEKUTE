@@ -4,9 +4,6 @@
 import "./core/runtime-modules.js";
 import { createBrowserWorkspace } from "./features/browser/browser-workspace.js";
 import { ensureChatMemorySessionId } from "./features/history/chat-memory-session.js";
-import {
-  MAX_CHAT_IMAGES, isSupportedImageFile, mergeImageAttachments, prepareImageAttachment,
-} from "./features/chat/image-attachments.js";
 import { openImageLightbox } from "./features/chat/image-lightbox.js";
 import { createChatScroller } from "./features/chat/chat-scroll.js";
 import { toggleWorkFold } from "./features/chat/chat-work-fold.js";
@@ -26,11 +23,11 @@ import {
   editorTabContextMenu, editorPathBar, editorPathLabel, editorBody, editorEmpty, editorView,
   editorError, monacoContainer, markdownPreview, settingsEditorToolbar, settingsUIView,
   settingsViewJson, settingsViewUi, proxyListenerStatus, proxyCaPath, btnShowProxyCa, messages,
-  chatInput, sendBtn, attachImageBtn, attachImageInput, composerAttachmentsEl, chatModeToggle,
-  chatModeButton, chatModeMenu, appMenu, helpGuideOverlay, helpGuideClose, menuRunCode,
-  commandCenter, quickOverlay, quickPanel, quickIcon, quickInput, quickMeta, quickResults,
-  quickSearchHelp, quickSearchAssist, quickSearchSuggestions, quickSearchChips, chatHeader,
-  btnTopFileTree, btnTopTerminal, btnTopChat, btnTopSettings, btnNotifications, notificationCount,
+  chatInput, sendBtn, attachImageBtn, attachImageInput, chatModeToggle, chatModeButton,
+  chatModeMenu, appMenu, helpGuideOverlay, helpGuideClose, menuRunCode, commandCenter,
+  quickOverlay, quickPanel, quickIcon, quickInput, quickMeta, quickResults, quickSearchHelp,
+  quickSearchAssist, quickSearchSuggestions, quickSearchChips, chatHeader, btnTopFileTree,
+  btnTopTerminal, btnTopChat, btnTopSettings, btnNotifications, notificationCount,
   notificationPanel, notificationList, notificationClear, btnWindowMinimize, btnWindowMaximize,
   btnWindowClose, chatSessionSelect, btnChatNew, btnChatDelete, btnChatHistory,
   chatHistoryPopover, chatHistoryBody, chatHistorySearch, btnChatMore, btnChatCollapse,
@@ -211,6 +208,9 @@ import {
   submitLiveChatInput, submitChatComposer, submitChatComposerFromInput, updateSendBtn,
   onChatInputChange,
 } from "./features/chat/composer-input.js";
+import {
+  addComposerImageFiles, sentImageOriginals, takeComposerImages, imageFilesFrom, hasDraggedFiles,
+} from "./features/chat/composer-images.js";
 
 
 const xekuteStore = globalThis.XekuteCore.createAppStore();
@@ -13835,64 +13835,10 @@ document.addEventListener("keydown", async (e) => {
 
 // ── Image attachments (clip button) ───────────────────────────────────────
 
-function renderComposerAttachments() {
-  if (!composerAttachmentsEl) return;
-  composerAttachmentsEl.replaceChildren();
-  composerAttachmentsEl.hidden = !appState.composerImages.length;
-  for (const image of appState.composerImages) {
-    const item = document.createElement("div");
-    item.className = "composer-attachment";
-    item.title = image.name;
-    const img = document.createElement("img");
-    img.src = image.thumbUrl;
-    img.alt = image.name;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "composer-attachment-remove";
-    remove.title = "Remove image";
-    remove.setAttribute("aria-label", `Remove ${image.name}`);
-    remove.innerHTML = '<span class="codicon codicon-close" aria-hidden="true"></span>';
-    remove.addEventListener("click", () => {
-      appState.composerImages = appState.composerImages.filter((item) => item.id !== image.id);
-      renderComposerAttachments();
-      updateSendBtn();
-    });
-    item.append(img, remove);
-    composerAttachmentsEl.appendChild(item);
-  }
-  if (attachImageBtn) attachImageBtn.disabled = appState.composerImages.length >= MAX_CHAT_IMAGES;
-}
 
-// Files past the tenth image, unsupported types and unreadable images are
-// skipped silently.
-async function addComposerImageFiles(files = []) {
-  const room = Math.max(0, MAX_CHAT_IMAGES - appState.composerImages.length);
-  const prepared = [];
-  for (const file of [...files].filter(isSupportedImageFile).slice(0, room)) {
-    try { prepared.push(await prepareImageAttachment(file)); } catch { /* skipped */ }
-  }
-  appState.composerImages = mergeImageAttachments(appState.composerImages, prepared).list;
-  renderComposerAttachments();
-  updateSendBtn();
-  chatInput?.focus();
-}
 
-// Full-resolution copies of images sent in this window, keyed by their saved
-// preview, so the zoomed view is sharp until the chat is reloaded.
-const sentImageOriginals = new Map();
 
-function rememberSentImageOriginals(images = []) {
-  for (const image of images) sentImageOriginals.set(image.thumbUrl, image.dataUrl);
-  while (sentImageOriginals.size > 100) sentImageOriginals.delete(sentImageOriginals.keys().next().value);
-}
 
-function takeComposerImages() {
-  const taken = appState.composerImages;
-  appState.composerImages = [];
-  renderComposerAttachments();
-  rememberSentImageOriginals(taken);
-  return taken;
-}
 
 messages?.addEventListener("click", (event) => {
   const img = event.target.closest?.(".user-prompt-images img");
@@ -13919,11 +13865,6 @@ messages?.addEventListener("click", (event) => {
 
 attachImageBtn?.addEventListener("click", () => attachImageInput?.click());
 
-// Pasted or dropped image files attach like the clip button. Text pastes and
-// in-app drags (file tree rows) carry no image files and are left alone.
-function imageFilesFrom(dataTransfer) {
-  return [...(dataTransfer?.files || [])].filter(isSupportedImageFile);
-}
 
 chatInput?.addEventListener("paste", (event) => {
   const images = imageFilesFrom(event.clipboardData);
@@ -13932,7 +13873,6 @@ chatInput?.addEventListener("paste", (event) => {
   void addComposerImageFiles(images);
 });
 
-const hasDraggedFiles = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
 composerEl?.addEventListener("dragover", (event) => {
   if (!hasDraggedFiles(event)) return;
   event.preventDefault();
