@@ -11,6 +11,7 @@ const RENDERER_FILES = [
   "core/runtime-globals.js",
   "core/text-format.js",
   "core/workspace-paths.js",
+  "features/chat/chat-persistence.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
