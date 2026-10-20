@@ -465,6 +465,12 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
       selectedId = id; syncInputShield(); return copy(record.tab);
     },
     layout,
+    async snapshot(id) {
+      const contents = recordFor(id).view.webContents;
+      if (contents.isDestroyed()) throw fail("BROWSER_TAB_UNAVAILABLE", "The browser tab is no longer available.");
+      const image = await contents.capturePage();
+      return image.isEmpty() ? null : image.toDataURL();
+    },
     hide() { for (const record of tabs.values()) record.view.setVisible(false); inputShield?.setVisible(false); },
     list: () => [...tabs.values()].map(record => copy(record.tab)),
     getContents: id => recordFor(id).view.webContents,

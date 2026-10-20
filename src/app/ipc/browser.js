@@ -71,6 +71,12 @@ function registerBrowserIpc({ ipcMain, container, getMainWindow }) {
       return { ok: true, tab };
     }),
     "browser:hide": () => admit(() => { container.hideNativeBrowser?.(); return { ok: true }; }),
+    "browser:capture": payload => admit(async () => {
+      const service = container.nativeBrowser();
+      requireProject(service, workspaceOf(payload));
+      if (!service.list().some(tab => tab.id === payload.tabId)) throw Object.assign(new Error("The browser tab is no longer available."), { code: "BROWSER_TAB_UNAVAILABLE" });
+      return { ok: true, dataUrl: await service.snapshot(payload.tabId) };
+    }),
   };
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, async (event, payload) => {
     if (!trusted(event)) return fail("UNTRUSTED_RENDERER", "Only the application window can control browser tabs.");

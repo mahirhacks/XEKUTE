@@ -34,6 +34,7 @@ function setup() {
     close: async id => tabs.splice(tabs.findIndex(tab => tab.id === id), 1),
     layout: (id, bounds) => { calls.push(["layout", id, bounds]); return tabs.find(tab => tab.id === id); },
     select: id => calls.push(["select", id]), hide: () => calls.push(["hide"]),
+    snapshot: async id => { calls.push(["snapshot", id]); return tabs.some(tab => tab.id === id) ? "data:image/png;base64,ZnJvemVu" : null; },
   };
   const container = {
     activateNativeBrowser: async (workspace, purpose) => {
@@ -93,6 +94,12 @@ test("browser IPC routes bounded layout, explicit ownership, history and project
   assert.deepEqual(host.calls.find(call => call[0] === "layout"), ["layout", "tab-1", bounds]);
   assert.equal((await host.request("browser:command", { ...common, assessmentPath: host.other, command: "reload" })).error.code, "BROWSER_PROJECT_MISMATCH");
   assert.equal((await host.request("browser:hide", {})).ok, true);
+  const snap = await host.request("browser:capture", { ...common });
+  assert.equal(snap.ok, true);
+  assert.match(snap.dataUrl, /^data:image\/png/);
+  assert.deepEqual(host.calls.find(call => call[0] === "snapshot"), ["snapshot", "tab-1"]);
+  assert.equal((await host.request("browser:capture", { assessmentPath: host.other, tabId: "tab-1" })).error.code, "BROWSER_PROJECT_MISMATCH");
+  assert.equal((await host.request("browser:capture", { ...common, tabId: "ghost" })).error.code, "BROWSER_TAB_UNAVAILABLE");
   assert.equal((await host.request("browser:command", { ...common, command: "close" })).tabs.length, 0);
 });
 

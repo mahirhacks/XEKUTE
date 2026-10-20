@@ -93,6 +93,8 @@
 .browser-status.error { background:#2a1c1c; color:#f0b4b4; }
 .browser-status.error::before { content:"\ea87"; color:var(--browser-danger); }
 .browser-viewport { position:relative; flex:1; min-height:0; min-width:0; overflow:hidden; background:var(--browser-bg); }
+.browser-freeze { position:absolute; inset:0; z-index:1; width:100%; height:100%; object-fit:fill; pointer-events:none; }
+.browser-freeze[hidden] { display:none; }
 .browser-workspace[data-control="agent"] .browser-viewport { box-shadow:inset 0 2px 0 var(--browser-agent); }
 .browser-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; width:100%; height:100%; padding:24px; text-align:center; color:var(--browser-muted); font-size:12.5px; }
 .browser-empty strong { color:var(--browser-text); font-size:14px; font-weight:600; }

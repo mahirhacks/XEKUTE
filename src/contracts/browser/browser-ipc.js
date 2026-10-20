@@ -22,6 +22,7 @@ const schemas = {
     width: { type: "integer", minimum: 1, maximum: 100000 }, height: { type: "integer", minimum: 1, maximum: 100000 },
   }, ["x", "y", "width", "height"]) }, ["assessmentPath", "tabId", "bounds", "visible"]),
   "browser:hide": object({}, []),
+  "browser:capture": object({ ...project, tabId: id }, ["assessmentPath", "tabId"]),
 };
 let ajv = null;
 const validators = new Map();

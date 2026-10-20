@@ -114,6 +114,7 @@ const api = {
   browserCommand: (payload) => ipcRenderer.invoke("browser:command", payload),
   browserLayout: (payload) => ipcRenderer.invoke("browser:layout", payload),
   browserHide: () => ipcRenderer.invoke("browser:hide", {}),
+  browserCapture: (payload) => ipcRenderer.invoke("browser:capture", payload),
   onBrowserEvent: (cb) => {
     const listener = (_event, payload) => cb(payload ?? {});
     ipcRenderer.on("browser:event", listener);

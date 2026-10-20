@@ -179,13 +179,13 @@
 }
 .agent-questions-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   min-height: 42px;
   padding: 10px 12px 8px;
   border: 0;
 }
-.agent-questions-icon { flex: 0 0 auto; color: #d6d6d6; font-size: 14px; }
+.agent-questions-icon { flex: 0 0 auto; margin-top: 1px; color: #d6d6d6; font-size: 14px; }
 .agent-questions-icon-image { width: 16px; height: 16px; object-fit: contain; }
 .agent-questions-title {
   flex: 1;
