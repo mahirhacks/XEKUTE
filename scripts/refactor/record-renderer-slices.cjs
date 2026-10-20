@@ -18,9 +18,12 @@ String.prototype.slice = function recordedSlice(start, end) {
   "use strict";
   const result = slice.call(this, start, end);
   if (typeof this === "string" && this.length > 100000 && variants.has(this)) {
-    const frame = new Error().stack.split("\n").slice(2).find(line => line.includes(testRoot));
-    const match = frame && frame.match(/\(?([A-Za-z]:[^:]+|\/[^:]+):(\d+):(\d+)\)?$/);
-    if (match) records.push({ file: path.relative(process.cwd(), match[1]).replace(/\\/g, "/"), line: Number(match[2]), column: Number(match[3]), text: result });
+    const frames = new Error().stack.split("\n").slice(2)
+      .filter(line => line.includes(testRoot))
+      .map(line => line.match(/\(?([A-Za-z]:[^:]+|\/[^:]+):(\d+):(\d+)\)?$/))
+      .filter(Boolean)
+      .map(match => ({ file: path.relative(process.cwd(), match[1]).replace(/\\/g, "/"), line: Number(match[2]), column: Number(match[3]) }));
+    if (frames.length) records.push({ ...frames[0], caller: frames[1] || null, text: result });
   }
   return result;
 };

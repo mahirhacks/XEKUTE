@@ -7,7 +7,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
 const renderer = rendererSource();
-const notices = renderer.slice(renderer.indexOf("const CONTEXT_SUMMARIZING_NOTICE ="), renderer.indexOf("function setContextCheckpointUi("));
+const notices = rendererDefinitions("CONTEXT_SUMMARIZING_NOTICE", "CONTEXT_SUMMARIZED_NOTICE", "CONTEXT_SUMMARIZATION_INTERRUPTED_NOTICE", "pendingContextCheckpointNotice", "lastAgentRunChunk", "checkpointNoticeHost", "ensureContextCheckpointNotice", "setContextCheckpointNoticeText", "hydrateContextCheckpointNotices", "finishContextCheckpointNotice", "applyContextCheckpointUi", "applyChatReferenceImportUi");
 
 function fixture() {
   const dom = new JSDOM('<div id="messages"><div id="destination"></div><div id="other"></div></div>');

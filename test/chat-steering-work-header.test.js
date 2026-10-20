@@ -1,5 +1,5 @@
 "use strict";
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -7,12 +7,6 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
 
-const source = rendererSource();
-function definition(start, end) {
-  const from = source.indexOf(start);
-  assert.ok(from >= 0, `missing ${start}`);
-  return source.slice(from, source.indexOf(end, from));
-}
 
 async function renderer(html = '<div id="messages"></div>') {
   const dom = new JSDOM(html);
@@ -40,18 +34,14 @@ async function renderer(html = '<div id="messages"></div>') {
     syncChatStickyMask() {}, syncChatEmptyState() {}, scrollMessages() {},
   };
   vm.createContext(withAppState(context));
-  for (const [start, end] of [
-    ["function isAgentResponseChild(", "\nfunction markActivityNode("],
-    ["function turnHasWorkVerdict(", "\nfunction wrapAssistantInRunChunk("],
-    ["function wrapAssistantInRunChunk(", "\nfunction promoteCheckpointNotices("],
-    ["function createChatExchange(", "\n// Older saved chats stored every turn directly under #messages."],
-    ["function createRestoredWorkFold(", "\nfunction createTranscriptChatReply("],
-    ["function replyEndsWithStopped(", "\nfunction isDurationWorkLabel("],
-    ["function addUserMessage(", "\nconst CHAT_ERROR_TOAST_MS"],
-    ["function renderTranscriptRun(", "\nfunction renderStructuredChatTranscript("],
-    ["function markSteeringAnswer(", "\nfunction appendStoppedPlainText("],
-    ["function isEmptyAssistantReply(", "\nfunction lastReusableExploredFold("],
-  ]) vm.runInContext(definition(start, end), context);
+  vm.runInContext(rendererDefinitions(
+    "isAgentResponseChild", "ensureAgentResponseHost", "createAgentResponseHost",
+    "startAssistantSteeringSegment", "turnHasWorkVerdict", "ensureAssistantWorkFold",
+    "wrapAssistantInRunChunk", "createChatExchange", "chatExchangeBody", "currentChatExchange",
+    "appendChatTurn", "appendSteeringUserTurn", "createRestoredWorkFold", "replyEndsWithStopped",
+    "markSteeringAnswer", "appendStoppedPlainText", "addUserMessage", "renderTranscriptRun",
+    "isEmptyAssistantReply",
+  ), context);
   return { context, document, messages: context.messages };
 }
 
@@ -173,7 +163,7 @@ test("a saved steering segment loses the fold an older save gave it and keeps it
   const { context, document } = await renderer('<div id="messages"></div>');
   context.coalesceAdjacentReplyRuns = () => {};
   context.pruneEmptyWorkFolds = () => {};
-  vm.runInContext(definition("function normalizeAssistantTurns(", "\nfunction createFoldCaret("), context);
+  vm.runInContext(rendererDefinitions("normalizeAssistantTurns"), context);
   const turn = document.createElement("div");
   turn.className = "chat-turn assistant";
   turn.dataset.steeringSegment = "true";

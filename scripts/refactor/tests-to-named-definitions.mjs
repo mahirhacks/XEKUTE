@@ -15,11 +15,22 @@ const acorn = require("acorn");
 const { rendererDefinitions } = require("../../test/helpers/renderer-source.js");
 
 const records = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const group = list => {
+  const map = new Map();
+  for (const record of list) {
+    const key = `${record.file}:${record.line}:${record.column}`;
+    if (!map.has(key)) map.set(key, { ...record, texts: new Set(), records: [] });
+    map.get(key).texts.add(record.text);
+    map.get(key).records.push(record);
+  }
+  return map;
+};
+// A slice inside a shared helper (definition(start, end)) takes many spans;
+// its callers each take one, so those call expressions are rewritten instead.
 const sites = new Map();
-for (const record of records) {
-  const key = `${record.file}:${record.line}:${record.column}`;
-  if (!sites.has(key)) sites.set(key, { ...record, texts: new Set() });
-  sites.get(key).texts.add(record.text);
+for (const [key, site] of group(records)) {
+  if (site.texts.size === 1 || site.records.some(record => !record.caller)) sites.set(key, site);
+  else for (const [callerKey, callerSite] of group(site.records.map(record => ({ ...record.caller, text: record.text, helper: true })))) sites.set(callerKey, callerSite);
 }
 
 function declarationNames(text) {
@@ -37,11 +48,17 @@ function declarationNames(text) {
   }
   if (!names.length) return null;
   try {
-    const rebuilt = rendererDefinitions(...names).replace(/\r\n/g, "\n").replace(/\s+/g, " ").trim();
-    return rebuilt === text.replace(/\r\n/g, "\n").replace(/\s+/g, " ").trim() ? names : null;
+    return normalized(rendererDefinitions(...names)) === normalized(text) ? names : null;
   } catch {
     return null;
   }
+}
+
+function normalized(text) {
+  const comments = [];
+  acorn.parse(text, { ecmaVersion: "latest", sourceType: "script", ranges: true, onComment: (block, value, start, end) => comments.push([start, end]) });
+  for (const [start, end] of comments.reverse()) text = text.slice(0, start) + text.slice(end);
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function walk(node, visit) {
@@ -73,7 +90,8 @@ for (const [file, fileSites] of byFile) {
   for (const site of fileSites) {
     let call = null;
     walk(ast, node => {
-      if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression" || node.callee.property.name !== "slice") return;
+      if (node.type !== "CallExpression") return;
+      if (!site.helper && (node.callee.type !== "MemberExpression" || node.callee.property.name !== "slice")) return;
       const { start, end } = node.loc;
       const inside = (site.line > start.line || (site.line === start.line && site.column - 1 >= start.column))
         && (site.line < end.line || (site.line === end.line && site.column - 1 <= end.column));

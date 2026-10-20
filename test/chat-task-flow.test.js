@@ -215,7 +215,7 @@ test("running chats stay navigable and signal background completion per tab", ()
   const loadSession = rendererDefinitions("loadChatSession", "allKnownChatSessions", "forkRootSessionId", "forkBaseTitle", "nextForkTitle", "cloneSessionValue", "forkChatSession");
   const scrollStart = renderer.indexOf("function scrollChatSessionIntoView");
   const scrollEnd = renderer.indexOf("chatSessionSelect?.addEventListener", scrollStart);
-  const scrollSession = renderer.slice(scrollStart, scrollEnd);
+  const scrollSession = rendererDefinitions("scrollChatSessionIntoView");
 
   assert.match(renderer, /const activeChatRuns = new Map\(\)/);
   assert.match(renderer, /function activeSessionRun\(\)/);
@@ -416,7 +416,7 @@ test("V3 checkpointing never hides or removes visible chat history", () => {
   const renderer = rendererSource();
   const renderStart = renderer.indexOf("function renderCanonicalChatHistory");
   const renderEnd = renderer.indexOf("function ensureChatEmptyState", renderStart);
-  const renderBody = renderer.slice(renderStart, renderEnd);
+  const renderBody = rendererDefinitions("renderCanonicalChatHistory", "captureSessionTranscript", "toolFromTranscriptItem", "applyThinkingRecord", "createRestoredWorkFold", "createTranscriptChatReply", "createToolCardFromRecord", "createCommandFromRecord", "restoreHistoryCommandContexts", "createFileStackFromRecord", "appendTranscriptEvent", "replyEndsWithStopped", "markSteeringAnswer", "appendStoppedPlainText", "isDurationWorkLabel", "commandResultFailed", "renderTranscriptRun", "renderStructuredChatTranscript", "restoreHistorySubagentCards", "hydrateSubagentRunCards");
 
   assert.match(renderBody, /for \(const message of sourceHistory\) renderMessage\(message, fragment\);/);
   assert.doesNotMatch(renderBody, /previousUserContent/);

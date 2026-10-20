@@ -1,4 +1,4 @@
-const { rendererSource } = require("./helpers/renderer-source.js");
+const { rendererSource, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -15,13 +15,6 @@ function functionBody(name, nextName) {
   return match[0];
 }
 
-function sourceBetween(startMarker, endMarker) {
-  const start = bootstrapSource.indexOf(startMarker);
-  const end = bootstrapSource.indexOf(endMarker, start + startMarker.length);
-  assert.ok(start >= 0, `Could not find ${startMarker}`);
-  assert.ok(end > start, `Could not find ${endMarker} after ${startMarker}`);
-  return bootstrapSource.slice(start, end);
-}
 
 test("assistant exchange footer is rebuilt only after the entire AI chunk is idle", () => {
   const body = functionBody("attachAssistantCopyButton", "toolIconClass");
@@ -36,7 +29,7 @@ test("assistant exchange footer is rebuilt only after the entire AI chunk is idl
 });
 
 test("starting an assistant continuation clears prior exchange metadata", () => {
-  const body = sourceBetween("function createAssistantTurn(", "const SYSTEM_SKILL_SLASH_COMMANDS");
+  const body = rendererDefinitions("createAssistantTurn");
   const appendTurnAt = body.indexOf("appendChatTurn(turn, { container })");
   const removeFooterAt = body.indexOf('querySelectorAll(".assistant-reply-footer")');
 
@@ -56,7 +49,7 @@ test("assistant finalization settles the live run before adding exchange metadat
 });
 
 test("restored exchanges attach metadata after text and tool-only assistant turns", () => {
-  const body = sourceBetween("function renderCanonicalChatHistory(history = [])", "function hydrateSubagentRunCards");
+  const body = rendererDefinitions("renderCanonicalChatHistory", "captureSessionTranscript", "toolFromTranscriptItem", "applyThinkingRecord", "createRestoredWorkFold", "createTranscriptChatReply", "createToolCardFromRecord", "createCommandFromRecord", "restoreHistoryCommandContexts", "createFileStackFromRecord", "appendTranscriptEvent", "replyEndsWithStopped", "markSteeringAnswer", "appendStoppedPlainText", "isDurationWorkLabel", "commandResultFailed", "renderTranscriptRun", "renderStructuredChatTranscript", "restoreHistorySubagentCards");
   const renderLoopAt = body.indexOf("for (const message of sourceHistory)");
   const renderAllAt = body.indexOf("renderMessage(message, fragment)", renderLoopAt);
   const exchangePassAt = body.indexOf('fragment.querySelectorAll(".chat-exchange")');

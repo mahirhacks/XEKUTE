@@ -1,14 +1,12 @@
 "use strict";
 
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { JSDOM } = require("jsdom");
-const source = rendererSource();
-const definition = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 
 async function fileCollector(paths, activePath = "") {
   const tags = await import("../src/ui/features/chat/file-tags.js");
@@ -17,7 +15,7 @@ async function fileCollector(paths, activePath = "") {
     ToolParser: { parseProjectFiles: () => paths }, getActiveFileContext: () => ({ path: activePath }),
     readWorkspaceFile: async path => { reads.push(path); return { path, content: `Contents of ${path}` }; } };
   vm.createContext(withAppState(context));
-  vm.runInContext(definition("async function collectMentionedFiles(", "function renderMarkdown("), context);
+  vm.runInContext(rendererDefinitions("collectMentionedFiles"), context);
   return { collect: text => context.collectMentionedFiles(text), reads };
 }
 
@@ -59,7 +57,7 @@ async function composer(t) {
     availableSlashCommands: () => [{ name: "/report", description: "Write a report", group: "system-command" },
       { name: "/create-skill", description: "Create a skill", group: "system-command" }] };
   vm.createContext(withAppState(context));
-  vm.runInContext(definition("function closeSlashSuggestions()", "function refreshTerminalsForTags("), context);
+  vm.runInContext(rendererDefinitions("closeSlashSuggestions", "effectiveChatInputValue", "normalizeChatInputText", "fullChatInputEditorText", "chatInputEditorValue", "syncChatInputEmptyState", "renderChatInputEditorValue", "syncChatInputEditableState", "installChatInputEditorAdapter", "setChatInputCaretToEnd", "isChatInputCaretAtArgumentStart", "reconcileSelectedSlashCommandAfterEdit", "setSelectedSlashCommand", "clearSelectedSlashCommand", "slashQueryAtCaret", "chooseSlashSuggestion", "renderSlashSuggestions"), context);
   context.installChatInputEditorAdapter();
   function enter(text, offset) {
     input.value = text;

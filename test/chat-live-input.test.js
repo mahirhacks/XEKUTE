@@ -1,5 +1,5 @@
 "use strict";
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -9,7 +9,6 @@ const { JSDOM } = require("jsdom");
 const modulePromise = import("../src/ui/features/chat/live-input.js");
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 const source = rendererSource();
-function definition(start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 const receipt = (id, extra = {}) => ({ ok: true, encrypted: true, durable: true, messageId: id, status: "received", ...extra });
 
 test("compound receipt stays accepted until every destination checkpoint completes", async () => {
@@ -123,7 +122,7 @@ test("live input updates remove any legacy receipt label without interrupting th
  const dom = new JSDOM('<div id="messages"><div class="chat-turn user" data-source-message-id="input:arial"><span class="chat-input-status">Received · waiting for checkpoint</span></div></div>');
  const context = { activeChatRuns: new Map(), activeChatSessionId: "chat", messages: dom.window.document.querySelector("#messages") };
  vm.createContext(withAppState(context));
- vm.runInContext(definition("function paintLiveInputRecord(", "\nconst liveInputController"), context);
+ vm.runInContext(rendererDefinitions("paintLiveInputRecord"), context);
  const session = { id: "chat", history: [{ role: "user", source_message_id: "input:arial" }] };
  context.paintLiveInputRecord(session, { id: "input:arial", taskId: "task:report" });
  const turn = dom.window.document.querySelector(".chat-turn.user");
@@ -155,10 +154,10 @@ test("steering appears after prior assistant output and before the continuation 
   syncChatStickyMask: () => {}, syncChatEmptyState: () => {}, scrollMessages: () => {},
  };
  vm.createContext(withAppState(context));
- vm.runInContext(definition("function ensureAgentResponseHost(", "\nfunction markActivityNode("), context);
- vm.runInContext(definition("function createChatExchange(", "\nfunction currentChatExchange("), context);
- vm.runInContext(definition("function appendChatTurn(", "\n// Older saved chats stored every turn directly under #messages."), context);
- vm.runInContext(definition("function addUserMessage(", "\nconst CHAT_ERROR_TOAST_MS"), context);
+ vm.runInContext(rendererDefinitions("ensureAgentResponseHost", "createAgentResponseHost", "startAssistantSteeringSegment"), context);
+ vm.runInContext(rendererDefinitions("createChatExchange", "chatExchangeBody"), context);
+ vm.runInContext(rendererDefinitions("appendChatTurn", "appendSteeringUserTurn"), context);
+ vm.runInContext(rendererDefinitions("addUserMessage"), context);
  context.addUserMessage("also run an echo command", "input:steering");
  const children = [...body.children];
  assert.deepEqual(children.map((node) => node.className), ["chat-turn user", "agent-response-host", "chat-turn user", "agent-response-host agent-stream"]);
@@ -181,11 +180,11 @@ test("restored transcripts keep steering between earlier and later assistant out
   markSteeringAnswer: () => [],
  };
  vm.createContext(withAppState(context));
- vm.runInContext(definition("function ensureAgentResponseHost(", "\nfunction markActivityNode("), context);
- vm.runInContext(definition("function createChatExchange(", "\nfunction chatExchangeBody("), context);
- vm.runInContext(definition("function currentChatExchange(", "\nfunction appendChatTurn("), context);
- vm.runInContext(definition("function appendChatTurn(", "\n// Older saved chats stored every turn directly under #messages."), context);
- vm.runInContext(definition("function renderTranscriptRun(", "\nfunction renderStructuredChatTranscript("), context);
+ vm.runInContext(rendererDefinitions("ensureAgentResponseHost", "createAgentResponseHost", "startAssistantSteeringSegment"), context);
+ vm.runInContext(rendererDefinitions("createChatExchange"), context);
+ vm.runInContext(rendererDefinitions("currentChatExchange"), context);
+ vm.runInContext(rendererDefinitions("appendChatTurn", "appendSteeringUserTurn"), context);
+ vm.runInContext(rendererDefinitions("renderTranscriptRun"), context);
  context.renderTranscriptRun({ timeline: [
   { type: "user", message: "run three sleeps", task_id: "task:main" },
   { type: "assistant", events: [{ type: "chat", text: "Started the sleep commands" }] },
@@ -212,9 +211,9 @@ test("command wait status leaves its original segment after steering, and the pa
   sendMessageWithAgentRuntime: (input) => sent.push(input),
  };
  vm.createContext(withAppState(context));
- vm.runInContext(definition("function beginModelRunCommandWait(", "\nfunction commandWaitRunForProcess("), context);
- vm.runInContext(definition("function commandWaitRunForProcess(", "\nfunction absorbModelRunCommandResult("), context);
- vm.runInContext(definition("function absorbModelRunCommandResult(", "\nasync function handleBackgroundWaitEvent("), context);
+ vm.runInContext(rendererDefinitions("beginModelRunCommandWait"), context);
+ vm.runInContext(rendererDefinitions("commandWaitRunForProcess"), context);
+ vm.runInContext(rendererDefinitions("absorbModelRunCommandResult"), context);
  context.beginModelRunCommandWait(run, assistant, { commands: [{ processId: "process:1" }] });
  const originalLine = run.commandWaitLine;
  assert.equal(originalLine.parentElement, oldHost);
@@ -249,7 +248,7 @@ test("history keeps repeated steering prompts in the same task exchange", () => 
   syncChatStickyMask: () => {}, syncChatEmptyState: () => {},
  };
  vm.createContext(withAppState(context));
- vm.runInContext(definition("function renderCanonicalChatHistory(", "\nfunction captureSessionTranscript"), context);
+ vm.runInContext(rendererDefinitions("renderCanonicalChatHistory"), context);
  context.renderCanonicalChatHistory([
   { role: "user", id: "input:1", source_message_id: "input:1", task_id: "task:main", content: "also run echo" },
   { role: "user", id: "input:2", source_message_id: "input:2", task_id: "task:main", content: "also run echo" },
@@ -261,7 +260,7 @@ function uiFixture(controller, session) {
  const dom = new JSDOM('<div id="messages"></div><textarea></textarea>'); const input = dom.window.document.querySelector("textarea");
  const errors = []; const context = { liveInputController: controller, activeChatSessionId: session.id, rootPath: "G:/Xekute", chatInput: input, chatSendInFlight: new Set(),
   effectiveChatInputValue: () => input.value, addUserMessage: () => {}, addErrorMessage: (error) => errors.push(error), resetChatInput: () => {}, schedulePersistChatSessions: () => {}, updateSendBtn: () => {} };
- vm.createContext(withAppState(context)); vm.runInContext(definition('async function submitLiveChatInput(', '\nfunction submitChatComposer()'), context);
+ vm.createContext(withAppState(context)); vm.runInContext(rendererDefinitions("submitLiveChatInput"), context);
  return { submit: context.submitLiveChatInput, input, errors };
 }
 test("actual UI submission retains a failed composer draft and retries the same input", async () => {
@@ -279,7 +278,7 @@ test("actual UI does not clear a new draft when an earlier receipt arrives", asy
 test("actual composer Send/Enter send unless the control is showing Stop", () => {
  let sent = 0; let stopped = 0; let stopMode = false;
  const context = { sendMessageWithAgentRuntime: () => sent++, stopGeneration: () => stopped++, sendBtn: { classList: { contains: (name) => name === "stop" && stopMode } } };
- vm.createContext(withAppState(context)); vm.runInContext(definition('function submitChatComposer()', '\nfunction updateSendBtn()'), context);
+ vm.createContext(withAppState(context)); vm.runInContext(rendererDefinitions("submitChatComposer", "submitChatComposerFromInput"), context);
  context.submitChatComposer(); context.submitChatComposerFromInput(); assert.equal(sent, 2); assert.equal(stopped, 0);
  // A running chat with an empty composer shows Stop; Send and Enter then stop it.
  stopMode = true;
@@ -303,7 +302,7 @@ test("timeline normalization retains source input and task IDs across reload", a
 
 test("actual Stop requests only the selected task in its owning journal", () => {
  const cancellations = []; const aborts = []; const context = { rootPath: "G:/Xekute", window: { api: { agentCancelTask: (payload) => { cancellations.push(payload); return Promise.resolve({ ok: true }); }, abortChat: (payload) => aborts.push(payload) } }, reportChatHistoryWarning: () => {} };
- vm.createContext(withAppState(context)); vm.runInContext(definition('function abortActiveChatRun(', '\nfunction dismissComposerQuestionsForStop('), context);
+ vm.createContext(withAppState(context)); vm.runInContext(rendererDefinitions("abortActiveChatRun"), context);
  context.abortActiveChatRun({ taskId: "child-task", session: { parentMemorySessionId: "parent-journal", memorySessionId: "child-journal" } });
  assert.equal(cancellations.length, 1); assert.equal(cancellations[0].sessionId, "parent-journal"); assert.equal(cancellations[0].taskId, "child-task"); assert.equal(cancellations[0].scope, "task"); assert.equal(aborts.length, 0);
 });
@@ -312,14 +311,14 @@ test("stopping the parent settles every delegated child UI of that parent only",
  const other = { sessionId: "other", delegated: true, session: { parentSessionId: "another-parent" } };
  const runs = new Map([["dependent", dependent], ["other", other]]); const settled = [];
  const context = { activeChatRuns: runs, chatStopIdsForRun: () => ["parent"], chatSessionIdForRuntimeId: (id) => id, settleStoppedRun: (run) => settled.push(run.sessionId) };
- vm.createContext(withAppState(context)); vm.runInContext(definition('function settleDelegatedChildrenOf(', '\nfunction stopGeneration()'), context);
+ vm.createContext(withAppState(context)); vm.runInContext(rendererDefinitions("settleDelegatedChildrenOf"), context);
  context.settleDelegatedChildrenOf({ sessionId: "parent" }); assert.deepEqual(settled, ["dependent"]); assert.equal(runs.has("other"), true);
 });
 test("Stop aborts a run that is waiting on sub-agents or an end turn, not only a streaming one", () => {
  for (const waiting of [{ pendingEndTurn: true }, { awaitingParentContinuation: true }, { commandWait: true }]) {
   const run = { sessionId: "chat", state: "complete", ...waiting }; const aborted = []; const settled = [];
   const context = { activeSessionRun: () => run, isChatSessionRunning: (id) => id === "chat" && !run.stopRequested, markChatSessionStoppedByOperator() {}, dismissComposerQuestionsForStop() {}, dropAutoContinuationsForSession() {}, syncAssistantDraftToHistory() {}, persistChatHistorySnapshot: async () => {}, settleDelegatedChildrenOf() {}, settleStoppedRun: (r) => settled.push(r), setAgentStatus() {}, modeLabel: () => "Agent", abortActiveChatRun: (r) => aborted.push(r), updateSendBtn() {}, updateContextUsage() {}, chatInput: null, activeChatSessionId: "chat", activeChatPersistenceScope: null, activeStreamContent: "" };
-  vm.createContext(withAppState(context)); vm.runInContext(definition('function stopGeneration()', '\nfunction chatStopIdsForRun('), context);
+  vm.createContext(withAppState(context)); vm.runInContext(rendererDefinitions("stopGeneration"), context);
   context.stopGeneration();
   assert.equal(run.stopRequested, true); assert.deepEqual(aborted, [run]); assert.deepEqual(settled, [run]);
  }

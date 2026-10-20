@@ -1,5 +1,5 @@
 "use strict";
-const { rendererSource, withAppState } = require("./helpers/renderer-source.js");
+const { rendererSource, withAppState, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -36,11 +36,11 @@ function fixture() {
   } };
   vm.createContext(withAppState(context));
   vm.runInContext([
-    slice("function closeSecurityHistoryMenu()", "function selectedSecurityHistoryRecords()"),
-    slice("async function hydrateSecurityHistoryRecords(", "async function loadSecurityHistoryRecord("),
-    slice("function openSecurityHistoryMenu(", "async function deleteSelectedSecurityHistoryRecords("),
-    slice("function bindSecurityHistoryRow(", "function createSecurityHistoryRow("),
-    slice("async function analyzeSecurityExchange(", "function clearSecurityExchange("),
+    rendererDefinitions("closeSecurityHistoryMenu"),
+    rendererDefinitions("hydrateSecurityHistoryRecords"),
+    rendererDefinitions("openSecurityHistoryMenu"),
+    rendererDefinitions("bindSecurityHistoryRow"),
+    rendererDefinitions("analyzeSecurityExchange"),
     slice('securityHistoryMenu?.addEventListener("click"', 'document.addEventListener("click"'),
   ].join("\n"), context);
   for (const record of context.securityHistoryRecords) context.bindSecurityHistoryRow(dom.window.document.getElementById(record.requestId === "old" ? "old" : "target"), record);
