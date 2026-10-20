@@ -2,10 +2,10 @@ import {
   turnWorkFold, workFoldBody, isWorkNode, ensureTurnWorkFold, hasWorkNode, isFinishedWorkFold,
   promoteFinalAnswer, setWorkFoldExpanded, unwrapWorkFold,
 } from "./chat-work-fold.js";
+import { streamingNodeLive } from "../../bootstrap.js";
 import {
-  streamingNodeLive, toolTargetBasename, splitToolStatusLabel, renderToolStatusLabel,
-  hydrateToolStatusLabels,
-} from "../../bootstrap.js";
+  toolTargetBasename, splitToolStatusLabel, renderToolStatusLabel, hydrateToolStatusLabels,
+} from "./tool-labels.js";
 import { renderMarkdown } from "./chat-messages.js";
 import {
   pruneEmptyWorkFolds, completedToolLabelFromRunning, stripFailedToolCardStubs,

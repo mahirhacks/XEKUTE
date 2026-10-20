@@ -2,7 +2,7 @@ import { appState } from "../../core/app-state.js";
 import { messages, chatHistorySecurityWarning } from "../../core/dom-refs.js";
 import {
   isBareToolVerbLabel, decorateBareToolLabel, renderToolStatusLabelFromText,
-} from "../../bootstrap.js";
+} from "./tool-labels.js";
 import { setAgentStatus } from "./chat-messages.js";
 import { normalizeContextUsageSnapshot } from "./context-usage.js";
 import { canonicalChatMode } from "./chat-mode.js";

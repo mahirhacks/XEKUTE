@@ -23,6 +23,7 @@ const RENDERER_FILES = [
   "features/chat/context-checkpoints.js",
   "features/chat/prompt-context.js",
   "features/chat/chat-messages.js",
+  "features/chat/tool-labels.js",
 ];
 
 // Tests slice renderer functions out by text and run them in a vm context, so
