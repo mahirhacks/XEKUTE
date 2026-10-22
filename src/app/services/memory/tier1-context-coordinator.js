@@ -632,7 +632,9 @@ function createTier1ContextCoordinator({
       : state.active;
     // Current Workflow is checkpoint-owned continuity. It starts empty and is
     // only exposed after a conversation checkpoint has produced it.
-    const workflow = summary && state.workflow ? state.workflow : null;
+    const workflow = Object.prototype.hasOwnProperty.call(input, "current_workflow")
+      ? input.current_workflow
+      : summary && state.workflow ? state.workflow : null;
     const a = [
       component("System Prompt", input.system_prompt || input.systemPrompt || ""),
       component("Tool Definitions", input.tool_definitions || input.toolDefinitions || []),

@@ -144,6 +144,7 @@ const api = {
   testOllamaConnection: () => ipcRenderer.invoke("settings:ollamaTest"),
   llmSettings: () => ipcRenderer.invoke("settings:llmGet"),
   setLlmSettings: (payload = {}) => ipcRenderer.invoke("settings:llmSet", payload),
+  openRouterDecisionModels: () => ipcRenderer.invoke("settings:decisionModels"),
   testLlmConnection: () => ipcRenderer.invoke("settings:llmTest"),
   onProxyCapture: (cb) => ipcRenderer.on("proxy:capture", (_event, payload) => cb(payload)),
   onProxyStatus: (cb) => ipcRenderer.on("proxy:status", (_event, payload) => cb(payload)),

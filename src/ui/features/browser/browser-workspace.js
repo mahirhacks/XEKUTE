@@ -63,6 +63,7 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   const freeze = $(".browser-freeze");
   const purpose = $('[aria-label="New tab purpose"]'), identity = $('[aria-label="New tab identity"]');
   const resumeSessions = new Map();
+  let renderedSelection = null;
   let project = "", tabs = [], identities = [], selectedId = null, visible = false, disposed = false;
   let layoutFrame = 0, lastLayout = "", loadSequence = 0, loading = false, freezeSeq = 0;
   const active = () => tabs.find(tab => tab.id === selectedId) || null;
@@ -156,6 +157,7 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
     identity.disabled = purpose.value === "research";
   }
   function render() {
+    const scrollLeft = strip.scrollLeft;
     strip.replaceChildren();
     for (const tab of tabs) {
       const item = document.createElement("div");
@@ -171,6 +173,11 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
       close.setAttribute("aria-label", `Close ${label.textContent}`); close.title = "Close tab"; close.innerHTML = '<span class="codicon codicon-close"></span>';
       close.addEventListener("click", () => { void command("close", {}, tab.id); });
       item.append(select, close); strip.append(item);
+    }
+    strip.scrollLeft = scrollLeft;
+    if (visible && selectedId !== renderedSelection) {
+      strip.querySelector(".is-active")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      renderedSelection = selectedId;
     }
     const tab = active(), chatId = String(getSessionId() || "");
     if (document.activeElement !== address) address.value = tab?.url === "about:blank" ? "" : tab?.url || "";
@@ -266,6 +273,15 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   purpose.addEventListener("change", () => { identity.disabled = purpose.value === "research"; });
   creator.addEventListener("submit", event => { event.preventDefault(); void open({ identityId: identity.value, purpose: purpose.value }); });
   address.addEventListener("keydown", event => { if (event.key === "Escape") { address.value = active()?.url || ""; address.blur(); } });
+  strip.addEventListener("wheel", event => {
+    if (event.ctrlKey) return;
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    const units = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? strip.clientWidth : 1;
+    const next = Math.max(0, Math.min(strip.scrollWidth - strip.clientWidth, strip.scrollLeft + delta * units));
+    if (next === strip.scrollLeft) return;
+    strip.scrollLeft = next;
+    event.preventDefault();
+  }, { passive: false });
   const unsubscribe = api.onBrowserEvent?.(event => {
     if (disposed || !project || String(getAssessmentPath() || "") !== project) return;
     if (event.tab) {

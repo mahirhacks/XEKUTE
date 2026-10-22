@@ -186,6 +186,11 @@ function normalizeToolGroup(event = {}) {
 
 function normalizeEvent(event) {
   const type = String(event?.type || "").toLowerCase();
+  if (type === "context_release") {
+    const count = Number(event.count), freed = Number(event.tokens_freed);
+    return Number.isSafeInteger(count) && count > 0
+      ? { type, lane: "activity", count, tokens_freed: Number.isFinite(freed) ? Math.max(0, freed) : 0 } : null;
+  }
   if (type === "chat") return normalizeChatEvent(event);
   if (type === "thinking") return normalizeThinking(event);
   if (type === "file_stack") return normalizeFileStack(event);
@@ -497,6 +502,11 @@ function captureWorkItem(node) {
 function captureNode(node, events, { verdict = false } = {}) {
   if (!node?.classList) return;
   if (classListContains(node, "agent-work-header") || classListContains(node, "agent-status-line")) return;
+  if (classListContains(node, "context-checkpoint-notice") && dataset(node).contextRelease === "true") {
+    const event = normalizeEvent({ type: "context_release", count: dataset(node).releaseCount, tokens_freed: dataset(node).tokensFreed });
+    if (event) events.push(event);
+    return;
+  }
   if (classListContains(node, "assistant-reply")) {
     if (isEmptyReply(node)) return;
     events.push(compact({

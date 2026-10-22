@@ -163,6 +163,27 @@ test("a real controller checkpoint preserves screenshot references for the follo
   assert.equal(rounds[0].contextUsage.tokenCalculation.imageTokens, 3840);
 });
 
+test("checkpoint pressure from retained screenshots does not summarize identical context twice", async () => {
+  const { runAgentTurn } = require("../src/agent/controller/agent-controller");
+  const { createTier1ContextCoordinator } = require("../src/app/services/memory/tier1-context-coordinator");
+  const inner = createTier1ContextCoordinator();
+  const tier1 = { ...inner };
+  tier1.pressure = input => ({ ...inner.pressure(input), threshold: 0 });
+  const checkpoints = [];
+  tier1.checkpoint = async input => { checkpoints.push(input.reason); return inner.checkpoint(input); };
+  const result = await runAgentTurn({
+    model: "test/vision", numCtx: 32768, contextBudget: 32768,
+    contextPlan: { provider: "openrouter", effectiveLimitTokens: 32768 },
+    projectId: "proj_00000000-0000-4000-8000-000000004123",
+    memorySessionId: "session_00000000-0000-4000-8000-000000004124",
+    tier1Context: tier1, mode: "agent", modeFamily: "assist", userMessage: "Describe the captured browser page.",
+    chatHistory: batch("capture-pressure", shot("one")),
+    runModelRound: async () => ({ ok: true, fullText: "Read the page.", toolCalls: [{ id: "finish", type: "function", function: { name: "end_turn", arguments: '{"status":"stop"}' } }] }),
+  });
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(checkpoints, ["before_model_call", "tool_results"]);
+});
+
 test("actual HTTP fetch carries image bytes and paired tool results through the provider request", async (t) => {
   const received = [];
   const server = http.createServer(async (request, response) => {

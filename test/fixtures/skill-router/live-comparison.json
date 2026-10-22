@@ -1,0 +1,457 @@
+{
+  "capturedAt": "2026-10-21T16:24:00.052Z",
+  "branch": "feature/skill-router",
+  "decisionModel": "typesafe/jev-1.14",
+  "method": "Live OpenRouter decisions through the production agent controller and native provider; task-model responses and checklist tool outputs were controlled fixtures.",
+  "comparisonScope": "Router-level metrics only. The frozen legacy baseline used deterministic selection and made zero router-model calls; its task-model execution tokens, latency, and cost were not captured.",
+  "checklistFixtures": "Controlled, generic per-scenario checklists were used after positive planning decisions; they are not claimed as model-generated or expert ground truth.",
+  "totals": {
+    "cases": 8,
+    "decisionCalls": 12,
+    "inputTokens": 11383,
+    "outputTokens": 1464,
+    "cost": 0.000478086,
+    "latencyMs": 7270.600000000001
+  },
+  "cases": [
+    {
+      "id": "01-general-factual-answer",
+      "ok": true,
+      "code": null,
+      "mode": "agent",
+      "explicitSkill": null,
+      "baselineLegacySkill": null,
+      "expectedSkills": [],
+      "activeSkillIds": [],
+      "automaticSkillIds": [],
+      "missedExpectedSkills": [],
+      "unexpectedAutomaticSkills": [],
+      "planning": false,
+      "checklistCreated": false,
+      "modelRounds": 1,
+      "decisionCalls": [
+        {
+          "questions": [
+            "needs_plan"
+          ],
+          "latencyMs": 1080,
+          "usage": {
+            "input_tokens": 354,
+            "output_tokens": 21,
+            "cost": 0.000014868
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 354,
+        "outputTokens": 21,
+        "cost": 0.000014868
+      },
+      "totalDecisionLatencyMs": 1080,
+      "error": null
+    },
+    {
+      "id": "02-large-web-vapt",
+      "ok": true,
+      "code": null,
+      "mode": "agent",
+      "explicitSkill": null,
+      "baselineLegacySkill": null,
+      "expectedSkills": [
+        "bug-bounty",
+        "web2-recon",
+        "web2-vuln-classes"
+      ],
+      "activeSkillIds": [
+        "web2-vuln-classes"
+      ],
+      "automaticSkillIds": [
+        "web2-vuln-classes",
+        "graphql-audit"
+      ],
+      "missedExpectedSkills": [
+        "bug-bounty",
+        "web2-recon"
+      ],
+      "unexpectedAutomaticSkills": [
+        "graphql-audit"
+      ],
+      "planning": true,
+      "checklistCreated": true,
+      "modelRounds": 2,
+      "decisionCalls": [
+        {
+          "questions": [
+            "needs_plan"
+          ],
+          "latencyMs": 624.2,
+          "usage": {
+            "input_tokens": 394,
+            "output_tokens": 21,
+            "cost": 0.000016548
+          }
+        },
+        {
+          "questions": [
+            "skill_argus",
+            "skill_bb-methodology",
+            "skill_bug-bounty",
+            "skill_cicd-security",
+            "skill_client-reverse",
+            "skill_credential-attack",
+            "skill_graphql-audit",
+            "skill_meme-coin-audit",
+            "skill_mobile-pentest",
+            "skill_report",
+            "skill_report-writing",
+            "skill_security-arsenal",
+            "skill_triage-validation",
+            "skill_web2-recon",
+            "skill_web2-vuln-classes",
+            "skill_web3-audit"
+          ],
+          "latencyMs": 595.4,
+          "usage": {
+            "input_tokens": 2111,
+            "output_tokens": 324,
+            "cost": 0.000088662
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 2505,
+        "outputTokens": 345,
+        "cost": 0.00010521
+      },
+      "totalDecisionLatencyMs": 1219.6,
+      "error": null
+    },
+    {
+      "id": "03-explicit-report-skill",
+      "ok": true,
+      "code": null,
+      "mode": "agent",
+      "explicitSkill": "report",
+      "baselineLegacySkill": {
+        "id": "report",
+        "selectedBy": "explicit",
+        "promptChars": 2630
+      },
+      "expectedSkills": [
+        "report"
+      ],
+      "activeSkillIds": [
+        "report"
+      ],
+      "automaticSkillIds": [],
+      "missedExpectedSkills": [],
+      "unexpectedAutomaticSkills": [],
+      "planning": false,
+      "checklistCreated": false,
+      "modelRounds": 1,
+      "decisionCalls": [
+        {
+          "questions": [
+            "needs_plan"
+          ],
+          "latencyMs": 524.2,
+          "usage": {
+            "input_tokens": 355,
+            "output_tokens": 21,
+            "cost": 0.00001491
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 355,
+        "outputTokens": 21,
+        "cost": 0.00001491
+      },
+      "totalDecisionLatencyMs": 524.2,
+      "error": null
+    },
+    {
+      "id": "04-history-followup-auth",
+      "ok": true,
+      "code": null,
+      "mode": "agent",
+      "explicitSkill": null,
+      "baselineLegacySkill": null,
+      "expectedSkills": [
+        "bug-bounty"
+      ],
+      "activeSkillIds": [],
+      "automaticSkillIds": [],
+      "missedExpectedSkills": [
+        "bug-bounty"
+      ],
+      "unexpectedAutomaticSkills": [],
+      "planning": false,
+      "checklistCreated": false,
+      "modelRounds": 1,
+      "decisionCalls": [
+        {
+          "questions": [
+            "needs_plan"
+          ],
+          "latencyMs": 674.4,
+          "usage": {
+            "input_tokens": 419,
+            "output_tokens": 21,
+            "cost": 0.000017598
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 419,
+        "outputTokens": 21,
+        "cost": 0.000017598
+      },
+      "totalDecisionLatencyMs": 674.4,
+      "error": null
+    },
+    {
+      "id": "05-direct-header-explanation",
+      "ok": true,
+      "code": null,
+      "mode": "agent",
+      "explicitSkill": null,
+      "baselineLegacySkill": null,
+      "expectedSkills": [],
+      "activeSkillIds": [],
+      "automaticSkillIds": [],
+      "missedExpectedSkills": [],
+      "unexpectedAutomaticSkills": [],
+      "planning": false,
+      "checklistCreated": false,
+      "modelRounds": 1,
+      "decisionCalls": [
+        {
+          "questions": [
+            "needs_plan"
+          ],
+          "latencyMs": 525.2,
+          "usage": {
+            "input_tokens": 353,
+            "output_tokens": 21,
+            "cost": 0.000014826
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 353,
+        "outputTokens": 21,
+        "cost": 0.000014826
+      },
+      "totalDecisionLatencyMs": 525.2,
+      "error": null
+    },
+    {
+      "id": "06-graphql-authorization-review",
+      "ok": true,
+      "code": null,
+      "mode": "agent",
+      "explicitSkill": null,
+      "baselineLegacySkill": null,
+      "expectedSkills": [
+        "graphql-audit",
+        "web2-vuln-classes"
+      ],
+      "activeSkillIds": [
+        "graphql-audit"
+      ],
+      "automaticSkillIds": [
+        "graphql-audit"
+      ],
+      "missedExpectedSkills": [
+        "web2-vuln-classes"
+      ],
+      "unexpectedAutomaticSkills": [],
+      "planning": true,
+      "checklistCreated": true,
+      "modelRounds": 2,
+      "decisionCalls": [
+        {
+          "questions": [
+            "needs_plan"
+          ],
+          "latencyMs": 519.5,
+          "usage": {
+            "input_tokens": 374,
+            "output_tokens": 21,
+            "cost": 0.000015708
+          }
+        },
+        {
+          "questions": [
+            "skill_argus",
+            "skill_bb-methodology",
+            "skill_bug-bounty",
+            "skill_cicd-security",
+            "skill_client-reverse",
+            "skill_credential-attack",
+            "skill_graphql-audit",
+            "skill_meme-coin-audit",
+            "skill_mobile-pentest",
+            "skill_report",
+            "skill_report-writing",
+            "skill_security-arsenal",
+            "skill_triage-validation",
+            "skill_web2-recon",
+            "skill_web2-vuln-classes",
+            "skill_web3-audit"
+          ],
+          "latencyMs": 537.4,
+          "usage": {
+            "input_tokens": 2094,
+            "output_tokens": 324,
+            "cost": 0.000087948
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 2468,
+        "outputTokens": 345,
+        "cost": 0.00010365600000000001
+      },
+      "totalDecisionLatencyMs": 1056.9,
+      "error": null
+    },
+    {
+      "id": "07-ci-supply-chain-review",
+      "ok": true,
+      "code": null,
+      "mode": "agent",
+      "explicitSkill": null,
+      "baselineLegacySkill": null,
+      "expectedSkills": [
+        "cicd-security"
+      ],
+      "activeSkillIds": [
+        "cicd-security"
+      ],
+      "automaticSkillIds": [
+        "cicd-security"
+      ],
+      "missedExpectedSkills": [],
+      "unexpectedAutomaticSkills": [],
+      "planning": true,
+      "checklistCreated": true,
+      "modelRounds": 2,
+      "decisionCalls": [
+        {
+          "questions": [
+            "needs_plan"
+          ],
+          "latencyMs": 531.1,
+          "usage": {
+            "input_tokens": 376,
+            "output_tokens": 21,
+            "cost": 0.000015792
+          }
+        },
+        {
+          "questions": [
+            "skill_argus",
+            "skill_bb-methodology",
+            "skill_bug-bounty",
+            "skill_cicd-security",
+            "skill_client-reverse",
+            "skill_credential-attack",
+            "skill_graphql-audit",
+            "skill_meme-coin-audit",
+            "skill_mobile-pentest",
+            "skill_report",
+            "skill_report-writing",
+            "skill_security-arsenal",
+            "skill_triage-validation",
+            "skill_web2-recon",
+            "skill_web2-vuln-classes",
+            "skill_web3-audit"
+          ],
+          "latencyMs": 549,
+          "usage": {
+            "input_tokens": 2095,
+            "output_tokens": 324,
+            "cost": 0.00008799
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 2471,
+        "outputTokens": 345,
+        "cost": 0.000103782
+      },
+      "totalDecisionLatencyMs": 1080.1,
+      "error": null
+    },
+    {
+      "id": "08-incident-log-triage",
+      "ok": true,
+      "code": null,
+      "mode": "agent",
+      "explicitSkill": null,
+      "baselineLegacySkill": null,
+      "expectedSkills": [
+        "triage-validation",
+        "security-arsenal"
+      ],
+      "activeSkillIds": [],
+      "automaticSkillIds": [],
+      "missedExpectedSkills": [
+        "triage-validation",
+        "security-arsenal"
+      ],
+      "unexpectedAutomaticSkills": [],
+      "planning": true,
+      "checklistCreated": true,
+      "modelRounds": 2,
+      "decisionCalls": [
+        {
+          "questions": [
+            "needs_plan"
+          ],
+          "latencyMs": 545.4,
+          "usage": {
+            "input_tokens": 371,
+            "output_tokens": 21,
+            "cost": 0.000015582
+          }
+        },
+        {
+          "questions": [
+            "skill_argus",
+            "skill_bb-methodology",
+            "skill_bug-bounty",
+            "skill_cicd-security",
+            "skill_client-reverse",
+            "skill_credential-attack",
+            "skill_graphql-audit",
+            "skill_meme-coin-audit",
+            "skill_mobile-pentest",
+            "skill_report",
+            "skill_report-writing",
+            "skill_security-arsenal",
+            "skill_triage-validation",
+            "skill_web2-recon",
+            "skill_web2-vuln-classes",
+            "skill_web3-audit"
+          ],
+          "latencyMs": 564.8,
+          "usage": {
+            "input_tokens": 2087,
+            "output_tokens": 324,
+            "cost": 0.000087654
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 2458,
+        "outputTokens": 345,
+        "cost": 0.000103236
+      },
+      "totalDecisionLatencyMs": 1110.2,
+      "error": null
+    }
+  ]
+}

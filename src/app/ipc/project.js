@@ -54,6 +54,7 @@ function registerProjectIpc({
   ollamaHostLabel,
   saveLlmSettings,
   llmSettingsSnapshot,
+  listOpenRouterDecisionModels,
   GUIDANCE_EXTENSIONS,
   MAX_GUIDANCE_FILE_BYTES,
   formatWorkspaceGuidance,
@@ -1037,6 +1038,7 @@ ipcMain.handle("settings:credentialDelete", async (_event, { workspace = "", cre
 
 ipcMain.handle("settings:llmGet", async () => llmSettingsSnapshot());
 ipcMain.handle("settings:llmSet", async (_event, payload = {}) => { try { return saveLlmSettings(payload); } catch (error) { return { error: error.message || "Invalid LLM settings.", code: "LLM_SETTINGS_INVALID" }; } });
+ipcMain.handle("settings:decisionModels", async () => typeof listOpenRouterDecisionModels === "function" ? listOpenRouterDecisionModels() : { models: [], error: "OpenRouter decision model catalog is unavailable." });
 ipcMain.handle("settings:llmTest", async () => {
   if (getActiveProvider() === "openrouter") {
     try { const response = await openRouterFetch("/models"); const data = await response.json(); return response.ok ? { ok: true, provider: "openrouter", modelCount: Array.isArray(data?.data) ? data.data.length : 0 } : { error: data?.error?.message || `OpenRouter error: ${response.status}`, code: "OPENROUTER_TEST_FAILED" }; }

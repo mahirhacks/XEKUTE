@@ -39,7 +39,7 @@ import {
   guidanceEmptyNew, guidanceImport, llmProvider, openRouterBaseUrl, openRouterApiKey,
   llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle, llmOpenRouterBaseToggle,
   llmOllamaEnableToggle, llmOllamaEndpointToggle, modelsSettingsSearch, modelsSettingsRefresh,
-  modelsViewAllBtn, modelsExploreSubagent, ollamaHostInput, ollamaHostTest, ollamaHostReset,
+  modelsViewAllBtn, modelsExploreSubagent, decisionModelSelect, ollamaHostInput, ollamaHostTest, ollamaHostReset,
   certificateBrowse, certificateOpenFolder, certificateReset, identityRefresh, identityCreate,
   identityList, identityImport, projectAuthSource, credentialCreate, credentialList,
   engagementAccountList, engagementAccountAdd, appSettingsSectionButtons, checklistSearch,
@@ -1575,6 +1575,7 @@ llmOllamaEndpointToggle?.addEventListener("change", () => {
   queueLlmSettingsAutosave(0);
 });
 openRouterApiKey?.addEventListener("change", () => queueLlmSettingsAutosave(0));
+decisionModelSelect?.addEventListener("change", () => queueLlmSettingsAutosave(0));
 openRouterBaseUrl?.addEventListener("input", () => queueLlmSettingsAutosave());
 ollamaHostInput?.addEventListener("input", () => queueLlmSettingsAutosave());
 modelsSettingsSearch?.addEventListener("input", () => {

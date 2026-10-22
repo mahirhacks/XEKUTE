@@ -331,7 +331,7 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     }
 
     if (payload.type === "task_list") {
-      run.taskList = payload.clear || payload.completed ? null : payload;
+      run.taskList = payload.clear ? null : payload;
       if (runIsVisible()) renderComposerTaskList(payload);
       return;
     }

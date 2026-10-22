@@ -8,13 +8,14 @@ const { readUiShell } = require("./helpers/ui-shell.js");
 
 const read = (relativePath) => fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
 
-test("Agent tasks keep the two-mode catalog without a temporary checklist tool", () => {
+test("Agent checklists are an agent-local runtime tool outside the canonical mode catalog", () => {
   const controller = read("src/agent/controller/agent-controller.js");
   const modes = read("src/agent/modes/mode-registry.js");
   assert.match(controller, /function isReasonablyLargeAgentRequest\(/);
   assert.doesNotMatch(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
   assert.doesNotMatch(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
-  assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_list"/);
+  assert.match(controller, /routingEnabled && !orchestrationControlOnly && !routingTools\.some/);
+  assert.match(controller, /sendEvent\(\{ type: "task_list", \.\.\.checklistForWidget\(checklist, runId\) \}\)/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
   assert.match(modes, /const AGENT_TOOLS = Object\.freeze\(\[/);
   assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal", "release_blocks", "recall_block"\]\)/);

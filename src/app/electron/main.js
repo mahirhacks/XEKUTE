@@ -16,7 +16,7 @@ const { HIDDEN_COMMAND_REVEAL_MS, createHiddenCommandReveal } = require("../serv
 const { createAgentTerminalHost } = require("../services/terminal/agent-terminal-host.js");
 const { createCommandReferences } = require("../services/terminal/command-references.js");
 const { defaultRegistry } = require("../../prompts/skills/internal/registry.js");
-const { selectInternalSkill } = require("../../prompts/skills/internal/runner.js");
+const { selectInternalSkill, resolveInternalSkill } = require("../../prompts/skills/internal/runner.js");
 const {
   CREATE_GUIDANCE_TOOL,
   createSpecialSkillToolEntry,
@@ -27,6 +27,7 @@ const { resolveSecurityExecutable } = require("../../agent/tools/process/executa
 const { normalizeAuthorityProfile } = require("../../agent/authority/profiles/profile-manifest.js");
 const Tunables = require("../../agent/runtime/tunables.js");
 const { createAgentSessionRuntime, assignTaskWave } = require("../../agent/runtime/agent-session-runtime.js");
+const OpenRouterDecision = require("../../agent/runtime/openrouter-decision.js");
 const { createChatReferenceResolver } = require("../../agent/runtime/chat-references.js");
 const { accountMasks, describeAccounts, loadAccounts, maskAccountSecrets, resolveAccountVariables } = require("../../agent/runtime/account-variables.js");
 const { createResourceReservations } = require("../../agent/runtime/resource-reservations.js");
@@ -522,7 +523,7 @@ function scheduleReleasePendingEndTurn(parentKey) {
   return scheduleParentContinuationKind(parentKey, "release_pending_end_turn", async () => {
     const descriptor = parentRunDescriptors.get(parentKey);
     if (!descriptor || descriptor.aborted || !descriptor.pendingEndTurn) return;
-    if (computeOrchestrationHold(subagentCoordinator, parentKey, { parentContinuationScheduled: false, descriptor })) {
+    if (computeOrchestrationHold(subagentCoordinator, parentKey)) {
       return;
     }
     const continuationPayload = {
@@ -894,6 +895,7 @@ function llmSettingsSnapshot() {
       source: process.env.OPENROUTER_API_KEY ? "environment" : key ? "settings" : "none",
       model: String(openrouter.model || ""),
     },
+    decisionModel: String(openrouter.decisionModel || DEFAULT_DECISION_MODEL),
     hasApiKey: Boolean(key),
     source,
   };
@@ -911,6 +913,7 @@ function saveLlmSettings(payload = {}) {
   delete llm.compaction;
   if (payload.baseUrl !== undefined) llm.openrouter.baseUrl = normalizeBaseUrl(payload.baseUrl);
   if (payload.model !== undefined) llm.openrouter.model = String(payload.model || "").trim();
+  if (payload.decisionModel !== undefined) llm.openrouter.decisionModel = String(payload.decisionModel || DEFAULT_DECISION_MODEL).trim() || DEFAULT_DECISION_MODEL;
   if (payload.apiKey !== undefined) {
     const key = String(payload.apiKey || "").trim();
     if (key) {
@@ -1402,6 +1405,7 @@ registerProjectIpc({
   ollamaHostLabel,
   saveLlmSettings,
   llmSettingsSnapshot,
+  listOpenRouterDecisionModels,
   GUIDANCE_EXTENSIONS,
   MAX_GUIDANCE_FILE_BYTES,
   formatWorkspaceGuidance,
@@ -2045,6 +2049,7 @@ function sanitizeOllamaMessages(messages) {
 }
 
 const DEFAULT_OLLAMA_PORT = 11435;
+const DEFAULT_DECISION_MODEL = "typesafe/jev-1.14";
 
 function normalizeOllamaHostInput(value) {
   const raw = String(value || "").trim();
@@ -2237,7 +2242,7 @@ async function listOpenRouterModels() {
       const id = String(item?.id || "").trim();
       if (!id) continue;
       const outputModalities = Array.isArray(item.architecture?.output_modalities) ? item.architecture.output_modalities : [];
-      if (outputModalities.includes("decisions") && !outputModalities.includes("text")) {
+      if (outputModalities.includes("decisions")) {
         decisionOnlyIds.add(id);
         continue;
       }
@@ -2267,6 +2272,23 @@ async function listOpenRouterModels() {
     return { models: [...new Set(models)].sort(), provider: "openrouter", host: "OpenRouter", modelMeta };
   } catch (error) {
     return { error: error.message, code: error.code || "OPENROUTER_LIST_FAILED", provider: "openrouter" };
+  }
+}
+
+async function listOpenRouterDecisionModels() {
+  try {
+    const response = await openRouterFetch("/models?output_modalities=decisions");
+    const data = await response.json();
+    if (!response.ok) return { error: data?.error?.message || `OpenRouter error: ${response.status}`, provider: "openrouter" };
+    const models = (Array.isArray(data?.data) ? data.data : [])
+      .filter((item) => Array.isArray(item?.architecture?.output_modalities) && item.architecture.output_modalities.includes("decisions"))
+      .filter((item) => item.available !== false && item.status !== "unavailable")
+      .map((item) => ({ id: String(item.id || "").trim(), name: String(item.name || item.id || "").trim() }))
+      .filter((item) => item.id)
+      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+    return { models, provider: "openrouter" };
+  } catch (error) {
+    return { error: error.message, code: error.code || "OPENROUTER_DECISION_MODELS_FAILED", provider: "openrouter" };
   }
 }
 
@@ -2527,6 +2549,21 @@ async function runOpenRouterJson({ model, messages, workspace, temperature = 0, 
     if (timer) clearTimeout(timer);
     signal?.removeEventListener?.("abort", stop);
   }
+}
+
+async function runOpenRouterDecision({ model, state, questions, signal = null, timeoutMs = 20_000 } = {}) {
+  const apiKey = getOpenRouterApiKey();
+  return OpenRouterDecision.runOpenRouterDecision({
+    model,
+    state,
+    questions,
+    signal,
+    timeoutMs,
+    apiKey,
+    baseUrl: getOpenRouterBaseUrl(),
+    headers: openRouterHeaders(apiKey, { referer: "https://xekute.local", title: "XEKUTE" }),
+    fetchImpl: fetch,
+  });
 }
 ipcMain.handle("ollama:list", async () => {
   if (getActiveProvider() === "openrouter") return listOpenRouterModels();
@@ -3647,6 +3684,89 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     const unknown = (listed?.value?.processes || []).filter((record) => record.status === "reconciliation_required" && (!session || record.sessionId === session));
     return [...running, ...unknown.map((record) => ({ ...record, processId: record.id }))];
   };
+  const requestedProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");
+  const selectedCatalog = toolCatalogFromRegistry(container.toolRegistry);
+  const catalogMode = selectedCatalog.mode;
+  const internalSkillId = payload.internalRuntimeInput ? String(payload.internalSkillId || "").trim().toLowerCase() : "";
+  const skillIntent = payload.internalRuntimeInput
+    ? (internalSkillId ? `/${internalSkillId}` : "")
+    : continuationResultId
+      ? parentDescriptor?.payload?.userMessage
+      : payload.userMessage;
+  const resolvedSpecialSkill = selectInternalSkill(defaultRegistry, skillIntent || "", { mode: requestedProfile.key, workspace: payload.workspace || "" });
+  let activeSpecialSkill = resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null;
+  const automaticSkillIds = new Set((typeof defaultRegistry?.listInternal === "function" ? defaultRegistry.listInternal() : [])
+    .map((manifest) => String(manifest?.id || ""))
+    .filter((id) => !["create-rule", "create-skill", "create-subagent"].includes(id)));
+  // Intent matching used to load a special skill before the task was planned.
+  // Automatic skills now enter only through the checklist picker; explicit
+  // slash invocations and the three system-command skills keep their behavior.
+  if (resolvedSpecialSkill?.selectedBy === "intent" && automaticSkillIds.has(String(resolvedSpecialSkill.id || ""))) {
+    activeSpecialSkill = null;
+  }
+  for (const definition of createSpecialSkillToolDefinitions(activeSpecialSkill)) {
+    if (!selectedCatalog.tools.some((tool) => tool?.function?.name === definition?.function?.name)) {
+      selectedCatalog.tools.push(definition);
+    }
+  }
+
+  const providerForRun = String(payload.provider || getActiveProvider() || "").trim().toLowerCase();
+  const routerEligible = providerForRun === "openrouter" && ["agent", "ask"].includes(requestedProfile.key);
+  const decisionModel = routerEligible
+    ? String(
+      parentDescriptor?.payload?.decisionModel
+        || payload.decisionModel
+        || llmPreferences().openrouter?.decisionModel
+        || DEFAULT_DECISION_MODEL,
+    ).trim() || DEFAULT_DECISION_MODEL
+    : "";
+  let skillRouterConfig = null;
+  if (routerEligible) {
+    const project = readProjectProfile(payload.workspace)?.profile || {};
+    const scope = project.scope || {};
+    const rules = project.rulesOfEngagement || {};
+    const list = (value) => (Array.isArray(value) ? value.map((item) => String(item || "").slice(0, 500)).filter(Boolean).slice(0, 100) : []);
+    const routingScope = {
+      inScopeTargets: list(scope.inScopeTargets),
+      outOfScopeTargets: list(scope.outOfScopeTargets),
+      wildcardRules: list(scope.wildcardRules),
+      thirdPartyAssets: list(scope.thirdPartyAssets),
+      authenticationDependencies: list(scope.authenticationDependencies),
+      notes: String(scope.notes || "").slice(0, 4_000),
+      rulesOfEngagement: {
+        testingWindows: list(rules.testingWindows),
+        allowedTechniques: list(rules.allowedTechniques),
+        restrictedTechniques: list(rules.restrictedTechniques),
+        prohibitedActions: list(rules.prohibitedActions),
+        stopConditions: list(rules.stopConditions),
+      },
+    };
+    skillRouterConfig = {
+      enabled: true,
+      freshRun: !isContinuation,
+      model: decisionModel,
+      candidates: defaultRegistry.listInternal(),
+      scope: routingScope,
+      runDecision: runOpenRouterDecision,
+      loadSkill: (id, options = {}) => resolveInternalSkill(defaultRegistry, id, {
+        mode: options.mode || requestedProfile.key,
+        workspace: options.workspace || payload.workspace || "",
+        compact: true,
+      }),
+      runFallback: ({ model, messages, signal }) => runOpenRouterJson({
+        model: model || payload.model,
+        messages,
+        workspace: payload.workspace || "",
+        temperature: 0,
+        maxCompletionTokens: 256,
+        timeoutMs: 30_000,
+        responseFormat: { type: "json_object" },
+        signal,
+      }),
+    };
+    payload = { ...payload, decisionModel };
+    if (parentDescriptor) parentDescriptor.payload = { ...parentDescriptor.payload, decisionModel };
+  }
   const delegationProvider = createRuntimeDelegationProvider({
     senderId: event.sender.id,
     runKey: coordinationKey,
@@ -3659,6 +3779,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     workspace: payload.workspace || "",
     mode: payload.mode || "agent",
     modeFamily: payload.modeFamily || "xekute",
+    skillRouter: skillRouterConfig,
     authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
     projectProfile: agentProjectProfile(payload.workspace),
     sessionId,
@@ -3821,25 +3942,6 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     });
     if (runResult?.ok) assessmentRun = runResult.run;
   }
-  const requestedProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");
-  const selectedCatalog = toolCatalogFromRegistry(container.toolRegistry);
-  const catalogMode = selectedCatalog.mode;
-  const internalSkillId = payload.internalRuntimeInput ? String(payload.internalSkillId || "").trim().toLowerCase() : "";
-  const skillIntent = payload.internalRuntimeInput
-    ? (internalSkillId ? `/${internalSkillId}` : "")
-    : continuationResultId
-      ? parentDescriptor?.payload?.userMessage
-      : payload.userMessage;
-  const resolvedSpecialSkill = selectInternalSkill(defaultRegistry, skillIntent || "", { mode: requestedProfile.key, workspace: payload.workspace || "" });
-  let activeSpecialSkill = resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null;
-  // Special-skill capabilities are scoped to the active package.  They are
-  // added to this turn's model catalog only; the canonical registry and its
-  // global tool inventory remain unchanged.
-  for (const definition of createSpecialSkillToolDefinitions(resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null)) {
-    if (!selectedCatalog.tools.some((tool) => tool?.function?.name === definition?.function?.name)) {
-      selectedCatalog.tools.push(definition);
-    }
-  }
   const previousRun = agentRunControllers.get(runKey);
   if (previousRun) previousRun.abort();
   runController = new AbortController();
@@ -3867,7 +3969,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     supervisedRun = await agentSessionRuntime.admit({ workspace: payload.workspace, sessionId: tier1SessionId,
       runId: durableRunId, blockId: replyBlockId, taskId: payload.taskId, resume: isContinuation,
       snapshotWave: ({ acceptedResultId }) => subagentCoordinator.exportWave(coordinationKey, { acceptedResultId }), continuationResultId,
-      completionBarrier: () => computeOrchestrationHold(subagentCoordinator, coordinationKey),
+      completionBarrier: () => computeOrchestrationHold(subagentCoordinator, coordinationKey, { activeResultId: continuationResultId }),
       inputId: payload.inputId || payload.userMessageId, userMessage: isContinuation ? parentDescriptor?.payload?.userMessage || payload.userMessage : payload.userMessage,
       binding: { ...payload, provider: payload.provider || getActiveProvider() } });
     if (!supervisedRun.ok) return refuseUnsavedInput(supervisedRun, sendAgentEvent);
@@ -3880,6 +3982,17 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     if (parentDescriptor) parentDescriptor.payload = { ...parentDescriptor.payload, ...supervisedRun.task.binding,
       runId: durableRunId, taskId: supervisedRun.taskId, blockId: replyBlockId, memorySessionId: tier1SessionId };
     sendAgentEvent({ type: "task_started", taskId: supervisedRun.taskId, runId: durableRunId, blockId: replyBlockId, memorySessionId: tier1SessionId });
+  }
+  if (skillRouterConfig) {
+    const frozenDecisionModel = String(
+      supervisedRun?.engineSnapshot?.skillRouterState?.decisionModel
+        || supervisedRun?.engineSnapshot?.planState?.decisionModel
+        || payload.decisionModel
+        || skillRouterConfig.model,
+    ).trim() || DEFAULT_DECISION_MODEL;
+    skillRouterConfig.model = frozenDecisionModel;
+    payload = { ...payload, decisionModel: frozenDecisionModel };
+    if (parentDescriptor) parentDescriptor.payload = { ...parentDescriptor.payload, decisionModel: frozenDecisionModel };
   }
   await delegationProvider.recoverChildren?.({ signal: runController.signal });
   const roundAccountingSnapshot = payload.roundAccountingSnapshot
@@ -3958,6 +4071,9 @@ async function handleAgentRun(event, payload = {}, options = {}) {
         ? subagentQuestionHeadText
         : payload.userMessage || "",
     specialSkill: activeSpecialSkill,
+    skillRouter: skillRouterConfig
+      ? { ...skillRouterConfig, bypassAutomaticSkills: String(skillIntent || "").trim().startsWith("/") }
+      : null,
     intelligence: container.assessmentIntelligence,
     projectId: tier1ProjectId,
     precedingBlockId: payload.precedingBlockId || payload.preceding_block_id || "",
@@ -4046,8 +4162,9 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     findWorkspaceFiles,
     searchWorkspaceIndex,
     orchestrationHold: () => computeOrchestrationHold(subagentCoordinator, coordinationKey, {
-      parentContinuationScheduled: parentContinuationInFlight(coordinationKey),
-      descriptor: parentDescriptor,
+      parentContinuationScheduled: !options.automaticContinuation && parentContinuationInFlight(coordinationKey),
+      descriptor: options.automaticContinuation ? null : parentDescriptor,
+      activeResultId: continuationResultId,
     }),
     setPendingEndTurn: (value) => {
       if (parentDescriptor) parentDescriptor.pendingEndTurn = Boolean(value);
@@ -4117,10 +4234,10 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     const runtimeStatus = result?.runState?.status;
     const assessmentStatus = result?.aborted
       ? "stopped"
-      : ["completed", "inconclusive", "stopped", "failed"].includes(runtimeStatus) ? runtimeStatus : result?.ok ? "completed" : "failed";
+      : runtimeStatus || (result?.ok ? "completed" : "failed");
     assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, {
       status: assessmentStatus,
-      completedAt: new Date().toISOString(),
+      ...(!["running", "waiting"].includes(assessmentStatus) ? { completedAt: new Date().toISOString() } : {}),
       stopReason: result?.aborted ? "Aborted by operator" : result?.error || "",
       notes: String(result?.finalText || result?.error || "").slice(0, 2000),
     });
@@ -4137,13 +4254,19 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }
     subagentCoordinator.cancelChildrenForParent(coordinationKey, "PARENT_TASK_ENDED");
   }
+  if (result?.aborted || ["completed", "failed", "stopped", "inconclusive"].includes(String(result?.runState?.status || ""))) {
+    sendAgentEvent({ type: "task_list", clear: true });
+  }
   appendParentRunHistory(coordinationKey, payload, result);
   if (payload.workspace) {
     const status = result?.aborted ? "stopped" : result?.runState?.status || (result?.ok ? "completed" : "failed");
-    await container.longHorizonRunStore.finish(payload.workspace, durableRunId, status, {
+    const patch = {
       evidenceIds: result?.evidenceIds || [],
       error: result?.error ? String(result.error).slice(0, 2000) : "",
-    }).catch(mainLog.ignored("run.finish"));
+    };
+    await (["running", "waiting"].includes(status)
+      ? container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, { ...patch, status })
+      : container.longHorizonRunStore.finish(payload.workspace, durableRunId, status, patch)).catch(mainLog.ignored("run.finish"));
   }
   const acceptContinuationResult = Boolean(result?.ok && !result?.aborted
     && !["failed", "stopped", "inconclusive", "artifact_sync_failed"].includes(result?.runState?.status));

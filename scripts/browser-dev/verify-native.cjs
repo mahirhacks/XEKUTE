@@ -56,6 +56,37 @@ async function verifyNativeBrowserHost() {
     assert.equal(updated.status, "ready");
     pass("real sandboxed WebContentsView tabs and navigation metadata");
 
+    const confinement = await run(async () => {
+      const h = globalThis.xekuteNativeBrowserDevelopment, service = h.createService();
+      const bounds = { x: 80, y: 100, width: 400, height: 300 };
+      const viewFor = id => h.window.contentView.children.find(view => view.webContents?.id === service.getContents(id).id);
+      try {
+        await service.activateProject(h.projectB);
+        const tab = await service.open({ purpose: "research", url: h.fixtures.origins.primary + "/popups" });
+        service.select(tab.id);
+        const beforeLayout = viewFor(tab.id).getVisible();
+        service.layout(tab.id, bounds);
+        const afterLayout = viewFor(tab.id).getVisible();
+        service.hide(); service.select(tab.id);
+        const hiddenSelection = viewFor(tab.id).getVisible();
+        await service.getContents(tab.id).executeJavaScript("void window.open('/popup-child','hidden-popup')", true);
+        for (let attempt = 0; attempt < 200 && service.list().length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+        const popup = service.list().find(item => item.id !== tab.id);
+        if (!popup) throw new Error("The popup was not created as an embedded tab.");
+        const hiddenPopup = viewFor(popup.id).getVisible();
+        service.layout(popup.id, bounds);
+        return { beforeLayout, afterLayout, hiddenSelection, hiddenPopup, popupBounds: viewFor(popup.id).getBounds(), popupVisible: viewFor(popup.id).getVisible() };
+      } finally { await service.shutdown(); }
+    });
+    assert.equal(confinement.beforeLayout, false, "selecting an agent page before the first workspace layout cannot cover the app");
+    assert.equal(confinement.afterLayout, true);
+    assert.equal(confinement.hiddenSelection, false, "select cannot undo a hidden browser workspace");
+    assert.equal(confinement.hiddenPopup, false, "a popup cannot undo a hidden workspace");
+    assert.deepEqual(confinement.popupBounds, { x: 80, y: 100, width: 400, height: 300 });
+    assert.equal(confinement.popupVisible, true);
+    assert.equal(await run(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+    pass("agent selection and popups stay hidden until the embedded workspace supplies visible bounds");
+
     const saved = await run(async (_electron, origin) => {
       const h = globalThis.xekuteNativeBrowserDevelopment;
       return h.vault.saveSecretAsync(h.projectA.workspace, "alice", {

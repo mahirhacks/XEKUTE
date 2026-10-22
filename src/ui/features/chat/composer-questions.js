@@ -10,7 +10,7 @@ export const pendingComposerQuestionsBySession = new Map();
 export const pendingOrchestratorEscalatedQuestions = new Map();
 
 export function isTaskListTool(tool) {
-  return toolActionName(tool) === "update_task_list";
+  return ["update_task_list", "manage_task_checklist"].includes(toolActionName(tool));
 }
 
 export function clearComposerTaskList() {
@@ -32,7 +32,7 @@ export function renderComposerTaskList(payload = {}) {
       title: String(task.title || "").replace(/\s+/g, " ").trim(),
       status: ["pending", "in_progress", "completed", "blocked"].includes(String(task.status || "")) ? String(task.status) : "pending",
     }));
-  if (payload.clear || payload.completed || !tasks.length || tasks.every((task) => task.status === "completed")) {
+  if (payload.clear || !tasks.length) {
     clearComposerTaskList();
     return;
   }

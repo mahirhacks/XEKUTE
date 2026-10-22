@@ -24,6 +24,7 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
   // Size of the most recent workspace layout. Tabs opened in the background
   // take it, so their pages have a real viewport the agent can act in.
   let workspaceBounds = null;
+  let workspaceVisible = false;
   const copy = value => structuredClone(value);
   const fail = (code, message) => Object.assign(new Error(message), { code });
   const queue = task => {
@@ -121,8 +122,8 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
         const tab = createBrowserTab({ id: randomUUID(), projectId: record.tab.projectId, purpose: record.tab.purpose, identityId: record.tab.identityId, url });
         tab.owner = copy(record.tab.owner); tab.controlGeneration = record.tab.controlGeneration;
         const child = makeView(tab, record.session, record.tab.id, options);
-        child.view.setBounds(record.view.getBounds());
-        for (const item of tabs.values()) item.view.setVisible(item === child);
+        child.view.setBounds(workspaceBounds || record.view.getBounds());
+        for (const item of tabs.values()) item.view.setVisible(item === child && workspaceVisible && Boolean(workspaceBounds));
         selectedId = child.tab.id; syncInputShield();
         if (!options.webContents) child.view.webContents.loadURL(url).catch(error => emit("navigation-error", child, { error: { message: error.message } }));
         persistMetadata(); return child.view.webContents;
@@ -183,6 +184,8 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
     if (selectedId === record.tab.id) selectedId = null;
   }
   async function closeProject() {
+    workspaceVisible = false;
+    workspaceBounds = null;
     let saveError;
     try { await saveTabs(); } catch (error) { saveError = error; onEvent({ type: "warning", code: "BROWSER_TABS_SAVE_FAILED", message: error.message }); }
     for (const record of [...tabs.values()]) destroy(record);
@@ -246,7 +249,8 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
     const next = { x, y, width, height }, previous = record.view.getBounds();
     if (Object.keys(next).some(key => next[key] !== previous[key])) { record.view.setBounds(next); transition(record, { type: "viewport_changed" }); }
     if (width > 0 && height > 0) workspaceBounds = next;
-    for (const item of tabs.values()) item.view.setVisible(item === record && width > 0 && height > 0);
+    workspaceVisible = width > 0 && height > 0;
+    for (const item of tabs.values()) item.view.setVisible(item === record && workspaceVisible);
     selectedId = id;
     syncInputShield();
     return copy(record.tab);
@@ -461,7 +465,10 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
     select(id, bounds) {
       if (bounds) return layout(id, bounds);
       const record = recordFor(id);
-      for (const item of tabs.values()) item.view.setVisible(item === record);
+      // Agent selection changes tabs, but only a renderer layout can expose
+      // a native page. Background pages still keep a viewport for automation.
+      if (workspaceVisible && workspaceBounds) record.view.setBounds(workspaceBounds);
+      for (const item of tabs.values()) item.view.setVisible(item === record && workspaceVisible && Boolean(workspaceBounds));
       selectedId = id; syncInputShield(); return copy(record.tab);
     },
     layout,
@@ -471,7 +478,7 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
       const image = await contents.capturePage();
       return image.isEmpty() ? null : image.toDataURL();
     },
-    hide() { for (const record of tabs.values()) record.view.setVisible(false); inputShield?.setVisible(false); },
+    hide() { workspaceVisible = false; for (const record of tabs.values()) record.view.setVisible(false); inputShield?.setVisible(false); },
     list: () => [...tabs.values()].map(record => copy(record.tab)),
     getContents: id => recordFor(id).view.webContents,
     status: () => ({ projectId: project?.id || null, selectedId, tabs: tabs.size, sessions: sessions.count(), disposed }),

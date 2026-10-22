@@ -156,9 +156,10 @@ test("agent question tool supports recommended-first single select and explicit 
   assert.match(chatStyles, /data-questions-action="submit"\] \{ order: 3; background: #e6e6e6/);
 });
 
-test("large Agent work uses a temporary collapsible composer checklist", () => {
+test("agent checklist uses the temporary composer widget and clears at terminal completion", () => {
   assert.match(renderer, /function renderComposerTaskList\(payload = \{\}\)/);
-  assert.match(renderer, /payload\.clear \|\| payload\.completed/);
+  assert.match(renderer, /payload\.clear \|\| !tasks\.length/);
+  assert.match(renderer, /run\.taskList\?\.source === "agent"[\s\S]*?clearComposerTaskList\(\)/);
   assert.match(renderer, /class="composer-task-list-card" aria-expanded=/);
   assert.match(renderer, /if \(!appState\.activeComposerTaskList\?\.expanded \|\| composerTaskListEl\?\.contains\(event\.target\)\) return/);
   assert.match(renderer, /const workTools = tools\.filter\(\(tool\) => !isEndTurnTool\(tool\) && !isTaskListTool\(tool\)\)/);

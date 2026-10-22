@@ -19,3 +19,19 @@ test("computeOrchestrationHold is true for active children and unconsumed result
   assert.equal(computeOrchestrationHold(coordinator, "p", {}), true);
   assert.equal(computeOrchestrationHold(coordinator, "p", { parentContinuationScheduled: true }), true);
 });
+
+test("the continuation consuming a result does not wait on itself", async t => {
+  const coordinator = createSubagentCoordinator();
+  t.after(() => coordinator.shutdown());
+  coordinator.submitChild({ parentKey: "p", childInvocationId: "c", childSessionId: "s", start: async () => ({ status: "completed", output: { text: "done" } }) });
+  await new Promise(resolve => setImmediate(resolve));
+  const resultId = coordinator.snapshot("p").resultQueue[0];
+  assert.equal(coordinator.claimResult("p", resultId).ok, true);
+  assert.equal(computeOrchestrationHold(coordinator, "p"), true);
+  assert.equal(computeOrchestrationHold(coordinator, "p", { activeResultId: resultId }), false);
+  assert.equal(computeOrchestrationHold(coordinator, "p", { activeResultId: "another-result" }), true);
+  coordinator.submitChild({ parentKey: "p", childInvocationId: "other", childSessionId: "other-s", start: async () => ({ status: "completed", output: { text: "more" } }) });
+  assert.equal(computeOrchestrationHold(coordinator, "p", { activeResultId: resultId }), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(computeOrchestrationHold(coordinator, "p", { activeResultId: resultId }), true);
+});

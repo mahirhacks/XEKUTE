@@ -266,6 +266,7 @@ export const modelsSettingsRefresh = $("models-settings-refresh");
 export const modelsSettingsList = $("models-settings-list");
 export const modelsViewAllBtn = $("models-view-all");
 export const modelsExploreSubagent = $("models-explore-subagent");
+export const decisionModelSelect = $("agent-decision-model");
 export const ollamaHostInput = $("ollama-host-input");
 export const ollamaLocationBadge = $("ollama-location-badge");
 export const ollamaActiveEndpoint = $("ollama-active-endpoint");

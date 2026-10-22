@@ -1,0 +1,164 @@
+{
+  "description": "Twenty frozen synthetic routing scenarios. These labels are proposed test expectations, not expert-reviewed ground truth.",
+  "cases": [
+    {
+      "id": "01-general-factual-answer",
+      "request": "What does HTTP status 401 mean? Give me a short explanation.",
+      "recentTurns": [],
+      "expectedPlan": false,
+      "expectedSkills": []
+    },
+    {
+      "id": "02-large-web-vapt",
+      "request": "Assess the supplied fictional scope and evidence for a web application. Build a prioritized VAPT checklist, examine authentication, object-level access, GraphQL, injection, exposed assets, and reportable impact. Use only the supplied artifacts and stop before any live testing.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["bug-bounty", "web2-recon", "web2-vuln-classes"]
+    },
+    {
+      "id": "03-explicit-report-skill",
+      "request": "/report Turn the validated fictional findings in the supplied assessment record into a concise Markdown report.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["report"]
+    },
+    {
+      "id": "04-history-followup-auth",
+      "request": "Now make the checks specific to refresh-token rotation and session invalidation.",
+      "recentTurns": [
+        { "role": "user", "content": "We are reviewing the in-scope authentication flow from these supplied notes." },
+        { "role": "assistant", "content": "The notes mention access tokens, rotating refresh tokens, and server-side session revocation." }
+      ],
+      "expectedPlan": true,
+      "expectedSkills": ["bug-bounty"]
+    },
+    {
+      "id": "05-direct-header-explanation",
+      "request": "Explain what the supplied Cache-Control: private header tells an HTTP client.",
+      "recentTurns": [],
+      "expectedPlan": false,
+      "expectedSkills": []
+    },
+    {
+      "id": "06-graphql-authorization-review",
+      "request": "Review this supplied GraphQL schema and three resolver excerpts for tenant isolation. Separate confirmed behavior from hypotheses, list missing proof, and propose a safe verification checklist without calling a target.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["graphql-audit", "web2-vuln-classes"]
+    },
+    {
+      "id": "07-ci-supply-chain-review",
+      "request": "Review these supplied GitHub Actions workflow files for untrusted pull-request inputs, token permissions, artifact boundaries, and dependency pinning. Give me ordered review steps and remediation notes.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["cicd-security"]
+    },
+    {
+      "id": "08-incident-log-triage",
+      "request": "Triage the supplied fictional authentication logs across three accounts. Build a timeline, distinguish direct observations from inferences, identify gaps, and draft incident handoff questions.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["triage-validation", "security-arsenal"]
+    },
+    {
+      "id": "09-web3-contract-review",
+      "request": "Analyze the supplied Solidity contract for authorization and accounting invariants. Trace the deposit and withdrawal paths, state any assumptions, and produce a prioritized review checklist.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["web3-audit"]
+    },
+    {
+      "id": "10-meme-token-due-diligence",
+      "request": "Using only these supplied contract and liquidity facts, assess a fictional meme token's authority, holder concentration, liquidity controls, and upgrade risk. Separate missing data from evidence and give a go/no-go review plan.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["meme-coin-audit", "web3-audit"]
+    },
+    {
+      "id": "11-mobile-client-review",
+      "request": "Review these supplied Android and iOS client notes for local credential storage, certificate handling, deep links, and backend trust assumptions. Make a bounded checklist for the evidence already available.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["mobile-pentest"]
+    },
+    {
+      "id": "12-exposed-credential-judgment",
+      "request": "A fictional source excerpt contains a redacted API credential. Explain a safe way to assess its intended scope and exposure from the supplied metadata. Do not use it to authenticate or test access.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["credential-attack"]
+    },
+    {
+      "id": "13-oast-recon-lead",
+      "request": "Assess this supplied scanner output and DNS transcript for a possible blind server-side request. Identify the evidence needed to validate the lead and organize safe follow-up work.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["argus", "web2-vuln-classes"]
+    },
+    {
+      "id": "14-client-signing-reversal",
+      "request": "The supplied proxy capture shows a request signature changing with a client token. Explain how to inspect the provided application code for signing inputs and document an offline reproduction plan.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["client-reverse"]
+    },
+    {
+      "id": "15-scope-change-supersedes-recon",
+      "request": "Do not continue the broad recon plan. The updated fictional program scope excludes subdomains and only permits review of the supplied staging repository. Reframe the work around that repository and its included build files.",
+      "recentTurns": [
+        { "role": "user", "content": "Earlier I asked for broad web recon and host discovery." },
+        { "role": "assistant", "content": "I prepared a passive asset checklist for that earlier scope." }
+      ],
+      "expectedPlan": true,
+      "expectedSkills": ["cicd-security", "bug-bounty"]
+    },
+    {
+      "id": "16-report-quality-gate",
+      "request": "Check whether these supplied finding drafts meet the evidence, reproducibility, impact, and severity requirements for submission. Return only gaps and revision priorities.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["triage-validation", "report-writing"]
+    },
+    {
+      "id": "17-web3-fact-after-history",
+      "request": "In one sentence, define a smart-contract upgrade proxy.",
+      "recentTurns": [
+        { "role": "user", "content": "We are planning a token contract security audit." },
+        { "role": "assistant", "content": "We can review the supplied proxy and implementation sources." }
+      ],
+      "expectedPlan": false,
+      "expectedSkills": []
+    },
+    {
+      "id": "18-ask-mode-bounded-analysis",
+      "request": "In Ask mode, compare the supplied OAuth redirect traces, browser cookie flags, and two policy excerpts. Identify inconsistencies and evidence gaps. Do not modify files or test a live endpoint.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["bug-bounty", "web2-vuln-classes"]
+    },
+    {
+      "id": "19-explicit-recon-bypass",
+      "request": "/web2-recon Organize the supplied in-scope host and endpoint inventory into a prioritized passive review checklist.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["web2-recon"]
+    },
+    {
+      "id": "20-child-auth-task",
+      "request": "Review only the assigned, supplied refresh-token handler for session invalidation behavior. Return observed facts and missing evidence. Do not inspect sibling tasks or use live credentials.",
+      "recentTurns": [],
+      "expectedPlan": true,
+      "expectedSkills": ["bug-bounty"]
+    }
+  ],
+  "comparisonCaseIds": [
+    "01-general-factual-answer",
+    "02-large-web-vapt",
+    "03-explicit-report-skill",
+    "04-history-followup-auth",
+    "05-direct-header-explanation",
+    "06-graphql-authorization-review",
+    "07-ci-supply-chain-review",
+    "08-incident-log-triage"
+  ]
+}

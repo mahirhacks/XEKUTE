@@ -559,6 +559,10 @@ export default memo(function AppShell() {
                   <h2>Sub-agent model</h2>
                   <select id="models-explore-subagent" className="models-select" aria-label="Sub-agent model"></select>
                 </section>
+                <section className="agent-subagent-settings" aria-label="Decision model">
+                  <h2>Decision model</h2>
+                  <select id="agent-decision-model" className="models-select" aria-label="Decision model"></select>
+                </section>
               </section>
               <section id="app-settings-prompts-panel" className="app-settings-panel guidance-settings-panel" hidden>
                 <div className="guidance-customize-page rules-settings-page">
