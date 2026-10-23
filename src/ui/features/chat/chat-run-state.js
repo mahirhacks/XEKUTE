@@ -26,6 +26,7 @@ import {
   normalizeAssistantTurns, hydrateExploredFoldLabels, hydrateThinkingFolds,
 } from "./turn-structure.js";
 import { MessageIdentity } from "../../core/runtime-globals.js";
+import { captureChatSnapshot } from "./chat-transcript.js";
 
 export const activeChatRuns = new Map();
 
@@ -147,7 +148,7 @@ export function chatRunContainer(run = activeSessionRun()) {
   if (run.viewHost) return run.viewHost;
   if (appState.activeChatSessionId === run.sessionId) return messages;
   const host = document.createElement("div");
-  host.innerHTML = run.session?.messagesHtml || "";
+  host.innerHTML = sanitizePersistedChatHtml(run.session?.messagesHtml || "");
   run.viewHost = host;
   return host;
 }
@@ -278,8 +279,9 @@ export function syncChatRunSession(run = activeSessionRun(), { persist = true } 
   session.selectedModel = run.model;
   const container = run.viewHost || (appState.activeChatSessionId === session.id ? messages : null);
   if (container) {
-    captureSessionTranscript(session, container);
-    session.messagesHtml = sanitizePersistedChatHtml(container.innerHTML || "");
+    const snapshot = captureChatSnapshot(container, sanitizePersistedChatHtml);
+    session.transcript = snapshot.transcript;
+    session.messagesHtml = snapshot.messagesHtml;
   }
   session.updatedAt = new Date().toISOString();
   if (appState.activeChatSessionId === session.id) {

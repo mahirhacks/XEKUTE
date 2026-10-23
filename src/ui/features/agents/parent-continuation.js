@@ -96,7 +96,7 @@ export function handleParentSubagentLifecycle(payload = {}) {
     persistedSubagentRowForSession(session, payload);
     if (session.messagesHtml) {
       const host = document.createElement("div");
-      host.innerHTML = session.messagesHtml;
+      host.innerHTML = sanitizePersistedChatHtml(session.messagesHtml);
       if (updateRenderedSubagentCard(payload, host)) {
         session.messagesHtml = sanitizePersistedChatHtml(host.innerHTML);
         captureSessionTranscript(session, host);
@@ -116,6 +116,7 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
   const type = String(payload.type || "");
   if (type === "task_list") {
     run.taskList = payload.clear ? null : { ...payload, source: "agent" };
+    if (!payload.clear && payload.tasks?.length) assistant.noteActivity();
     if (runIsChildVisible(childSessionId)) renderComposerTaskList(run.taskList || payload);
     scheduleDelegatedLiveSnapshot(run);
     return;
@@ -130,7 +131,9 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
     assistant.setStatus(response?.skipped ? "Clarification skipped" : "Clarification answers submitted");
     return;
   }
-  if (type === "thinking") {
+  if (type === "model_start") {
+    assistant.beginModelBlock({ newRound: true });
+  } else if (type === "thinking") {
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
     assistant.appendThinking(payload.token || payload.delta || "");
   } else if (type === "model_round") {
@@ -142,6 +145,8 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
       run.activeStreamContent = assistant.rawContent;
       syncAssistantDraftToHistory(run, assistant, { persist: false });
     }
+  } else if (type === "skills_loaded") {
+    assistant.appendSkillLoad(payload.skills);
   } else if (type === "status" || type === "activity") {
     if (payload.text || payload.summary) assistant.setStatus(String(payload.text || payload.summary));
   } else if (type === "run_state") {
@@ -149,8 +154,7 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
     assistant.setStatus(phase);
   } else if (type === "tool_call") {
     const tools = Array.isArray(payload.tools) ? payload.tools : [];
-    assistant.beginModelBlock();
-    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteModelOutput();
+    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteActivity();
     for (const tool of tools) {
       if (isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) continue;
       ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
@@ -306,7 +310,7 @@ export function ensureParentContinuationRun(payload = {}) {
       ? messages
       : (() => {
         const detached = document.createElement("div");
-        detached.innerHTML = session.messagesHtml || "";
+        detached.innerHTML = sanitizePersistedChatHtml(session.messagesHtml || "");
         return detached;
       })();
     run = {
@@ -362,7 +366,10 @@ export async function renderParentContinuationEvent(payload = {}) {
   const visible = appState.activeChatSessionId === run.sessionId && !run.viewHost;
   if (type === "task_list") {
     run.taskList = payload.clear ? null : { ...payload, source: "agent" };
+    if (!payload.clear && payload.tasks?.length) assistant.noteActivity();
     if (visible) renderComposerTaskList(run.taskList || payload);
+  } else if (type === "model_start") {
+    assistant.beginModelBlock({ newRound: true });
   } else if (type === "thinking") {
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
     assistant.appendThinking(payload.token || payload.delta || "");
@@ -377,6 +384,8 @@ export async function renderParentContinuationEvent(payload = {}) {
     }
   } else if (type === "status") {
     assistant.setStatus(payload.text || "Working...");
+  } else if (type === "skills_loaded") {
+    assistant.appendSkillLoad(payload.skills);
   } else if (type === "activity") {
     if (payload.text && !isSilentToolRoutingActivity(payload.text)) assistant.noteTaskActivity(payload.text, payload.kind || "info");
   } else if (type === "output_continuation") {
@@ -407,8 +416,7 @@ export async function renderParentContinuationEvent(payload = {}) {
   } else if (type === "tool_call") {
     assistant.finalizeThinking();
     const tools = Array.isArray(payload.tools) ? payload.tools : [];
-    assistant.beginModelBlock();
-    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteModelOutput();
+    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteActivity();
     for (const tool of tools) {
       if (isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) continue;
       ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });

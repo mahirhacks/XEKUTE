@@ -10,6 +10,7 @@ import { liveInputController } from "../../bootstrap.js";
 import { stopGeneration } from "./run-stop.js";
 import { chatSendInFlight, sendMessageWithAgentRuntime } from "./agent-run.js";
 import { isRunningChatActive } from "./chat-run-state.js";
+import { activeChatSession } from "./chat-sessions.js";
 import { renderFileTagSuggestions } from "./file-tag-picker.js";
 
 export const CHAT_INPUT_MAX_LINES = 12;
@@ -220,6 +221,7 @@ export async function submitLiveChatInput(session, text) {
 
 export function submitChatComposer() {
   if (sendBtn.classList.contains("stop")) { stopGeneration(); return; }
+  if (sendBtn.classList.contains("resume")) { if (!sendBtn.disabled) sendMessageWithAgentRuntime({ resume: true }); return; }
   sendMessageWithAgentRuntime();
 }
 export function submitChatComposerFromInput() { submitChatComposer(); }
@@ -232,12 +234,15 @@ export function updateSendBtn() {
   // start a new message but never steer a running one.
   const running = isRunningChatActive();
   const stopMode = running && !hasText;
+  const session = activeChatSession();
+  const resumeMode = !running && !hasText && !appState.composerImages.length && Boolean(session?.stoppedRun);
   const canSend = hasText || (!running && appState.composerImages.length > 0);
   sendBtn.classList.toggle("stop", stopMode);
-  sendBtn.title = stopMode ? "Stop" : "Send message";
-  sendBtn.setAttribute("aria-label", stopMode ? "Stop the agent" : "Send message");
-  sendBtn.disabled = stopMode ? false : !canSend;
-  if (icon) icon.className = `codicon ${stopMode ? "codicon-primitive-square" : "codicon-arrow-up"}`;
+  sendBtn.classList.toggle("resume", resumeMode);
+  sendBtn.title = stopMode ? "Stop" : resumeMode ? "Resume run" : "Send message";
+  sendBtn.setAttribute("aria-label", stopMode ? "Stop the agent" : resumeMode ? "Resume the stopped run" : "Send message");
+  sendBtn.disabled = stopMode ? false : resumeMode ? Boolean(session.stopPending || chatSendInFlight.has(session.id)) : !canSend;
+  if (icon) icon.className = `codicon ${stopMode ? "codicon-primitive-square" : resumeMode ? "codicon-play" : "codicon-arrow-up"}`;
 }
 
 export function onChatInputChange() {

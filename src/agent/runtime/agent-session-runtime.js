@@ -32,7 +32,7 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
     }
     return unwrap(receipt);
   }
-  async function admit({ workspace = "", sessionId, runId, blockId, taskId, userMessage, inputId, binding = {}, resume = false, snapshotWave = null, continuationResultId = "", completionBarrier = null }) {
+  async function admit({ workspace = "", sessionId, runId, blockId, taskId, userMessage, inputId, binding = {}, resume = false, resumeStopped = false, snapshotWave = null, continuationResultId = "", completionBarrier = null }) {
     const originalText = userMessage;
     const receipt = await store.transactSession(workspace, sessionId, (document) => {
       const control = document.run_control = normalizeRunControl(document.run_control);
@@ -40,6 +40,17 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
       if (task && ((taskId && task.id !== taskId) || (runId && task.runId !== runId)
         || (!resume && ((userMessage !== undefined && task.objective !== userMessage) || (inputId && task.initialInputId !== inputId))))) return { ok: false, code: "SESSION_TASK_CONFLICT", error: "This task identity was already admitted for different work." };
       if (!task && resume) task = control.tasks.find((entry) => entry.id === control.activeTaskId);
+      if (resumeStopped) {
+        if (!task || task.status !== "stopped" || !task.engine || task.childRun) return { ok: false, code: "TASK_RESUME_UNAVAILABLE", error: "This task has no stopped run to resume." };
+        if (control.tasks.some((entry) => entry.id !== task.id && entry.kind === "primary" && ["running", "waiting"].includes(entry.status))) return { ok: false, code: "PRIMARY_TASK_BUSY", error: "Another task is already running in this chat." };
+        task.status = "running";
+        task.completionIntent = null;
+        task.engine = { ...task.engine, cancellationEpoch: control.cancellationEpoch };
+        delete task.engine.pendingCompletion;
+        control.activeTaskId = task.id;
+        control.ownerTaskId = task.id;
+        control.orchestrationWave = task.orchestrationWave || null;
+      }
       if (task && !["running", "waiting"].includes(task.status)) return { ok: false, code: "TASK_ALREADY_TERMINAL", error: "This task has already ended." };
       let fresh = false;
       if (!task) {
@@ -76,6 +87,7 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
     const { task, messages, history } = receipt.value;
     const location = { workspace, sessionId, taskId: task.id };
     let appliedRevision = task.appliedRevision;
+    let checkpointEpoch = task.engine?.cancellationEpoch ?? 0;
     let finalReceipt = null;
     const emittedInputs = new Set();
     const prefix = messages.map((message) => ({ ...message }));
@@ -121,6 +133,7 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
         await deliverPending(snapshot);
         let current = snapshot.control.tasks.find((entry) => entry.id === task.id);
         if (!current || !["running", "waiting"].includes(current.status)) return { ok: false, code: "TASK_STOPPED", error: "The task was stopped.", aborted: true };
+        if ((current.engine?.cancellationEpoch ?? 0) !== checkpointEpoch) return { ok: false, code: "TASK_REVISION_STALE", error: "The task is owned by a newer invocation.", aborted: true };
         if (snapshot.batch.length && current.kind === "primary" && !current.pendingPlan) {
           const proposal = routeSessionInput({ ...snapshot, planningTaskId: task.id });
           if (!proposal.ok) return proposal;
@@ -175,6 +188,7 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
         const receipt = await store.transactSession(workspace, sessionId, (document) => {
           const control = document.run_control = normalizeRunControl(document.run_control);
           const owner = document.run_control.tasks.find((entry) => entry.id === task.id);
+          if (owner && (owner.engine?.cancellationEpoch ?? 0) !== checkpointEpoch) return { ok: false, code: "TASK_REVISION_STALE", error: "The task is owned by a newer invocation.", aborted: true };
           const expectedArrival = Number.isSafeInteger(inputWatermark) ? inputWatermark : control.arrival;
           if (control.arrival !== expectedArrival || control.arrival !== control.routed) return { ok: false, code: "TASK_INPUT_PENDING", error: "New session input arrived before this execution round could be persisted." };
           if (!owner || !["running", "waiting"].includes(owner.status) || owner.appliedRevision !== revision || owner.revision !== revision) return { ok: false, code: "TASK_REVISION_STALE", error: "The task cannot persist this execution round." };
@@ -184,13 +198,15 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
           owner.engine = engineSnapshot; owner.pendingExecution = plan;
           return { ok: true, value: plan };
         });
+        if (receipt.ok) checkpointEpoch = engineSnapshot.cancellationEpoch ?? 0;
         return receipt.ok ? { ...receipt, plan: receipt.value } : receipt;
       },
       async checkpoint({ revision, previousRevision, appendedMessages, engineSnapshot, consumedPlanId, allowStopped, mutation = null }) {
         const result = await supervisor.checkpointTask({ ...location, expectedRevision: revision, previousRevision: previousRevision ?? appliedRevision,
-          engine: engineSnapshot, messages: transcript(appendedMessages, engineSnapshot), consumedPlanId, allowStopped, mutation });
+          expectedCheckpointEpoch: checkpointEpoch, engine: engineSnapshot, messages: transcript(appendedMessages, engineSnapshot), consumedPlanId, allowStopped, mutation });
         if (result.ok) {
           appliedRevision = revision;
+          checkpointEpoch = engineSnapshot?.cancellationEpoch ?? 0;
           const appliedIds = new Set(engineSnapshot?.appliedInputIds || []);
           const appliedDeliveries = supervisor.taskSnapshot(location).task?.deliveries.filter((delivery) => delivery.revision <= revision && appliedIds.has(delivery.messageId)) || [];
           for (const message of [...(appendedMessages || []), ...appliedDeliveries.map((delivery) => ({ source_message_id: delivery.messageId, task_revision: delivery.revision }))]) if (message.source_message_id && !emittedInputs.has(message.source_message_id)) {
@@ -232,6 +248,7 @@ function createAgentSessionRuntime({ store, emit = () => {}, wake = () => {}, on
           const control = document.run_control = normalizeRunControl(document.run_control);
           const owner = control.tasks.find((entry) => entry.id === task.id);
           if (!owner || !["running", "waiting"].includes(owner.status)
+            || (owner.engine?.cancellationEpoch ?? 0) !== checkpointEpoch
             || (request.taskRevision !== undefined && (owner.appliedRevision !== request.taskRevision || owner.revision !== request.taskRevision))
             || (Number.isSafeInteger(request.inputWatermark) && control.arrival > request.inputWatermark)) return { ok: false, code: "TOOL_TASK_STALE", error: "The task no longer owns this tool round." };
           operationId = `${task.runId}:${owner.pendingExecution?.id || owner.pendingPlan?.id || `revision:${owner.appliedRevision}`}:${call.id || call.callId}`;

@@ -16,6 +16,7 @@ import {
 } from "./command-timeline.js";
 import { createToolCard, setToolCardStatus } from "./tool-cards.js";
 import { toolActionName } from "./tool-labels.js";
+import { createSkillLoadRow } from "./skill-activity.js";
 import { renderMarkdown, attachAssistantCopyButton, syncChatStickyMask } from "./chat-messages.js";
 import { syncChatEmptyState, activeChatSession } from "./chat-sessions.js";
 import {
@@ -121,7 +122,8 @@ export function applyThinkingRecord(fold, item = {}) {
   const text = String(item.text || "").trim();
   if (content && text) {
     content.hidden = false;
-    renderMarkdown(content, text);
+    content.textContent = "Reasoning completed privately. Raw chain-of-thought and system instructions were not displayed.";
+    content.removeAttribute("data-raw-md");
     content.classList.remove("streaming");
   }
   setThinkingFoldLabel(fold, { live: false, endedAt, durationMs });
@@ -246,6 +248,11 @@ export function createFileStackFromRecord(event = {}) {
 
 export function appendTranscriptEvent(host, event) {
   if (!host || !event) return;
+  if (event.type === "skills_loaded") {
+    const row = createSkillLoadRow(event.skills);
+    if (row) host.appendChild(row);
+    return;
+  }
   if (event.type === "context_release") {
     const notice = createContextReleaseNotice(event.count, event.tokens_freed);
     if (notice) host.appendChild(notice);

@@ -736,6 +736,17 @@ body,
   border-radius: 2px;
   background: currentColor;
 }
+.send-btn.resume:not(:disabled) { background: #d6d6d6 !important; color: #1b1b1b !important; }
+.send-btn.resume .codicon { display: none; }
+.send-btn.resume::before {
+  content: "";
+  width: 0;
+  height: 0;
+  margin-left: 2px;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid currentColor;
+}
 
 #statusbar {
   height: 31px;

@@ -7,7 +7,7 @@ import {
   stashActiveChatRunView, activeChatRuns, hydratePersistedChatTranscript, isChatSessionRunning,
   isRunningChatActive,
 } from "./chat-run-state.js";
-import { hasStructuredTranscript, normalizeUiTranscript } from "./chat-transcript.js";
+import { hasStructuredTranscript, normalizeUiTranscript, captureChatSnapshot } from "./chat-transcript.js";
 import { MessageIdentity } from "../../core/runtime-globals.js";
 import {
   paintLiveInputRecord, memoryRecord, createChatSession, currentChatPersistenceScope,
@@ -105,6 +105,7 @@ export function applyActiveChatSession(session) {
   if (liveRun?.taskList) renderComposerTaskList(liveRun.taskList);
   else clearComposerTaskList();
   syncComposerQuestionsForActiveSession();
+  let restoredHtml = false;
   if (liveRun?.viewHost) {
     messages.replaceChildren(...liveRun.viewHost.childNodes);
     liveRun.viewHost = null;
@@ -113,13 +114,15 @@ export function applyActiveChatSession(session) {
     restoreHistorySubagentCards(session.history);
     hydratePersistedChatTranscript(messages);
   } else if (session.messagesHtml) {
-    messages.innerHTML = session.messagesHtml;
+    restoredHtml = true;
+    messages.innerHTML = sanitizePersistedChatHtml(session.messagesHtml);
     hydratePersistedChatTranscript(messages);
     restoreHistorySubagentCards(session.history);
     // Normalize snapshots produced before the V3 checkpoint UI. The cursor is
     // model-only state; it must never hide or remove visible transcript rows.
     if (messages.querySelector(".chat-archive-marker")) {
       renderCanonicalChatHistory(session.history);
+      restoredHtml = false;
     }
   }
   else {
@@ -148,10 +151,12 @@ export function applyActiveChatSession(session) {
   updateSendBtn();
   queueMicrotask(() => migrateLegacyChatInputs(session));
   requestAnimationFrame(() => {
-    messages.querySelectorAll(".assistant-reply[data-raw-md]").forEach((element) => {
-      globalThis.MarkdownRenderer?.renderToElement(element, element.dataset.rawMd || "");
-      attachAssistantCopyButton(element);
-    });
+    if (restoredHtml) {
+      messages.querySelectorAll(".assistant-reply[data-raw-md]").forEach((element) => {
+        globalThis.MarkdownRenderer?.renderToElement(element, element.dataset.rawMd || "");
+        attachAssistantCopyButton(element);
+      });
+    }
     scrollMessages({ force: true });
   });
   scheduleSubagentResultDrain();
@@ -258,8 +263,9 @@ export function syncActiveChatSession({ persist = true } = {}) {
   appState.chatHistory = session.history;
   session.contextFilesCache = appState.contextFilesCache;
   session.activeStreamContent = appState.activeStreamContent;
-  session.messagesHtml = sanitizePersistedChatHtml(messages?.innerHTML || "");
-  captureSessionTranscript(session, messages);
+  const snapshot = captureChatSnapshot(messages, sanitizePersistedChatHtml);
+  session.messagesHtml = snapshot.messagesHtml;
+  session.transcript = snapshot.transcript;
   session.chatMode = appState.chatMode;
   session.chatFamily = appState.chatFamily;
   session.selectedModel = appState.selectedModel;

@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const { normalizeRunControl, emptyRunControl, createTask } = require("../src/agent/runtime/session-input.js");
+const { normalizeRunControl, validateRunControl, emptyRunControl, createTask } = require("../src/agent/runtime/session-input.js");
 const { sessionFixture } = require("./helpers/agent-session-store.js");
 
 test("encrypted receipt preserves exact input and retries return the same sequence", async (t) => {
@@ -58,6 +58,18 @@ test("malformed control state is rejected rather than reset to an empty journal"
   const state = emptyRunControl(); state.arrival = 1;
   assert.throws(() => normalizeRunControl(state), { code: "SESSION_CONTROL_INVALID" });
   assert.throws(() => normalizeRunControl({ ...emptyRunControl(), version: 2 }), { code: "SESSION_CONTROL_INVALID" });
+});
+
+test("validation leaves control ownership and recovery to the normalizer", () => {
+  const state = emptyRunControl();
+  state.tasks = [createTask({ taskId: "task:independent", runId: "run:independent", kind: "independent" })];
+  const before = structuredClone(state);
+  validateRunControl(state);
+  assert.deepEqual(state, before);
+  const recovered = normalizeRunControl(state);
+  assert.equal(recovered.tasks[0].status, "stopped");
+  assert.deepEqual(state, before, "recovery does not mutate its source");
+  assert.throws(() => validateRunControl({ ...state, version: 2 }), { code: "SESSION_CONTROL_INVALID" });
 });
 
 test("recovery rejects cycles and routed input without matching task delivery", () => {

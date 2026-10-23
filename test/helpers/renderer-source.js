@@ -26,6 +26,7 @@ const RENDERER_FILES = [
   "features/chat/tool-labels.js",
   "features/chat/tool-cards.js",
   "features/chat/command-timeline.js",
+  "features/chat/skill-activity.js",
   "features/chat/composer-questions.js",
   "features/chat/assistant-turn.js",
   "features/chat/slash-commands.js",

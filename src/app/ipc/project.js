@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { policyFromProjectScope } = require("../../domain/scope/scope-engine");
 const { createMcpConfigService } = require("../services/assessment/knowledge/mcp-config-service.js");
 const { createKaliAccessService } = require("../services/assessment/knowledge/kali-access-service.js");
 
@@ -714,7 +715,7 @@ ipcMain.handle("proxy:configure", async (_event, { assessmentPath } = {}) => {
     const project = readProjectProfile(assessmentPath);
     const result = await proxyListener.configure(assessmentPath, {
       settings: nextSettings,
-      targets: project?.profile?.scope?.inScopeTargets || null,
+      ...policyFromProjectScope(project?.profile?.scope),
     });
     if (requestGeneration !== proxyConfigurationGeneration) return proxyListener.getStatus();
     if (!result?.running && assessmentPath) {
@@ -746,7 +747,7 @@ ipcMain.handle("proxy:browserLaunch", async (_event, { assessmentPath = "", iden
     const project = readProjectProfile(assessmentPath);
     proxyStatus = await proxyListener.configure(assessmentPath, {
       settings,
-      targets: project?.profile?.scope?.inScopeTargets || null,
+      ...policyFromProjectScope(project?.profile?.scope),
     });
   }
   if (!proxyStatus?.running) {
@@ -822,7 +823,7 @@ ipcMain.handle("settings:certificatesChoose", async (_event, { assessmentPath = 
     const project = readProjectProfile(assessmentPath);
     await proxyListener.configure(assessmentPath, {
       settings: effectiveProjectRuntimeSettings(assessmentPath),
-      targets: project?.profile?.scope?.inScopeTargets || null,
+      ...policyFromProjectScope(project?.profile?.scope),
     });
   }
   return certificateSettingsSnapshot();
@@ -838,7 +839,7 @@ ipcMain.handle("settings:certificatesReset", async (_event, { assessmentPath = "
     const project = readProjectProfile(assessmentPath);
     await proxyListener.configure(assessmentPath, {
       settings: effectiveProjectRuntimeSettings(assessmentPath),
-      targets: project?.profile?.scope?.inScopeTargets || null,
+      ...policyFromProjectScope(project?.profile?.scope),
     });
   }
   return certificateSettingsSnapshot();

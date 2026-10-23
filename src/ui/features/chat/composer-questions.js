@@ -45,7 +45,17 @@ export function renderComposerTaskList(payload = {}) {
 
   const rows = tasks.map((task, index) => `
     <div class="composer-task-list-row" data-task-status="${escapeHtml(task.status)}" data-task-index="${index}"${!expanded && index !== currentIndex ? " hidden" : ""}>
-      <span class="composer-task-list-icon" aria-hidden="true"></span>
+      <span class="composer-task-list-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" focusable="false">
+          <rect x="2" y="2" width="20" height="20" rx="4" stroke="currentColor" stroke-width="2.5"/>
+          ${task.status === "completed" ? '<rect x="7" y="7" width="10" height="10" rx="1" fill="currentColor"/>' : ""}
+          ${task.status === "in_progress" ? `<g fill="currentColor" class="composer-task-list-progress">
+            <rect x="6" y="6" width="12" height="2.5"/>
+            <rect x="6" y="11" width="12" height="2.5"/>
+            <rect x="6" y="16" width="12" height="2.5"/>
+          </g>` : ""}
+        </svg>
+      </span>
       <span class="composer-task-list-count">${index + 1}/${tasks.length}</span>
       <span class="composer-task-list-title">${escapeHtml(task.title)}</span>
     </div>

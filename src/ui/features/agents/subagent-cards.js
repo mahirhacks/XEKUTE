@@ -145,7 +145,7 @@ export function createSubagentRunCard(assistant, payload = {}, mount = null) {
   stop.className = "subagent-run-stop";
   stop.title = "Stop sub-agent";
   stop.setAttribute("aria-label", "Stop sub-agent");
-  stop.innerHTML = '<span class="codicon codicon-debug-pause" aria-hidden="true"></span>';
+  stop.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="3" y="3" width="3" height="10" rx=".5"/><rect x="10" y="3" width="3" height="10" rx=".5"/></svg>';
 
   card.append(body, stop);
 

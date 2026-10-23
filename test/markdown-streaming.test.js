@@ -112,6 +112,19 @@ test("block-cached rendering matches a whole-document parse and sanitize for eve
   const options = { ADD_TAGS: ["button"], ADD_ATTR: ["class", "data-code", "data-mermaid-source", "title", "type"] };
   for (let end = 1; end <= doc.length; end += 1) {
     const md = doc.slice(0, end);
-    assert.equal(renderer.render(md), window.DOMPurify.sanitize(window.marked.parse(md), options), md);
+    assert.equal(renderer.render(md, { streaming: true }), window.DOMPurify.sanitize(window.marked.parse(md), options), md);
   }
+});
+
+test("restored replies sanitize the complete document once and retain safe formatting", () => {
+  const { renderer, reply, window } = setup();
+  const sanitize = window.DOMPurify.sanitize.bind(window.DOMPurify);
+  let calls = 0;
+  window.DOMPurify.sanitize = (...args) => { calls++; return sanitize(...args); };
+  renderer.renderToElement(reply, '# Saved reply\n\nFirst **paragraph**.\n\nSecond [reference][r].\n\n[r]: https://example.com\n\n<script>alert(1)</script><img src=x onerror=alert(1)>\n\n[bad](javascript:alert(1))');
+  assert.equal(reply.querySelector("h1").textContent, "Saved reply");
+  assert.equal(reply.querySelector("strong").textContent, "paragraph");
+  assert.equal(reply.querySelector("a").getAttribute("href"), "https://example.com");
+  assert.equal(reply.querySelector("script, [onerror], [href^='javascript:']"), null);
+  assert.equal(calls, 1, "restoration does not start a separate sanitizer for every paragraph");
 });

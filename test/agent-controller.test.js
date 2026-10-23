@@ -96,6 +96,7 @@ test("the agent creates its checklist directly and an empty picker permits paire
   assert.match(postChecklistPrompt, /Inspect supplied evidence/);
   assert.match(postChecklistPrompt, /Review only the supplied files and notes/);
   assert.equal(events.some((event) => event.type === "task_list" && event.tasks?.[0]?.title === "Inspect supplied evidence"), true);
+  assert.equal(events.some((event) => event.type === "skills_loaded"), false);
   const widget = events.find((event) => event.type === "task_list");
   assert.equal(JSON.stringify(widget).includes("Review supplied evidence safely"), false);
   assert.equal(JSON.stringify(widget).includes("Review only the supplied files and notes."), false);
@@ -129,6 +130,23 @@ test("new skill instructions suppress paired calls and appear before regenerated
   assert.deepEqual(decisions.map(({ questions }) => questions), [["skill_evidence-review"]]);
   assert.equal(events.some((event) => event.type === "tool_result" && JSON.stringify(event.result).includes("Not executed because checklist routing loaded new instructions")), true);
   assert.equal(JSON.stringify(payloads[1].messages).includes("ROUTED_SKILL_MARKER"), true);
+  assert.deepEqual(events.filter((event) => event.type === "skills_loaded"), [{ type: "skills_loaded", skills: ["Evidence Review"] }]);
+  assert.equal(events.filter(event => event.type === "model_start").length, payloads.length);
+  assert.ok(events.findIndex(event => event.type === "model_start") < events.findIndex(event => event.type === "model_round"));
+});
+
+test("an explicit skill announces its load once and recovery does not announce it again", async () => {
+  const specialSkill = { manifest: { id: "evidence-review", title: "Evidence Review" }, prompt: "Review supplied evidence carefully." };
+  const events = [];
+  const options = { mode: "agent", userMessage: "Review this note", specialSkill, sendEvent: event => events.push(event),
+    runModelRound: async () => ({ fullText: "Reviewed.", toolCalls: [endTurnCall("explicit-end")] }) };
+  const result = await runAgentTurn(options);
+  assert.equal(result.ok, true);
+  assert.deepEqual(events.filter(event => event.type === "skills_loaded"), [{ type: "skills_loaded", skills: ["Evidence Review"] }]);
+  events.length = 0;
+  const restored = await runAgentTurn({ ...options, engineSnapshot: result.engineSnapshot });
+  assert.equal(restored.ok, true);
+  assert.deepEqual(events.filter(event => event.type === "skills_loaded"), []);
 });
 
 test("greetings and short tasks can finish without a checklist or a decision-model call", async () => {
@@ -206,6 +224,41 @@ test("invalid checklist calls preserve state and do not invoke the skill picker"
   assert.equal(result.ok, true);
   assert.deepEqual(decisions.map(({ questions }) => questions), []);
   assert.equal(result.engineSnapshot.checklist, null);
+});
+
+test("overlapping checklist activity is rejected before routing or accompanying task execution", async () => {
+  const { decisions, skillRouter } = routingFixture();
+  const events = [];
+  const executed = [];
+  let round = 0;
+  const read = { id: "read-after-handoff", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } };
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Inspect evidence, verify the result, and report the gaps.",
+    skillRouter,
+    sendEvent: event => events.push(event),
+    runModelRound: async () => {
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall("initial", {
+        action: "create", main_goal: "Review supplied evidence",
+        items: [
+          { id: "inspect", label: "Inspect evidence", description: "Inspect the supplied files.", status: "in_progress" },
+          { id: "verify", label: "Verify results", description: "Verify the evidence before reporting.", status: "pending" },
+        ],
+      })] };
+      if (round === 2) return { fullText: "", toolCalls: [checklistCall("overlap", { action: "update", items: [{ id: "verify", status: "in_progress" }] }), { ...read, id: "read-before-repair" }] };
+      if (round === 3) return { fullText: "", toolCalls: [checklistCall("handoff", { action: "update", items: [{ id: "inspect", status: "completed" }, { id: "verify", status: "in_progress" }] }), read] };
+      return { fullText: "Verification complete.", toolCalls: [endTurnCall("finish")] };
+    },
+    executeToolCall: async ({ toolCall }) => { executed.push(toolCall.id); return { ok: true, value: { content: "Verified fixture." } }; },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(executed, ["read-after-handoff"]);
+  assert.equal(decisions.length, 2, "only the initial checklist and repaired handoff invoke selection");
+  assert.deepEqual(events.filter(event => event.type === "task_list").map(event => event.tasks.map(({ status }) => status)), [
+    ["in_progress", "pending"], ["completed", "in_progress"],
+  ]);
+  assert.deepEqual(result.engineSnapshot.checklist.items.map(({ status }) => status), ["completed", "in_progress"]);
 });
 
 test("one checklist repair is allowed and repeated invalid calls fail before task actions", async () => {

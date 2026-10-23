@@ -45,6 +45,19 @@ test("normal quit flushes durable state then quits once", async () => {
   assert.equal(app.quitCalls, 1);
 });
 
+test("shutdown finishes runtime checkpoints before draining session writes", async () => {
+  setAllowImmediateQuit(false);
+  const { app, handlers } = createAppHarness();
+  const calls = [];
+  registerLifecycle({ app, BrowserWindow: {}, session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
+    container: { v3SessionStore: { flush: async () => { calls.push("sessions"); } }, tier1SensitiveStore: { flush: async () => { calls.push("sensitive"); } } },
+    shutdown: async () => { await new Promise(resolve => setImmediate(resolve)); calls.push("runtime"); }, createWindow() {},
+  });
+  handlers["before-quit"]({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(calls, ["runtime", "sessions", "sensitive"]);
+});
+
 test("update install quit is not cancelled by the shutdown flush", async () => {
   setAllowImmediateQuit(true);
   const { app, handlers } = createAppHarness();

@@ -110,10 +110,8 @@ export function applyContextCheckpointUi(run, payload = {}) {
   const container = chatRunContainer(run);
   if (active) {
     ensureContextCheckpointNotice(container, { assistant: run?.assistant });
-    run?.assistant?.holdPlanningUntilCheckpoint?.();
   } else {
     finishContextCheckpointNotice(container, status);
-    run?.assistant?.releasePlanningAfterCheckpoint?.();
   }
   const visible = Boolean(session && appState.activeChatSessionId === session.id && !run?.viewHost);
   setContextCheckpointUi(active && (visible || appState.contextCheckpointingSessionId === appState.activeChatSessionId));
@@ -162,7 +160,6 @@ export function applyChatReferenceImportUi(run, payload = {}) {
         return item;
       }));
     }
-    run?.assistant?.holdPlanningUntilCheckpoint?.();
   } else {
     const notice = container?.querySelector?.(".context-checkpoint-notice[data-chat-reference-import='true'][data-state='pending']");
     if (payload.status === "failed") {
@@ -173,7 +170,6 @@ export function applyChatReferenceImportUi(run, payload = {}) {
       if (notice) notice.dataset.state = "complete";
     }
     if (appState.contextCheckpointNotice === notice) appState.contextCheckpointNotice = null;
-    run?.assistant?.releasePlanningAfterCheckpoint?.();
   }
   const visible = Boolean(run?.session && appState.activeChatSessionId === run.session.id && !run.viewHost);
   if (visible) { setContextCheckpointUi(active); setAgentStatus(active ? text : payload.status === "failed" ? "Could not bring chats" : `${modeLabel(run.mode)} working`); scrollMessages(); }

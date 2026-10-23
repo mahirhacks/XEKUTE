@@ -25,6 +25,7 @@ import {
   agentStateKindForText,
 } from "./chat-messages.js";
 import { setToolCardStatus } from "./tool-cards.js";
+import { createSkillLoadRow } from "./skill-activity.js";
 import {
   commandTimelineKey, bindCommandTimelineIdentity, commandTimelineRowIds, commandTimelineRows,
   commandCompletionForRow, createCommandTimelineRow, updateCommandTimelineRow,
@@ -50,7 +51,9 @@ export function coalesceDelegatedAssistantReplyFragments(assistant) {
   coalesceAdjacentReplyRuns(host);
 }
 
-export function createAssistantTurn({ container = messages, sessionId = appState.activeChatSessionId } = {}) {
+export function createAssistantTurn({ container = messages, sessionId = appState.activeChatSessionId, resuming = false } = {}) {
+  const startupState = resuming ? "resuming" : "planning";
+  const startupLabel = resuming ? "Resuming\u2026" : "Planning\u2026";
   const turn = document.createElement("div");
   turn.className = "chat-turn assistant agent-stream";
   turn.setAttribute("aria-busy", "true");
@@ -93,7 +96,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
     workFoldEl: null,
     workFoldBodyEl: null,
     workTimer: null,
-    modelEmitting: false,
+    activityStarted: false,
     modelBlockOpen: true,
     pendingSteeringHost: null,
     exploredFoldEl: null,
@@ -171,6 +174,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
       return host?.dataset.steeringSegment === "true" ? this.rootTurn : host;
     },
     activityBody() {
+      this.noteActivity();
       const fold = this.ensureWorkFold();
       return fold?.parentElement === this.workHostTurn() ? workFoldBody(fold) : null;
     },
@@ -198,17 +202,17 @@ export function createAssistantTurn({ container = messages, sessionId = appState
       this.thinkingRaw = "";
       return fold;
     },
-    beginModelBlock() {
-      if (this.modelBlockOpen) return;
+    beginModelBlock({ newRound = false } = {}) {
+      if (this.modelBlockOpen && !newRound) return;
       this.modelBlockOpen = true;
       const host = this.pendingSteeringHost;
       this.pendingSteeringHost = null;
-      if (host?.isConnected) startAssistantSteeringSegment(this, host);
+      if (streamingNodeLive(host)) startAssistantSteeringSegment(this, host);
     },
     appendThinking(token) {
       const value = String(token || "");
       this.beginModelBlock();
-      this.noteModelOutput();
+      this.noteActivity();
       this.showPrivateReasoning();
       const fold = this.ensureThinkingFold();
       if (!fold) return;
@@ -290,7 +294,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
       }
     },
     startWorkTimer() {
-      if (!this.modelEmitting || this.finalOutcome || this.workTimer) return;
+      if (!this.activityStarted || this.finalOutcome || this.workTimer) return;
       const tick = () => {
         const label = `Working for ${formatAgentWorkDuration(this.startedAt)}`;
         let live = false;
@@ -302,11 +306,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
             live = true;
             const textEl = block.querySelector(".agent-status-text");
             if (textEl) textEl.textContent = label;
-            // Planning/thinking leftover on this header would hide the caret
-            // and swallow clicks even after the label is Working for.
-            if (block.dataset.state === "planning" || block.dataset.state === "thinking") {
-              block.dataset.state = "working";
-            }
+            block.dataset.state = "working";
             syncWorkHeaderAffordance(block);
           }
         }
@@ -315,43 +315,22 @@ export function createAssistantTurn({ container = messages, sessionId = appState
       tick();
       this.workTimer = setInterval(tick, 1000);
     },
-    paintPlanningHeader(header = this.liveStateEl) {
-      if (!header || this.modelEmitting || header.dataset.final === "true") return header;
-      header.dataset.state = "planning";
+    paintStartupHeader(header = this.liveStateEl) {
+      if (!header || this.activityStarted || header.dataset.final === "true") return header;
+      header.dataset.state = startupState;
       header.dataset.final = "false";
       const textEl = header.querySelector(".agent-status-text");
-      if (textEl) textEl.textContent = "Planning\u2026";
+      if (textEl) textEl.textContent = startupLabel;
       syncWorkHeaderAffordance(header);
       return header;
     },
-    showPlanning() {
-      if (this.modelEmitting || this.finalOutcome || this.liveStateEl?.dataset.final === "true") return;
-      if (this.checkpointHeldChunk) return;
+    showStartupState() {
+      if (this.activityStarted || this.finalOutcome || this.liveStateEl?.dataset.final === "true") return;
       this.ensureWorkFold();
     },
-    holdPlanningUntilCheckpoint() {
-      const chunk = this.turn?.closest(".agent-run-chunk");
-      const notice = chunk?.previousElementSibling;
-      const prior = notice?.classList?.contains("context-checkpoint-notice")
-        ? notice.previousElementSibling
-        : null;
-      if (!prior?.classList?.contains("agent-run-chunk") || this.checkpointHeldChunk) return;
-      const label = prior.querySelector(".agent-status-text")?.textContent || "";
-      if (!/^Planning/i.test(label)) return;
-      if (prior.querySelector(".tool-card, .subagent-run-card, .command-event, .agent-command")) return;
-      const visibleReply = [...prior.querySelectorAll(".assistant-reply")].some((reply) => !reply.hidden && reply.textContent.trim());
-      if (visibleReply) return;
-      prior.hidden = true;
-      this.checkpointHeldChunk = prior;
-    },
-    releasePlanningAfterCheckpoint() {
-      if (!this.checkpointHeldChunk) return;
-      this.checkpointHeldChunk = null;
-      this.showPlanning();
-    },
-    noteModelOutput() {
-      if (this.modelEmitting || this.finalOutcome || this.liveStateEl?.dataset.final === "true") return;
-      this.modelEmitting = true;
+    noteActivity() {
+      if (this.activityStarted || this.finalOutcome || this.liveStateEl?.dataset.final === "true") return;
+      this.activityStarted = true;
       this.ensureWorkFold();
     },
     // Creating the fold adopts whatever the run already wrote, so narration
@@ -360,7 +339,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
     ensureWorkFold() {
       const fold = ensureAssistantWorkFold(this.workFoldTurn(), {
         startedAt: this.startedAt,
-        label: this.modelEmitting ? undefined : "Planning\u2026",
+        label: this.activityStarted ? undefined : startupLabel,
       });
       if (!fold) return null;
       const header = workFoldHeader(fold);
@@ -377,8 +356,8 @@ export function createAssistantTurn({ container = messages, sessionId = appState
         if (header && header.dataset.final !== "true") Object.assign(header.dataset, { final: "true", state: "complete" });
         return fold;
       }
-      if (this.modelEmitting) this.startWorkTimer();
-      else this.paintPlanningHeader(header);
+      if (this.activityStarted) this.startWorkTimer();
+      else this.paintStartupHeader(header);
       return fold;
     },
     splitAtContextCheckpoint(notice) {
@@ -429,7 +408,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
         delete current.dataset.workVerdict;
       }
       this.sealCurrentContentSegment();
-      this.noteModelOutput();
+      this.noteActivity();
       this.pendingVerdictBreak = false;
       if (this.verdictOpen) {
         this.verdictOpen = false;
@@ -452,7 +431,6 @@ export function createAssistantTurn({ container = messages, sessionId = appState
         const el = [...this.contentSegments].reverse().find((segment) => String(segment?.raw || "").trim())?.el;
         if (el) (this.completionAnswerEls ||= []).push(el);
       }
-      this.beginModelBlock();
       this.modelBlockOpen = false;
       const reason = String(finishReason || "").trim().toLowerCase();
       if (this.turn) this.turn.dataset.finishReason = reason;
@@ -527,6 +505,16 @@ export function createAssistantTurn({ container = messages, sessionId = appState
       }
       this.pendingVerdictBreak = Boolean(String(this.currentContentSegment()?.raw || "").trim());
       if (collapse && fold && fold.dataset.userToggled !== "true") setWorkFoldExpanded(fold, false);
+    },
+    appendSkillLoad(skills) {
+      const row = createSkillLoadRow(skills);
+      if (!row) return null;
+      this.finalizeThinking();
+      this.markToolUse();
+      appendChatStreamNode(this.toolWorkMount(), row);
+      this.ensurePostToolContentSegment();
+      scrollMessages();
+      return row;
     },
     ensureCommandEvent(tool) {
       this.markToolUse();
@@ -631,12 +619,12 @@ export function createAssistantTurn({ container = messages, sessionId = appState
       if (this.liveStateEl?.dataset.final === "true") return;
       const currentLabel = this.liveStateEl?.querySelector?.(".agent-status-text")?.textContent || "";
       if (isDurationWorkLabel(currentLabel)) {
-        if (this.modelEmitting) this.startWorkTimer();
+        if (this.activityStarted) this.startWorkTimer();
         return;
       }
       if (kind === "error" || kind === "question") this.stopWorkTimer();
-      else if (!this.modelEmitting) {
-        this.showPlanning();
+      else if (!this.activityStarted) {
+        this.showStartupState();
         this.turn?.setAttribute("aria-busy", "true");
         (this.rootTurn || this.turn)?.setAttribute("aria-busy", "true");
         return;
@@ -850,7 +838,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
     appendContent(token) {
       let value = String(token || "");
       this.beginModelBlock();
-      this.noteModelOutput();
+      this.noteActivity();
       this.ensureConversationSegment();
       const segment = this.currentContentSegment();
       if (segment) {
@@ -901,7 +889,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
       const hasStatus = Boolean(this.statusEl?.isConnected && !this.statusEl.hidden);
       const hasThinking = this.assistantTurns().some((turn) => turn.querySelector(".agent-thinking-fold"));
       const hasActivity = Boolean(this.activityLogEl?.childElementCount && this.activityLogEl.isConnected);
-      const hasTools = this.assistantTurns().some((turn) => turn.querySelector(".tool-card, .agent-command-event, .agent-thinking-fold"));
+      const hasTools = this.assistantTurns().some((turn) => turn.querySelector(".tool-card, .agent-command-event, .agent-skill-event, .agent-thinking-fold"));
       if (!hasContent && !statusActive && !hasStatus && !hasThinking && !hasActivity && !hasTools) {
         for (const turn of this.assistantTurns()) {
           const chunk = turn.closest(".agent-run-chunk");
@@ -913,7 +901,7 @@ export function createAssistantTurn({ container = messages, sessionId = appState
       for (const turn of this.assistantTurns()) {
         if (turn === this.rootTurn) continue;
         const visible = [...turn.querySelectorAll(".assistant-reply")].some((el) => !el.hidden && el.textContent.trim());
-        const extras = turn.querySelector(".tool-card, .agent-command-event, .subagent-run-card, .agent-status-line, .agent-thinking-fold");
+        const extras = turn.querySelector(".tool-card, .agent-command-event, .agent-skill-event, .subagent-run-card, .agent-status-line, .agent-thinking-fold");
         if (!visible && !extras) (turn.closest(".agent-run-chunk") || turn).remove();
       }
     },
@@ -942,6 +930,6 @@ export function createAssistantTurn({ container = messages, sessionId = appState
     },
   };
 
-  assistant.showPlanning();
+  assistant.showStartupState();
   return assistant;
 }

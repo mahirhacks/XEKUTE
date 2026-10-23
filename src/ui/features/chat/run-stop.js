@@ -20,6 +20,12 @@ import {
 
 export const chatSessionsStoppedByOperator = new Set();
 
+export function rememberStoppedRun(run) {
+  const taskId = run?.taskId || run?.session?.taskId;
+  if (!run?.session || !taskId || run.delegated) return;
+  run.session.stoppedRun = { taskId, model: run.model, mode: run.mode, family: run.family };
+}
+
 export function collapseStoppedOrchestratorTurns(run) {
   const primary = run?.assistant?.rootTurn || run?.assistant?.turn;
   const exchange = primary?.closest?.(".chat-exchange");
@@ -81,6 +87,7 @@ export function stopGeneration() {
   dropAutoContinuationsForSession(run.sessionId);
   dropAutoContinuationsForSession(run.memorySessionId || run.session?.memorySessionId || "");
   syncAssistantDraftToHistory(run, run.assistant, { persist: false });
+  rememberStoppedRun(run);
   void persistChatHistorySnapshot(appState.activeChatPersistenceScope, run.session);
   appState.activeStreamContent = "";
   settleDelegatedChildrenOf(run);
@@ -91,7 +98,12 @@ export function stopGeneration() {
     chatInput.removeAttribute("aria-disabled");
   }
   setAgentStatus(`${modeLabel()} ready`);
-  abortActiveChatRun(run);
+  const stopping = Promise.allSettled([abortActiveChatRun(run), run.finished]);
+  run.session.stopPending = stopping;
+  void stopping.finally(() => {
+    if (run.session.stopPending === stopping) delete run.session.stopPending;
+    updateSendBtn();
+  });
   updateSendBtn();
   updateContextUsage();
 }
@@ -123,15 +135,14 @@ export function isChatSessionStoppedByOperator(sessionId = "") {
 
 export function abortActiveChatRun(run) {
   if (run.taskId || run.session?.taskId) {
-    window.api.agentCancelTask?.({ workspace: run.workspace || appState.rootPath, sessionId: run.session?.parentMemorySessionId || run.memorySessionId || run.session?.memorySessionId || run.sessionId, taskId: run.taskId || run.session.taskId, scope: "task" })?.catch?.(reportChatHistoryWarning);
-    return;
+    return window.api.agentCancelTask?.({ workspace: run.workspace || appState.rootPath, sessionId: run.session?.parentMemorySessionId || run.memorySessionId || run.session?.memorySessionId || run.sessionId, taskId: run.taskId || run.session.taskId, scope: "task" })?.catch?.(reportChatHistoryWarning);
   }
   const ids = chatStopIdsForRun(run);
   if (!ids.length) {
     window.api.abortChat?.({});
     return;
   }
-  for (const sessionId of ids) window.api.abortChat?.({ sessionId });
+  return Promise.all(ids.map((sessionId) => window.api.abortChat?.({ sessionId })));
 }
 
 export function dismissComposerQuestionsForStop(run) {

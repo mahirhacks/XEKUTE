@@ -1,6 +1,24 @@
-const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard, powerSaveBlocker } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard, powerSaveBlocker, crashReporter } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const { createMainLog } = require("./main-log.js");
+const mainLog = createMainLog({ directory: () => path.join(app.getPath("userData"), "logs") });
+// Capture native failures before loading addons such as node-pty. JavaScript
+// exception handlers cannot record an access violation in Electron or an addon.
+app.setPath("crashDumps", path.join(app.getPath("userData"), "Crashpad"));
+crashReporter.start({ uploadToServer: false });
+mainLog.write("native.startup", JSON.stringify({
+  pid: process.pid, electron: process.versions.electron, node: process.versions.node,
+  platform: process.platform, arch: process.arch, crashDumps: app.getPath("crashDumps"),
+}));
+app.on("child-process-gone", (_event, details) => {
+  if (details.reason === "clean-exit") return;
+  mainLog.write("native.child-process-gone", `${details.type}: ${details.reason}, exit code ${details.exitCode}`);
+});
+app.on("render-process-gone", (_event, contents, details) => {
+  if (details.reason === "clean-exit") return;
+  mainLog.write("native.render-process-gone", `WebContents ${contents.id}: ${details.reason}, exit code ${details.exitCode}`);
+});
 const crypto = require("crypto");
 const http = require("http");
 const { pathToFileURL } = require("url");
@@ -70,7 +88,6 @@ const {
 } = require("../services/guidance/custom-guidance.js");
 const { createContainer } = require("../../infrastructure/di/container");
 const { registerLifecycle, setAllowImmediateQuit, prepareForUpdateInstall, APP_USER_MODEL_ID } = require("./lifecycle.js");
-const { createMainLog } = require("./main-log.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { isMemoryId } = require("../../contracts/memory/index.js");
@@ -330,7 +347,6 @@ function loadRenderer(mainWindow) {
   });
 }
 
-const mainLog = createMainLog({ directory: () => path.join(app.getPath("userData"), "logs") });
 process.on("unhandledRejection", (reason) => mainLog.write("unhandledRejection", reason));
 process.on("uncaughtException", (error) => {
   mainLog.write("uncaughtException", error);
@@ -1169,16 +1185,37 @@ function createWindow() {
     console.error("Renderer failed to load:", code, description, url);
   });
   mainWindow.webContents.on("will-attach-webview", (event) => event.preventDefault());
-  mainWindow.webContents.on("render-process-gone", (_event, details) => {
-    console.error("XEKUTE renderer exited unexpectedly:", details?.reason || "unknown");
-  });
   mainWindow.once("ready-to-show", () => {
     if (!mainWindow?.isDestroyed()) mainWindow.show();
   });
   loadRenderer(mainWindow);
   if (IS_DEV) {
-    mainWindow.webContents.once("did-finish-load", () => {
-      if (!mainWindow?.isDestroyed()) mainWindow.webContents.openDevTools({ mode: "detach" });
+    const inspectedWindow = mainWindow;
+    const inspected = inspectedWindow.webContents;
+    inspected.once("did-finish-load", () => {
+      if (inspectedWindow.isDestroyed()) return;
+      // An explicit owner avoids Electron 43's detached DevTools crash in
+      // WebContents::DevToolsOpened -> SetOwnerWindow during startup.
+      const devtools = new BrowserWindow({
+        width: 1000, height: 760, show: false, autoHideMenuBar: true,
+        backgroundColor: "#181818",
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      devtools.setMenu(null);
+      devtools.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      const destroyDevtools = () => {
+        inspectedWindow.removeListener("closed", destroyDevtools);
+        inspected.removeListener("devtools-closed", destroyDevtools);
+        if (!devtools.isDestroyed()) devtools.destroy();
+      };
+      devtools.once("closed", destroyDevtools);
+      inspectedWindow.once("closed", destroyDevtools);
+      inspected.once("devtools-closed", destroyDevtools);
+      inspected.once("devtools-opened", () => {
+        if (!devtools.isDestroyed()) devtools.show();
+      });
+      inspected.setDevToolsWebContents(devtools.webContents);
+      inspected.openDevTools({ mode: "detach" });
     });
   }
   const senderId = mainWindow.webContents.id;
@@ -3531,6 +3568,18 @@ async function runTier1CheckpointDelta({ request, model = "", provider = "", rea
 
 async function handleAgentRun(event, payload = {}, options = {}) {
   const sender = event.sender;
+  const resumeStopped = Boolean(payload.resumeTaskId) && !options.automaticContinuation && !payload.backgroundRuntime && !payload.internalRuntimeInput;
+  if (resumeStopped) {
+    const resumeSessionId = String(payload.sessionId || payload.memorySessionId || "");
+    if (liveRunForSession(resumeSessionId)) return { ok: false, code: "PARENT_BUSY", error: "The previous invocation is still stopping. Retry Resume once it finishes." };
+    const memorySessionId = tier1SessionIdForRun(resumeSessionId, sessionRunKey(resumeSessionId));
+    const state = agentSessionRuntime?.supervisor.snapshot({ workspace: payload.workspace || "", sessionId: memorySessionId });
+    const task = state?.control?.tasks.find((entry) => entry.id === payload.resumeTaskId);
+    if (!state?.ok || task?.status !== "stopped" || !task.engine || task.childRun) return { ok: false, code: "TASK_RESUME_UNAVAILABLE", error: "This task has no saved stopped run to resume." };
+    payload = { ...task.binding, workspace: payload.workspace || "", sessionId: resumeSessionId, chatSessionId: payload.chatSessionId,
+      runId: task.runId, taskId: task.id, blockId: task.blockId, userMessage: task.objective, resumeTaskId: task.id,
+      internalRuntimeInput: false, backgroundRuntime: false, continuation: null };
+  }
   const userImages = normalizeUserImages(payload.userImages);
   if (!userImages.ok) return { ok: false, error: userImages.error, code: "USER_IMAGES_INVALID" };
   const sessionId = String(payload.sessionId || payload.memorySessionId || "");
@@ -3592,7 +3641,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       .find((wave) => wave && (wave.resultQueue?.length || (wave.wave && !wave.wave.sealed)));
     if (savedWave) subagentCoordinator.restoreWave(coordinationKey, savedWave);
   }
-  const isContinuation = Boolean(continuationResultId || continuationQuestionId || payload.internalRuntimeInput || options.liveInputContinuation || options.releasePendingEndTurn || payload.releasePendingEndTurn);
+  const isContinuation = Boolean(resumeStopped || continuationResultId || continuationQuestionId || payload.internalRuntimeInput || options.liveInputContinuation || options.releasePendingEndTurn || payload.releasePendingEndTurn);
   if (!isContinuation && !canonicalControl?.control?.tasks.some((task) => task.kind === "primary" && ["running", "waiting"].includes(task.status))) subagentCoordinator.resetParentForTask?.(coordinationKey);
   const parentTurn = continuationResultId
     ? subagentCoordinator.claimResult(coordinationKey, continuationResultId)
@@ -3890,7 +3939,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     // supplied to delegated turns.
     tier1Context: tier1ProjectId ? container.memoryTier1Coordinator : null,
     loadChatReferenceSnapshot: (input) => agentSessionRuntime.loadChatReferenceSnapshot(input),
-    tier1Model: tier1ProjectId ? createTier1ModelCallback(payload) : null,
+    getTier1Model: (binding) => tier1ProjectId ? createTier1ModelCallback({ ...payload, ...binding }) : null,
     workingReferences: [],
     toolMetadataForName: (name, childSessionId = sessionId) => container.mcpRuntime?.metadata?.(name, {
       workspace: payload.workspace,
@@ -3967,12 +4016,13 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   let supervisedRun = null;
   if (agentSessionRuntime) {
     supervisedRun = await agentSessionRuntime.admit({ workspace: payload.workspace, sessionId: tier1SessionId,
-      runId: durableRunId, blockId: replyBlockId, taskId: payload.taskId, resume: isContinuation,
+      runId: durableRunId, blockId: replyBlockId, taskId: payload.taskId, resume: isContinuation, resumeStopped,
       snapshotWave: ({ acceptedResultId }) => subagentCoordinator.exportWave(coordinationKey, { acceptedResultId }), continuationResultId,
       completionBarrier: () => computeOrchestrationHold(subagentCoordinator, coordinationKey, { activeResultId: continuationResultId }),
       inputId: payload.inputId || payload.userMessageId, userMessage: isContinuation ? parentDescriptor?.payload?.userMessage || payload.userMessage : payload.userMessage,
       binding: { ...payload, provider: payload.provider || getActiveProvider() } });
     if (!supervisedRun.ok) return refuseUnsavedInput(supervisedRun, sendAgentEvent);
+    if (resumeStopped && parentDescriptor) parentDescriptor.aborted = false;
     if (supervisedRun.fresh) subagentCoordinator.resetParentForTask?.(coordinationKey);
     durableRunId = supervisedRun.runId;
     tier1SessionId = supervisedRun.sessionId;

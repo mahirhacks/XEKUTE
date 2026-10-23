@@ -7,6 +7,18 @@ const load = () => import("../src/ui/features/browser/browser-workspace.js");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const makeTab = (id, extra = {}) => ({ id, projectId: "project", purpose: "assessment", identityId: null, owner: { kind: "human" }, operation: { status: "idle" }, controlGeneration: 0, documentVersion: 0, viewportRevision: 0, url: "about:blank", title: "", status: "ready", ...extra });
 
+test("background browser updates preserve focused tab controls", async t => {
+  const env = await setup(t, [makeTab("one"), makeTab("two")]);
+  env.controller.setVisible(true); await env.flush();
+  const button = env.document.querySelector('[data-browser-tab="one"]');
+  button.focus();
+  for (let index = 1; index <= 100; index++) env.event({ type: "updated", tab: makeTab("two", { documentVersion: index, title: `Background ${index}` }) });
+  assert.strictEqual(env.document.querySelector('[data-browser-tab="one"]'), button);
+  assert.strictEqual(env.document.activeElement, button);
+  env.event({ type: "updated", tab: makeTab("one", { owner: { kind: "chat", chatId: "agent" }, operation: { status: "running" } }) });
+  assert.equal(env.document.querySelector(".browser-address").disabled, true, "ownership controls still update immediately");
+});
+
 test("overflowed browser tabs scroll with a mouse wheel and retain position on page updates", async t => {
   const env = await setup(t, [makeTab("one"), makeTab("two"), makeTab("three")]);
   env.controller.setVisible(true); await env.flush();

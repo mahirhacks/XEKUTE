@@ -179,6 +179,9 @@
     streamingRender = streaming;
     try {
       const tokens = marked.lexer(md ?? "");
+      // Restored and finished replies need one complete sanitization. Block
+      // caching only pays off while the same reply is growing during a stream.
+      if (!streaming) return DOMPurify.sanitize(marked.parser(tokens), SANITIZE_OPTIONS);
       const context = `${streaming ? 1 : 0}${hljsRef ? 1 : 0}${JSON.stringify(tokens.links || {})}\u0000`;
       let html = "";
       for (let index = 0; index < tokens.length; index += 1) {

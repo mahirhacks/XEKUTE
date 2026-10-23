@@ -28,7 +28,7 @@ const { createRoundAccounting, waitForRetry } = require("../runtime/round-accoun
 const { completeExchanges, coherentTail } = require("../runtime/tool-protocol.js");
 const { runModelAttempt } = require("../runtime/model-attempt.js");
 const { CONTEXT_START, prepareChatReferenceContext, referenceIds } = require("../runtime/chat-references.js");
-const { approximateTokens, summaryBudget, PIN_BUDGET_RATIO } = require("../../app/services/memory/tier1-context-coordinator.js");
+const { approximateTokens, PIN_BUDGET_RATIO } = require("../../app/services/memory/tier1-context-coordinator.js");
 const { NON_OPERATOR_ID } = require("../../app/services/memory/message-provenance.js");
 const { neutralizeContextMarkers } = require("../../shared/context-markers.js");
 const { estimateBrowserImageTokens, retainBrowserScreenshotExchanges } = require("../llm/openrouter/browser-images.js");
@@ -495,6 +495,7 @@ function buildPromptMessages({
       "For tasks requiring three or more meaningful steps, multiple deliverables, or sustained work, you must first create a checklist with manage_task_checklist. Count investigation, execution, verification, and reporting when they are real parts of the task, even if the user wrote one sentence.",
       "Skip checklist creation only for greetings, brief direct answers, or straightforward tasks that finish in one or two meaningful steps. Do not pad a simple task with artificial steps.",
       "Each agent owns one checklist. Use create only when none exists, then update that same checklist as work progresses or the task changes. If an initially short task expands, create the checklist before continuing the expanded work.",
+      "Keep at most one item in_progress per agent. When switching items, update the previous item's actual status and start the next item in the same call. Never mark unfinished work completed.",
       "Checklist labels must be 12 words or fewer; hidden descriptions must be 40 words or fewer.",
       "After a checklist update, wait for routing results before task actions. If new skill instructions load, regenerate actions using those instructions.",
     ].join(" ")
@@ -719,12 +720,14 @@ async function runAgentTurnWithLease({
       .filter((record, index, all) => all.findIndex((candidate) => candidate.id === record.id) === index)
       .map((record) => ({ id: record.id, description: String(record.description || ""), instructions: record.instructions }))
     : [];
+  let initialLoadedSkill = "";
   if (!activeSkillRecords.length && specialSkill?.manifest?.id && specialSkill?.prompt) {
     activeSkillRecords = [{
       id: String(specialSkill.manifest.id),
       description: String(specialSkill.manifest.description || specialSkill.manifest.title || ""),
       instructions: String(specialSkill.prompt),
     }];
+    initialLoadedSkill = String(specialSkill.manifest.title || specialSkill.manifest.id);
   }
   const restoredRouterState = restored.skillRouterState || (restored.planState?.evaluated ? restored.planState : null);
   const routingEnabled = Boolean(skillRouter?.enabled && (restoredRouterState || skillRouter?.freshRun));
@@ -1074,7 +1077,6 @@ async function runAgentTurnWithLease({
   let tier1CheckpointInFlight = null;
   let lastCheckpointActive = null;
   let roundCheckpointed = false;
-  let summaryRefitted = false;
   const refreshTier1Prompt = ({ resetHistory = true } = {}) => {
     if (!useTier1) return tier1Assembly;
     const next = tier1Context.assemble({
@@ -1630,15 +1632,10 @@ async function runAgentTurnWithLease({
       if (!refreshed) throw Object.assign(new Error("Tier 1 context could not be assembled."), { code: "MEMORY_TIER1_REASSEMBLY_FAILED" });
       const pressure = tier1PressureFor(refreshed);
       if (pressure.protectedOverflow) applyToolCatalog(keepNativeAndRecentTools(availableTools, recentToolNames()));
-      // A summary written for a larger window (the model was switched) is refit
-      // to this window's budget once, even when nothing new needs summarizing.
-      const summaryTokens = tier1UsageSections(refreshed).find((section) => section.key === "summarized_conversation")?.tokens || 0;
-      const refitSummary = !summaryRefitted && summaryTokens > summaryBudget(effectiveContextLimit);
       // A ledger that holds only the task's own messages has nothing to summarize;
       // checkpointing it again would repeat every round.
-      if (refitSummary || (pressure.shouldCheckpoint && tier1Active.some((message) => !taskInputMatches(message)))) {
-        summaryRefitted ||= refitSummary;
-        const checkpoint = await checkpointTier1IfNeeded({ force: refitSummary, reason: "before_model_call", midTask: true });
+      if (pressure.shouldCheckpoint && tier1Active.some((message) => !taskInputMatches(message))) {
+        const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call", midTask: true });
         if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
         roundCheckpointed = checkpoint?.checkpointed === true || Boolean(checkpoint?.checkpoint);
       }
@@ -1680,6 +1677,7 @@ async function runAgentTurnWithLease({
   async function invokeModel(request) {
     if (!request.ok) return request;
     finishReferenceImport();
+    sendEvent({ type: "model_start" });
     const maxAttempts = Math.max(1, Number(Tunables.MODEL_ROUND_RETRIES) || 1);
     let result;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -1848,7 +1846,7 @@ async function runAgentTurnWithLease({
     if (loaded.length) {
       refreshTaskContext();
       if (useTier1) publishTier1Meter();
-      sendEvent({ type: "activity", kind: "success", text: `Loaded ${loaded.length} additional skill${loaded.length === 1 ? "" : "s"}.` });
+      sendEvent({ type: "skills_loaded", skills: loaded.map((id) => candidates.find((card) => card.id === id)?.title || id) });
     }
     return { loaded, selected, steeringChanged, diagnostics: routingSummary(loaded.length ? "loaded" : "not_admitted", decision, selected, loaded) };
   }
@@ -1958,6 +1956,7 @@ async function runAgentTurnWithLease({
 
   try {
   sendEvent({ type: "run_state", runId, state: { ...runState } });
+  if (initialLoadedSkill) sendEvent({ type: "skills_loaded", skills: [initialLoadedSkill] });
   if (checklist) sendEvent({ type: "task_list", ...checklistForWidget(checklist, runId) });
   if (routingEnabled && !restored.skillRouterState) {
     await checkpointRun({ round: 0, actionCount: actionResults.length, status: "running", checkpoint: { phase: "skill-router-ready" } });

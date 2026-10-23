@@ -254,7 +254,7 @@ test("a missing write receipt cannot acknowledge a commit and retry recovers the
   const h = harness(t);
   const lostReceipt = createV3SessionStore({
     projectIdentityStore: h.projectIdentityStore,
-    sensitiveStore: { ...h.sensitive, writeTranscript(...args) { h.sensitive.writeTranscript(...args); } },
+    sensitiveStore: { ...h.sensitive, async writeTranscriptAsync(...args) { await h.sensitive.writeTranscriptAsync(...args); } },
   });
   const missing = await receive(lostReceipt, h.workspace);
   assert.equal(missing.ok, false);

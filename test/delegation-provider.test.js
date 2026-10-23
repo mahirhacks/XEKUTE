@@ -39,6 +39,44 @@ function runProvider(provider, input, context) {
   return provider(input, context, {});
 }
 
+test("a child checkpoints its own context before a large tool result fills the window", async () => {
+  const { runAgentTurn } = require("../src/agent/controller/agent-controller.js");
+  const { createTier1ContextCoordinator } = require("../src/app/services/memory/tier1-context-coordinator.js");
+  const { estimateTokenCount } = require("../src/agent/runtime/context-budget.js");
+  const projectId = "proj_00000000-0000-4000-8000-000000009771";
+  const tier1 = createTier1ContextCoordinator({ tokenCounter: (value) => ({ tokens: estimateTokenCount(typeof value === "string" ? value : JSON.stringify(value)), exact: false }) });
+  const events = [], modelBindings = [], summaries = [], requests = [];
+  const provider = createRuntimeDelegationProvider({
+    senderId: "context-test", runKey: "context-test::parent", parentModel: "parent-model", subagentModel: "child-model",
+    numCtx: 32768, contextPlan: { provider: "openrouter", effectiveLimitTokens: 32768, promptBudgetTokens: 30000 },
+    workspace: "G:/ws", mode: "ask", modeFamily: "assist", sessionId: "parent", projectId, tools: PARENT_TOOLS,
+    tier1Context: tier1,
+    getTier1Model: (binding) => { modelBindings.push(binding); return async (input) => { summaries.push(input); return {}; }; },
+    runAgentTurn,
+    runModelRound: async (_sender, payload) => {
+      requests.push(payload);
+      return requests.length === 1
+        ? { ok: true, fullText: "", toolCalls: Array.from({ length: 14 }, (_, index) => ({ id: `large-read-${index}`, type: "function", function: { name: "read_file", arguments: { path: `bundle-${index}.js` } } })), finishReason: "tool_calls" }
+        : { ok: true, fullText: "Analysis complete", toolCalls: [endTurnCall()], finishReason: "stop" };
+    },
+    executeToolCall: async () => ({ ok: true, value: { text: "bundle finding ".repeat(18000) } }),
+    beginChildSession: async () => ({ sessionId: "context-child", blockId: "child-block" }),
+    sendToRenderer: (event) => events.push(event),
+  });
+  const result = await runProvider(provider, {
+    task: "Inspect the local bundle and report observations",
+    contextPackage: { role: "agent", authority: "approve_for_me", scope: {}, identity: {}, resources: {} },
+    expectedOutput: { description: "Analysis", format: "text" },
+  }, execContext("G:/ws"));
+  assert.equal(result.status, "completed", JSON.stringify({ status: result.status, error: result.error }));
+  assert.equal(requests.length, 2);
+  assert.ok(events.some((event) => event.type === "context_checkpoint" && event.status === "completed"), "the child must summarize instead of hitting MANDATORY_CONTEXT_LIMIT");
+  assert.ok(summaries.length >= 1, "the child's summarizer runs");
+  assert.equal(modelBindings[0].model, "child-model");
+  assert.equal(modelBindings[0].provider, "openrouter");
+  assert.ok(requests[1].contextUsage.promptTokens < 32768);
+});
+
 test("oneLiner collapses whitespace and bounds length", () => {
   assert.equal(oneLiner("  hello    world  "), "hello world");
   assert.equal(oneLiner("x".repeat(500)).length, 160);

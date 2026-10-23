@@ -110,7 +110,7 @@ export function markActivityNode(node) {
 }
 
 export function boxHasToolUsage(root) {
-  return Boolean(root?.querySelector?.(".tool-card:not([hidden]), .agent-file-row, .agent-file-stack, .agent-command-event, .subagent-run-card, .agent-thinking-fold"));
+  return Boolean(root?.querySelector?.(".tool-card:not([hidden]), .agent-file-row, .agent-file-stack, .agent-command-event, .agent-skill-event, .subagent-run-card, .agent-thinking-fold"));
 }
 
 // Last sibling after `reply` that carries tool work or visible model text.
@@ -643,7 +643,7 @@ export function appendChatTurn(turn, { startsExchange = false, container = messa
 export function appendSteeringUserTurn(turn, exchange, assistant = null) {
   if (!turn || !exchange) return;
   const body = chatExchangeBody(exchange);
-  const pending = assistant?.pendingSteeringHost?.isConnected ? assistant.pendingSteeringHost : null;
+  const pending = assistant?.pendingSteeringHost?.parentNode ? assistant.pendingSteeringHost : null;
   const responseHost = pending || assistant?.turn?.closest?.(".agent-response-host") || ensureAgentResponseHost(exchange);
   if (responseHost?.parentElement === body) responseHost.after(turn);
   else body.appendChild(turn);

@@ -12,7 +12,7 @@ const META_KEYS = Object.freeze([
   "title", "model", "mode", "family", "kind", "parentSessionId", "parent_session_id",
   "childInvocationId", "child_invocation_id", "lastContextUsage", "last_context_usage",
   "status", "checkpointId", "checkpoint_id", "checkpointRevision", "checkpoint_revision",
-  "liveInputs", "draftText", "taskId", "parentMemorySessionId", "sourceMessageIds", "promptQueue",
+  "liveInputs", "draftText", "taskId", "stoppedRun", "parentMemorySessionId", "sourceMessageIds", "promptQueue",
 ]);
 
 /*
@@ -73,10 +73,9 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
     };
   }
   function normalizeUiTranscript(value) {
-    const cloned = clone(value);
-    if (!cloned || typeof cloned !== "object") return { version: 1, runs: [] };
-    const runs = Array.isArray(cloned.runs) ? clone(cloned.runs).slice(0, 200) : [];
-    return { version: Number(cloned.version) || 1, runs };
+    if (!value || typeof value !== "object") return { version: 1, runs: [] };
+    const runs = Array.isArray(value.runs) ? clone(value.runs.slice(0, 200)) : [];
+    return { version: Number(value.version) || 1, runs };
   }
   function normalizeMessages(messages, salt) {
     return (Array.isArray(messages) ? messages : [])
@@ -94,7 +93,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
         return normalized;
       });
   }
-  function normalizeBlock(block, projectId, sessionId, fallbackBlockId = "") {
+  function normalizeBlock(block, projectId, sessionId, fallbackBlockId = "", includeToolEvents = true) {
     const source = block && typeof block === "object" ? block : {};
     const blockId = opaqueId(source.block_id || source.blockId || fallbackBlockId, "block", `${projectId}|${sessionId}`);
     const messages = normalizeMessages(source.messages || source.transcript, `${projectId}|${sessionId}|${blockId}`);
@@ -107,7 +106,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
         : "",
       user_prompt: messageContent(source.user_prompt || source.userPrompt || ""),
       messages,
-      tool_events: Array.isArray(source.tool_events) ? clone(source.tool_events) : [],
+      tool_events: includeToolEvents && Array.isArray(source.tool_events) ? clone(source.tool_events) : [],
       outcome: text(source.outcome || "pending", "pending", 40),
       captured_at: text(source.captured_at || source.timestamp || stamp(), "", 80),
       ...(source.completed_at ? { completed_at: text(source.completed_at, "", 80) } : {}),
@@ -135,7 +134,6 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       result[target] = clone(value[key]);
     }
     result.session_id = sessionId;
-    result.updated_at = stamp();
     return result;
   }
   function normalizeDocument(value, projectId, sessionId, fallback = {}) {
@@ -169,9 +167,9 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       const resolved = workspaceResult(rawWorkspace, false);
       if (!resolved?.ok || !resolved.projectId) return resolved;
       const sessionId = opaqueId(rawSessionId, "session", `${resolved.projectId}|${resolved.canonical}`);
-      const loaded = loadDocument(resolved.projectId, sessionId);
+      const loaded = sensitiveStore.readTranscript(resolved.projectId, sessionId);
       if (!loaded?.ok) return loaded;
-      return { ok: true, exists: loaded.exists, projectId: resolved.projectId, sessionId, encrypted: loaded.encrypted, durable: loaded.durable, control: clone(loaded.value.run_control) };
+      return { ok: true, exists: loaded.exists, projectId: resolved.projectId, sessionId, encrypted: loaded.encrypted, durable: loaded.durable, control: normalizeRunControl(loaded.value?.run_control) };
     } catch (error) {
       return { ok: false, code: error.code || "SESSION_CONTROL_READ_FAILED", error: error.message };
     }
@@ -187,7 +185,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       if (!resolved?.ok || !resolved.projectId) return Promise.resolve(resolved);
       sessionId = opaqueId(rawSessionId, "session", `${resolved.projectId}|${resolved.canonical}`);
     } catch (error) { return Promise.resolve(failed(error.code || "SESSION_IDENTITY_INVALID", error.message)); }
-    return enqueue(queueKey(resolved), () => {
+    return enqueue(queueKey(resolved), async () => {
       try {
         if (requireDurable && !(typeof sensitiveStore.available === "function" && sensitiveStore.available())) return failed("MEMORY_SECURE_STORAGE_UNAVAILABLE", "Encrypted durable session storage is unavailable.");
         const loaded = loadDocument(resolved.projectId, sessionId);
@@ -206,8 +204,9 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
           return { ...result, ok: true, encrypted: loaded.encrypted, durable: loaded.durable, projectId: resolved.projectId, sessionId };
         }
         if (document.schema_version !== 3 || document.project_id !== resolved.projectId || document.session_id !== sessionId || !Array.isArray(document.blocks)) return failed("MEMORY_TRANSCRIPT_INVALID", "The mutation changed the session's identity or transcript structure.");
+        document.metadata = { ...document.metadata, updated_at: stamp() };
         const candidate = normalizeDocument(document, resolved.projectId, sessionId);
-        const saved = sensitiveStore.writeTranscript(resolved.projectId, sessionId, candidate, { requireDurable });
+        const saved = await (sensitiveStore.writeTranscriptAsync || sensitiveStore.writeTranscript)(resolved.projectId, sessionId, candidate, { requireDurable });
         if (saved?.ok !== true) return saved || failed("MEMORY_TRANSCRIPT_WRITE_FAILED", "The session write returned no receipt.");
         if (requireDurable && !(saved.encrypted === true && saved.durable === true)) return failed("SESSION_DURABILITY_REQUIRED", "The session write did not return an encrypted durable receipt.");
         return { ...result, ok: true, encrypted: saved.encrypted === true, durable: saved.durable === true, projectId: resolved.projectId, sessionId };
@@ -217,7 +216,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
   function sessionHistory(document) {
     const result = [];
     for (const block of document.blocks || []) {
-      const messages = Array.isArray(block.messages) ? clone(block.messages) : [];
+      const messages = Array.isArray(block.messages) ? block.messages : [];
       if (block.user_prompt && !messages.some((message) => message?.id === block.user_prompt_id)) {
         const matchingPrompt = messages.find((message) => message?.role === "user" && messageContent(message.content).trim() === messageContent(block.user_prompt).trim());
         if (matchingPrompt) matchingPrompt.id = block.user_prompt_id || matchingPrompt.id;
@@ -228,19 +227,19 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
     return result;
   }
   function projection(projectId, sessionId, document, workspace, flags = {}) {
-    const metadata = document.metadata || {};
-    const history = sessionHistory(document);
+    const metadata = normalizeMetadata(document.metadata, sessionId);
+    const blocks = (document.blocks || []).map((block, index) => normalizeBlock(block, projectId, sessionId, `block-${index + 1}`, false));
+    const history = sessionHistory({ blocks });
     const status = String(metadata.status || "active");
     return {
       id: sessionId,
       memorySessionId: sessionId,
       memoryProjectId: projectId,
-      memoryBlockId: document.blocks.at(-1)?.block_id || "",
+      memoryBlockId: blocks.at(-1)?.block_id || "",
       title: text(metadata.title || DEFAULT_TITLE, DEFAULT_TITLE, 240),
       history,
-      messages: clone(history),
-      messagesHtml: messageContent(document.display_html || ""),
-      transcript: clone(document.ui_transcript) || { version: 1, runs: [] },
+      messagesHtml: messageContent(document.display_html || document.displayHtml || ""),
+      transcript: normalizeUiTranscript(document.ui_transcript || document.uiTranscript || document.transcript_ui),
       contextFilesCache: [],
       lastContextUsage: clone(metadata.last_context_usage) || null,
       chatMode: text(metadata.mode || "agent", "agent", 100),
@@ -252,6 +251,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       liveInputs: clone(metadata.liveInputs) || [],
       draftText: text(metadata.draftText || "", "", 100000),
       taskId: text(metadata.taskId || "", "", 240),
+      stoppedRun: clone(metadata.stoppedRun) || null,
       parentMemorySessionId: text(metadata.parentMemorySessionId || "", "", 240),
       sourceMessageIds: clone(metadata.sourceMessageIds) || [],
       promptQueue: clone(metadata.promptQueue) || [],
@@ -263,9 +263,10 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
     };
   }
   function readSession(projectId, sessionId, workspace = "") {
-    const loaded = loadDocument(projectId, sessionId);
+    const loaded = sensitiveStore.readTranscript(projectId, sessionId, { cache: false });
     if (!loaded?.ok) return loaded;
-    return { ...loaded, document: loaded.value, projection: projection(projectId, sessionId, loaded.value, workspace) };
+    const document = loaded.value || emptyDocument(projectId, sessionId);
+    return { ...loaded, projection: projection(projectId, sessionId, document, workspace) };
   }
   function load(rawWorkspace) {
     const resolved = workspaceResult(rawWorkspace, false);
@@ -306,15 +307,15 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
       : String(sessionId || "").trim()
         ? opaqueId(sessionId, "session", `${resolved.projectId}|${resolved.canonical}`)
         : createOpaqueId("session", { uuid: () => typeof crypto.randomUUID === "function" ? crypto.randomUUID() : nodeCrypto.randomUUID() });
-    return enqueue(queueKey(resolved), () => {
+    return enqueue(queueKey(resolved), async () => {
       const loaded = loadDocument(resolved.projectId, actualSessionId);
       if (!loaded?.ok) return loaded;
       const document = loaded.exists ? normalizeDocument(loaded.value, resolved.projectId, actualSessionId, session) : emptyDocument(resolved.projectId, actualSessionId, session);
       const blockId = createOpaqueId("block", { uuid: () => typeof crypto.randomUUID === "function" ? crypto.randomUUID() : nodeCrypto.randomUUID() });
       const messageId = opaqueId(userMessageId || `${blockId}:user`, "event", `${resolved.projectId}|${actualSessionId}`);
-      document.metadata = normalizeMetadata({ ...document.metadata, ...session, title, status: "active" }, actualSessionId, session);
+      document.metadata = normalizeMetadata({ ...document.metadata, ...session, title, status: "active", updated_at: stamp() }, actualSessionId, session);
       document.blocks.push(normalizeBlock({ block_id: blockId, user_prompt_id: messageId, user_prompt: userPrompt, messages: [{ id: messageId, role: "user", content: userPrompt, createdAt: stamp() }], outcome: "pending" }, resolved.projectId, actualSessionId, blockId));
-      const saved = sensitiveStore.writeTranscript(resolved.projectId, actualSessionId, document);
+      const saved = await (sensitiveStore.writeTranscriptAsync || sensitiveStore.writeTranscript)(resolved.projectId, actualSessionId, document);
       return saved?.ok !== true ? saved || { ok: false, code: "MEMORY_TRANSCRIPT_WRITE_FAILED", error: "The session write returned no receipt." } : { ok: true, persisted: true, durable: saved.durable === true, encrypted: saved.encrypted === true, projectId: resolved.projectId, sessionId: actualSessionId, blockId, userPromptId: messageId, projectPath: resolved.workspace };
     });
   }
@@ -371,7 +372,7 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
     document.metadata.updated_at = stamp();
     return document;
   }
-  function recordSync(rawWorkspace, event = {}) {
+  function prepareEvent(rawWorkspace, event) {
     const resolved = workspaceResult(rawWorkspace, false);
     if (!resolved?.ok || !resolved.projectId) return { ok: false, error: "The V3 project identity is not initialized." };
     const sessionId = opaqueId(event.sessionId, "session", `${resolved.projectId}|${resolved.canonical}`);
@@ -380,13 +381,30 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
     if (!loaded.exists) return { ok: false, code: "MEMORY_SESSION_NOT_FOUND", error: "The V3 chat session was not found." };
     const document = normalizeDocument(loaded.value, resolved.projectId, sessionId);
     try { applyEvent(document, { ...event, sessionId }); } catch (error) { return { ok: false, code: error.code || "MEMORY_SESSION_EVENT_INVALID", error: error.message }; }
-    const saved = sensitiveStore.writeTranscript(resolved.projectId, sessionId, document);
-    return saved?.ok !== true ? saved || { ok: false, code: "MEMORY_TRANSCRIPT_WRITE_FAILED", error: "The session write returned no receipt." } : { ok: true, projectId: resolved.projectId, sessionId, blockId: event.blockId || document.blocks.at(-1)?.block_id || "", durable: saved.durable === true, encrypted: saved.encrypted === true, savedAt: stamp() };
+    return { ok: true, resolved, sessionId, document };
+  }
+  function eventReceipt(prepared, event, saved) {
+    return saved?.ok !== true ? saved || { ok: false, code: "MEMORY_TRANSCRIPT_WRITE_FAILED", error: "The session write returned no receipt." } : { ok: true, projectId: prepared.resolved.projectId, sessionId: prepared.sessionId, blockId: event.blockId || prepared.document.blocks.at(-1)?.block_id || "", durable: saved.durable === true, encrypted: saved.encrypted === true, savedAt: stamp() };
+  }
+  function recordSync(rawWorkspace, event = {}) {
+    const resolved = workspaceResult(rawWorkspace, false);
+    if (resolved?.ok && queues.has(queueKey(resolved))) {
+      record(rawWorkspace, clone(event));
+      return { ok: true, queued: true, durable: false };
+    }
+    const prepared = prepareEvent(rawWorkspace, event);
+    if (!prepared.ok) return prepared;
+    return eventReceipt(prepared, event, sensitiveStore.writeTranscript(prepared.resolved.projectId, prepared.sessionId, prepared.document));
   }
   function record(rawWorkspace, event = {}) {
     const resolved = workspaceResult(rawWorkspace, false);
     if (!resolved?.ok || !resolved.projectId) return Promise.resolve({ ok: false, error: "The V3 project identity is not initialized." });
-    return enqueue(queueKey(resolved), () => recordSync(rawWorkspace, event));
+    return enqueue(queueKey(resolved), async () => {
+      const prepared = prepareEvent(rawWorkspace, event);
+      if (!prepared.ok) return prepared;
+      const saved = await (sensitiveStore.writeTranscriptAsync || sensitiveStore.writeTranscript)(prepared.resolved.projectId, prepared.sessionId, prepared.document);
+      return eventReceipt(prepared, event, saved);
+    });
   }
   function close(rawWorkspace, sessionId) { return record(rawWorkspace, { type: "close", sessionId }); }
   function reopen(rawWorkspace, sessionId) { return record(rawWorkspace, { type: "reopen", sessionId }); }
@@ -401,7 +419,10 @@ function createV3SessionStore({ sensitiveStore, projectIdentityStore, crypto = n
     if (!resolved?.ok || !resolved.projectId || !isMemoryId(sessionId, "session")) return "";
     return sensitiveStore.transcriptFile(resolved.projectId, String(sessionId));
   }
-  function flush() { return Promise.all([...queues.values()].map((pending) => pending.catch(() => null))).then(() => sensitiveStore.flush?.() || { ok: true }); }
+  async function flush() {
+    while (queues.size) await Promise.allSettled([...queues.values()]);
+    return sensitiveStore.flush?.() || { ok: true };
+  }
 
   function writeChatReferenceSnapshot(workspace, snapshot) {
     const resolved = workspaceResult(workspace, false);

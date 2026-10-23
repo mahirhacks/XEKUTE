@@ -263,8 +263,7 @@ export function storeLastContextUsage(value, {
     memory.checkpointTokens = Number(summarizedTokens);
     if (memory.status === "empty") memory.status = "ready";
   }
-  if (session.id === appState.activeChatSessionId) syncActiveChatSession();
-  else schedulePersistChatSessions();
+  schedulePersistChatSessions(session);
   return usage;
 }
 

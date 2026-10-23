@@ -158,22 +158,35 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   }
   function render() {
     const scrollLeft = strip.scrollLeft;
-    strip.replaceChildren();
-    for (const tab of tabs) {
-      const item = document.createElement("div");
-      item.className = `browser-web-tab${tab.id === selectedId ? " is-active" : ""}${tab.owner?.kind === "chat" ? " is-agent" : ""}`;
-      const select = document.createElement("button"); select.type = "button"; select.setAttribute("role", "tab");
+    const existing = new Map([...strip.children].map(item => [item.querySelector("[data-browser-tab]")?.dataset.browserTab, item]));
+    for (const [index, tab] of tabs.entries()) {
+      let item = existing.get(tab.id);
+      if (!item) {
+        item = document.createElement("div");
+        const select = document.createElement("button"); select.type = "button"; select.setAttribute("role", "tab");
+        select.dataset.browserTab = tab.id;
+        select.append(document.createElement("span"), document.createElement("span"));
+        select.addEventListener("click", () => { selectedId = tab.id; setStatus(); render(); });
+        const close = document.createElement("button"); close.type = "button"; close.className = "browser-web-tab-close";
+        close.title = "Close tab"; close.innerHTML = '<span class="codicon codicon-close"></span>';
+        close.addEventListener("click", () => { void command("close", {}, tab.id); });
+        item.append(select, close);
+      }
+      existing.delete(tab.id);
+      const classes = `browser-web-tab${tab.id === selectedId ? " is-active" : ""}${tab.owner?.kind === "chat" ? " is-agent" : ""}`;
+      if (item.className !== classes) item.className = classes;
+      const select = item.firstElementChild;
       select.setAttribute("aria-selected", String(tab.id === selectedId)); select.dataset.browserTab = tab.id;
-      const icon = document.createElement("span");
-      icon.className = tab.status === "loading" ? "codicon codicon-loading codicon-modifier-spin" : tab.owner?.kind === "chat" ? "codicon codicon-copilot" : "codicon codicon-globe";
-      const label = document.createElement("span"); label.textContent = tab.title || (tab.url === "about:blank" ? "New tab" : tab.url);
+      const icon = select.firstElementChild;
+      const iconClass = tab.status === "loading" ? "codicon codicon-loading codicon-modifier-spin" : tab.owner?.kind === "chat" ? "codicon codicon-copilot" : "codicon codicon-globe";
+      if (icon.className !== iconClass) icon.className = iconClass;
+      const label = select.lastElementChild, text = tab.title || (tab.url === "about:blank" ? "New tab" : tab.url);
+      if (label.textContent !== text) label.textContent = text;
       select.title = `${tab.title || tab.url}\n${tab.purpose === "research" ? "Public research" : "Assessment"}`;
-      select.append(icon, label); select.addEventListener("click", () => { selectedId = tab.id; setStatus(); render(); });
-      const close = document.createElement("button"); close.type = "button"; close.className = "browser-web-tab-close";
-      close.setAttribute("aria-label", `Close ${label.textContent}`); close.title = "Close tab"; close.innerHTML = '<span class="codicon codicon-close"></span>';
-      close.addEventListener("click", () => { void command("close", {}, tab.id); });
-      item.append(select, close); strip.append(item);
+      item.lastElementChild.setAttribute("aria-label", `Close ${label.textContent}`);
+      if (strip.children[index] !== item) strip.insertBefore(item, strip.children[index] || null);
     }
+    for (const item of existing.values()) item.remove();
     strip.scrollLeft = scrollLeft;
     if (visible && selectedId !== renderedSelection) {
       strip.querySelector(".is-active")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });

@@ -9,13 +9,14 @@ const WORK_NODE_CLASSES = [
   "agent-file-stack",
   "agent-file-row",
   "agent-command-event",
+  "agent-skill-event",
   "subagent-run-card",
   "tool-card",
   "agent-question-answer",
 ];
 
 const WORK_NODE_SELECTOR = ".agent-thinking-fold, .agent-explored-fold, .agent-file-stack,"
-  + " .agent-file-row, .agent-command-event, .subagent-run-card, .tool-card:not([hidden]), .agent-question-answer";
+  + " .agent-file-row, .agent-command-event, .agent-skill-event, .subagent-run-card, .tool-card:not([hidden]), .agent-question-answer";
 
 const FOLD_CARET_SRC = "assets/icons/chat_fold_caret.svg";
 

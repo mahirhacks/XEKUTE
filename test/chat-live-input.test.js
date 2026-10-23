@@ -316,9 +316,9 @@ test("stopping the parent settles every delegated child UI of that parent only",
 });
 test("Stop aborts a run that is waiting on sub-agents or an end turn, not only a streaming one", () => {
  for (const waiting of [{ pendingEndTurn: true }, { awaitingParentContinuation: true }, { commandWait: true }]) {
-  const run = { sessionId: "chat", state: "complete", ...waiting }; const aborted = []; const settled = [];
+  const run = { sessionId: "chat", session: {}, state: "complete", ...waiting }; const aborted = []; const settled = [];
   const context = { activeSessionRun: () => run, isChatSessionRunning: (id) => id === "chat" && !run.stopRequested, markChatSessionStoppedByOperator() {}, dismissComposerQuestionsForStop() {}, dropAutoContinuationsForSession() {}, syncAssistantDraftToHistory() {}, persistChatHistorySnapshot: async () => {}, settleDelegatedChildrenOf() {}, settleStoppedRun: (r) => settled.push(r), setAgentStatus() {}, modeLabel: () => "Agent", abortActiveChatRun: (r) => aborted.push(r), updateSendBtn() {}, updateContextUsage() {}, chatInput: null, activeChatSessionId: "chat", activeChatPersistenceScope: null, activeStreamContent: "" };
-  vm.createContext(withAppState(context)); vm.runInContext(rendererDefinitions("stopGeneration"), context);
+  vm.createContext(withAppState(context)); vm.runInContext(rendererDefinitions("rememberStoppedRun", "stopGeneration"), context);
   context.stopGeneration();
   assert.equal(run.stopRequested, true); assert.deepEqual(aborted, [run]); assert.deepEqual(settled, [run]);
  }

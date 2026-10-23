@@ -21,9 +21,8 @@ function scopeFor(input, intents) { return intents.map(({ id, start, end }) => (
 function emptyRunControl() {
   return { version: 1, arrival: 0, routed: 0, cancellationEpoch: 0, activeTaskId: "", inputs: [], routes: [], tasks: [], dispatches: [] };
 }
-function normalizeRunControl(value) {
-  if (value === undefined || value === null) return emptyRunControl();
-  const state = JSON.parse(JSON.stringify(value));
+function validateRunControl(state) {
+  if (state === undefined || state === null) return;
   if (state.version !== 1 || !integer(state.arrival) || !integer(state.routed) || state.routed > state.arrival || !integer(state.cancellationEpoch)
     || !Array.isArray(state.inputs) || !Array.isArray(state.routes) || !Array.isArray(state.tasks) || !Array.isArray(state.dispatches)
     || state.inputs.length !== state.arrival || state.routes.length !== state.routed) invalid("SESSION_CONTROL_INVALID", "The durable session control state is invalid.");
@@ -98,6 +97,11 @@ function normalizeRunControl(value) {
     if (!id(dispatch.id) || dispatchIds.has(dispatch.id) || !tasks.has(dispatch.taskId) || !["pending", "running", "waiting", "completed", "failed"].includes(dispatch.status)) return true;
     dispatchIds.add(dispatch.id); return false;
   })) invalid("SESSION_DISPATCH_INVALID", "The dispatch journal is invalid.");
+}
+function normalizeRunControl(value) {
+  if (value === undefined || value === null) return emptyRunControl();
+  const state = JSON.parse(JSON.stringify(value));
+  validateRunControl(state);
   // Independent tasks no longer have a runtime. Saved ones that never finished
   // end as stopped so nothing waits on them.
   const independent = new Set(state.tasks.filter((task) => task.kind === "independent").map((task) => task.id));
@@ -192,4 +196,4 @@ function acceptRoutes(state, { expectedRouted, cancellationEpoch, routes, tasks 
   return { routed: state.routed, deliveries };
 }
 
-module.exports = { emptyRunControl, normalizeRunControl, validateInput, receiveInput, createTask, acceptRoutes, stableIntentId };
+module.exports = { emptyRunControl, validateRunControl, normalizeRunControl, validateInput, receiveInput, createTask, acceptRoutes, stableIntentId };

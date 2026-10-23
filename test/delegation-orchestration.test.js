@@ -48,7 +48,6 @@ test("main wires shared continuation dedupe helpers", () => {
 test("bootstrap keeps parent turn open while orchestrationHold is true", () => {
   const bootstrap = rendererSource();
   assert.match(bootstrap, /run\.orchestrationHold/);
-  assert.match(bootstrap, /holdActive/);
   assert.match(bootstrap, /childEventLanes/);
 });
 

@@ -137,7 +137,7 @@ export function childAssistant(run) {
       run.assistant.appendThinking = function delegatedAppendThinking(token) {
         const value = String(token || "");
         this.beginModelBlock();
-        this.noteModelOutput();
+        this.noteActivity();
         this.showPrivateReasoning();
         const fold = this.ensureThinkingFold();
         if (!fold) return;

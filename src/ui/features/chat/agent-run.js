@@ -23,7 +23,7 @@ import {
   syncSubagentOrchestrationWaitStatus, handleSubagentCardEvent, ensureSubagentSessionTab,
   finalizeSubagentSessionTab,
 } from "../agents/subagent-cards.js";
-import { clearChatSessionStoppedByOperator } from "./run-stop.js";
+import { clearChatSessionStoppedByOperator, rememberStoppedRun } from "./run-stop.js";
 import { chatInput } from "../../core/dom-refs.js";
 import { MessageIdentity, TerminalManager } from "../../core/runtime-globals.js";
 import {
@@ -131,7 +131,13 @@ export function sendHiddenAgentRuntime(payload = {}) {
 
 export async function sendMessageWithAgentRuntime(options = {}) {
   const internal = Boolean(options?.internal);
+  const resume = !internal && Boolean(options?.resume);
   const targetSessionId = String(options?.sessionId || appState.activeChatSessionId || "");
+  const targetSession = chatSessions.find((session) => session.id === targetSessionId);
+  if (!internal && targetSession?.stopPending) await targetSession.stopPending;
+  const stoppedRun = resume ? targetSession?.stoppedRun : null;
+  if (resume && (!stoppedRun || chatSendInFlight.has(targetSessionId))) return;
+  let finishInvocation = () => {};
   const hasExplicitText = Object.prototype.hasOwnProperty.call(options || {}, "text");
   let text = hasExplicitText
     ? String(options.text || "")
@@ -143,22 +149,22 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     // Images go with a new message only; a run already in progress gets text.
     const busy = isChatSessionRunning(targetSessionId) || chatSendInFlight.has(targetSessionId);
     const sendingImages = !busy && appState.composerImages.length > 0;
-    if (!text.trim() && !sendingImages) return;
+    if (!resume && !text.trim() && !sendingImages) return;
     if (busy) {
       return submitLiveChatInput(chatSessions.find((session) => session.id === targetSessionId), text);
     }
-    if (!text.trim()) text = appState.composerImages.length > 1 ? "See the attached images." : "See the attached image.";
+    if (!resume && !text.trim()) text = appState.composerImages.length > 1 ? "See the attached images." : "See the attached image.";
     chatSendInFlight.add(targetSessionId);
     clearChatSessionStoppedByOperator(chatSessions.find((session) => session.id === targetSessionId) || { id: targetSessionId });
   } else if (!text || isChatSessionRunning(targetSessionId)) return;
   try {
 
-  if (!internal && text.startsWith("/")) {
+  if (!internal && !resume && text.startsWith("/")) {
     const handled = await runSpecialSlashCommand(text);
     if (handled) { chatInput.value = ""; resetChatInput(); closeSlashSuggestions(); return; }
   }
-  if (!internal) text = expandSlashCommand(text);
-  if (!text) {
+  if (!internal && !resume) text = expandSlashCommand(text);
+  if (!resume && !text) {
     resetChatInput();
     closeSlashSuggestions();
     return;
@@ -173,12 +179,12 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     || (internal ? null : activeChatSession());
   if (!runSession) return;
   let runHistory = runSession.history;
-  const runModel = runSession.selectedModel || appState.selectedModel;
-  const runMode = options?.modeOverride
+  const runModel = stoppedRun?.model || runSession.selectedModel || appState.selectedModel;
+  const runMode = stoppedRun?.mode || (options?.modeOverride
     ? canonicalChatMode(options.modeOverride)
-    : canonicalChatMode(runSession.chatMode || appState.chatMode);
+    : canonicalChatMode(runSession.chatMode || appState.chatMode));
   runSession.turnMode = runMode;
-  const runFamily = runSession.chatFamily || appState.chatFamily;
+  const runFamily = stoppedRun?.family || runSession.chatFamily || appState.chatFamily;
   if (!runModel) {
     if (!internal) addErrorMessage("Select a model before sending a message.");
     return;
@@ -194,9 +200,9 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     ? options.activeFile
     : (providedContextFiles[0] || getActiveFileContext());
 
-  const initialInput = !internal ? liveInputController.prepare(runSession, text) : null;
-  const runImages = internal ? [] : takeComposerImages();
-  if (!internal) {
+  const initialInput = !internal && !resume ? liveInputController.prepare(runSession, text) : null;
+  const runImages = internal || resume ? [] : takeComposerImages();
+  if (!internal && !resume) {
     {
       chatInput.value = "";
       runSession.draftText = "";
@@ -205,7 +211,7 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     }
     if (appState.activeChatSessionId === runSession.id) addUserMessage(text, initialInput.id, runImages.map((image) => ({ thumb: image.thumbUrl, id: image.storedId })));
   }
-  const userMessage = {
+  const userMessage = resume ? null : {
     role: "user",
     content: text,
     id: initialInput?.id || `${runSession.id}-message-${Date.now()}-${runHistory.length + 1}`,
@@ -214,15 +220,20 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     ...(internal ? { __xekuteInternalRuntimeInput: true } : {}),
   };
   const lastHistoryMessage = runHistory.at(-1);
-  const reusedUserMessage = lastHistoryMessage?.id === userMessage.id
+  const reusedUserMessage = userMessage && lastHistoryMessage?.id === userMessage.id
     ? lastHistoryMessage
     : null;
-  if (!reusedUserMessage) runHistory.push(userMessage);
+  if (userMessage && !reusedUserMessage) runHistory.push(userMessage);
   const promptMessage = reusedUserMessage || userMessage;
-  if (!internal) maybeNameActiveChat(text);
-  if (!internal) runSession.taskId = "";
+  if (!internal && !resume) {
+    maybeNameActiveChat(text);
+    runSession.taskId = "";
+    runSession.stoppedRun = null;
+    if (appState.activeChatSessionId === runSession.id) clearComposerTaskList();
+  }
   const run = {
     sessionId: runSession.id,
+    taskId: stoppedRun?.taskId || "",
     userImages: runImages,
     initialInputId: initialInput?.id || "",
     session: runSession,
@@ -242,15 +253,16 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     contextCheckpointPending: false,
     internal,
     continuation: options?.continuation || null,
+    finished: new Promise((resolve) => { finishInvocation = resolve; }),
   };
   activeChatRuns.set(run.sessionId, run);
   setAgentStatus(`${modeLabel(runMode)} working`);
   updateSendBtn();
   renderChatSessionSelect();
 
-  await beginChatHistoryBlock(text, runSession);
+  if (!resume) await beginChatHistoryBlock(text, runSession);
   run.memorySessionId = runSession.memorySessionId || run.sessionId;
-  const checkpointPromptIndex = runHistory.findIndex((message) => message?.id === promptMessage.id);
+  const checkpointPromptIndex = promptMessage ? runHistory.findIndex((message) => message?.id === promptMessage.id) : -1;
   if (checkpointPromptIndex >= 0) runSession.memoryBlockHistoryStart = checkpointPromptIndex;
   syncChatRunSession(run);
   runHistory = run.history;
@@ -283,7 +295,7 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     runHistory = run.history;
     updateRunContextUsage();
 
-    assistant = createAssistantTurn({ container: chatRunContainer(run), sessionId: run.sessionId });
+    assistant = createAssistantTurn({ container: chatRunContainer(run), sessionId: run.sessionId, resuming: resume });
     run.assistant = assistant;
     assistant.contentEl.classList.add("streaming");
     assistant.setLiveState({ kind: "working", detail: "Starting" });
@@ -292,12 +304,17 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     let lastAgentText = "";
 
     const handleAgentEvent = async (payload) => {
-    if (!payload) return;
+    if (!payload || run.stopRequested || activeChatRuns.get(run.sessionId) !== run) return;
     // Main-owned FIFO continuations have their own renderer event bridge. The
     // original user-turn listener may still be settling its IPC response when
     // the main process starts the continuation, so do not render those events
     // into the old assistant turn as well.
     if (payload.source === "parent_continuation") return;
+    if (payload.type === "task_started" && resume) {
+      runSession.stoppedRun = null;
+      schedulePersistChatSessions();
+      return;
+    }
 
     if (payload.type === "model_run_command_wait") {
       beginModelRunCommandWait(run, assistant, payload);
@@ -317,6 +334,15 @@ export async function sendMessageWithAgentRuntime(options = {}) {
       renderMemorySaveBanner();
       return;
     }
+    if (payload.type === "model_start") {
+      assistant.beginModelBlock({ newRound: true });
+      return;
+    }
+    if (payload.type === "skills_loaded") {
+      assistant.appendSkillLoad(payload.skills);
+      scheduleLiveChatSnapshot(run);
+      return;
+    }
     if (payload.type === "context_release") {
       applyContextReleaseUi(run, payload);
       return;
@@ -332,6 +358,7 @@ export async function sendMessageWithAgentRuntime(options = {}) {
 
     if (payload.type === "task_list") {
       run.taskList = payload.clear ? null : payload;
+      if (!payload.clear && payload.tasks?.length) assistant.noteActivity();
       if (runIsVisible()) renderComposerTaskList(payload);
       return;
     }
@@ -458,8 +485,7 @@ export async function sendMessageWithAgentRuntime(options = {}) {
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
       if (!tools.length) return;
       const workTools = tools.filter((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool));
-      assistant.beginModelBlock();
-      if (workTools.length) assistant.noteModelOutput();
+      if (workTools.length) assistant.noteActivity();
       for (const tool of workTools) {
         if (!isAgentTerminalTool(tool)) ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
       }
@@ -548,13 +574,14 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     // above each "Ran Command" card.
     let agentEventQueue = Promise.resolve();
     unsubscribeAgentEvent = window.api.onAgentEvent((payload) => {
+      if (run.stopRequested || activeChatRuns.get(run.sessionId) !== run) return;
       const eventSessionId = String(payload?.sessionId || "");
       const runEventSessionId = String(run.memorySessionId || runSession.memorySessionId || runSession.id);
       if (!eventSessionId || eventSessionId !== runEventSessionId) return;
       agentEventQueue = agentEventQueue
         .then(async () => {
           await handleAgentEvent(payload);
-          scheduleLiveChatSnapshot(run);
+          if (!run.stopRequested && activeChatRuns.get(run.sessionId) === run) scheduleLiveChatSnapshot(run);
         })
         .catch(() => {});
     });
@@ -579,14 +606,17 @@ export async function sendMessageWithAgentRuntime(options = {}) {
       activeFile: runActiveFile,
       extraFiles: run.contextFilesCache,
       subagentModel: getExploreSubagentModel(),
-       userMessage: internal && options?.continuation ? "" : text,
+       userMessage: resume || (internal && options?.continuation) ? "" : text,
        userImages: (run.userImages || []).map(({ name, mediaType, dataUrl }) => ({ name, mediaType, dataUrl })),
-       userMessageId: promptMessage.id,
+       userMessageId: promptMessage?.id,
+       ...(resume ? { resumeTaskId: stoppedRun.taskId } : {}),
        internalRuntimeInput: internal,
        internalSkillId: internal ? String(options?.internalSkillId || "") : "",
        continuation: internal ? (options?.continuation || null) : null,
     });
     if (run.stopRequested) {
+      if (agentRunResult?.taskId) run.taskId = agentRunResult.taskId;
+      rememberStoppedRun(run);
       run.orchestrationHold = false;
       run.pendingEndTurn = false;
     } else if (agentRunResult && typeof agentRunResult === "object") {
@@ -598,6 +628,10 @@ export async function sendMessageWithAgentRuntime(options = {}) {
       }
     }
     const result = agentRunResult;
+    if (resume && !run.stopRequested && (result?.ok || result?.code === "TASK_RESUME_UNAVAILABLE")) {
+      runSession.stoppedRun = null;
+      schedulePersistChatSessions();
+    }
     // Drain serialized UI events so the last tokens/tool cards land before
     // we finalize the transcript.
     await agentEventQueue;
@@ -706,9 +740,9 @@ export async function sendMessageWithAgentRuntime(options = {}) {
       run.awaitingParentContinuation = false;
     }
     run.modelTurnOpen = false;
-    const holdActive = Boolean(run?.orchestrationHold) && !run.stopRequested;
     const stillWorking = parentRunStillWorking(run);
-    if (!stillWorking) unsubscribeAgentEvent();
+    // Later continuations and background completions use the global bridges.
+    unsubscribeAgentEvent();
     if (assistant?.turn && assistant.turn.getAttribute("aria-busy") === "true" && !stillWorking) {
       assistant.finishLiveState(run.stopRequested ? "stopped" : assistant.finalOutcome || "complete");
     }
@@ -750,6 +784,7 @@ export async function sendMessageWithAgentRuntime(options = {}) {
   }
   return agentRunResult;
   } finally {
+    finishInvocation();
     if (!internal) {
       const session = chatSessions.find((item) => item.id === targetSessionId);
       const initial = session?.liveInputs?.find((item) => item.text === text && item.status === "sending");

@@ -46,25 +46,23 @@
     };
   }
 
-  const ready = new Promise((resolve, reject) => {
-    if (typeof globalScope.require !== "function") {
-      // Loader did not run (blocked/omitted). Inject it from the page-relative
-      // node_modules path so Monaco loads regardless of script-tag timing.
-      const script = globalScope.document.createElement("script");
-      script.src = new URL(`${monacoBase()}/vs/loader.js`, globalScope.location.href).href;
-      script.onload = () => {
-        if (typeof globalScope.require === "function") {
-          bootEditor(resolve, reject);
-        } else {
-          reject(new Error("Monaco loader is unavailable."));
-        }
-      };
-      script.onerror = () => reject(new Error("Monaco loader is unavailable."));
-      globalScope.document.head.appendChild(script);
-      return;
-    }
-    bootEditor(resolve, reject);
-  });
+  let ready;
+  function editorReady() {
+    return ready ||= new Promise((resolve, reject) => {
+      if (typeof globalScope.require !== "function") {
+        const script = globalScope.document.createElement("script");
+        script.src = new URL(`${monacoBase()}/vs/loader.js`, globalScope.location.href).href;
+        script.onload = () => {
+          if (typeof globalScope.require === "function") bootEditor(resolve, reject);
+          else reject(new Error("Monaco loader is unavailable."));
+        };
+        script.onerror = () => reject(new Error("Monaco loader is unavailable."));
+        globalScope.document.head.appendChild(script);
+        return;
+      }
+      bootEditor(resolve, reject);
+    });
+  }
 
   function bootEditor(resolve, reject) {
     if (typeof globalScope.require !== "function") {
@@ -171,7 +169,7 @@
   }
 
   async function ensureModel(path, name, value = "") {
-    await ready;
+    await editorReady();
     if (models.has(path)) return models.get(path);
     const model = globalScope.monaco.editor.createModel(String(value), languageFor(name), modelUri(path));
     models.set(path, model);
@@ -199,7 +197,7 @@
 
   globalScope.XekuteEditorManager = Object.freeze({
     async showTab(path, name, value = "", { loading = false, focus = true } = {}) {
-      const instance = await ready;
+      const instance = await editorReady();
       const model = await ensureModel(path, name, value);
       if (model.getValue() !== String(value)) {
         suppressChanges = true;
@@ -222,9 +220,10 @@
     focus() { editor?.focus(); },
     layout() { editor?.layout(); },
     async revealLocation(path, line = 1, column = 1) {
-      const instance = await ready;
       const model = models.get(path);
-      if (!model || instance.getModel() !== model) return false;
+      if (!model) return false;
+      const instance = await editorReady();
+      if (instance.getModel() !== model) return false;
       const lineNumber = Math.max(1, Math.min(Number(line) || 1, model.getLineCount()));
       const maxColumn = model.getLineMaxColumn(lineNumber);
       const position = {
@@ -260,9 +259,9 @@
       if (activePath === path) activePath = "";
     },
     async showChangeDecorations(path, before, after) {
-      await ready;
       const model = models.get(path);
       if (!model) return;
+      await editorReady();
       const previous = decorations.get(path) || [];
       decorations.set(path, model.deltaDecorations(previous, changedLineDecorations(before, after)));
     },

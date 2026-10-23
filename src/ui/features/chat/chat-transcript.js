@@ -3,6 +3,7 @@
 
 import { QUESTION_ANSWER_CLASS, questionAnswerEvent, questionAnswerFromEvent, readQuestionAnswerCard } from "./question-answers.js";
 import { validPromptImages } from "./image-attachments.js";
+import { normalizeLoadedSkills, readSkillLoadRow } from "./skill-activity.js";
 
 export const CHAT_TRANSCRIPT_VERSION = 2;
 const MAX_RUNS = 200;
@@ -186,6 +187,10 @@ function normalizeToolGroup(event = {}) {
 
 function normalizeEvent(event) {
   const type = String(event?.type || "").toLowerCase();
+  if (type === "skills_loaded") {
+    const skills = normalizeLoadedSkills(event.skills);
+    return skills.length ? { type, lane: "activity", skills } : null;
+  }
   if (type === "context_release") {
     const count = Number(event.count), freed = Number(event.tokens_freed);
     return Number.isSafeInteger(count) && count > 0
@@ -501,6 +506,11 @@ function captureWorkItem(node) {
 
 function captureNode(node, events, { verdict = false } = {}) {
   if (!node?.classList) return;
+  if (classListContains(node, "agent-skill-event")) {
+    const event = normalizeEvent({ type: "skills_loaded", skills: readSkillLoadRow(node) });
+    if (event) events.push(event);
+    return;
+  }
   if (classListContains(node, "agent-work-header") || classListContains(node, "agent-status-line")) return;
   if (classListContains(node, "context-checkpoint-notice") && dataset(node).contextRelease === "true") {
     const event = normalizeEvent({ type: "context_release", count: dataset(node).releaseCount, tokens_freed: dataset(node).tokensFreed });
@@ -662,4 +672,53 @@ export function captureChatTranscript(root) {
     version: CHAT_TRANSCRIPT_VERSION,
     runs: exchanges.map((exchange, index) => captureExchangeRun(exchange, index)).filter(Boolean),
   });
+}
+
+const snapshotCaches = new WeakMap();
+
+export function captureChatSnapshot(root, sanitizeHtml) {
+  if (!root) return { transcript: { version: CHAT_TRANSCRIPT_VERSION, runs: [] }, messagesHtml: "" };
+  let cache = snapshotCaches.get(root);
+  if (!cache || cache.sanitize !== sanitizeHtml) {
+    cache?.observer.disconnect();
+    const entries = new WeakMap();
+    const invalidate = (records) => {
+      for (const record of records) {
+        let node = classListContains(root, "chat-exchange") ? root : record.target.nodeType === 1 ? record.target : record.target.parentNode;
+        while (node && node !== root && node.parentNode !== root) node = node.parentNode;
+        const entry = entries.get(node);
+        if (entry) entry.dirty = true;
+      }
+    };
+    const observer = new root.ownerDocument.defaultView.MutationObserver(invalidate);
+    observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
+    cache = { entries, observer, invalidate, sanitize: sanitizeHtml };
+    snapshotCaches.set(root, cache);
+  }
+  cache.invalidate(cache.observer.takeRecords());
+  const nodes = classListContains(root, "chat-exchange") ? [root] : [...root.childNodes];
+  const runs = [], html = [];
+  let index = 0;
+  for (const node of nodes) {
+    if (node.nodeType !== 1 && node.nodeType !== 3) continue;
+    const exchange = classListContains(node, "chat-exchange");
+    if (exchange) index++;
+    let entry = cache.entries.get(node);
+    const live = node.querySelector?.('.chat-turn.assistant[aria-busy="true"]');
+    if (!entry || entry.dirty || live || entry.index !== index) {
+      let rawHtml = node.outerHTML;
+      if (rawHtml === undefined) {
+        const text = root.ownerDocument.createElement("div");
+        text.textContent = node.textContent;
+        rawHtml = text.innerHTML;
+      }
+      const captured = exchange ? captureExchangeRun(node, index - 1) : null;
+      const run = captured ? normalizeRun(captured, index - 1) : null;
+      entry = { index, dirty: false, run, html: sanitizeHtml(rawHtml) };
+      cache.entries.set(node, entry);
+    }
+    if (entry.run && runs.length < MAX_RUNS) runs.push(entry.run);
+    html.push(entry.html);
+  }
+  return { transcript: { version: CHAT_TRANSCRIPT_VERSION, runs }, messagesHtml: html.join("") };
 }

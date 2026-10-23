@@ -52,7 +52,8 @@ test("automatic parent continuations display block-release events", async () => 
 for (const child of [false, true]) test(`${child ? "child" : "resumed parent"} checklist events update only the owning agent's widget`, async () => {
   const dom = new JSDOM('<div id="input-bar"><div id="tasks" hidden></div></div>');
   try {
-    const run = { sessionId: "owner", session: {}, assistant: {} };
+    let activityCount = 0;
+    const run = { sessionId: "owner", session: {}, assistant: { noteActivity() { activityCount++; } } };
     const context = {
       appState: { activeChatSessionId: "owner" },
       ensureParentContinuationRun: () => run, ensureDelegatedChildRun: () => run, childAssistant: () => run.assistant,
@@ -68,6 +69,7 @@ for (const child of [false, true]) test(`${child ? "child" : "resumed parent"} c
     assert.equal(context.composerTaskListEl.querySelector(".composer-task-list-count").textContent, "1/10");
     assert.equal(run.taskList.tasks.length, 10);
     assert.equal(run.taskList.source, "agent", "transport provenance does not change checklist ownership");
+    assert.equal(activityCount, 1);
     context.appState.activeChatSessionId = "another-agent";
     await send({ type: "task_list", source: "agent", tasks: [{ id: "new", title: "Changed background task", status: "pending" }] });
     assert.equal(run.taskList.tasks[0].title, "Changed background task");
@@ -76,5 +78,6 @@ for (const child of [false, true]) test(`${child ? "child" : "resumed parent"} c
     await send({ type: "task_list", clear: true });
     assert.equal(context.composerTaskListEl.hidden, true);
     assert.equal(run.taskList, null);
+    assert.equal(activityCount, 2, "clearing a checklist does not start visible activity");
   } finally { dom.window.close(); }
 });

@@ -62,9 +62,14 @@ function createSessionSupervisor({ store, now = () => new Date().toISOString(), 
     if (!task) return { ok: false, code: "TASK_NOT_FOUND", error: "The task does not exist." };
     return { ok: true, task, cancellationEpoch: result.control.cancellationEpoch, deliveries: task.deliveries.filter((delivery) => delivery.revision > task.appliedRevision).map((delivery) => ({ ...delivery, input: result.control.inputs.find((entry) => entry.id === delivery.messageId) })) };
   }
-  async function checkpointTask({ workspace = "", sessionId, taskId, expectedRevision, previousRevision = expectedRevision, engine, messages, blockId, consumedPlanId = "", allowStopped = false, mutation = null }) {
+  async function checkpointTask({ workspace = "", sessionId, taskId, expectedRevision, previousRevision = expectedRevision, expectedCheckpointEpoch, engine, messages, blockId, consumedPlanId = "", allowStopped = false, mutation = null }) {
     return transact(workspace, sessionId, (control, document) => {
       const task = control.tasks.find((entry) => entry.id === taskId);
+      // A peer's cancellation changes the session counter, not this task's
+      // checkpoint ownership. Resume changes the owning task's saved epoch.
+      if (task && Number.isSafeInteger(expectedCheckpointEpoch) && (task.engine?.cancellationEpoch ?? 0) !== expectedCheckpointEpoch) {
+        return { ok: false, code: "TASK_REVISION_STALE", error: "The task was interrupted before this checkpoint.", aborted: true };
+      }
       if (!task || task.appliedRevision !== previousRevision || expectedRevision < previousRevision || expectedRevision > task.revision
         || (!["running", "waiting"].includes(task.status) && !(allowStopped && task.status === "stopped" && expectedRevision === previousRevision))) return { ok: false, code: "TASK_REVISION_STALE", error: "The applied task revision changed before its checkpoint could be stored." };
       if (blockId && blockId !== task.blockId) return { ok: false, code: "TASK_BLOCK_MISMATCH", error: "The checkpoint cannot replace another task's transcript." };

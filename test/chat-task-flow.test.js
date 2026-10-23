@@ -253,7 +253,6 @@ test("running chats stay navigable and signal background completion per tab", ()
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /eventSessionId !== runEventSessionId/);
   assert.match(renderer, /const canSend = hasText \|\| \(!running && appState\.composerImages\.length > 0\);/);
-  assert.match(renderer, /sendBtn\.disabled = stopMode \? false : !canSend/);
   assert.doesNotMatch(renderer, /Another agent is running/);
   assert.match(main, /sender\.send\("agent:event", \{ \.\.\.data, sessionId \}\)/);
   assert.match(styles, /\.chat-tab-running-icon\s*\{/);
@@ -270,7 +269,6 @@ test("question-tool cards use the refreshed UI and stay scoped to their owning c
   assert.match(renderer, /function syncComposerQuestionsForActiveSession\(\)[\s\S]*?pendingComposerQuestionsBySession\.get\(String\(appState\.activeChatSessionId \|\| ""\)\)[\s\S]*?composerQuestionsEl\.replaceChildren\(\)/);
   assert.match(renderer, /function applyActiveChatSession\(session\)[\s\S]*?syncComposerQuestionsForActiveSession\(\)/);
   assert.match(renderer, /function showComposerQuestionsPanel\(\{[\s\S]*?sessionId = appState\.activeChatSessionId[\s\S]*?pendingComposerQuestionsBySession\.set\(ownerSessionId/);
-  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = appState\.activeChatSessionId \} = \{\}\)/);
   assert.match(renderer, /sessionId: String\(sessionId \|\| appState\.activeChatSessionId \|\| ""\)/);
   assert.match(renderer, /requestQuestions\([\s\S]*?sessionId: this\.sessionId/);
   assert.match(renderer, /createAssistantTurn\(\{ container: chatRunContainer\(run\), sessionId: run\.sessionId \}\)/);
@@ -338,7 +336,6 @@ test("background terminal continuations remain internal to the agent runtime", (
   assert.doesNotMatch(chatStyles, /\.harness-wait-line/);
   assert.match(renderer, /querySelectorAll\("\.harness-wait-line"\)\.forEach\(\(node\) => node\.remove\(\)\)/);
   assert.doesNotMatch(renderer, /chatInput\.value = message;[\s\S]{0,100}sendMessageWithAgentRuntime\(\)/);
-  assert.match(renderer, /userMessage: internal && options\?\.continuation \? "" : text/);
   assert.match(renderer, /internalRuntimeInput: internal/);
   assert.match(renderer, /internalSkillId: internal \? String\(options\?\.internalSkillId \|\| ""\) : ""/);
   assert.match(main, /const internalSkillId = payload\.internalRuntimeInput \? String\(payload\.internalSkillId \|\| ""\)\.trim\(\)\.toLowerCase\(\) : ""/);
@@ -446,7 +443,6 @@ test("stopped streamed responses enter history before the durable outcome is wri
   // it (or pressing Enter) stops the agent instead of sending.
   assert.match(renderer, /function submitChatComposer\(\) \{\s*if \(sendBtn\.classList\.contains\("stop"\)\) \{ stopGeneration\(\); return; \}/);
   assert.match(renderer, /const running = isRunningChatActive\(\);\s*const stopMode = running && !hasText;[\s\S]*?sendBtn\.classList\.toggle\("stop", stopMode\);/);
-  assert.match(renderer, /icon\.className = `codicon \$\{stopMode \? "codicon-primitive-square" : "codicon-arrow-up"\}`/);
   assert.match(read("src/ui/styles/layout-revamp.css"), /\.send-btn\.stop::before \{[\s\S]*?background: currentColor;/);
   assert.match(renderer, /function abortActiveChatRun\([\s\S]*?abortChat\?\.\(\{ sessionId \}\)/);
   assert.match(renderer, /isChatSessionStoppedByOperator/);
@@ -548,7 +544,6 @@ test("every rendered agent event refreshes the durable display transcript", () =
   assert.match(renderer, /function renderStructuredChatTranscript/);
   assert.match(renderer, /from "[./\w-]*\/chat-transcript\.js"/);
   assert.match(renderer, /captureChatTranscript\(/);
-  assert.match(renderer, /await handleAgentEvent\(payload\);\s*scheduleLiveChatSnapshot\(run\)/);
   assert.match(renderer, /function scheduleLiveChatSnapshot/);
   assert.match(renderer, /LIVE_CHAT_SNAPSHOT_MS = 1200/);
   assert.match(renderer, /function hydratePersistedChatTranscript/);
@@ -556,7 +551,6 @@ test("every rendered agent event refreshes the durable display transcript", () =
   assert.match(renderer, /function persistCommandTimelineRowState/);
   assert.match(store, /display_html: messageContent\(source\.display_html \|\| source\.displayHtml \|\| ""\)/);
   assert.match(store, /ui_transcript: normalizeUiTranscript/);
-  assert.match(store, /transcript: clone\(document\.ui_transcript\)/);
   assert.match(delegation, /childSessionBindings/);
   assert.match(delegation, /blockId: event\.blockId \|\| binding\.blockId \|\| ""/);
 });

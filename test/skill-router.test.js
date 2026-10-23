@@ -50,6 +50,35 @@ test("checklist updates merge atomically, require complete new items, and reject
   assert.deepEqual(initial.items.map(({ id }) => id), ["one", "two"], "a rejected update leaves the saved checklist untouched");
 });
 
+test("a checklist permits at most one in-progress item and switches it atomically", () => {
+  const bothActive = create([item("one", { status: "in_progress" }), item("two", { status: "in_progress" })]);
+  const rejectedCreate = SkillRouter.applyChecklistOperation(null, bothActive);
+  assert.equal(rejectedCreate.ok, false);
+  assert.equal(rejectedCreate.code, "CHECKLIST_INVALID");
+  assert.match(rejectedCreate.error, /one.*in_progress/);
+
+  const initial = SkillRouter.applyChecklistOperation(null, create([item("one", { status: "in_progress" }), item("two")])).value;
+  const saved = structuredClone(initial);
+  const rejectedUpdate = SkillRouter.applyChecklistOperation(initial, { action: "update", items: [{ id: "two", status: "in_progress" }] });
+  assert.equal(rejectedUpdate.ok, false);
+  assert.deepEqual(initial, saved, "an invalid handoff preserves all saved progress");
+
+  for (const previousStatus of ["completed", "pending", "blocked"]) {
+    const updated = SkillRouter.applyChecklistOperation(initial, { action: "update", items: [
+      { id: "two", status: "in_progress" },
+      { id: "one", status: previousStatus },
+    ] });
+    assert.equal(updated.ok, true, "validation happens after merging every patch");
+    assert.deepEqual(updated.value.items.map(({ id, status }) => ({ id, status })), [
+      { id: "one", status: previousStatus }, { id: "two", status: "in_progress" },
+    ]);
+  }
+  assert.equal(SkillRouter.applyChecklistOperation(initial, { action: "update", items: [{ id: "one", status: "completed" }] }).ok, true, "zero active items is valid");
+  assert.equal(SkillRouter.applyChecklistOperation(initial, { action: "update", items: [item("three", { status: "in_progress" })] }).ok, false);
+  const repaired = SkillRouter.applyChecklistOperation({ main_goal: bothActive.main_goal, items: bothActive.items }, { action: "update", items: [{ id: "two", status: "pending" }] });
+  assert.equal(repaired.ok, true, "previously saved overlapping statuses can be repaired without replacing the checklist");
+});
+
 test("model and widget views expose only their permitted checklist fields", () => {
   const checklist = {
     main_goal: "Hidden goal",

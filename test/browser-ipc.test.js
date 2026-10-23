@@ -119,16 +119,21 @@ test("a pending navigation does not prevent a browser tab from closing", async (
 
 test("existing proxy configuration closes native views before moving the shared listener", async () => {
   const handlers = new Map(), calls = [];
+  let configuredScope;
   const oldProject = path.resolve("old-browser-project"), nextProject = path.resolve("next-browser-project");
   registerProjectIpc({
     ipcMain: { handle: (name, handler) => handlers.set(name, handler), on: () => {} },
     app: { getPath: () => path.resolve("unused-test-home") }, getMainWindow: () => null,
     container: { closeNativeBrowserProject: async () => calls.push("closeNative"), proxyBrowser: { status: () => ({ running: false }) } },
-    proxyListener: { getStatus: () => ({ running: true, assessmentPath: oldProject, host: "127.0.0.1", port: 8080 }), configure: async () => { calls.push("configure"); return { running: true }; } },
-    readProjectProfile: () => ({}), effectiveOperatorRuntimeSettings: () => ({ listener: { enabled: true, bindAddress: "127.0.0.1", port: 8080 } }),
+    proxyListener: { getStatus: () => ({ running: true, assessmentPath: oldProject, host: "127.0.0.1", port: 8080 }), configure: async (_workspace, options) => { calls.push("configure"); configuredScope = options; return { running: true }; } },
+    readProjectProfile: () => ({ profile: { scope: { inScopeTargets: [], wildcardRules: ["*.example.test"], outOfScopeTargets: ["blocked.example.test"] } } }),
+    effectiveOperatorRuntimeSettings: () => ({ listener: { enabled: true, bindAddress: "127.0.0.1", port: 8080 } }),
   });
   await handlers.get("proxy:configure")({}, { assessmentPath: nextProject });
   assert.deepEqual(calls, ["closeNative", "configure"]);
+  assert.deepEqual(configuredScope.targets, []);
+  assert.deepEqual(configuredScope.wildcardRules, ["*.example.test"]);
+  assert.deepEqual(configuredScope.excludedTargets, ["blocked.example.test"]);
 });
 
 test("a newer proxy configuration supersedes a request waiting for browser cleanup", async () => {

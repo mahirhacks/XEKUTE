@@ -87,6 +87,9 @@ function normalizeChecklistSnapshot(checklist) {
     ids.add(normalized.value.id);
     items.push(normalized.value);
   }
+  if (items.filter((item) => item.status === "in_progress").length > 1) {
+    return checklistFailure("Only one checklist item may be in_progress. Update the previous item's actual status and the new item's status in the same call.");
+  }
   return { ok: true, value: { main_goal: mainGoal, items } };
 }
 
