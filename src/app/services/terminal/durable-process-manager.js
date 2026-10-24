@@ -1053,8 +1053,12 @@ function createDurableProcessManager({
         return { ok: false, error: { code: "PROCESS_STOP_FAILED", message: "Process termination could not be confirmed. The owned handle remains available for another Stop.", retryable: true }, value: { processId: record.id, status: record.status } };
       }
     }
+    if (record.status === "reconciliation_required" && await processGone(record)) {
+      settleUnreconciled(workspace, record, "host_restart_exited");
+      return projectResult({ ok: true, value: { processId: record.id, pid: record.pid, status: record.status, completedAt: record.completedAt } });
+    }
     if (["running", "starting", "queued", "reconciliation_required"].includes(record.status)) {
-      return { ok: false, error: { code: "PROCESS_IDENTITY_UNPROVEN", message: "The owned process handle is unavailable. Reconcile the previous process before stopping or replaying it.", retryable: false }, value: { processId: record.id, status: "reconciliation_required", replaySafe: false } };
+      return { ok: false, error: { code: "PROCESS_IDENTITY_UNPROVEN", message: "The owned process handle is unavailable and its PID is still in use, so it cannot be stopped safely. The operator can release it from the chat.", retryable: false }, value: { processId: record.id, status: "reconciliation_required", replaySafe: false } };
     }
     return projectResult({ ok: true, value: { ...snapshot(workspace, record, {}, null), processId: record.id, completedAt: record.completedAt } });
   }
@@ -1104,10 +1108,40 @@ function createDurableProcessManager({
     }
     return { ok: true, value: { processes } };
   }
+  // A handle restored after a restart cannot prove which process its PID now
+  // names. When nothing runs under that PID or its tree, nothing can own the
+  // workspace, so the handle settles instead of blocking writes forever.
+  async function processGone(record) {
+    if (!Number(record.pid)) return true;
+    if (isAlive(record.pid)) return false;
+    try { return !(await sampleTree(record.pid, { fsImpl, platform: process.platform }))?.alive; } catch { return true; }
+  }
+  function settleUnreconciled(workspace, record, reason) {
+    const stamp = now().toISOString();
+    Object.assign(record, { status: "finished_unknown", completedAt: stamp, updatedAt: stamp, terminationReason: reason });
+    delete record.reconciliation;
+    writeRecord(workspace, record);
+  }
+  // Operator-only. Stops tracking handles the host cannot prove and never
+  // signals their PIDs, which may now belong to unrelated processes.
+  async function releaseUnreconciled(workspace) {
+    const released = [];
+    for (const record of listInternal(workspace, "", Infinity)) {
+      if (record.status !== "reconciliation_required") continue;
+      const stillRunning = !await processGone(record);
+      settleUnreconciled(workspace, record, stillRunning ? "operator_released" : "host_restart_exited");
+      released.push({ processId: record.id, pid: Number(record.pid) || null, stillRunning });
+    }
+    return { ok: true, value: { released } };
+  }
   async function reconcile(workspace) {
     const changed = [];
-    for (const record of listInternal(workspace)) {
-      if (record.status === "reconciliation_required") { changed.push(record.id); continue; }
+    for (const record of listInternal(workspace, "", Infinity)) {
+      if (record.status === "reconciliation_required") {
+        if (await processGone(record)) settleUnreconciled(workspace, record, "host_restart_exited");
+        changed.push(record.id);
+        continue;
+      }
       let alive = record.status === "running" ? (live.has(record.id) || isAlive(record.pid)) : false;
       if (record.status === "running" && !live.has(record.id)) {
         try {
@@ -1136,7 +1170,7 @@ function createDurableProcessManager({
     const record = listInternal(workspace, "", Infinity).find(item => item.id === id);
     return record ? snapshot(workspace, record, { tail_chars: 50000 }) : null;
   }
-  return { list, reconcile, start, run, status, stop, stopOwned, sampleTree, runningCommands, referenceCommands, readReferenceCommand };
+  return { list, reconcile, releaseUnreconciled, start, run, status, stop, stopOwned, sampleTree, runningCommands, referenceCommands, readReferenceCommand };
 }
 
 module.exports = { createDurableProcessManager, createEncryptedProcessHandleStore };

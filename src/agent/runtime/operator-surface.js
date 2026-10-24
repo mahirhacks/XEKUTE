@@ -42,25 +42,43 @@
     return words.every((word) => GLUE.has(word));
   }
 
-  function redactOperatorText(text) {
-    const original = String(text || "");
-    if (!original) return "";
-    const leaked = hasOperatorLeak(original);
-    let next = original.replace(/```(?:json|tool|javascript|js)?[^\n]*\n?[\s\S]*?```/gi, (block) => (hasOperatorLeak(block) ? "" : block));
-    next = next
+  function redactLeaks(line) {
+    return line
       .replace(PROCESS_ID_RE, "")
       .replace(TOOL_NAME_RE, "")
       .replace(SCHEMA_WORD_RE, "")
-      .replace(OPERATION_RE, "")
-      .replace(/[`"']{2,}/g, "")
-      .replace(/\(\s*\)/g, "")
-      .replace(/\s+'s\b/g, "")
-      .replace(/\s{2,}/g, " ")
-      .replace(/\s+([,.;:!?])/g, "$1")
-      .replace(/\(\s+/g, "(")
-      .replace(/\s+\)/g, ")")
+      .replace(OPERATION_RE, "");
+  }
+
+  // Tidies only what a redaction left behind on one line. Line breaks and
+  // indentation carry markdown structure (tables, lists, code), so they stay.
+  function tidyRedactedLine(line) {
+    const indent = line.match(/^[ \t]*/)[0];
+    const body = line.slice(indent.length)
+      .replace(/``|""|''/g, "")
+      .replace(/(^|[ \t])\([ \t]*\)/g, "$1")
+      .replace(/[ \t]+'s\b/g, "")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/[ \t]+([,.;:!?])/g, "$1")
+      .replace(/\([ \t]+/g, "(")
+      .replace(/[ \t]+\)/g, ")")
       .trim();
-    if (leaked && isHollow(next)) return "I'll check the process.";
+    return body ? indent + body : "";
+  }
+
+  function redactOperatorText(text) {
+    const original = String(text || "");
+    if (!original || !hasOperatorLeak(original)) return original;
+    const next = original
+      .replace(/```(?:json|tool|javascript|js)?[^\n]*\n?[\s\S]*?```/gi, (block) => (hasOperatorLeak(block) ? "" : block))
+      .split("\n")
+      .map((line) => {
+        const redacted = redactLeaks(line);
+        return redacted === line ? line : tidyRedactedLine(redacted);
+      })
+      .join("\n")
+      .trim();
+    if (isHollow(next)) return "I'll check the process.";
     return next;
   }
 

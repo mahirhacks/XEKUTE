@@ -29,7 +29,7 @@ const { createShellCommandTracker } = require("../services/terminal/shell-comman
 const { sameTerminalOwner, findLiveTerminal } = require("../services/terminal/terminal-ownership.js");
 const { appendTerminalOutput } = require("../services/terminal/active-terminal-catalog.js");
 const { createTerminalOutputBatcher } = require("../services/terminal/terminal-output-batcher.js");
-const { normalizeUserImages, attachUserImages } = require("../services/chat/user-images.js");
+const { normalizeUserImages, attachUserImages, attachImagesByMessageId } = require("../services/chat/user-images.js");
 const { HIDDEN_COMMAND_REVEAL_MS, createHiddenCommandReveal } = require("../services/terminal/agent-terminal-reveal.js");
 const { createAgentTerminalHost } = require("../services/terminal/agent-terminal-host.js");
 const { createCommandReferences } = require("../services/terminal/command-references.js");
@@ -378,11 +378,28 @@ const liveInputWakeups = new Set();
 // Commands a parked run is still waiting for, by run key. Their outputs reach
 // the task inbox as they finish; the task wakes once the last one is in.
 const parkedCommandWaits = new Map();
+// Images sent with steering messages, keyed by message id. Like a run's opening
+// images they stay out of chat history and checkpoints; each model round
+// attaches them to their message. The oldest entries go first.
+const steeringImages = new Map();
+const STEERING_IMAGE_MESSAGES = 50;
+function rememberSteeringImages(messageId, images) {
+  steeringImages.delete(messageId);
+  steeringImages.set(messageId, images);
+  while (steeringImages.size > STEERING_IMAGE_MESSAGES) steeringImages.delete(steeringImages.keys().next().value);
+}
 const controlSessionOwners = new Map();
 const delegatedChildren = createDelegatedChildStore({ v3SessionStore: container.v3SessionStore });
 const taskResources = createResourceReservations({ listProcesses: async (workspace) => {
   if (!workspace) return [];
-  const listed = await container.durableProcessManager.list(workspace, {});
+  const manager = container.durableProcessManager;
+  let listed = await manager.list(workspace, {});
+  // A stuck handle whose process has since exited settles here, so a running
+  // task unblocks without waiting for the next run's reconcile.
+  if (listed?.ok && listed.value?.processes?.some((record) => record.status === "reconciliation_required")) {
+    await manager.reconcile(workspace);
+    listed = await manager.list(workspace, {});
+  }
   if (!listed?.ok) throw Object.assign(new Error("Process ownership could not be read before reserving the workspace."), { code: "RESOURCE_OWNERSHIP_UNAVAILABLE" });
   return listed?.value?.processes || [];
 } });
@@ -1865,6 +1882,13 @@ ipcMain.handle("tools:runCommand", async (_event, { workspace, command, timeoutM
 
 ipcMain.handle("tools:startProcess", async (_event, { workspace, command }) => {
   return startWorkspaceProcess(workspace, command, _event.sender.id);
+});
+
+// The operator's escape hatch for command handles that survived a restart and
+// still name a live PID: Xekute stops tracking them without signalling the PID.
+ipcMain.handle("processes:releaseUnreconciled", async (_event, { workspace } = {}) => {
+  if (typeof workspace !== "string" || !workspace.trim()) return { ok: false, error: "A workspace is required." };
+  return container.durableProcessManager.releaseUnreconciled(workspace);
 });
 
 ipcMain.handle("tools:readProcess", async (_event, { id }) => {
@@ -3766,7 +3790,8 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   }
 
   const providerForRun = String(payload.provider || getActiveProvider() || "").trim().toLowerCase();
-  const routerEligible = providerForRun === "openrouter" && ["agent", "ask"].includes(requestedProfile.key);
+  const checklistEnabled = ["agent", "ask"].includes(requestedProfile.key);
+  const routerEligible = providerForRun === "openrouter" && checklistEnabled;
   const decisionModel = routerEligible
     ? String(
       parentDescriptor?.payload?.decisionModel
@@ -3835,6 +3860,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     mode: payload.mode || "agent",
     modeFamily: payload.modeFamily || "xekute",
     skillRouter: skillRouterConfig,
+    checklistEnabled,
     authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
     projectProfile: agentProjectProfile(payload.workspace),
     sessionId,
@@ -4130,6 +4156,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     skillRouter: skillRouterConfig
       ? { ...skillRouterConfig, bypassAutomaticSkills: String(skillIntent || "").trim().startsWith("/") }
       : null,
+    checklistEnabled,
     intelligence: container.assessmentIntelligence,
     projectId: tier1ProjectId,
     precedingBlockId: payload.precedingBlockId || payload.preceding_block_id || "",
@@ -4145,11 +4172,11 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, {
       ...roundPayload,
       // Attached images go to the model on every round of this run only.
-      messages: attachUserImages(roundPayload.messages, {
+      messages: attachImagesByMessageId(attachUserImages(roundPayload.messages, {
         text: payload.userMessage,
         images: userImages.images,
         provider: payload.provider || roundPayload.contextPlan?.provider || getActiveProvider(),
-      }),
+      }), steeringImages, payload.provider || roundPayload.contextPlan?.provider || getActiveProvider()),
       provider: payload.provider,
       workspace: payload.workspace,
     }, {
@@ -4390,6 +4417,8 @@ ipcMain.handle("agent:run", handleAgentRun);
 ipcMain.handle("agent:submitInput", async (event, payload = {}) => {
   const sessionId = String(payload.sessionId || "");
   if (!sessionId) return { ok: false, code: "SESSION_ID_REQUIRED", error: "Choose a chat before sending input." };
+  const inputImages = normalizeUserImages(payload.images);
+  if (!inputImages.ok) return { ok: false, code: "USER_IMAGES_INVALID", error: inputImages.error };
   const key = sessionRunKey(sessionId);
   let descriptor = parentRunDescriptors.get(key);
   const memorySessionId = descriptor?.payload?.memorySessionId || tier1SessionIdForRun(sessionId, key);
@@ -4407,9 +4436,26 @@ ipcMain.handle("agent:submitInput", async (event, payload = {}) => {
         model: payload.model || chat?.selectedModel || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" }, false);
     }
   }
+  // Registered before delivery: the running agent can pick the message up at
+  // its next boundary, before this handler resumes.
+  const messageId = String(payload.messageId || "");
+  if (inputImages.images.length && messageId) rememberSteeringImages(messageId, inputImages.images);
   const receipt = await agentSessionRuntime.receive({ workspace, sessionId: memorySessionId,
     binding: { provider: getActiveProvider(), model: payload.model || descriptor?.payload?.model || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" },
     input: { id: payload.messageId, text: payload.text, targetTaskId: payload.targetTaskId || "" } });
+  if (inputImages.images.length && messageId) {
+    if (!receipt?.ok) steeringImages.delete(messageId);
+    else if (workspace) {
+      // Kept with the chat, like a run's opening images, so a reopened chat
+      // can show them at full quality. Best effort.
+      try {
+        const identity = container.memoryProjectIdentityStore?.resolveV3Project?.(workspace, { persist: true });
+        if (identity?.ok && isMemoryId(identity.projectId, "proj")) {
+          for (const image of inputImages.images) container.tier1SensitiveStore?.writeChatImage?.(String(identity.projectId), memorySessionId, image);
+        }
+      } catch (error) { mainLog.write("chatImage.save", error); }
+    }
+  }
   return refuseUnsavedInput(receipt, (data) => { if (!event.sender.isDestroyed()) event.sender.send("agent:event", { ...data, sessionId }); });
 });
 ipcMain.handle("agent:cancelTask", async (event, payload = {}) => {

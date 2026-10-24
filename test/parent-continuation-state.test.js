@@ -66,18 +66,40 @@ for (const child of [false, true]) test(`${child ? "child" : "resumed parent"} c
     const tasks = Array.from({ length: 10 }, (_, index) => ({ id: String(index), title: `Step ${index + 1}`, status: index ? "pending" : "in_progress" }));
     await send({ type: "task_list", source: child ? "subagent" : "parent_continuation", tasks });
     assert.equal(context.composerTaskListEl.hidden, false);
-    assert.equal(context.composerTaskListEl.querySelector(".composer-task-list-count").textContent, "1/10");
+    assert.equal(context.composerTaskListEl.querySelector(".composer-task-list-row:not([hidden]) .composer-task-list-title").textContent, "Step 1");
+    const positions = [...context.composerTaskListEl.querySelectorAll(".composer-task-list-position")];
+    assert.deepEqual(positions.map((el) => [el.closest(".composer-task-list-row").dataset.taskIndex, el.textContent]), [["0", "1 of 10"]], "only the active row shows its position");
     assert.equal(run.taskList.tasks.length, 10);
     assert.equal(run.taskList.source, "agent", "transport provenance does not change checklist ownership");
     assert.equal(activityCount, 1);
     context.appState.activeChatSessionId = "another-agent";
     await send({ type: "task_list", source: "agent", tasks: [{ id: "new", title: "Changed background task", status: "pending" }] });
     assert.equal(run.taskList.tasks[0].title, "Changed background task");
-    assert.equal(context.composerTaskListEl.querySelector(".composer-task-list-count").textContent, "1/10");
+    assert.equal(context.composerTaskListEl.querySelector(".composer-task-list-row:not([hidden]) .composer-task-list-title").textContent, "Step 1");
     context.appState.activeChatSessionId = "owner";
     await send({ type: "task_list", clear: true });
     assert.equal(context.composerTaskListEl.hidden, true);
     assert.equal(run.taskList, null);
     assert.equal(activityCount, 2, "clearing a checklist does not start visible activity");
   } finally { dom.window.close(); }
+});
+
+test("the checklist position follows the active item and stays on it when expanded", () => {
+  const dom = new JSDOM('<div id="tasks" hidden></div><div id="input-bar"></div>');
+  const context = {
+    document: dom.window.document, appState: { activeChatSessionId: "owner" },
+    composerTaskListEl: dom.window.document.querySelector("#tasks"), inputBar: dom.window.document.querySelector("#input-bar"),
+  };
+  vm.runInNewContext(rendererDefinitions("escapeHtml", "clearComposerTaskList", "renderComposerTaskList"), context);
+  const statuses = (...list) => list.map((status, index) => ({ id: String(index), title: `Step ${index + 1}`, status }));
+  const position = () => [...context.composerTaskListEl.querySelectorAll(".composer-task-list-position")]
+    .map((el) => [el.closest(".composer-task-list-row").dataset.taskIndex, el.textContent]);
+  context.renderComposerTaskList({ tasks: statuses("completed", "in_progress", "pending") });
+  assert.deepEqual(position(), [["1", "2 of 3"]]);
+  context.appState.activeComposerTaskList.expanded = true;
+  context.renderComposerTaskList(context.appState.activeComposerTaskList);
+  assert.equal(context.composerTaskListEl.querySelectorAll(".composer-task-list-row:not([hidden])").length, 3);
+  assert.deepEqual(position(), [["1", "2 of 3"]], "expanding keeps the position beside the active item only");
+  context.renderComposerTaskList({ tasks: statuses("completed", "completed", "completed") });
+  assert.deepEqual(position(), [["2", "3 of 3"]], "a finished list ends on its last item");
 });

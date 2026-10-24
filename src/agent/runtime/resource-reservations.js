@@ -15,13 +15,23 @@ const CONCURRENT_TOOLS = new Set([
 function concurrent(call) {
   return CONCURRENT_TOOLS.has(call?.function?.name || call?.toolName);
 }
+// Only run and start launch work. status, list, and stop must stay available
+// while the workspace waits on reconciliation, or the agent cannot inspect or
+// stop the very job that holds it.
+function launchesCommand(call) {
+  let args = call?.args ?? call?.function?.arguments ?? {};
+  if (typeof args === "string") {
+    try { args = JSON.parse(args); } catch { return true; }
+  }
+  return ["", "run", "start"].includes(String(args?.operation || "").trim().toLowerCase());
+}
 function createResourceReservations({ listProcesses = async () => [] } = {}) {
   const tails = new Map();
   async function reconciliationRequired(workspace) {
     const processes = await listProcesses(workspace);
     return processes.some((record) => record.status === "reconciliation_required");
   }
-  const reconciliationFailure = { ok: false, errorCode: "RESOURCE_RECONCILIATION_REQUIRED", error: "A process from the previous host may still own this workspace. Reconcile it before another task writes here.", retryable: false };
+  const reconciliationFailure = { ok: false, errorCode: "RESOURCE_RECONCILIATION_REQUIRED", error: "A command from before the app restarted may still own this workspace, and its PID is still in use. Tell the operator; they can release it from the chat. Status, list, and stop still work.", retryable: false };
   const stoppedFailure = { ok: false, errorCode: "RESOURCE_WAIT_STOPPED", error: "The task stopped while waiting for the workspace.", retryable: false };
   async function untilSettledOrStopped(previous, signal) {
     if (signal?.aborted) return false;
@@ -32,7 +42,7 @@ function createResourceReservations({ listProcesses = async () => [] } = {}) {
   async function execute({ workspace = "", toolCall, signal }, perform) {
     const key = workspace ? path.resolve(workspace).toLowerCase() : "app";
     if (concurrent(toolCall)) {
-      if ((toolCall?.function?.name || toolCall?.toolName) !== "exec_command") return perform();
+      if ((toolCall?.function?.name || toolCall?.toolName) !== "exec_command" || !launchesCommand(toolCall)) return perform();
       if (await reconciliationRequired(workspace)) return reconciliationFailure;
       // A command never starts in the middle of a file edit. It does not hold
       // the workspace while it runs, so commands never queue behind each other.
@@ -54,4 +64,4 @@ function createResourceReservations({ listProcesses = async () => [] } = {}) {
   }
   return { execute };
 }
-module.exports = { createResourceReservations, concurrent };
+module.exports = { createResourceReservations, concurrent, launchesCommand };

@@ -34,6 +34,15 @@ test("input names the visible chat as browser owner only for that chat's own ses
  assert.equal(calls[0].sessionId, "mem-chat"); assert.equal(calls[0].chatSessionId, "chat");
  assert.equal(calls[1].sessionId, "mem-parent"); assert.equal(calls[1].chatSessionId, undefined);
 });
+test("steering images travel with the submitted message and are omitted when absent", async () => {
+ const calls = [];
+ const { session, controller } = await fixture({ agentSubmitInput: async (payload) => { calls.push(payload); return receipt(payload.messageId); } });
+ const images = [{ name: "shot.png", mediaType: "image/png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" }];
+ await controller.send({ session, text: "look at this", images });
+ await controller.send({ session, text: "no picture" });
+ assert.deepEqual(calls[0].images, images);
+ assert.equal("images" in calls[1], false);
+});
 test("agent runs carry the UI chat id, and main uses it as the browser tab owner", () => {
  const main = fs.readFileSync(path.join(__dirname, "../src/app/electron/main.js"), "utf8");
  const runs = source.split("window.api.agentRun({").slice(1).map((body) => body.slice(0, body.indexOf("});")));
@@ -259,7 +268,7 @@ test("history keeps repeated steering prompts in the same task exchange", () => 
 function uiFixture(controller, session) {
  const dom = new JSDOM('<div id="messages"></div><textarea></textarea>'); const input = dom.window.document.querySelector("textarea");
  const errors = []; const context = { liveInputController: controller, activeChatSessionId: session.id, rootPath: "G:/Xekute", chatInput: input, chatSendInFlight: new Set(),
-  effectiveChatInputValue: () => input.value, addUserMessage: () => {}, addErrorMessage: (error) => errors.push(error), resetChatInput: () => {}, schedulePersistChatSessions: () => {}, updateSendBtn: () => {} };
+  effectiveChatInputValue: () => input.value, addUserMessage: () => {}, addErrorMessage: (error) => errors.push(error), restoreComposerImages: () => {}, resetChatInput: () => {}, schedulePersistChatSessions: () => {}, updateSendBtn: () => {} };
  vm.createContext(withAppState(context)); vm.runInContext(rendererDefinitions("submitLiveChatInput"), context);
  return { submit: context.submitLiveChatInput, input, errors };
 }

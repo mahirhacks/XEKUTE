@@ -152,8 +152,6 @@ export function syncProxyBrowserUi(status = {}) {
   const button = document.getElementById("security-proxy-browser") || securityProxyBrowser;
   if (!button) return;
   const running = Boolean(status.running);
-  button.classList.toggle("active", running);
-  button.setAttribute("aria-pressed", String(running));
   button.title = running
     ? `${status.browser === "edge" ? "Edge" : "Chrome"} is open through ${status.proxyHost || "127.0.0.1"}:${status.proxyPort || "proxy"}${status.agentShareAvailable ? "; matching agent browser actions can share it" : ""}`
     : "Open browser. Right-click to open a tab with an identity.";

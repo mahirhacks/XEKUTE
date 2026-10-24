@@ -14,7 +14,7 @@ test("Agent checklists are an agent-local runtime tool outside the canonical mod
   assert.match(controller, /function isReasonablyLargeAgentRequest\(/);
   assert.doesNotMatch(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
   assert.doesNotMatch(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
-  assert.match(controller, /routingEnabled && !orchestrationControlOnly && !routingTools\.some/);
+  assert.match(controller, /checklistEnabled && !orchestrationControlOnly && !routingTools\.some/);
   assert.match(controller, /sendEvent\(\{ type: "task_list", \.\.\.checklistForWidget\(checklist, runId\) \}\)/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
   assert.match(modes, /const AGENT_TOOLS = Object\.freeze\(\[/);
@@ -252,7 +252,7 @@ test("running chats stay navigable and signal background completion per tab", ()
   assert.match(renderer, /if \(isChatSessionRunning\(id\)\) return/);
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /eventSessionId !== runEventSessionId/);
-  assert.match(renderer, /const canSend = hasText \|\| \(!running && appState\.composerImages\.length > 0\);/);
+  assert.match(renderer, /const canSend = hasText \|\| hasImages;/, "text or images can be sent, including as steering into a running chat");
   assert.doesNotMatch(renderer, /Another agent is running/);
   assert.match(main, /sender\.send\("agent:event", \{ \.\.\.data, sessionId \}\)/);
   assert.match(styles, /\.chat-tab-running-icon\s*\{/);
@@ -442,7 +442,7 @@ test("stopped streamed responses enter history before the durable outcome is wri
   // The send control becomes a stop button while a run is active, and clicking
   // it (or pressing Enter) stops the agent instead of sending.
   assert.match(renderer, /function submitChatComposer\(\) \{\s*if \(sendBtn\.classList\.contains\("stop"\)\) \{ stopGeneration\(\); return; \}/);
-  assert.match(renderer, /const running = isRunningChatActive\(\);\s*const stopMode = running && !hasText;[\s\S]*?sendBtn\.classList\.toggle\("stop", stopMode\);/);
+  assert.match(renderer, /const running = isRunningChatActive\(\);\s*const hasImages = appState\.composerImages\.length > 0;\s*const stopMode = running && !hasText && !hasImages;[\s\S]*?sendBtn\.classList\.toggle\("stop", stopMode\);/);
   assert.match(read("src/ui/styles/layout-revamp.css"), /\.send-btn\.stop::before \{[\s\S]*?background: currentColor;/);
   assert.match(renderer, /function abortActiveChatRun\([\s\S]*?abortChat\?\.\(\{ sessionId \}\)/);
   assert.match(renderer, /isChatSessionStoppedByOperator/);

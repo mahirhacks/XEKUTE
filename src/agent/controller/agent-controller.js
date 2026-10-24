@@ -32,17 +32,27 @@ const { approximateTokens, PIN_BUDGET_RATIO } = require("../../app/services/memo
 const { NON_OPERATOR_ID } = require("../../app/services/memory/message-provenance.js");
 const { neutralizeContextMarkers } = require("../../shared/context-markers.js");
 const { estimateBrowserImageTokens, retainBrowserScreenshotExchanges } = require("../llm/openrouter/browser-images.js");
+const { automaticSkillCards, clipRecentTurns, selectSkillIds } = require("../runtime/skill-router.js");
 const {
+  CHECKLIST_DRIFT_ROUNDS,
+  CHECKLIST_MISSING_ROUNDS,
+  CHECKLIST_RULES,
   CHECKLIST_TOOL,
   CHECKLIST_TOOL_NAME,
+  activeChecklistItem,
   applyChecklistOperation,
-  automaticSkillCards,
+  checklistActionError,
+  checklistDriftNote,
   checklistForModel,
   checklistForWidget,
-  checklistActionError,
-  clipRecentTurns,
-  selectSkillIds,
-} = require("../runtime/skill-router.js");
+  checklistMissingNote,
+  checklistReceipt,
+  checklistRepairNote,
+  checklistRoutingKey,
+  checklistSteeringNote,
+  checklistVerificationGap,
+} = require("../runtime/checklist.js");
+const { concurrent, launchesCommand } = require("../runtime/resource-reservations.js");
 
 // Delivery state of every detached tool result in this process, keyed by its
 // inbox id. A task resumed by a later run finds the call in its saved
@@ -490,17 +500,7 @@ function buildPromptMessages({
     ? InitialPrompts.projectSettings(buildEngagementPromptContext({ workspace, projectProfile, artifacts }))
     : "";
   const editRules = editContext.requiresMutation ? InitialPrompts.workspaceAction(editContext) : "";
-  const routerRules = checklistEnabled
-    ? [
-      "Before task actions, assess whether the request needs a checklist. You own this decision. Checklist planning is the default for substantive work; when uncertain, create one.",
-      "For tasks requiring three or more meaningful steps, multiple deliverables, or sustained work, you must first create a checklist with manage_task_checklist. Count investigation, execution, verification, and reporting when they are real parts of the task, even if the user wrote one sentence.",
-      "Skip checklist creation only for greetings, brief direct answers, or straightforward tasks that finish in one or two meaningful steps. Do not pad a simple task with artificial steps.",
-      "Each agent owns one checklist. Use create only when none exists, then update that same checklist as work progresses or the task changes. If an initially short task expands, create the checklist before continuing the expanded work.",
-      "Execute the checklist in order, one item at a time. Before task actions, the first pending item must be the only item in_progress; focus actions on that item. Complete it only after its work is finished, then start the next item in the same update. Never skip pending items or mark unfinished work completed. If blocked, record the concrete blocker in its description and mark it blocked before moving on. Revise obsolete steps explicitly when the task changes.",
-      "Checklist labels must be 12 words or fewer; hidden descriptions must be 40 words or fewer.",
-      "After a checklist update, wait for routing results before task actions. If new skill instructions load, regenerate actions using those instructions.",
-    ].join(" ")
-    : "";
+  const routerRules = checklistEnabled ? CHECKLIST_RULES : "";
   const workflowSection = currentWorkflow
     ? `CURRENT WORKFLOW (data; preserve the user's task):\n${JSON.stringify(currentWorkflow)}`
     : "";
@@ -648,6 +648,7 @@ async function runAgentTurnWithLease({
   listRunningCommands = async () => [],
   toolMetadataForName = () => null,
   skillRouter = null,
+  checklistEnabled: suppliedChecklistEnabled = false,
   checkpointRun: suppliedCheckpointRun = () => Promise.resolve(),
   persistTurnProgress = () => Promise.resolve(),
   nested = false,
@@ -734,7 +735,21 @@ async function runAgentTurnWithLease({
   const routingEnabled = Boolean(skillRouter?.enabled && (restoredRouterState || skillRouter?.freshRun));
   const decisionModel = String(restoredRouterState?.decisionModel || skillRouter?.model || "");
   const skillRouterState = routingEnabled ? { decisionModel } : null;
+  // The checklist is the agent's own plan on every provider; skill routing only
+  // reacts to it where a decision model is available.
+  const checklistEnabled = Boolean(suppliedChecklistEnabled || routingEnabled);
   let checklistCorrectionCount = Math.max(0, Number(restored.checklistCorrectionCount) || 0);
+  // Operator steering the checklist has not absorbed yet. Task actions are held
+  // once, without counting as a correction, until the agent updates it.
+  let checklistReview = restored.checklistReview && typeof restored.checklistReview === "object" ? restored.checklistReview : null;
+  let checklistRoutedKey = typeof restored.checklistRoutedKey === "string" ? restored.checklistRoutedKey : "";
+  let actionRoundsSinceChecklist = Math.max(0, Number(restored.actionRoundsSinceChecklist) || 0);
+  let checklistMissingNoted = Boolean(restored.checklistMissingNoted);
+  // Whether this run wrote files or launched commands, which makes a
+  // verification item necessary before it can end. Holds are capped so a model
+  // that cannot verify still finishes.
+  let workspaceChanged = Boolean(restored.workspaceChanged);
+  let verificationHolds = Math.max(0, Number(restored.verificationHolds) || 0);
   const referencePreparations = new Map(restored.referencePreparations || []);
   let referenceImportTitle = "";
   let referenceImportTitles = [];
@@ -845,7 +860,7 @@ async function runAgentTurnWithLease({
     availableTools = availableTools.filter((tool) => tool?.function?.name === "delegate_agent");
   }
   const routingTools = [...availableTools];
-  if (routingEnabled && !orchestrationControlOnly && !routingTools.some((tool) => tool?.function?.name === CHECKLIST_TOOL_NAME)) routingTools.push(CHECKLIST_TOOL);
+  if (checklistEnabled && !orchestrationControlOnly && !routingTools.some((tool) => tool?.function?.name === CHECKLIST_TOOL_NAME)) routingTools.push(CHECKLIST_TOOL);
   availableTools = routingTools;
   let allowedNames = new Set(availableTools.map((tool) => tool?.function?.name).filter(Boolean));
   const initialToolPartitions = partitionProviderTools(availableTools);
@@ -903,7 +918,7 @@ async function runAgentTurnWithLease({
     editContext,
     specialSkillPrompt: scopedSkillPrompt(),
     currentWorkflow: currentWorkflowPrompt(),
-    checklistEnabled: routingEnabled,
+    checklistEnabled,
     useTier1,
     subagentQuestionHeadText,
   });
@@ -1057,6 +1072,12 @@ async function runAgentTurnWithLease({
       activeSkillRecords,
       skillRouterState,
       checklistCorrectionCount,
+      checklistReview,
+      checklistRoutedKey,
+      actionRoundsSinceChecklist,
+      checklistMissingNoted,
+      workspaceChanged,
+      verificationHolds,
       actionResults: actionResults.map((result) => ({ ok: result?.ok, error: result?.error, code: result?.code,
         evidenceIds: AgentRuntime.evidenceIdsFromResults([result]) })), failureCounts: [...failureCounts], failureRecords,
       executedTools, finalText, outputSegments, outputContinuationCount, lastUsage,
@@ -1709,7 +1730,7 @@ async function runAgentTurnWithLease({
     editContext = { isEditRequest: isEditRequest(taskInstructions), requiresMutation: isEditRequest(taskInstructions), targetFile: inferEditTarget(taskInstructions, activeFile, dirMap) };
     const next = buildPromptMessages({ profile, contextRoute, workspace, projectProfile, artifacts, userMessage: taskInstructions,
       chatHistory: workingHistory, dirMap, activeFile, extraFiles, numCtx, editContext, specialSkillPrompt: scopedSkillPrompt(),
-      currentWorkflow: currentWorkflowPrompt(), checklistEnabled: routingEnabled, useTier1, subagentQuestionHeadText });
+      currentWorkflow: currentWorkflowPrompt(), checklistEnabled, useTier1, subagentQuestionHeadText });
     promptSeed.base = next.base;
     prompt.base = next.base;
     promptSeed.tier1Components = next.tier1Components;
@@ -1753,6 +1774,7 @@ async function runAgentTurnWithLease({
       scope: skillRouter.scope || null,
       main_goal: nextChecklist.main_goal,
       checklist: checklistForModel(nextChecklist),
+      active_item: activeChecklistItem(nextChecklist),
       active_skills: activeSkillRecords.map(({ id, description }) => ({ id, description })),
       candidates: candidates.map(({ id, title, description }) => ({ id, title, description })),
       recent_turns: recentTurns,
@@ -1761,7 +1783,7 @@ async function runAgentTurnWithLease({
       `skill_${candidate.id}`,
       {
         type: "noul",
-        instructions: `Would adding ${candidate.title} provide meaningful instructions beyond the active skills for the current checklist? Consider only the current task and items.`,
+        instructions: `Would adding ${candidate.title} provide meaningful instructions beyond the active skills for the active checklist item or the items still pending? Weigh the active item most; ignore completed items.`,
       },
     ]));
     let decision;
@@ -1863,6 +1885,7 @@ async function runAgentTurnWithLease({
     const response = requireLive(await liveInput.boundary({ kind, runId, revision }));
     if (!Number.isSafeInteger(response.revision) || response.revision < revision) throw Object.assign(new Error("Live input returned an obsolete applied revision."), { code: "LIVE_REVISION_STALE" });
     const deliveries = Array.isArray(response.deliveries) ? response.deliveries : [];
+    let steered = false;
     for (const delivery of deliveries) {
       if (typeof delivery.id !== "string" || !delivery.id || typeof delivery.text !== "string" || !Number.isSafeInteger(delivery.revision) || delivery.revision > response.revision) throw Object.assign(new Error("Live input returned an invalid original message."), { code: "LIVE_DELIVERY_INVALID" });
       if (appliedInputIds.has(delivery.id)) {
@@ -1882,6 +1905,11 @@ async function runAgentTurnWithLease({
         try { tier1Context.recordDirective?.(tier1ProjectId, resolvedTier1SessionId, { text: scopedContent(message), sourceMessageId: delivery.id, revision: delivery.revision }); }
         catch { /* the message stays in the ledger either way */ }
       }
+      if (!NON_OPERATOR_ID.test(delivery.id)) steered = true;
+    }
+    if (steered && checklist) {
+      checklistReview = { revision: response.revision, held: false };
+      noteToAgent(checklistSteeringNote(checklist));
     }
     revision = response.revision;
     cancellationEpoch = response.cancellationEpoch ?? cancellationEpoch;
@@ -1903,6 +1931,12 @@ async function runAgentTurnWithLease({
     if (pendingPlan?.revision !== revision) pendingPlan = null;
     await checkpointLive(changed ? { previousRevision } : {});
     return { changed, arrival: response.arrival };
+  }
+
+  function noteToAgent(content) {
+    const message = { role: "user", __xekuteInternalRuntimeInput: true, content };
+    workingHistory.push(message);
+    appendTier1Messages(message);
   }
 
   // A result that will never arrive becomes a note to the model, so it decides
@@ -2044,6 +2078,14 @@ async function runAgentTurnWithLease({
           ...(gate.reason === "BACKGROUND_TOOLS" ? { reason: "COMMAND_WAIT", commandWait: true, waitingProcessIds: [] } : { reason: "ORCHESTRATION_HOLD" }) };
       }
       if (!gate.changed) { await waitForRetry(25, signal); continue; }
+    }
+    if (checklistEnabled && checklist && actionRoundsSinceChecklist >= CHECKLIST_DRIFT_ROUNDS) {
+      const note = checklistDriftNote(checklist, actionRoundsSinceChecklist);
+      if (note) noteToAgent(note);
+      actionRoundsSinceChecklist = 0;
+    } else if (checklistEnabled && !checklist && !checklistMissingNoted && actionRoundsSinceChecklist >= CHECKLIST_MISSING_ROUNDS) {
+      noteToAgent(checklistMissingNote(actionRoundsSinceChecklist));
+      checklistMissingNoted = true;
     }
     const modelRevision = revision;
     const request = await prepareModelRequest();
@@ -2449,9 +2491,9 @@ async function runAgentTurnWithLease({
 
     let suppressTaskCalls = false;
     let invalidChecklistResponse = false;
-    let checklistCorrectionExhausted = false;
+    let checklistRejection = "";
     let checklistWorkError = null;
-    const checklistCalls = routingEnabled ? normalizedCalls.filter((tool) => tool.toolName === CHECKLIST_TOOL_NAME) : [];
+    const checklistCalls = checklistEnabled ? normalizedCalls.filter((tool) => tool.toolName === CHECKLIST_TOOL_NAME) : [];
     if (checklistCalls.length) {
       const invalidBatch = checklistCalls.length > 1;
       for (const tool of checklistCalls) {
@@ -2475,16 +2517,21 @@ async function runAgentTurnWithLease({
           } else {
             checklist = applied.value;
             if (!checklistActionError(checklist)) checklistCorrectionCount = 0;
-            toolResult = { ok: true, value: { status: "saved", itemCount: checklist.items.length } };
+            checklistReview = null;
+            actionRoundsSinceChecklist = 0;
+            toolResult = { ok: true, value: checklistReceipt(checklist) };
             toolWasExecuted = true;
-            routeAfterChecklist = true;
+            routeAfterChecklist = checklistRoutingKey(checklist) !== checklistRoutedKey;
             successfulToolRefs.add(String(tool.callId || actionId));
             sendEvent({ type: "task_list", ...checklistForWidget(checklist, runId) });
             refreshTaskContext();
           }
         }
 
-        if (!duplicateReceipt && (!toolResult?.ok || toolResult?.error)) invalidChecklistResponse = true;
+        if (!duplicateReceipt && (!toolResult?.ok || toolResult?.error)) {
+          invalidChecklistResponse = true;
+          checklistRejection = String(toolResult?.error || "The checklist call was invalid.");
+        }
 
         emitToolActivity(sendEvent, "tool_start", { tool: toolForEvent });
         sendEvent({ type: "activity", text: "Updating task checklist", kind: "tool" });
@@ -2511,6 +2558,7 @@ async function runAgentTurnWithLease({
         if (routeAfterChecklist) {
           await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: "checklist-saved" } });
           const routed = await routeSkillsForChecklist(checklist);
+          checklistRoutedKey = checklistRoutingKey(checklist);
           if (routed.loaded.length || routed.steeringChanged) suppressTaskCalls = true;
           const steering = await boundary("after_checklist_routing");
           if (steering.changed) suppressTaskCalls = true;
@@ -2521,12 +2569,8 @@ async function runAgentTurnWithLease({
         if (normalizedCalls[index].toolName === CHECKLIST_TOOL_NAME) normalizedCalls.splice(index, 1);
       }
       if (invalidChecklistResponse) {
-        if (checklistCorrectionCount >= 1) {
-          checklistCorrectionExhausted = true;
-          suppressTaskCalls = true;
-        } else {
-          checklistCorrectionCount += 1;
-        }
+        checklistCorrectionCount += 1;
+        checklistWorkError = `Not executed because the checklist call was rejected: ${checklistRejection}`;
         suppressTaskCalls = true;
       }
       if (suppressTaskCalls) {
@@ -2534,14 +2578,20 @@ async function runAgentTurnWithLease({
       }
     }
 
-    if (routingEnabled && !suppressTaskCalls && normalizedCalls.some(tool => ![END_TURN_TOOL_NAME, RELEASE_BLOCKS_TOOL_NAME, RECALL_BLOCK_TOOL_NAME].includes(tool.toolName))) {
+    const hasTaskCalls = normalizedCalls.some(tool => ![END_TURN_TOOL_NAME, RELEASE_BLOCKS_TOOL_NAME, RECALL_BLOCK_TOOL_NAME].includes(tool.toolName));
+    if (checklistEnabled && !suppressTaskCalls && hasTaskCalls) {
       checklistWorkError = checklistActionError(checklist);
       if (checklistWorkError) {
         suppressTaskCalls = true;
-        checklistCorrectionExhausted = checklistCorrectionCount >= 1;
+        checklistRejection = checklistWorkError;
         checklistCorrectionCount += 1;
+      } else if (checklistReview && !checklistReview.held) {
+        checklistReview.held = true;
+        checklistWorkError = checklistSteeringNote(checklist);
+        suppressTaskCalls = true;
       }
     }
+    if (checklistEnabled && !suppressTaskCalls && hasTaskCalls) actionRoundsSinceChecklist += 1;
     const slotCalls = normalizedCalls.filter((tool) => consumesCommandSlot(tool) && !suppressTaskCalls);
     let running = [];
     if (slotCalls.length) {
@@ -2655,6 +2705,13 @@ async function runAgentTurnWithLease({
       if (toolName === END_TURN_TOOL_NAME) {
         seenThisRound.add(signature);
         executedTools = true;
+        const verificationGap = checklistEnabled && verificationHolds < 2 && isEndTurnStop({ toolName, args: tool.args })
+          ? checklistVerificationGap(checklist, { workspaceChanged })
+          : null;
+        if (verificationGap) {
+          verificationHolds += 1;
+          return immediate({ ok: false, error: verificationGap, errorCode: "CHECKLIST_VERIFICATION_REQUIRED", retryable: false }, false);
+        }
         const toolResult = executeEndTurn(tool.args || {});
         if (isEndTurnStop({ toolName, args: tool.args }) && toolResult?.ok) requestedEndTurn = toolResult;
         return immediate(toolResult, true);
@@ -2754,6 +2811,7 @@ async function runAgentTurnWithLease({
       const actionEvidenceIds = AgentRuntime.evidenceIdsFromResults([toolResult]);
       if (toolResult?.ok && !toolResult?.error) {
         if (toolWasExecuted) accounting.observation(signature, toolResult);
+        if (toolWasExecuted && (!concurrent(tool) || (toolName === "exec_command" && launchesCommand(tool)))) workspaceChanged = true;
         if (tool.callId) successfulToolRefs.add(String(tool.callId));
         if (actionId) successfulToolRefs.add(String(actionId));
         for (const ref of actionEvidenceIds) successfulToolRefs.add(String(ref));
@@ -2763,7 +2821,9 @@ async function runAgentTurnWithLease({
         ok: Boolean(toolResult?.ok && !toolResult?.error),
         evidenceIds: actionEvidenceIds,
       });
-      if (!toolResult?.ok || toolResult?.error) {
+      // A held call never ran, so it must not count toward the repeat limit
+      // that would refuse the same call once the checklist is fixed.
+      if ((!toolResult?.ok || toolResult?.error) && !heldForRouting) {
         failureCounts.set(signature, (failureCounts.get(signature) || 0) + 1);
         const record = failureRecordFor(tool, toolResult);
         if (record) failureRecords.push(record);
@@ -2774,12 +2834,9 @@ async function runAgentTurnWithLease({
     } finally { operatorInput?.stop(); }
     await checkpointRun({ round, actionCount: actionResults.length, status: stoppedToolBatch ? "stopped" : "running", accounting: accounting.snapshot(), checkpoint: { phase: runState.phase, toolCount: runState.toolCount, failedToolCount: runState.failedToolCount, ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
     if (stoppedToolBatch) return abortTurnResult();
-    if (checklistCorrectionExhausted) {
-      const error = "The checklist is still invalid after one correction attempt.";
-      AgentRuntime.finalize(runState, { status: "failed", reason: error });
-      sendEvent({ type: "run_state", runId, state: { ...runState } });
-      return { ok: false, error, code: "CHECKLIST_INVALID", finalText, appendedMessages: appendedMessages(), runState, contextRoute, engineSnapshot: snapshotEngine() };
-    }
+    // A rejected checklist never ends the run: task actions stay held, and from
+    // the second miss on the agent gets the exact problem and current state.
+    if (checklistRejection && checklistCorrectionCount >= 2) noteToAgent(checklistRepairNote(checklist, checklistRejection, checklistCorrectionCount));
     if (useTier1 && tier1ExecutedThisRound) {
       const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results", midTask: true });
       if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");

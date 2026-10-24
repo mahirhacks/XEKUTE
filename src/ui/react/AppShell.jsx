@@ -107,24 +107,18 @@ export default memo(function AppShell() {
       <div id="layout">
         <nav id="activitybar" aria-label="Primary activity">
           <div className="activitybar-primary">
-            <button type="button" id="activity-search" className="activity-item" title="Search (Ctrl+F)" aria-label="Search">
-              <span className="codicon codicon-search"></span>
-            </button>
-            <button type="button" id="activity-bugbounty" className="activity-item active" title="Project" aria-label="Project" aria-pressed="true">
-              <span className="codicon codicon-folder-library"></span>
-            </button>
             <button type="button" id="activity-security" className="activity-item" title="Security Tools" aria-label="Security Tools" aria-pressed="false">
               <span className="codicon codicon-shield"></span>
             </button>
           </div>
           <div className="activitybar-secondary">
             <div id="security-proxy-browser-wrap" className="security-proxy-browser-wrap">
-              <button type="button" id="security-proxy-browser" className="activity-item browser-activity-icon" aria-label="Open browser" title="Open browser. Right-click to open a tab with an identity." aria-haspopup="menu" aria-expanded="false">
+              <button type="button" id="security-proxy-browser" className="activity-item browser-activity-icon" aria-label="Open browser" title="Open browser. Right-click to open a tab with an identity." aria-haspopup="menu" aria-expanded="false" aria-pressed="false">
                 <span className="codicon codicon-globe" aria-hidden="true"></span>
               </button>
               <div id="security-proxy-browser-menu" className="security-proxy-browser-menu" role="menu" hidden></div>
             </div>
-            <button type="button" id="btn-top-settings" className="activity-item" title="XEKUTE Settings" aria-label="XEKUTE Settings">
+            <button type="button" id="btn-top-settings" className="activity-item" title="XEKUTE Settings" aria-label="XEKUTE Settings" aria-pressed="false">
               <span className="codicon codicon-settings-gear" aria-hidden="true"></span>
             </button>
           </div>

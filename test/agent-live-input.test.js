@@ -197,6 +197,68 @@ test("a steering prompt resumes a parked run while its command process is still 
   await echoExecuted.promise;
   assert.equal(rounds, 2);
 });
+test("images sent with a steering prompt reach the model on that message", async (t) => {
+  const fixture = sessionFixture(t);
+  const main = createAgentRunHandlerFixture();
+  main.context.runAgentTurn = runAgentTurn;
+  main.context.container.v3SessionStore = fixture.store;
+  main.installSessionRuntime();
+  const senders = new Map();
+  main.context.bindAgentSender = (sessionId, sender) => senders.set(String(sessionId), sender);
+  main.context.senderForSession = (sessionId, fallback) => senders.get(String(sessionId)) || fallback;
+  main.context.toolCatalogFromRegistry = () => ({ mode: "native", tools: [{ type: "function", function: {
+    name: "exec_command", description: "Run a command", parameters: { type: "object", properties: { command: { type: "string" }, context: { type: "string" } } },
+  } }] });
+  main.context.container.durableProcessManager.runningCommands = () => [{ processId: "sleep-process" }];
+  main.installInputWake();
+
+  let rounds = 0;
+  const resumed = deferred();
+  const echoExecuted = deferred();
+  main.context.runOllamaAgentRound = async (_senderId, request) => {
+    rounds++;
+    if (rounds === 1) return { ok: true, fullText: "Starting the sleep command.", toolCalls: [
+      { id: "sleep", type: "function", function: { name: "exec_command", arguments: { command: "sleep 15", context: "sleep command" } } }, end("sleep-end"),
+    ] };
+    const steering = request.messages.find((message) => message.source_message_id === "steer-echo");
+    assert.deepEqual(steering?.images, ["iVBORw0KGgo="], "the steering message carries its image");
+    assert.equal(request.messages.filter((message) => message.images?.length).length, 1, "no other message gets the image");
+    resumed.resolve();
+    return { ok: true, fullText: "Running the echo command.", toolCalls: [
+      { id: "echo", type: "function", function: { name: "exec_command", arguments: { command: "echo ready", context: "echo command" } } }, end("echo-end"),
+    ] };
+  };
+  main.context.executeToolCall = async ({ toolCall }) => {
+    const command = String(toolCall.function.arguments.command || "");
+    if (command.includes("sleep")) return { ok: true, value: { processId: "sleep-process", command, mode: "process_start", status: "running", startedAt: Date.now() } };
+    echoExecuted.resolve();
+    return { ok: true, value: { processId: "echo-process", command, mode: "process_complete", status: "complete", stdout: "ready", exitCode: 0 } };
+  };
+
+  const first = await main.invokeIpc("agent:run", { sessionId: "ui-session", userMessage: "Run a sleep command", model: "execution", numCtx: 16384, provider: "ollama" });
+  assert.equal(first.ok, true, first.error || "");
+  assert.equal(first.commandWait, true);
+  assert.equal(first.pendingEndTurn, false);
+  const receipt = await main.invokeIpc("agent:submitInput", { sessionId: "ui-session", messageId: "steer-echo", targetTaskId: first.taskId, text: "also run an echo command", images: [{ name: "shot.png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" }] });
+  assert.equal(receipt.durable, true);
+  let resumeTimeout;
+  try {
+    await Promise.race([resumed.promise, new Promise((_, reject) => { resumeTimeout = setTimeout(() => reject(new Error("steering did not resume before command exit")), 1_000); })]);
+  } finally {
+    clearTimeout(resumeTimeout);
+  }
+  await echoExecuted.promise;
+  assert.equal(rounds, 2);
+});
+test("invalid steering images are refused before the message is saved", async (t) => {
+  const fixture = sessionFixture(t);
+  const main = createAgentRunHandlerFixture();
+  main.context.container.v3SessionStore = fixture.store;
+  main.installSessionRuntime();
+  const refused = await main.invokeIpc("agent:submitInput", { sessionId: "ui-session", messageId: "bad", text: "look", images: [{ dataUrl: "data:image/svg+xml;base64,PHN2Zz4=" }] });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, "USER_IMAGES_INVALID");
+});
 test("a steering prompt frees a round blocked on a long command, and the command's late result wakes the task", async (t) => {
   const fixture = sessionFixture(t);
   const main = createAgentRunHandlerFixture();

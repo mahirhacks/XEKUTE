@@ -77,7 +77,6 @@ body,
   order: 5;
 }
 
-.browser-activity-icon.active { color: #75beff; }
 .browser-activity-icon:disabled { color: var(--fg-muted); cursor: wait; }
 
 #app-topbar > #btn-top-filetree {
@@ -91,7 +90,7 @@ body,
   max-width: none;
   height: 26px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 4px;
   background: transparent;
   color: var(--revamp-text);
   font-size: 12px;
@@ -100,7 +99,7 @@ body,
 .command-center:hover,
 .command-center:focus-visible {
   border-color: transparent;
-  border-radius: 999px;
+  border-radius: 4px;
   background: rgba(40, 40, 40, .55);
 }
 
@@ -178,6 +177,12 @@ body,
   line-height: 1;
 }
 
+/* The minimize glyph is a short dash, so at the shared size it reads smaller
+   than maximize and close. */
+#app-topbar #btn-window-minimize > .codicon {
+  font-size: 20px;
+}
+
 /* Three-pane frame */
 #layout {
   background: var(--revamp-surface);
@@ -191,7 +196,7 @@ body,
 }
 
 .activitybar-primary {
-  padding-top: 19px;
+  padding-top: 4px;
 }
 
 .activitybar-secondary {
@@ -204,17 +209,41 @@ body,
 
 .activity-item {
   width: 44px;
-  height: 58px;
-  flex-basis: 58px;
+  height: 44px;
+  flex-basis: 44px;
   color: var(--revamp-text);
 }
 
-.activity-item.active::before,
 .activity-item.panel-visible::after {
   display: none;
 }
 
+#activitybar .activity-item::before {
+  content: "";
+  position: absolute;
+  inset: 12px auto 12px 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: #fff;
+  opacity: 0;
+  transform: scaleY(.4);
+  transition: opacity .12s ease, transform .12s ease;
+  pointer-events: none;
+}
+
+#activitybar .activity-item.active::before {
+  opacity: 1;
+  transform: none;
+}
+
+#activitybar .activity-item > .codicon { transition: opacity .12s ease; }
+#activitybar .activity-item:hover > .codicon,
+#activitybar .activity-item:focus-visible > .codicon { opacity: .85; }
+#activitybar .activity-item.active { color: #fff; }
+#activitybar .activity-item.active > .codicon { opacity: 1; }
+
 #activitybar .activity-item > .codicon {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -224,7 +253,7 @@ body,
   opacity: .5;
 }
 
-#activitybar .activity-item > :is(.codicon-search, .codicon-folder-library, .codicon-shield, .codicon-globe, .codicon-settings-gear)::before {
+#activitybar .activity-item > :is(.codicon-shield, .codicon-globe, .codicon-settings-gear)::before {
   content: "";
   display: block;
   width: 100%;
@@ -234,8 +263,6 @@ body,
   mask: var(--activity-icon) center/contain no-repeat;
 }
 
-#activity-search { --activity-icon: url("../assets/icons/activity-search.svg"); transform: translateY(-6px); }
-#activity-bugbounty { --activity-icon: url("../assets/icons/activity-project.svg"); }
 #activity-security { --activity-icon: url("../assets/icons/activity-shield.svg"); }
 #security-proxy-browser { --activity-icon: url("../assets/icons/activity-browser.svg"); }
 #btn-top-settings { --activity-icon: url("../assets/icons/activity-settings.svg"); }

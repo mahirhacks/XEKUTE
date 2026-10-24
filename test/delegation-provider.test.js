@@ -192,6 +192,7 @@ test("child runs inherit tool metadata, browser scope, and checkpoints", async (
     sessionId: "parent-session-1",
     tools: PARENT_TOOLS,
     skillRouter: { enabled: true, freshRun: false, model: "typesafe/jev-1.14" },
+    checklistEnabled: true,
     intelligence: { status: () => ({ ok: true }) },
     toolMetadataForName: (name, sessionId) => ({ name, sessionId }),
     checkpointRun: (_patch, context) => { checkpointContexts.push(context); },
@@ -200,6 +201,7 @@ test("child runs inherit tool metadata, browser scope, and checkpoints", async (
       assert.equal(payload.nested, true);
       assert.equal(payload.skillRouter.freshRun, true, "a newly spawned child gets its own skill-router state and agent-managed checklist");
       assert.equal(payload.skillRouter.model, "typesafe/jev-1.14");
+      assert.equal(payload.checklistEnabled, true, "children plan with a checklist like their parent");
       assert.equal(payload.mode, "agent");
       assert.deepEqual(payload.toolMetadataForName("read_file"), { name: "read_file", sessionId: payload.sessionId });
       await payload.executeToolCall({

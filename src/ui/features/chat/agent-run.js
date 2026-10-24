@@ -53,6 +53,7 @@ import {
   resizeChatInput, resetChatInput, effectiveChatInputValue, submitLiveChatInput, updateSendBtn,
 } from "./composer-input.js";
 import { takeComposerImages } from "./composer-images.js";
+import { needsWorkspaceRelease, showWorkspaceReleaseNotice } from "./workspace-release-notice.js";
 
 export const chatSendInFlight = new Set();
 export const hiddenAgentRuntimeQueues = new Map();
@@ -146,14 +147,14 @@ export async function sendMessageWithAgentRuntime(options = {}) {
     text = "Review the delegated result and decide the next action.";
   }
   if (!internal) {
-    // Images go with a new message only; a run already in progress gets text.
+    // Images go with a new message and with steering into a running one.
     const busy = isChatSessionRunning(targetSessionId) || chatSendInFlight.has(targetSessionId);
-    const sendingImages = !busy && appState.composerImages.length > 0;
+    const sendingImages = appState.composerImages.length > 0;
     if (!resume && !text.trim() && !sendingImages) return;
-    if (busy) {
-      return submitLiveChatInput(chatSessions.find((session) => session.id === targetSessionId), text);
-    }
     if (!resume && !text.trim()) text = appState.composerImages.length > 1 ? "See the attached images." : "See the attached image.";
+    if (busy) {
+      return submitLiveChatInput(chatSessions.find((session) => session.id === targetSessionId), text, takeComposerImages());
+    }
     chatSendInFlight.add(targetSessionId);
     clearChatSessionStoppedByOperator(chatSessions.find((session) => session.id === targetSessionId) || { id: targetSessionId });
   } else if (!text || isChatSessionRunning(targetSessionId)) return;
@@ -552,6 +553,7 @@ export async function sendMessageWithAgentRuntime(options = {}) {
         return;
       }
       const uiResult = toolUiResult(payload.result);
+      if (needsWorkspaceRelease(payload.result)) showWorkspaceReleaseNotice(assistant.contentEl);
       const summary = uiResult.error
         ? `Failed: ${uiResult.error}`
         : uiResult.summary || uiResult.command || uiResult.mode || "Complete";

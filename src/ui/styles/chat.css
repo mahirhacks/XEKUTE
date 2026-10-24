@@ -430,7 +430,8 @@
 .composer-task-list-card {
   display: grid;
   box-sizing: border-box;
-  width: 100%;
+  width: 95%;
+  margin: 0 auto;
   max-height: min(42vh, 210px);
   gap: 0;
   overflow: auto;
@@ -448,7 +449,7 @@
 .composer-task-list-card:focus-visible { outline: 1px solid #888; outline-offset: 1px; }
 .composer-task-list-row {
   display: grid;
-  grid-template-columns: 16px auto minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
   min-height: 26px;
@@ -462,7 +463,12 @@
   color: #b5b5b5;
 }
 .composer-task-list-icon svg { display: block; width: 100%; height: 100%; }
-.composer-task-list-count { color: #858585; font-variant-numeric: tabular-nums; }
+.composer-task-list-position {
+  padding-left: 8px;
+  color: #858585;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .composer-task-list-title {
   min-width: 0;
   overflow: hidden;
@@ -491,8 +497,8 @@
   .composer-task-list-progress rect:nth-child(2) { transform: scaleX(.666667); }
   .composer-task-list-progress rect:nth-child(3) { transform: scaleX(.5); }
 }
-.composer-task-list-row[data-task-status="completed"] .composer-task-list-icon,
-.composer-task-list-row[data-task-status="completed"] .composer-task-list-title { color: #737373; }
+.composer-task-list-row:is([data-task-status="completed"], [data-task-status="pending"]) .composer-task-list-icon,
+.composer-task-list-row:is([data-task-status="completed"], [data-task-status="pending"]) .composer-task-list-title { color: #737373; }
 .composer-task-list-row[data-task-status="blocked"] .composer-task-list-icon { color: #a9685e; }
 .composer-task-list-row[data-task-status="blocked"] .composer-task-list-title { color: #d29a91; }
 #input-bar.has-composer-task-list .composer { box-shadow: none; }

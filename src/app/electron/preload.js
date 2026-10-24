@@ -183,6 +183,7 @@ const api = {
   startProcess: (payload) => ipcRenderer.invoke("tools:startProcess", payload),
   readProcess: (payload) => ipcRenderer.invoke("tools:readProcess", payload),
   stopProcess: (payload) => ipcRenderer.invoke("tools:stopProcess", payload),
+  releaseUnreconciledProcesses: (payload) => ipcRenderer.invoke("processes:releaseUnreconciled", payload),
 
   // Terminal
   terminalShells: () => ipcRenderer.invoke("terminal:shells"),

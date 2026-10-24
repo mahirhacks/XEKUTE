@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { MAX_USER_IMAGES, normalizeUserImages, attachUserImages } = require("../src/app/services/chat/user-images.js");
+const { MAX_USER_IMAGES, normalizeUserImages, attachUserImages, attachImagesByMessageId } = require("../src/app/services/chat/user-images.js");
 
 const png = "data:image/png;base64,iVBORw0KGgo=";
 const jpeg = "data:image/jpeg;base64,/9j/4AAQ";
@@ -36,4 +36,23 @@ test("images attach to the run's own user message for each provider", () => {
   assert.deepEqual(ollama[3], { role: "user", content: "What is on this page?", images: ["iVBORw0KGgo="] });
   assert.equal(ollama[1].images, undefined);
   assert.equal(attachUserImages(messages, { text: "not present", images, provider: "ollama" }), messages);
+});
+
+test("steering images attach to their own message by id for each provider", () => {
+  const { images } = normalizeUserImages([{ dataUrl: png }]);
+  const messages = [
+    { role: "user", content: "Start.", source_message_id: "initial" },
+    { role: "assistant", content: "ok" },
+    { role: "user", content: "Look at this.\n\n[reference context]", source_message_id: "steer-1" },
+  ];
+  const byId = new Map([["steer-1", images], ["unrelated", images]]);
+  const openrouter = attachImagesByMessageId(messages, byId, "openrouter");
+  assert.deepEqual(openrouter[2].content, [
+    { type: "text", text: "Look at this.\n\n[reference context]" },
+    { type: "image_url", image_url: { url: png } },
+  ], "matching by id works even when context text was appended");
+  assert.equal(openrouter[0].content, "Start.");
+  assert.equal(typeof messages[2].content, "string", "the caller's history is not modified");
+  assert.deepEqual(attachImagesByMessageId(messages, byId, "ollama")[2].images, ["iVBORw0KGgo="]);
+  assert.equal(attachImagesByMessageId(messages, new Map(), "ollama"), messages);
 });

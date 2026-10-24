@@ -246,7 +246,6 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(browserButton, /codicon-globe/);
   assert.match(baseStyles, /\.security-workspace-tools\s*\{[^}]*display:\s*flex;[^}]*gap:\s*6px;/);
   assert.match(baseStyles, /\.security-history-toggle\s*\{[^}]*margin-right:\s*0;/);
-  assert.match(layoutRevampStyles, /\.browser-activity-icon\.active\s*\{[^}]*#75beff/);
   assert.match(renderer, /function openBrowserTab\(\)[\s\S]*?special: "browser"/);
   assert.match(renderer, /closest\("#security-proxy-browser"\)\) \{\s*event\.stopPropagation\(\);\s*closeProxyBrowserMenu\(\);\s*openBrowserTab\(\);\s*\}/, "the activity-bar button opens the Browser workspace without creating a page");
   assert.match(renderer, /openBrowserTab\(\);\s*await appState\.browserWorkspace\?\.open\(\{ identityId:/, "choosing an identity opens a page with it");

@@ -10,7 +10,7 @@ import { createLiveInputController, bindLiveInputComposer } from "./features/cha
 import { appState } from "./core/app-state.js";
 import {
   $, btnNewFile, btnNewFolder, explorerRootToggle, btnOpenFolder, fileTree, activityExplorer,
-  activitySearch, activityRun, activityBugBounty, activitySecurity, activityTerminal,
+  activityRun, activitySecurity, activityTerminal,
   activityChat, activitySettings, btnSidebarMore, btnCreateProjectHeader, btnCreateProjectSidebar,
   btnOpenProjectSidebar, bugBountyTree, btnBugBountyMore, btnCreateProject, btnCreateAssessment,
   btnOpenAssessment, bugBountyRepair, assessmentRepairOverlay, assessmentRepairClose,
@@ -1156,18 +1156,7 @@ btnSidebarMore?.addEventListener("click", () => openQuickPalette("command"));
 activityExplorer?.addEventListener("click", () => {
   activateSidebarView("explorer");
 });
-activitySearch?.addEventListener("click", () => openQuickPalette("search"));
 activityRun?.addEventListener("click", () => runActiveCode());
-  activityBugBounty?.addEventListener("click", () => {
-    // The Project activity icon owns only the file-tree pane. It must never
-    // replace the active editor, special tab, or chat workspace.
-    if (appState.sidebarCollapsed) {
-      setSidebarView("project");
-      setSidebarCollapsed(false);
-      return;
-    }
-    setSidebarCollapsed(true);
-  });
 activitySecurity?.addEventListener("click", () => showSecurityWorkspace());
 activityTerminal?.addEventListener("click", () => {
   setTerminalCollapsed(!appState.terminalCollapsed);

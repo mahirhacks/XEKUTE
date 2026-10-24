@@ -9,7 +9,7 @@ const { computeOrchestrationHold } = require("../../src/agent/runtime/orchestrat
 const { isMemoryId } = require("../../src/contracts/memory/index.js");
 const { createAgentSessionRuntime, assignTaskWave } = require("../../src/agent/runtime/agent-session-runtime.js");
 const { createChatReferenceResolver } = require("../../src/agent/runtime/chat-references.js");
-const { normalizeUserImages, attachUserImages } = require("../../src/app/services/chat/user-images.js");
+const { normalizeUserImages, attachUserImages, attachImagesByMessageId } = require("../../src/app/services/chat/user-images.js");
 
 const mainSource = fs.readFileSync(path.join(__dirname, "../../src/app/electron/main.js"), "utf8");
 
@@ -23,6 +23,7 @@ function definition(start, end) {
 // Exercise the production handler with injected boundaries without booting
 // Electron, opening a window, or starting provider/process services.
 const handlerSource = [
+  definition("const steeringImages = new Map();", "const controlSessionOwners"),
   definition("function rememberParentRunDescriptor(", "function appendParentRunHistory("),
   definition("function appendParentRunHistory(", "function scheduleParentContinuation("),
   definition("async function handleAgentRun(", 'ipcMain.handle("agent:run",'),
@@ -59,6 +60,7 @@ function createAgentRunHandlerFixture() {
     createChatReferenceResolver,
     normalizeUserImages,
     attachUserImages,
+    attachImagesByMessageId,
     assignTaskWave,
     llmPreferences: () => ({}),
     getOpenRouterBaseUrl: () => "",

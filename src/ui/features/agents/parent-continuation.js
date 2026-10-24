@@ -40,6 +40,7 @@ import { createAssistantTurn } from "../chat/assistant-turn.js";
 import { MessageIdentity } from "../../core/runtime-globals.js";
 import { modeLabel } from "../chat/chat-mode.js";
 import { updateSendBtn } from "../chat/composer-input.js";
+import { needsWorkspaceRelease, showWorkspaceReleaseNotice } from "../chat/workspace-release-notice.js";
 
   export const subagentContinuationRuns = new Set();
   export const seenSubagentResultIds = new Set();
@@ -174,6 +175,7 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
       applyEndTurnStopToUi(assistant, payload.result);
     } else {
       const uiResult = toolUiResult(payload.result);
+      if (needsWorkspaceRelease(payload.result)) showWorkspaceReleaseNotice(assistant.contentEl);
       if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
       else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
     }
@@ -437,6 +439,7 @@ export async function renderParentContinuationEvent(payload = {}) {
       applyEndTurnStopToUi(assistant, payload.result);
     } else {
       const uiResult = toolUiResult(payload.result);
+      if (needsWorkspaceRelease(payload.result)) showWorkspaceReleaseNotice(assistant.contentEl);
       if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
       else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
       if (toolActionName(payload.tool) === "browser_action" && [payload.result.code, payload.result.error?.code].includes("SCOPE_NOT_CONFIGURED")) showScopeRequiredNotice(assistant.contentEl);

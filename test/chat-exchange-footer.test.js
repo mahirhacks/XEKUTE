@@ -77,7 +77,7 @@ test("assistant footer keeps copy visible and always shows time on the latest ex
     source,
     /#messages > \.chat-exchange:last-child \.assistant-reply-time/,
   );
-  assert.match(source, /\.assistant-reply-time:hover\s*\{[^}]*background: #2d2d2d/);
+  assert.doesNotMatch(source, /\.assistant-reply-time:hover/, "the timestamp has no hover effect");
   assert.match(source, /\.assistant-reply-copy \{[^]*?opacity: 0\.92;/);
   assert.match(source, /\.assistant-reply-copy:hover,[\s\S]*?background: #303030/);
   assert.match(chatStyles, /#messages \.agent-response-host > \.assistant-reply-footer/);
