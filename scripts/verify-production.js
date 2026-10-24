@@ -103,7 +103,7 @@ assert.deepEqual(
   ["electron"],
   "sandboxed preload must not require local CommonJS modules",
 );
-assert.equal(packageJson.devDependencies.electron, "43.4.0");
+assert.equal(packageJson.devDependencies.electron, "43.8.3");
 assert.equal(packageJson.dependencies["@vscode/codicons"], "0.0.45");
 assert.equal(packageJson.dependencies["@huggingface/transformers"], undefined, "retired local embedding runtime must not ship");
 assert.doesNotMatch(packageLock, /@huggingface\/transformers|onnxruntime-(?:node|web)/, "retired embedding dependencies must not remain locked");
@@ -426,7 +426,9 @@ assert.ok(exists("architecture/source-layout.md"));
 assert.ok(exists("architecture/runtime-flow.md"));
 assert.ok(exists("architecture/authority-roadmap.md"));
 assert.ok(exists("architecture/memory-storage.md"));
-assert.ok(fs.existsSync(path.join(root, "temp_test")), "temp_test harness must remain present");
+for (const harness of ["scripts/browser-dev/runtime.cjs", "scripts/browser-dev/app-host.cjs"]) {
+  assert.ok(exists(harness), `committed browser harness is missing: ${harness}`);
+}
 
 const skillGraph = createSkillKnowledgeGraph({ libraryRoot: path.join(sourceRoot, "prompts", "skills") });
 const skillValidation = skillGraph.validation();

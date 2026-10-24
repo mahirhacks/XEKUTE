@@ -26,6 +26,26 @@ function workspace(t) {
   return root;
 }
 
+test("wildcard scope rejects deceptive hostnames and keeps explicit exclusions across browser and shell gates", async () => {
+  const projectProfile = { scope: { wildcardRules: ["*.example.test"], outOfScopeTargets: ["blocked.example.test"] } };
+  for (const [url, allowed] of [
+    ["https://api.example.test/", true],
+    ["https://deep.api.example.test/", true],
+    ["https://api.example.test.attacker.invalid/", false],
+    ["https://api.example.test@attacker.invalid/", false],
+    ["https://api.example.test%2eattacker.invalid/", false],
+    ["https://attacker.invalid/?next=https://api.example.test/", false],
+    ["https://blocked.example.test/", false],
+  ]) {
+    const browser = await evaluateBrowserPolicyAsync({ projectProfile, profileId: "full_authority",
+      input: { action: "open_page", url, purpose: "assessment" },
+      resolveAddresses: async () => ({ ok: true, addresses: ["8.8.8.8"] }),
+    });
+    assert.equal(browser.browserPolicy.decision === "allow", allowed, `browser: ${url}`);
+    assert.equal(evaluateToolScope({ projectProfile, toolName: "exec_command", args: { command: `curl '${url}'` } }).ok, allowed, `shell: ${url}`);
+  }
+});
+
 test("a wildcard covers nested subdomains without an exact host entry", async () => {
   const projectProfile = { scope: { inScopeTargets: ["*.nasa.gov"], wildcardRules: ["*.nasa.gov"] } };
   for (const url of ["https://astronautappearances.nasa.gov/", "https://auth.launchpad.nasa.gov/"]) {

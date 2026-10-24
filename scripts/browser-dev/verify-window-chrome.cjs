@@ -13,13 +13,23 @@ async function verifyWindowChrome() {
     app = await _electron.launch({ executablePath: launch.executablePath, args: launch.args, env: launch.env, timeout: 30000 });
     const page = await app.firstWindow();
     await page.waitForFunction(() => globalThis.XekuteTerminalManager && window.api?.windowToggleMaximize);
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find(window => window.getTitle() === "XEKUTE");
+      globalThis.chromeStateEvents = [];
+      for (const name of ["maximize", "unmaximize", "resize"]) window.on(name, () => {
+        globalThis.chromeStateEvents.push({ name, maximized: window.isMaximized() });
+      });
+    });
     const expect = async maximized => {
       await page.waitForFunction(maximized => {
         const button = document.querySelector("#btn-window-maximize");
         return button?.title === (maximized ? "Restore" : "Maximize")
           && button.querySelector(".codicon").classList.contains(maximized ? "codicon-chrome-restore" : "codicon-chrome-maximize")
           && !button.querySelector(".codicon").classList.contains(maximized ? "codicon-chrome-maximize" : "codicon-chrome-restore");
-      }, maximized, { timeout: 5000 });
+      }, maximized, { timeout: 5000 }).catch(async error => {
+        console.error(JSON.stringify({ expected: maximized, native: await app.evaluate(({ BrowserWindow }) => ({ maximized: BrowserWindow.getAllWindows().find(window => window.getTitle() === "XEKUTE").isMaximized(), events: globalThis.chromeStateEvents })), ui: await page.locator("#btn-window-maximize").evaluate(button => ({ title: button.title, icon: button.querySelector(".codicon").className })) }));
+        throw error;
+      });
       assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.getTitle() === "XEKUTE").isMaximized()), maximized);
     };
     await expect(false);

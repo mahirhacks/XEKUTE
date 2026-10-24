@@ -109,4 +109,4 @@ npm ci
 npm start
 ```
 
-Use Node.js 22+ and npm 10+. See the root [README](README.md) for development verification and packaging commands.
+Use Node.js 22.13.0+ and npm 10+. See the root [README](README.md) for development verification and packaging commands.

@@ -62,6 +62,7 @@
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: "strict",
+          htmlLabels: false,
           theme: "dark",
           fontFamily: "Consolas, 'Cascadia Code', monospace",
         });

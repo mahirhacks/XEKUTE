@@ -1,10 +1,12 @@
 "use strict";
 
-const { rendererSource } = require("./helpers/renderer-source.js");
+const { rendererSource, rendererStatements, rendererDefinitions } = require("./helpers/renderer-source.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
+const { JSDOM } = require("jsdom");
 
 const { readUiShell } = require("./helpers/ui-shell.js");
 
@@ -100,14 +102,23 @@ test("editor provides VS Code-style models, syntax languages, tabs, cursor event
   assert.match(renderer, /if \(preserveDirty && tab\.dirty\) \{[\s\S]*?tab\.savedContent = newContent;[\s\S]*?preservedDirty: tab\.dirty/);
 });
 
-test("Project activity icon only toggles the file-tree sidebar", () => {
-  const start = renderer.indexOf('activityBugBounty?.addEventListener("click"');
-  const end = renderer.indexOf('activitySecurity?.addEventListener', start);
-  const handler = renderer.slice(start, end);
-  assert.ok(start >= 0 && end > start);
-  assert.match(handler, /if \(appState\.sidebarCollapsed\) \{[\s\S]*?setSidebarView\("project"\);[\s\S]*?setSidebarCollapsed\(false\);/);
-  assert.match(handler, /setSidebarCollapsed\(true\);/);
-  assert.doesNotMatch(handler, /showResourceWorkspace|showSecurityWorkspace|openSettingsTab/);
+test("the file-tree toggle only changes the project sidebar", t => {
+  const dom = new JSDOM('<button id="project"></button>');
+  t.after(() => dom.window.close());
+  const calls = [];
+  const context = vm.createContext({
+    btnTopFileTree: dom.window.document.getElementById("project"),
+    appState: { sidebarCollapsed: true, currentSidebarView: "project" },
+    setSidebarView: view => { calls.push(["view", view]); context.appState.currentSidebarView = view; },
+    setSidebarCollapsed: value => { calls.push(["collapsed", value]); context.appState.sidebarCollapsed = value; },
+  });
+  vm.runInContext(rendererDefinitions("activateSidebarView") + "\n" + rendererStatements('btnTopFileTree?.addEventListener("click"'), context);
+  context.btnTopFileTree.click();
+  assert.deepEqual(calls, [["view", "project"], ["collapsed", false]]);
+  calls.length = 0;
+  context.appState.sidebarCollapsed = false;
+  context.btnTopFileTree.click();
+  assert.deepEqual(calls, [["collapsed", true]]);
 });
 
 test("workspace context menu renames files and folders without discarding open editor state", () => {

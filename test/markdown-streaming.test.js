@@ -128,3 +128,19 @@ test("restored replies sanitize the complete document once and retain safe forma
   assert.equal(reply.querySelector("script, [onerror], [href^='javascript:']"), null);
   assert.equal(calls, 1, "restoration does not start a separate sanitizer for every paragraph");
 });
+
+test("hostile HTML and encoded script links stay inert during streaming and final rendering", () => {
+  const { renderer, reply } = setup();
+  const payloads = [
+    '<svg><a href="javascript:alert(1)"><text>click</text></a><animate onbegin="alert(1)" /></svg>',
+    '<img src="missing" onerror="alert(1)"><iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    '<a href="jav&#x61;script:alert(1)">encoded link</a><math><mtext><img src=x onerror=alert(1)></mtext></math>',
+    '<form><input name="__proto__"><input name="constructor"></form><object data="javascript:alert(1)"></object>',
+  ];
+  for (const payload of payloads) {
+    for (const streaming of [true, false]) {
+      reply.innerHTML = renderer.render(payload, { streaming });
+      assert.equal(reply.querySelector("script, iframe, object, embed, [onerror], [onload], [onbegin], [href^='javascript:'], [srcdoc]"), null, payload);
+    }
+  }
+});

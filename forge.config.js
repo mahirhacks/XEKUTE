@@ -19,18 +19,12 @@ function isIgnoredPackagePath(file) {
 }
 
 // node-pty carries native binaries for every OS. Keep only the target's.
-function pruneForeignNativeBinaries(buildPath, _electronVersion, platform, arch, done) {
-  try {
-    const remove = (target) => fs.rmSync(target, { recursive: true, force: true });
-    const ptyPrebuilds = path.join(buildPath, "node_modules", "node-pty", "prebuilds");
-    if (fs.existsSync(ptyPrebuilds)) {
-      for (const name of fs.readdirSync(ptyPrebuilds)) {
-        if (name !== `${platform}-${arch}`) remove(path.join(ptyPrebuilds, name));
-      }
+function pruneForeignNativeBinaries({ buildPath, platform, arch }) {
+  const ptyPrebuilds = path.join(buildPath, "node_modules", "node-pty", "prebuilds");
+  if (fs.existsSync(ptyPrebuilds)) {
+    for (const name of fs.readdirSync(ptyPrebuilds)) {
+      if (name !== `${platform}-${arch}`) fs.rmSync(path.join(ptyPrebuilds, name), { recursive: true, force: true });
     }
-    done();
-  } catch (error) {
-    done(error);
   }
 }
 
