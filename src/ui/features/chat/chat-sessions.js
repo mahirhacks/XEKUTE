@@ -222,6 +222,7 @@ export function setChatCollapsed(collapsed) {
   chatResize?.classList.toggle("collapsed", collapsed);
   btnTopChat?.classList.toggle("active", !collapsed);
   btnTopChat?.classList.toggle("inactive", collapsed);
+  btnTopChat?.setAttribute("aria-pressed", String(!collapsed));
   activityChat?.classList.toggle("panel-visible", !collapsed);
   activityChat?.setAttribute("aria-pressed", String(!collapsed));
   if (!collapsed) {

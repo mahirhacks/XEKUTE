@@ -4,6 +4,16 @@ const { assertDevEntry } = require("./runtime.cjs");
 assertDevEntry({ isPackaged: app.isPackaged, defaultApp: process.defaultApp, argv: process.argv, userData: process.env.XEKUTE_BROWSER_DEV_USER_DATA });
 app.setPath("userData", process.env.XEKUTE_BROWSER_DEV_USER_DATA);
 if (process.env.XEKUTE_BROWSER_DEV_HARDWARE !== "1") app.disableHardwareAcceleration();
+if (process.env.XEKUTE_BROWSER_DEV_SUPPRESS_READY_TO_SHOW === "1") {
+  app.on("browser-window-created", (_event, window) => {
+    if (window.getTitle() !== "XEKUTE") return;
+    const emit = window.emit;
+    window.emit = function (event, ...args) {
+      if (event === "ready-to-show") return false;
+      return emit.call(this, event, ...args);
+    };
+  });
+}
 require("../../src/app/electron/main.js");
 if (process.env.XEKUTE_BROWSER_DEV_OFFLINE === "1") {
   const { ipcMain, session } = require("electron");

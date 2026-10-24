@@ -28,6 +28,7 @@ body,
 
 /* Title bar */
 #app-topbar {
+  --topbar-icon-size: 16px;
   height: 34px;
   min-height: 34px;
   justify-content: flex-start;
@@ -60,8 +61,8 @@ body,
 }
 
 .app-brand-icon {
-  width: 12px;
-  height: 12px;
+  width: var(--topbar-icon-size);
+  height: var(--topbar-icon-size);
   border-radius: 4px;
   filter: grayscale(1) brightness(1.55);
 }
@@ -72,17 +73,12 @@ body,
 
 #app-topbar > .topbar-icon,
 #app-topbar > .notification-panel,
-#app-topbar > .security-proxy-browser-wrap,
 #app-topbar > .window-control {
   order: 5;
 }
 
-/* The proxied-browser button lives in the title bar as an icon, with its
-   identity menu still anchored to it. */
-#app-topbar > .security-proxy-browser-wrap { align-self: stretch; -webkit-app-region: no-drag; }
-#app-topbar > .security-proxy-browser-wrap > .browser-topbar-icon { width: 32px; height: 100%; }
-.browser-topbar-icon.active { color: #75beff; }
-.browser-topbar-icon:disabled { color: var(--fg-muted); cursor: wait; }
+.browser-activity-icon.active { color: #75beff; }
+.browser-activity-icon:disabled { color: var(--fg-muted); cursor: wait; }
 
 #app-topbar > #btn-top-filetree {
   order: 3;
@@ -128,7 +124,21 @@ body,
   pointer-events: none;
 }
 
-#btn-top-chat .chrome-icon,
+.panel-toggle-icon {
+  --panel-toggle-mask: url("../assets/icons/panel_collapsed.svg");
+  background: currentColor;
+  -webkit-mask: var(--panel-toggle-mask) center/contain no-repeat;
+  mask: var(--panel-toggle-mask) center/contain no-repeat;
+}
+
+.topbar-icon[aria-pressed="true"] > .panel-toggle-icon,
+#btn-chat-collapse > .panel-toggle-icon {
+  --panel-toggle-mask: url("../assets/icons/panel_expanded.svg");
+}
+
+.panel-toggle-icon-bottom { transform: rotate(-90deg); }
+.panel-toggle-icon-right { transform: rotate(180deg); }
+
 #btn-chat-collapse .chrome-icon {
   width: 13px;
   height: 13px;
@@ -143,6 +153,29 @@ body,
   min-height: 0;
   align-self: stretch;
   border-radius: 0;
+}
+
+#app-topbar .topbar-icon,
+#app-topbar .window-control {
+  flex-shrink: 0;
+}
+
+#app-topbar .chrome-icon,
+#app-topbar .topbar-icon > .codicon,
+#app-topbar .window-control > .codicon {
+  width: var(--topbar-icon-size);
+  height: var(--topbar-icon-size);
+  flex: 0 0 var(--topbar-icon-size);
+  object-fit: contain;
+}
+
+#app-topbar .topbar-icon > .codicon,
+#app-topbar .window-control > .codicon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--topbar-icon-size);
+  line-height: 1;
 }
 
 /* Three-pane frame */
@@ -161,6 +194,14 @@ body,
   padding-top: 19px;
 }
 
+.activitybar-secondary {
+  flex-shrink: 0;
+}
+
+.activitybar-secondary .security-proxy-browser-wrap {
+  flex-direction: column;
+}
+
 .activity-item {
   width: 44px;
   height: 58px;
@@ -173,13 +214,31 @@ body,
   display: none;
 }
 
-.activity-item .codicon {
-  font-size: 25px;
+#activitybar .activity-item > .codicon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 21.25px;
+  height: 21.25px;
+  font-size: 21.25px;
+  opacity: .5;
 }
 
-#activity-search .codicon {
-  font-size: 25px;
+#activitybar .activity-item > :is(.codicon-search, .codicon-folder-library, .codicon-shield, .codicon-globe, .codicon-settings-gear)::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: currentColor;
+  -webkit-mask: var(--activity-icon) center/contain no-repeat;
+  mask: var(--activity-icon) center/contain no-repeat;
 }
+
+#activity-search { --activity-icon: url("../assets/icons/activity-search.svg"); transform: translateY(-6px); }
+#activity-bugbounty { --activity-icon: url("../assets/icons/activity-project.svg"); }
+#activity-security { --activity-icon: url("../assets/icons/activity-shield.svg"); }
+#security-proxy-browser { --activity-icon: url("../assets/icons/activity-browser.svg"); }
+#btn-top-settings { --activity-icon: url("../assets/icons/activity-settings.svg"); }
 
 #sidebar {
   width: var(--revamp-sidebar-width);
@@ -740,12 +799,12 @@ body,
 .send-btn.resume .codicon { display: none; }
 .send-btn.resume::before {
   content: "";
-  width: 0;
-  height: 0;
+  width: 8px;
+  height: 10px;
   margin-left: 2px;
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
-  border-left: 8px solid currentColor;
+  background: currentColor;
+  -webkit-mask: url("../assets/icons/play_filled.svg") center / contain no-repeat;
+  mask: url("../assets/icons/play_filled.svg") center / contain no-repeat;
 }
 
 #statusbar {
@@ -1106,30 +1165,6 @@ body,
   background: transparent;
 }
 
-#app-settings-general-panel .general-toggle {
-  width: 40px;
-  height: 22px;
-}
-
-#app-settings-general-panel .general-toggle span {
-  background: #4a4a4a;
-}
-
-#app-settings-general-panel .general-toggle span::after {
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-}
-
-#app-settings-general-panel .general-toggle input:checked + span {
-  background: #2f8cf4;
-}
-
-#app-settings-general-panel .general-toggle input:checked + span::after {
-  transform: translateX(18px);
-}
-
 /* Project page and subsection navigation. */
 .app-settings-content .project-settings-shell {
   display: flex;
@@ -1327,7 +1362,7 @@ body,
 
 .app-settings-content .project-toggle-grid > label {
   min-height: 93px;
-  padding: 0 72px 0 0;
+  padding: 0;
   align-items: center;
   border: 0 !important;
   border-bottom: 1px solid #303030 !important;
@@ -1342,43 +1377,6 @@ body,
 .app-settings-content .project-toggle-grid > label:has(input:checked) {
   border-color: #303030;
   background: transparent;
-}
-
-.app-settings-content .project-toggle-grid input[type="checkbox"] {
-  top: 50%;
-  right: 0;
-  left: auto;
-  width: 50px;
-  height: 28px;
-  transform: translateY(-50%);
-}
-
-.app-settings-content .project-toggle-grid > label::before {
-  top: 50%;
-  right: 0;
-  left: auto;
-  width: 50px;
-  height: 28px;
-  transform: translateY(-50%);
-  background: #4a4a4a;
-}
-
-.app-settings-content .project-toggle-grid > label::after {
-  top: 50%;
-  right: 24px;
-  left: auto;
-  width: 24px;
-  height: 24px;
-  transform: translateY(-50%);
-  box-shadow: none;
-}
-
-.app-settings-content .project-toggle-grid > label:has(input:checked)::before {
-  background: #2f8cf4;
-}
-
-.app-settings-content .project-toggle-grid > label:has(input:checked)::after {
-  transform: translate(22px, -50%);
 }
 
 .app-settings-content .project-toggle-grid strong {

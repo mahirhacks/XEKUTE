@@ -9,7 +9,7 @@ const CHECKLIST_TOOL = Object.freeze({
   type: "function",
   function: {
     name: CHECKLIST_TOOL_NAME,
-    description: "Create or update this agent's single task checklist. Create it before tasks requiring three or more meaningful steps, multiple deliverables, or sustained work. Greetings, brief direct answers, and straightforward one- or two-step tasks can proceed without a checklist.",
+    description: "Create or update this agent's single task checklist. Create it before tasks requiring three or more meaningful steps, multiple deliverables, or sustained work. Work in item order: start the first pending item before task actions; complete the active item or describe its blocker before advancing. Greetings, brief direct answers, and straightforward one- or two-step tasks can proceed without a checklist.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -99,7 +99,7 @@ function applyChecklistOperation(current, operation) {
   if (operation.action === "create") {
     if (current) return checklistFailure("This agent already has a checklist. Update it instead of creating another.");
     if (operation.remove_ids?.length) return checklistFailure("A new checklist cannot remove existing items.");
-    return normalizeChecklistSnapshot({ main_goal: operation.main_goal, items: operation.items });
+    return validateChecklistOrder(normalizeChecklistSnapshot({ main_goal: operation.main_goal, items: operation.items }), null);
   }
   if (operation.action !== "update" || !current) return checklistFailure("Update requires this agent's existing checklist.");
   if (operation.items !== undefined && !Array.isArray(operation.items)) return checklistFailure("Updated checklist items must be an array.");
@@ -131,10 +131,38 @@ function applyChecklistOperation(current, operation) {
     items.set(id, normalized.value);
   }
   for (const id of removeIds) items.delete(id);
-  return normalizeChecklistSnapshot({
+  return validateChecklistOrder(normalizeChecklistSnapshot({
     main_goal: operation.main_goal === undefined ? current.main_goal : operation.main_goal,
     items: [...items.values()],
-  });
+  }), current);
+}
+
+function validateChecklistOrder(normalized, previous) {
+  if (!normalized.ok) return normalized;
+  const previousItems = new Map((previous?.items || []).map(item => [item.id, item]));
+  let unfinished = null;
+  for (const item of normalized.value.items) {
+    if (item.status === "in_progress" && unfinished) {
+      return checklistFailure(`Item "${unfinished.id}" must be completed or blocked before starting "${item.id}". Work in checklist order.`);
+    }
+    if (item.status === "completed" && previousItems.get(item.id)?.status !== "completed") {
+      if (unfinished) return checklistFailure(`Cannot complete "${item.id}" before unfinished item "${unfinished.id}".`);
+      const prior = previousItems.get(item.id);
+      if (prior && prior.status !== "in_progress") return checklistFailure(`Start item "${item.id}" before completing it. Only the active item can be completed.`);
+    }
+    if (!unfinished && ["pending", "in_progress"].includes(item.status)) unfinished = item;
+  }
+  return normalized;
+}
+
+function checklistActionError(checklist) {
+  if (!checklist) return null;
+  const first = checklist.items.find(item => ["pending", "in_progress"].includes(item.status));
+  if (!first) return "The checklist has no remaining actionable item. Add or reopen the next step before further task actions, or finish the run.";
+  if (first.status !== "in_progress" || checklist.items.filter(item => item.status === "in_progress").length !== 1) {
+    return `Before task actions, update the checklist so "${first.id}" is the only in_progress item. Work in order; complete the current item or describe its blocker before advancing. Preserve actual completed work.`;
+  }
+  return null;
 }
 
 function checklistForModel(checklist) {
@@ -278,6 +306,7 @@ module.exports = Object.freeze({
   automaticSkillCards,
   checklistForModel,
   checklistForWidget,
+  checklistActionError,
   clipRecentTurns,
   normalizeChecklistItem,
   normalizeChecklistSnapshot,

@@ -13,6 +13,8 @@
     "verify:browser-workspace": "npm run build:ui && node scripts/verify-browser-workspace.mjs",
     "verify:browser-agent": "node scripts/verify-browser-agent.mjs",
     "verify:composer": "npm run build:ui && node scripts/browser-dev/verify-composer.cjs",
+    "verify:lazy-loading": "npm run build:ui && node scripts/browser-dev/verify-lazy-loading.cjs",
+    "verify:window-chrome": "npm run build:ui && node scripts/browser-dev/verify-window-chrome.cjs",
     "verify:context-blocks": "npm run build:ui && node scripts/browser-dev/verify-context-blocks.cjs",
     "verify:checkpoint-interrupt": "npm run build:ui && node scripts/browser-dev/verify-checkpoint-interrupt.cjs",
     "verify:memory-save": "npm run build:ui && node scripts/browser-dev/verify-memory-save.cjs",

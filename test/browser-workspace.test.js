@@ -19,6 +19,32 @@ test("background browser updates preserve focused tab controls", async t => {
   assert.equal(env.document.querySelector(".browser-address").disabled, true, "ownership controls still update immediately");
 });
 
+test("browser notices can be dismissed without closing pages or hiding later errors", async t => {
+  const tab = makeTab("one");
+  const env = await setup(t, [tab]);
+  env.controller.setVisible(true); await env.flush();
+  const status = env.document.querySelector(".browser-status");
+  env.event({ type: "navigation-error", tab, error: { message: "ERR_CERT_AUTHORITY_INVALID" } });
+  await env.flush();
+  assert.equal(status.hidden, false);
+  assert.match(status.textContent, /ERR_CERT_AUTHORITY_INVALID/);
+  const dismiss = status.querySelector('button[aria-label="Dismiss browser message"]');
+  assert.ok(dismiss, "the banner offers a labeled close button");
+  dismiss.click(); await env.flush();
+  assert.equal(status.hidden, true);
+  assert.deepEqual(env.tabs().map(item => item.id), ["one"]);
+  assert.equal(env.calls.some(([name]) => name === "command"), false);
+  env.event({ type: "updated", tab: { ...tab, title: "Still open" } });
+  await env.flush();
+  assert.equal(status.hidden, true, "background metadata does not restore a dismissed notice");
+  env.event({ type: "crashed", tab }); await env.flush();
+  assert.equal(status.hidden, false, "a new failure remains visible");
+  assert.match(status.textContent, /Reload it to recover/);
+  assert.strictEqual(status.querySelector("button"), dismiss);
+  dismiss.click(); await env.flush();
+  assert.equal(status.hidden, true);
+});
+
 test("overflowed browser tabs scroll with a mouse wheel and retain position on page updates", async t => {
   const env = await setup(t, [makeTab("one"), makeTab("two"), makeTab("three")]);
   env.controller.setVisible(true); await env.flush();

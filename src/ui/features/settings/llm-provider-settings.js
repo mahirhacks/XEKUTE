@@ -173,6 +173,8 @@ export function renderModelsSettingsList() {
     toggleLabel.setAttribute("aria-label", `Enable ${name}`);
     const toggleInput = document.createElement("input");
     toggleInput.type = "checkbox";
+    toggleInput.className = "ui-toggle";
+    toggleInput.setAttribute("aria-label", `Enable ${name}`);
     toggleInput.checked = isModelEnabled(name);
     toggleInput.addEventListener("change", () => {
       setModelEnabled(name, toggleInput.checked);
@@ -184,10 +186,7 @@ export function renderModelsSettingsList() {
         syncModelLabel();
       }
     });
-    const toggleSpan = document.createElement("span");
-    toggleSpan.setAttribute("aria-hidden", "true");
     toggleLabel.appendChild(toggleInput);
-    toggleLabel.appendChild(toggleSpan);
     actions.appendChild(toggleLabel);
 
     row.appendChild(nameEl);

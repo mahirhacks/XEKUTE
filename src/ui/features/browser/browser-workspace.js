@@ -46,7 +46,10 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
         <button type="submit" class="browser-primary">Open tab</button>
       </div>
     </form>
-    <div class="browser-status" role="status" hidden></div>
+    <div class="browser-status" role="status" hidden>
+      <span class="browser-status-message"></span>
+      <button type="button" class="browser-status-dismiss" aria-label="Dismiss browser message" title="Dismiss message"><span class="codicon codicon-close" aria-hidden="true"></span></button>
+    </div>
     <div class="browser-viewport" data-native-surface>
       <img class="browser-freeze" alt="" aria-hidden="true" hidden>
       <div class="browser-empty">
@@ -59,7 +62,7 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   host.append(root);
   const $ = selector => root.querySelector(selector);
   const strip = $(".browser-web-tabs"), address = $(".browser-address"), viewport = $(".browser-viewport");
-  const status = $(".browser-status"), empty = $(".browser-empty"), creator = $(".browser-new-page");
+  const status = $(".browser-status"), statusMessage = $(".browser-status-message"), empty = $(".browser-empty"), creator = $(".browser-new-page");
   const freeze = $(".browser-freeze");
   const purpose = $('[aria-label="New tab purpose"]'), identity = $('[aria-label="New tab identity"]');
   const resumeSessions = new Map();
@@ -68,7 +71,7 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   let layoutFrame = 0, lastLayout = "", loadSequence = 0, loading = false, freezeSeq = 0;
   const active = () => tabs.find(tab => tab.id === selectedId) || null;
   function setStatus(message = "", error = false) {
-    status.textContent = message;
+    statusMessage.textContent = message;
     status.hidden = !message;
     status.classList.toggle("error", error);
     scheduleLayout();
@@ -273,6 +276,7 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
       if (accept(result, expected)) setStatus();
     } catch (error) { if (project === expected) { setStatus(error.message, true); void refresh(); } }
   }
+  $(".browser-status-dismiss").addEventListener("click", () => setStatus());
   $(".browser-navigation").addEventListener("submit", event => { event.preventDefault(); try { void command("navigate", { url: normalizeBrowserAddress(address.value) }); } catch (error) { setStatus(error.message, true); } });
   root.querySelectorAll("[data-browser-command]").forEach(button => button.addEventListener("click", () => { void command(button.dataset.browserCommand); }));
   $("[data-browser-control]").addEventListener("click", event => {

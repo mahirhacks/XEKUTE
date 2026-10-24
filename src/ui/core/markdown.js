@@ -15,6 +15,7 @@
   const highlightedCode = new Map();
   let streamingRender = false;
   let hljsRef = null;
+  let highlighterLoad = null;
   let mermaidLoad = null;
   let mermaidSeq = 0;
 
@@ -28,7 +29,14 @@
 
   function highlightCode(text, lang) {
     if (!text) return "";
-    if (!hljsRef) return escapeHtml(text);
+    if (!lang || /^(?:text|txt|plaintext)$/i.test(lang)) return escapeHtml(text);
+    if (!hljsRef) {
+      highlighterLoad ||= import("../../../node_modules/highlight.js/es/common.js").then(mod => {
+        hljsRef = mod.default;
+        rerenderAll();
+      }).catch(() => { highlighterLoad = null; });
+      return escapeHtml(text);
+    }
     const key = `${lang || ""}\n${text}`;
     if (highlightedCode.has(key)) return highlightedCode.get(key);
     try {
@@ -276,7 +284,7 @@
 
   function rerenderAll() {
     document.querySelectorAll(".assistant-reply[data-raw-md], .agent-thinking-content[data-raw-md], .thinking-body[data-raw-md]").forEach((el) => {
-      if (!renderScheduled.has(el)) renderToElement(el, el.dataset.rawMd, { streaming: el.classList.contains("streaming") });
+      if (el.querySelector(".md-code-block") && !renderScheduled.has(el)) renderToElement(el, el.dataset.rawMd, { streaming: el.classList.contains("streaming") });
     });
   }
 
@@ -287,13 +295,4 @@
   };
 
   globalThis.dispatchEvent(new Event("markdown-ready"));
-
-  import("../../../node_modules/highlight.js/es/common.js")
-    .then((mod) => {
-      hljsRef = mod.default;
-      rerenderAll();
-    })
-    .catch(() => {
-      /* code blocks render without syntax colors */
-    });
 })();

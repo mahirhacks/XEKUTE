@@ -39,6 +39,7 @@ const {
   automaticSkillCards,
   checklistForModel,
   checklistForWidget,
+  checklistActionError,
   clipRecentTurns,
   selectSkillIds,
 } = require("../runtime/skill-router.js");
@@ -495,7 +496,7 @@ function buildPromptMessages({
       "For tasks requiring three or more meaningful steps, multiple deliverables, or sustained work, you must first create a checklist with manage_task_checklist. Count investigation, execution, verification, and reporting when they are real parts of the task, even if the user wrote one sentence.",
       "Skip checklist creation only for greetings, brief direct answers, or straightforward tasks that finish in one or two meaningful steps. Do not pad a simple task with artificial steps.",
       "Each agent owns one checklist. Use create only when none exists, then update that same checklist as work progresses or the task changes. If an initially short task expands, create the checklist before continuing the expanded work.",
-      "Keep at most one item in_progress per agent. When switching items, update the previous item's actual status and start the next item in the same call. Never mark unfinished work completed.",
+      "Execute the checklist in order, one item at a time. Before task actions, the first pending item must be the only item in_progress; focus actions on that item. Complete it only after its work is finished, then start the next item in the same update. Never skip pending items or mark unfinished work completed. If blocked, record the concrete blocker in its description and mark it blocked before moving on. Revise obsolete steps explicitly when the task changes.",
       "Checklist labels must be 12 words or fewer; hidden descriptions must be 40 words or fewer.",
       "After a checklist update, wait for routing results before task actions. If new skill instructions load, regenerate actions using those instructions.",
     ].join(" ")
@@ -2449,6 +2450,7 @@ async function runAgentTurnWithLease({
     let suppressTaskCalls = false;
     let invalidChecklistResponse = false;
     let checklistCorrectionExhausted = false;
+    let checklistWorkError = null;
     const checklistCalls = routingEnabled ? normalizedCalls.filter((tool) => tool.toolName === CHECKLIST_TOOL_NAME) : [];
     if (checklistCalls.length) {
       const invalidBatch = checklistCalls.length > 1;
@@ -2472,7 +2474,7 @@ async function runAgentTurnWithLease({
             toolResult = { ok: false, error: applied.error, errorCode: applied.code, retryable: false };
           } else {
             checklist = applied.value;
-            checklistCorrectionCount = 0;
+            if (!checklistActionError(checklist)) checklistCorrectionCount = 0;
             toolResult = { ok: true, value: { status: "saved", itemCount: checklist.items.length } };
             toolWasExecuted = true;
             routeAfterChecklist = true;
@@ -2532,6 +2534,14 @@ async function runAgentTurnWithLease({
       }
     }
 
+    if (routingEnabled && !suppressTaskCalls && normalizedCalls.some(tool => ![END_TURN_TOOL_NAME, RELEASE_BLOCKS_TOOL_NAME, RECALL_BLOCK_TOOL_NAME].includes(tool.toolName))) {
+      checklistWorkError = checklistActionError(checklist);
+      if (checklistWorkError) {
+        suppressTaskCalls = true;
+        checklistCorrectionExhausted = checklistCorrectionCount >= 1;
+        checklistCorrectionCount += 1;
+      }
+    }
     const slotCalls = normalizedCalls.filter((tool) => consumesCommandSlot(tool) && !suppressTaskCalls);
     let running = [];
     if (slotCalls.length) {
@@ -2728,7 +2738,7 @@ async function runAgentTurnWithLease({
     try {
     for (const tool of normalizedCalls) {
       const heldForRouting = suppressTaskCalls
-        ? { ok: false, error: "Not executed because checklist routing loaded new instructions or the task changed. Regenerate actions using the current checklist and instructions.", errorCode: "TOOL_CALL_HELD_FOR_ROUTING", retryable: false }
+        ? { ok: false, error: checklistWorkError || "Not executed because checklist routing loaded new instructions or the task changed. Regenerate actions using the current checklist and instructions.", errorCode: checklistWorkError ? "CHECKLIST_INVALID" : "TOOL_CALL_HELD_FOR_ROUTING", retryable: false }
         : null;
       const cancelled = heldForRouting || ((signal?.aborted || stoppedToolBatch) && !prepared.has(tool)
         ? { ok: false, error: "The agent turn was stopped before this call executed.", errorCode: "TOOL_CALL_CANCELLED", aborted: true }

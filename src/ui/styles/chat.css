@@ -582,20 +582,14 @@
 .agent-activity-line.success .agent-activity-icon { color: #89d185; }
 .agent-activity-line.error .agent-activity-icon { color: #f48771; }
 
-/* Transient tool/command cards: complete cards fade out and collapse away. */
-#messages .tool-card { transition: opacity 320ms ease, transform 320ms ease, margin 320ms ease, max-height 320ms ease; }
-#messages .tool-card.tool-card-fade { opacity: 0; transform: translateY(-2px); pointer-events: none; }
-#messages .tool-card.tool-card-fade-collapse { margin: 0 !important; max-height: 0 !important; overflow: hidden; }
+/* Keep the row's space until removal so its text cannot paint into the next row. */
+#messages .tool-card { transition: opacity 320ms ease; }
+#messages .tool-card.tool-card-fade { opacity: 0; pointer-events: none; }
 #messages .tool-card.file-action.tool-card-fade,
 #messages .agent-explored-fold .tool-card.tool-card-fade {
   opacity: 1 !important;
   transform: none !important;
   pointer-events: auto !important;
-}
-#messages .tool-card.file-action.tool-card-fade-collapse,
-#messages .agent-explored-fold .tool-card.tool-card-fade-collapse {
-  max-height: none !important;
-  overflow: visible !important;
 }
 #messages .tool-card.subagent-wait { position: relative; overflow: hidden; border-color: #a371c8; background: #2a2333; }
 #messages .tool-card.subagent-wait::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(105deg, transparent 20%, rgba(190, 140, 230, .12) 45%, transparent 70%); transform: translateX(-100%); animation: tool-sweep 1.9s ease-in-out infinite; }
@@ -900,6 +894,7 @@
 }
 
 #messages .chat-exchange-body {
+  flex: 0 0 auto;
   padding: 0;
   margin: 0;
 }
@@ -1604,6 +1599,7 @@
 
 #messages .agent-work-fold-body {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 0;
   min-width: 0;
@@ -1701,6 +1697,7 @@
 #messages .agent-file-stack-body,
 #messages .agent-command-body {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 0;
   min-width: 0;
@@ -1759,6 +1756,11 @@
   max-width: 100%;
   min-width: 0;
   align-self: stretch;
+}
+
+#messages .assistant-reply,
+#messages .agent-thinking-content {
+  flex: 0 0 auto;
 }
 
 #messages .agent-thinking-fold[data-expanded="false"] > .agent-thinking-body {

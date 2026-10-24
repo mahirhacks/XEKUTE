@@ -153,6 +153,12 @@ const api = {
   // Window chrome
   windowMinimize: () => ipcRenderer.invoke("window:minimize"),
   windowToggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),
+  onWindowMaximized: (callback) => {
+    const listener = (_event, maximized) => callback(maximized);
+    ipcRenderer.on("window:maximized", listener);
+    ipcRenderer.send("window:requestMaximized");
+    return () => ipcRenderer.removeListener("window:maximized", listener);
+  },
   windowClose: () => ipcRenderer.invoke("window:close"),
 
   // Clipboard (native, reliable in Electron renderers)

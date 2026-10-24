@@ -232,20 +232,23 @@ test("project workspace exposes a plain folder flow and professional project set
     html.indexOf('<div id="messages"', html.indexOf('class="chat-session-controls"')),
   );
   const topbarMarkup = html.slice(html.indexOf('id="app-topbar"'), html.indexOf('id="layout"'));
-  assert.match(topbarMarkup, /id="security-proxy-browser"/);
-  assert.ok(topbarMarkup.indexOf('id="security-proxy-browser"') < topbarMarkup.indexOf('id="btn-top-terminal"'),
-    "the browser button sits in the title bar before the terminal toggle");
+  const activitybarMarkup = html.slice(html.indexOf('class="activitybar-secondary"'), html.indexOf('</nav>', html.indexOf('class="activitybar-secondary"')));
+  assert.doesNotMatch(topbarMarkup, /id="(?:security-proxy-browser|btn-top-settings)"/);
+  assert.match(activitybarMarkup, /id="security-proxy-browser"/);
+  assert.match(activitybarMarkup, /id="btn-top-settings"/);
+  assert.ok(activitybarMarkup.indexOf('id="security-proxy-browser"') < activitybarMarkup.indexOf('id="btn-top-settings"'),
+    "Browser sits above Settings at the bottom of the activity bar");
   assert.doesNotMatch(securityToolsMarkup, /id="security-proxy-browser"/);
   assert.doesNotMatch(chatControlsMarkup, /id="security-proxy-browser"/);
   const browserButton = html.slice(html.indexOf('id="security-proxy-browser"'), html.indexOf("</button>", html.indexOf('id="security-proxy-browser"')));
-  assert.match(browserButton, /class="topbar-icon browser-topbar-icon"/);
-  assert.doesNotMatch(browserButton, />\s*Browser\s*</, "the title-bar button shows only the icon, no label");
+  assert.match(browserButton, /class="activity-item browser-activity-icon"/);
+  assert.doesNotMatch(browserButton, />\s*Browser\s*</, "the activity-bar button shows only the icon, no label");
   assert.match(browserButton, /codicon-globe/);
   assert.match(baseStyles, /\.security-workspace-tools\s*\{[^}]*display:\s*flex;[^}]*gap:\s*6px;/);
   assert.match(baseStyles, /\.security-history-toggle\s*\{[^}]*margin-right:\s*0;/);
-  assert.match(layoutRevampStyles, /\.browser-topbar-icon\.active\s*\{[^}]*#75beff/);
+  assert.match(layoutRevampStyles, /\.browser-activity-icon\.active\s*\{[^}]*#75beff/);
   assert.match(renderer, /function openBrowserTab\(\)[\s\S]*?special: "browser"/);
-  assert.match(renderer, /closest\("#security-proxy-browser"\)\) \{\s*event\.stopPropagation\(\);\s*closeProxyBrowserMenu\(\);\s*openBrowserTab\(\);\s*\}/, "the title-bar button opens the Browser workspace without creating a page");
+  assert.match(renderer, /closest\("#security-proxy-browser"\)\) \{\s*event\.stopPropagation\(\);\s*closeProxyBrowserMenu\(\);\s*openBrowserTab\(\);\s*\}/, "the activity-bar button opens the Browser workspace without creating a page");
   assert.match(renderer, /openBrowserTab\(\);\s*await appState\.browserWorkspace\?\.open\(\{ identityId:/, "choosing an identity opens a page with it");
   assert.match(renderer, /function showBrowserWorkspaceContent\(\)[\s\S]*?browserWorkspace\?\.setVisible\(true\)/);
   assert.match(renderer, /nextSettings\.listener\.enabled = true/);
@@ -361,9 +364,6 @@ test("project workspace exposes a plain folder flow and professional project set
   assert.match(settingsStyles, /\.app-settings-nav-group \{[\s\S]*flex:0 0 auto;[\s\S]*width:100%;/);
   assert.match(settingsStyles, /\.app-settings-tabs button \{[\s\S]*height:auto;[\s\S]*min-height:31px;/);
   assert.match(settingsStyles, /\.app-settings-content > \.app-settings-panel \{[\s\S]*margin:0 auto;/);
-  assert.match(settingsStyles, /\.project-toggle-grid > label::before[\s\S]*width:30px[\s\S]*height:18px/);
-  assert.match(settingsStyles, /\.project-toggle-grid > label:has\(input:checked\)::before[\s\S]*background:#2f8cf4/);
-  assert.match(settingsStyles, /\.project-toggle-grid > label:has\(input:checked\)::after[\s\S]*transform:translateX\(12px\)/);
   assert.match(settingsStyles, /\.agent-subagent-settings \{[\s\S]*background:var\(--settings-panel\)/);
   assert.match(settingsStyles, /#app-settings-prompts-panel[\s\S]*grid-template-columns:240px/);
   assert.match(settingsStyles, /@container app-settings \(max-width: 700px\)[\s\S]*\.app-settings-sidebar \{[\s\S]*width:64px/);

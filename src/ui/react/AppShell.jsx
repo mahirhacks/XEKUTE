@@ -75,7 +75,7 @@ export default memo(function AppShell() {
           </div>
         </nav>
         <button type="button" id="btn-top-filetree" className="topbar-icon active" title="Toggle file tree" aria-label="Toggle file tree" aria-pressed="true">
-          <img className="chrome-icon" src="assets/icons/filetree_collapse_expand_icon.svg" alt="" aria-hidden="true" />
+          <span className="chrome-icon panel-toggle-icon" aria-hidden="true"></span>
         </button>
         <button type="button" id="command-center" className="command-center" title="Search (Ctrl+F)">
           <span>Search</span>
@@ -88,20 +88,11 @@ export default memo(function AppShell() {
           <header><div className="notification-panel-heading"><span className="codicon codicon-bell" aria-hidden="true"></span><strong>Notifications</strong></div><button type="button" id="notification-clear" className="icon-btn" title="Clear notifications" aria-label="Clear notifications"><span className="codicon codicon-clear-all"></span></button></header>
           <div id="notification-list" className="notification-list"><div className="notification-empty">No notifications</div></div>
         </div>
-        <div id="security-proxy-browser-wrap" className="security-proxy-browser-wrap">
-          <button type="button" id="security-proxy-browser" className="topbar-icon browser-topbar-icon" aria-label="Open browser" title="Open browser. Right-click to open a tab with an identity." aria-haspopup="menu" aria-expanded="false">
-            <span className="codicon codicon-globe" aria-hidden="true"></span>
-          </button>
-          <div id="security-proxy-browser-menu" className="security-proxy-browser-menu" role="menu" hidden></div>
-        </div>
-        <button type="button" id="btn-top-terminal" className="topbar-icon active" title="Toggle terminal">
-          <img className="chrome-icon" src="assets/icons/terminal_collapse_expand_icon.svg" alt="" aria-hidden="true" />
+        <button type="button" id="btn-top-terminal" className="topbar-icon active" title="Toggle terminal" aria-label="Toggle terminal" aria-pressed="true">
+          <span className="chrome-icon panel-toggle-icon panel-toggle-icon-bottom" aria-hidden="true"></span>
         </button>
-        <button type="button" id="btn-top-chat" className="topbar-icon active" title="Toggle AI chat">
-          <img className="chrome-icon" src="assets/icons/chat_collapse_expand_icon.svg" alt="" aria-hidden="true" />
-        </button>
-        <button type="button" id="btn-top-settings" className="topbar-icon" title="XEKUTE Settings">
-          <img className="chrome-icon" src="assets/icons/settings_icon.svg" alt="" aria-hidden="true" />
+        <button type="button" id="btn-top-chat" className="topbar-icon active" title="Toggle AI chat" aria-label="Toggle AI chat" aria-pressed="true">
+          <span className="chrome-icon panel-toggle-icon panel-toggle-icon-right" aria-hidden="true"></span>
         </button>
         <button type="button" id="btn-window-minimize" className="window-control" title="Minimize">
           <span className="codicon codicon-chrome-minimize"></span>
@@ -124,6 +115,17 @@ export default memo(function AppShell() {
             </button>
             <button type="button" id="activity-security" className="activity-item" title="Security Tools" aria-label="Security Tools" aria-pressed="false">
               <span className="codicon codicon-shield"></span>
+            </button>
+          </div>
+          <div className="activitybar-secondary">
+            <div id="security-proxy-browser-wrap" className="security-proxy-browser-wrap">
+              <button type="button" id="security-proxy-browser" className="activity-item browser-activity-icon" aria-label="Open browser" title="Open browser. Right-click to open a tab with an identity." aria-haspopup="menu" aria-expanded="false">
+                <span className="codicon codicon-globe" aria-hidden="true"></span>
+              </button>
+              <div id="security-proxy-browser-menu" className="security-proxy-browser-menu" role="menu" hidden></div>
+            </div>
+            <button type="button" id="btn-top-settings" className="activity-item" title="XEKUTE Settings" aria-label="XEKUTE Settings">
+              <span className="codicon codicon-settings-gear" aria-hidden="true"></span>
             </button>
           </div>
         </nav>
@@ -307,14 +309,14 @@ export default memo(function AppShell() {
                   <section className="general-settings-card general-settings-list">
                     <div className="general-settings-row">
                       <div><strong>Status Bar</strong><p>Show status bar at the bottom of the window</p></div>
-                      <label className="general-toggle" aria-label="Show status bar"><input id="general-status-bar-toggle" type="checkbox" defaultChecked /><span aria-hidden="true"></span></label>
+                      <label className="general-toggle" aria-label="Show status bar"><input id="general-status-bar-toggle" className="ui-toggle" aria-label="Show status bar" type="checkbox" defaultChecked /></label>
                     </div>
                   </section>
                   <h2 className="general-settings-section-title">Updates</h2>
                   <section className="general-settings-card general-settings-list">
                     <div className="general-settings-row">
                       <div><strong>Check for updates automatically</strong><p>XEKUTE checks GitHub for a new version each time it starts. You can still check manually from the Help menu.</p></div>
-                      <label className="general-toggle" aria-label="Check for updates automatically"><input id="general-updates-toggle" type="checkbox" defaultChecked /><span aria-hidden="true"></span></label>
+                      <label className="general-toggle" aria-label="Check for updates automatically"><input id="general-updates-toggle" className="ui-toggle" aria-label="Check for updates automatically" type="checkbox" defaultChecked /></label>
                     </div>
                     <div className="general-settings-divider" aria-hidden="true"></div>
                     <div className="general-settings-row">
@@ -397,11 +399,11 @@ export default memo(function AppShell() {
                       <header><div><span className="codicon codicon-verified"></span><div><h2>Authorization &amp; Review</h2><p>Record the engagement authorization and review metadata. Runtime tool access is determined by the active mode and configured scope.</p></div></div></header>
                       <div className="project-settings-card project-critical-card">
                         <div className="project-toggle-grid">
-                          <label><input type="checkbox" data-project-field="authorization.confirmed" data-project-kind="boolean" /><span><strong>Written Authorization Confirmed</strong><small>Confirms the named owner has authorized this work.</small></span></label>
-                          <label><input type="checkbox" data-project-field="review.scopeReviewed" data-project-kind="boolean" /><span><strong>In-scope targets reviewed</strong><small>Every target and wildcard has been checked.</small></span></label>
-                          <label><input type="checkbox" data-project-field="review.exclusionsConfirmed" data-project-kind="boolean" /><span><strong>Exclusions confirmed</strong><small>Out-of-scope and third-party assets are understood.</small></span></label>
-                          <label><input type="checkbox" data-project-field="review.thirdPartyRiskReviewed" data-project-kind="boolean" /><span><strong>Third-party risk reviewed</strong><small>Ownership and dependent services have been considered.</small></span></label>
-                          <label><input type="checkbox" data-project-field="review.rulesAccepted" data-project-kind="boolean" /><span><strong>Rules of Engagement accepted</strong><small>Windows, techniques, limits, and stop conditions are approved.</small></span></label>
+                          <label><input className="ui-toggle" type="checkbox" data-project-field="authorization.confirmed" data-project-kind="boolean" /><span><strong>Written Authorization Confirmed</strong><small>Confirms the named owner has authorized this work.</small></span></label>
+                          <label><input className="ui-toggle" type="checkbox" data-project-field="review.scopeReviewed" data-project-kind="boolean" /><span><strong>In-scope targets reviewed</strong><small>Every target and wildcard has been checked.</small></span></label>
+                          <label><input className="ui-toggle" type="checkbox" data-project-field="review.exclusionsConfirmed" data-project-kind="boolean" /><span><strong>Exclusions confirmed</strong><small>Out-of-scope and third-party assets are understood.</small></span></label>
+                          <label><input className="ui-toggle" type="checkbox" data-project-field="review.thirdPartyRiskReviewed" data-project-kind="boolean" /><span><strong>Third-party risk reviewed</strong><small>Ownership and dependent services have been considered.</small></span></label>
+                          <label><input className="ui-toggle" type="checkbox" data-project-field="review.rulesAccepted" data-project-kind="boolean" /><span><strong>Rules of Engagement accepted</strong><small>Windows, techniques, limits, and stop conditions are approved.</small></span></label>
                         </div>
                         <div className="project-field-grid">
                           <label>Authorized by<input data-project-field="authorization.authorizedBy" /></label>
@@ -483,9 +485,9 @@ export default memo(function AppShell() {
                       <header><div><span className="codicon codicon-lock"></span><div><h2>Evidence &amp; Data Handling</h2><p>Document how sensitive assessment material must be collected, stored, retained, and removed.</p></div></div></header>
                       <div className="project-settings-card">
                         <div className="project-toggle-grid">
-                          <label><input type="checkbox" data-project-field="dataHandling.collectMinimumNecessary" data-project-kind="boolean" /><span><strong>Collect minimum necessary data</strong><small>Avoid retaining unrelated client or personal data.</small></span></label>
-                          <label><input type="checkbox" data-project-field="dataHandling.redactSecrets" data-project-kind="boolean" /><span><strong>Redact secrets</strong><small>Mask credentials, tokens, and session material in evidence.</small></span></label>
-                          <label><input type="checkbox" data-project-field="dataHandling.encryptAtRest" data-project-kind="boolean" /><span><strong>Encrypt at rest</strong><small>Use approved encrypted storage for sensitive evidence.</small></span></label>
+                          <label><input className="ui-toggle" type="checkbox" data-project-field="dataHandling.collectMinimumNecessary" data-project-kind="boolean" /><span><strong>Collect minimum necessary data</strong><small>Avoid retaining unrelated client or personal data.</small></span></label>
+                          <label><input className="ui-toggle" type="checkbox" data-project-field="dataHandling.redactSecrets" data-project-kind="boolean" /><span><strong>Redact secrets</strong><small>Mask credentials, tokens, and session material in evidence.</small></span></label>
+                          <label><input className="ui-toggle" type="checkbox" data-project-field="dataHandling.encryptAtRest" data-project-kind="boolean" /><span><strong>Encrypt at rest</strong><small>Use approved encrypted storage for sensitive evidence.</small></span></label>
                         </div>
                         <div className="project-field-grid">
                           <label>Retention days<input type="number" min="0" max="3650" data-project-field="dataHandling.retentionDays" data-project-kind="number" /></label>
@@ -517,7 +519,7 @@ export default memo(function AppShell() {
                         <h3>Local Kali access</h3>
                         <p>Reuse one SSH connection for MCP servers running inside your local Kali VM.</p>
                       </div>
-                      <label className="kali-access-switch"><input id="kali-access-enabled" type="checkbox" /><span aria-hidden="true"></span><strong>Enable</strong></label>
+                      <label className="kali-access-switch"><input id="kali-access-enabled" className="ui-toggle" type="checkbox" /><strong>Enable</strong></label>
                     </header>
                     <form id="kali-access-form" autoComplete="off">
                       <div id="kali-access-fields" hidden>
@@ -529,7 +531,7 @@ export default memo(function AppShell() {
                           <label className="wide">SSH private key<div className="mcp-key-row"><input id="kali-access-key" maxLength="32768" spellCheck="false" placeholder="Optional when your SSH agent already has the key" /><button type="button" id="kali-access-key-browse">Browse…</button></div></label>
                         </div>
                         <div className="mcp-form-options">
-                          <label><input id="kali-access-accept-host-key" type="checkbox" defaultChecked /><span><strong>Trust a new SSH host key</strong><small>Accepts the first key but still rejects a changed key.</small></span></label>
+                          <label><input id="kali-access-accept-host-key" className="ui-toggle" type="checkbox" defaultChecked /><span><strong>Trust a new SSH host key</strong><small>Accepts the first key but still rejects a changed key.</small></span></label>
                         </div>
                         <div className="mcp-form-note"><span className="codicon codicon-shield"></span><p>Password login is intentionally unsupported. Credentials and remote tool output are not stored in the MCP configuration.</p></div>
                         <details className="mcp-setup-help">
@@ -617,7 +619,7 @@ export default memo(function AppShell() {
                             <p>You can put in your OpenRouter key to use hosted models at cost.</p>
                             <span id="llm-openrouter-key-status" className="models-secret-status" hidden>Secret saved</span>
                           </div>
-                          <label className="general-toggle" aria-label="Use OpenRouter API key"><input id="llm-openrouter-key-toggle" type="checkbox" /><span aria-hidden="true"></span></label>
+                          <label className="general-toggle" aria-label="Use OpenRouter API key"><input id="llm-openrouter-key-toggle" className="ui-toggle" aria-label="Use OpenRouter API key" type="checkbox" /></label>
                         </div>
                         <div id="llm-openrouter-key-fields" className="models-api-fields" hidden>
                           <input id="openrouter-api-key" type="password" autoComplete="off" spellCheck="false" placeholder="Secret saved. Enter a new key to replace it" aria-label="OpenRouter API key" />
@@ -627,7 +629,7 @@ export default memo(function AppShell() {
                             <strong>Override OpenRouter Base URL</strong>
                             <p>Change the base URL for OpenRouter API requests.</p>
                           </div>
-                          <label className="general-toggle" aria-label="Override OpenRouter base URL"><input id="llm-openrouter-base-toggle" type="checkbox" /><span aria-hidden="true"></span></label>
+                          <label className="general-toggle" aria-label="Override OpenRouter base URL"><input id="llm-openrouter-base-toggle" className="ui-toggle" aria-label="Override OpenRouter base URL" type="checkbox" /></label>
                         </div>
                         <div id="llm-openrouter-base-fields" className="models-api-fields" hidden>
                           <input id="openrouter-base-url" type="url" spellCheck="false" placeholder="https://openrouter.ai/api/v1" aria-label="OpenRouter base URL" />
@@ -641,7 +643,7 @@ export default memo(function AppShell() {
                             <strong>Enable Ollama</strong>
                             <p>Use your local or remote Ollama server for chat, agents, and model listing.</p>
                           </div>
-                          <label className="general-toggle" aria-label="Enable Ollama"><input id="llm-ollama-enable-toggle" type="checkbox" defaultChecked /><span aria-hidden="true"></span></label>
+                          <label className="general-toggle" aria-label="Enable Ollama"><input id="llm-ollama-enable-toggle" className="ui-toggle" aria-label="Enable Ollama" type="checkbox" defaultChecked /></label>
                         </div>
                         <div className="models-api-row models-api-row-toggle">
                           <div>
@@ -649,7 +651,7 @@ export default memo(function AppShell() {
                             <p>Override the default <code>http://127.0.0.1:11435</code> endpoint.</p>
                             <span id="llm-ollama-endpoint-status" className="models-secret-status" hidden>Endpoint saved</span>
                           </div>
-                          <label className="general-toggle" aria-label="Use custom Ollama endpoint"><input id="llm-ollama-endpoint-toggle" type="checkbox" /><span aria-hidden="true"></span></label>
+                          <label className="general-toggle" aria-label="Use custom Ollama endpoint"><input id="llm-ollama-endpoint-toggle" className="ui-toggle" aria-label="Use custom Ollama endpoint" type="checkbox" /></label>
                         </div>
                         <div id="llm-ollama-endpoint-fields" className="models-api-fields" hidden>
                           <input id="ollama-host-input" type="url" spellCheck="false" placeholder="http://127.0.0.1:11435" aria-label="Ollama API base URL" />
@@ -767,54 +769,54 @@ export default memo(function AppShell() {
                   <div className="settings-ui-content">
                     <section className="settings-group">
                       <div className="settings-group-heading"><span className="codicon codicon-radio-tower"></span><div><h2>Proxy Listener</h2><p>Local interface used by the assessment interception workbench.</p></div></div>
-                      <div className="settings-row"><label htmlFor="setting-listener-enabled">Listener enabled</label><input id="setting-listener-enabled" type="checkbox" data-setting-path="listener.enabled" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-listener-enabled">Listener enabled</label><input id="setting-listener-enabled" className="ui-toggle" type="checkbox" data-setting-path="listener.enabled" data-setting-type="boolean" /></div>
                       <div className="settings-row"><label htmlFor="setting-bind-address">Bind address</label><input id="setting-bind-address" type="text" data-setting-path="listener.bindAddress" /></div>
                       <div className="settings-row"><label htmlFor="setting-listener-port">Port</label><input id="setting-listener-port" type="number" min="1" max="65535" step="1" data-setting-path="listener.port" data-setting-type="number" /></div>
-                      <div className="settings-row"><label htmlFor="setting-http2">HTTP/2 support</label><input id="setting-http2" type="checkbox" data-setting-path="listener.supportHttp2" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-http2">HTTP/2 support</label><input id="setting-http2" className="ui-toggle" type="checkbox" data-setting-path="listener.supportHttp2" data-setting-type="boolean" /></div>
                       <div className="settings-row"><label>Listener status</label><output id="proxy-listener-status" className="proxy-listener-status">Stopped</output></div>
                     </section>
                     <section className="settings-group">
                       <div className="settings-group-heading"><span className="codicon codicon-lock"></span><div><h2>TLS</h2><p>Certificate and upstream verification behavior.</p></div></div>
-                      <div className="settings-row"><label htmlFor="setting-tls-enabled">TLS interception</label><input id="setting-tls-enabled" type="checkbox" data-setting-path="tls.enabled" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-tls-enabled">TLS interception</label><input id="setting-tls-enabled" className="ui-toggle" type="checkbox" data-setting-path="tls.enabled" data-setting-type="boolean" /></div>
                       <div className="settings-row"><label htmlFor="setting-certificate-mode">Certificate mode</label><select id="setting-certificate-mode" data-setting-path="tls.certificateMode"><option value="project-ca">Project CA</option><option value="custom">Custom certificate</option><option value="passthrough">Passthrough</option></select></div>
                       <div className="settings-row"><label htmlFor="setting-min-tls">Minimum TLS version</label><select id="setting-min-tls" data-setting-path="tls.minimumVersion"><option>TLSv1.2</option><option>TLSv1.3</option></select></div>
-                      <div className="settings-row"><label htmlFor="setting-verify-upstream">Verify upstream certificates</label><input id="setting-verify-upstream" type="checkbox" data-setting-path="tls.verifyUpstreamCertificates" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-verify-upstream">Verify upstream certificates</label><input id="setting-verify-upstream" className="ui-toggle" type="checkbox" data-setting-path="tls.verifyUpstreamCertificates" data-setting-type="boolean" /></div>
                       <div className="settings-row"><label>Project CA certificate</label><div className="settings-inline-action"><input id="proxy-ca-path" type="text" readOnly defaultValue="Generated when the listener starts" /><button type="button" id="btn-show-proxy-ca" title="Show CA certificate"><span className="codicon codicon-folder-opened"></span></button></div></div>
                     </section>
                     <section className="settings-group">
                       <div className="settings-group-heading"><span className="codicon codicon-shield"></span><div><h2>Authorization</h2><p>Confirm written permission before sending traffic from Repeater, Intruder, or Interceptor.</p></div></div>
-                      <div className="settings-row"><label htmlFor="setting-auth-confirmed">Authorization confirmed</label><input id="setting-auth-confirmed" type="checkbox" data-setting-path="authorization.confirmed" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-auth-confirmed">Authorization confirmed</label><input id="setting-auth-confirmed" className="ui-toggle" type="checkbox" data-setting-path="authorization.confirmed" data-setting-type="boolean" /></div>
                       <div className="settings-row"><label htmlFor="setting-authorized-by">Authorized by</label><input id="setting-authorized-by" type="text" data-setting-path="authorization.authorizedBy" placeholder="Program owner or approver" /></div>
                       <div className="settings-row"><label htmlFor="setting-auth-reference">Authorization reference</label><input id="setting-auth-reference" type="text" data-setting-path="authorization.authorizationReference" placeholder="Ticket, email, or program URL" /></div>
                       <div className="settings-row"><label htmlFor="setting-auth-signed-at">Signed at</label><input id="setting-auth-signed-at" type="text" data-setting-path="authorization.signedAt" placeholder="YYYY-MM-DD" /></div>
                     </section>
                     <section className="settings-group">
                       <div className="settings-group-heading"><span className="codicon codicon-debug-disconnect"></span><div><h2>Interception</h2><p>Control which HTTP messages stop in the Interceptor.</p></div></div>
-                      <div className="settings-row"><label htmlFor="setting-interception-enabled">Intercept traffic</label><input id="setting-interception-enabled" type="checkbox" data-setting-path="interception.enabled" data-setting-type="boolean" /></div>
-                      <div className="settings-row"><label htmlFor="setting-intercept-requests">Intercept requests</label><input id="setting-intercept-requests" type="checkbox" data-setting-path="interception.interceptRequests" data-setting-type="boolean" /></div>
-                      <div className="settings-row"><label htmlFor="setting-intercept-responses">Intercept responses</label><input id="setting-intercept-responses" type="checkbox" data-setting-path="interception.interceptResponses" data-setting-type="boolean" /></div>
-                      <div className="settings-row"><label htmlFor="setting-only-scope">Only intercept in-scope targets</label><input id="setting-only-scope" type="checkbox" data-setting-path="interception.onlyInScope" data-setting-type="boolean" /></div>
-                      <div className="settings-row"><label htmlFor="setting-content-length">Update Content-Length</label><input id="setting-content-length" type="checkbox" data-setting-path="interception.automaticallyUpdateContentLength" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-interception-enabled">Intercept traffic</label><input id="setting-interception-enabled" className="ui-toggle" type="checkbox" data-setting-path="interception.enabled" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-intercept-requests">Intercept requests</label><input id="setting-intercept-requests" className="ui-toggle" type="checkbox" data-setting-path="interception.interceptRequests" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-intercept-responses">Intercept responses</label><input id="setting-intercept-responses" className="ui-toggle" type="checkbox" data-setting-path="interception.interceptResponses" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-only-scope">Only intercept in-scope targets</label><input id="setting-only-scope" className="ui-toggle" type="checkbox" data-setting-path="interception.onlyInScope" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-content-length">Update Content-Length</label><input id="setting-content-length" className="ui-toggle" type="checkbox" data-setting-path="interception.automaticallyUpdateContentLength" data-setting-type="boolean" /></div>
                     </section>
                     <section className="settings-group">
                       <div className="settings-group-heading"><span className="codicon codicon-globe"></span><div><h2>Requests and Upstream Proxy</h2><p>Network limits used by Repeater and Intruder.</p></div></div>
                       <div className="settings-row"><label htmlFor="setting-request-timeout">Request timeout (seconds)</label><input id="setting-request-timeout" type="number" min="1" max="30" data-setting-path="requests.timeoutSeconds" data-setting-type="number" /></div>
                       <div className="settings-row"><label htmlFor="setting-max-response">Maximum response bytes</label><input id="setting-max-response" type="number" min="1024" max="1000000" data-setting-path="requests.maximumResponseBytes" data-setting-type="number" /></div>
-                      <div className="settings-row"><label htmlFor="setting-upstream-enabled">Use upstream proxy</label><input id="setting-upstream-enabled" type="checkbox" data-setting-path="upstreamProxy.enabled" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-upstream-enabled">Use upstream proxy</label><input id="setting-upstream-enabled" className="ui-toggle" type="checkbox" data-setting-path="upstreamProxy.enabled" data-setting-type="boolean" /></div>
                       <div className="settings-row"><label htmlFor="setting-upstream-url">Upstream proxy URL</label><input id="setting-upstream-url" type="url" data-setting-path="upstreamProxy.url" placeholder="http://127.0.0.1:8081" /></div>
                     </section>
                     <section className="settings-group">
                       <div className="settings-group-heading"><span className="codicon codicon-symbol-event"></span><div><h2>Intruder</h2><p>Bounded automated request behavior.</p></div></div>
                       <div className="settings-row"><label htmlFor="setting-intruder-limit">Maximum requests per run</label><input id="setting-intruder-limit" type="number" min="1" max="25" data-setting-path="intruder.maximumRequestsPerRun" data-setting-type="number" /></div>
                       <div className="settings-row"><label htmlFor="setting-intruder-delay">Delay between requests (ms)</label><input id="setting-intruder-delay" type="number" min="500" max="60000" data-setting-path="intruder.delayBetweenRequestsMs" data-setting-type="number" /></div>
-                      <div className="settings-row"><label htmlFor="setting-stop-error">Stop on error</label><input id="setting-stop-error" type="checkbox" data-setting-path="intruder.stopOnError" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-stop-error">Stop on error</label><input id="setting-stop-error" className="ui-toggle" type="checkbox" data-setting-path="intruder.stopOnError" data-setting-type="boolean" /></div>
                     </section>
                     <section className="settings-group">
                       <div className="settings-group-heading"><span className="codicon codicon-output"></span><div><h2>Traffic Logging</h2><p>Evidence retained in Traffic/Raw and Traffic/Filtered.</p></div></div>
-                      <div className="settings-row"><label htmlFor="setting-log-raw">Log raw traffic</label><input id="setting-log-raw" type="checkbox" data-setting-path="logging.logRawTraffic" data-setting-type="boolean" /></div>
-                      <div className="settings-row"><label htmlFor="setting-log-filtered">Log filtered traffic</label><input id="setting-log-filtered" type="checkbox" data-setting-path="logging.logFilteredTraffic" data-setting-type="boolean" /></div>
-                      <div className="settings-row"><label htmlFor="setting-log-bodies">Include message bodies</label><input id="setting-log-bodies" type="checkbox" data-setting-path="logging.includeBodies" data-setting-type="boolean" /></div>
-                      <div className="settings-row"><label htmlFor="setting-redact-auth">Redact Authorization headers</label><input id="setting-redact-auth" type="checkbox" data-setting-path="logging.redactAuthorizationHeaders" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-log-raw">Log raw traffic</label><input id="setting-log-raw" className="ui-toggle" type="checkbox" data-setting-path="logging.logRawTraffic" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-log-filtered">Log filtered traffic</label><input id="setting-log-filtered" className="ui-toggle" type="checkbox" data-setting-path="logging.logFilteredTraffic" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-log-bodies">Include message bodies</label><input id="setting-log-bodies" className="ui-toggle" type="checkbox" data-setting-path="logging.includeBodies" data-setting-type="boolean" /></div>
+                      <div className="settings-row"><label htmlFor="setting-redact-auth">Redact Authorization headers</label><input id="setting-redact-auth" className="ui-toggle" type="checkbox" data-setting-path="logging.redactAuthorizationHeaders" data-setting-type="boolean" /></div>
                     </section>
                   </div>
                 </div>
@@ -1034,7 +1036,7 @@ export default memo(function AppShell() {
                 <span className="codicon codicon-ellipsis"></span>
               </button>
               <button type="button" id="btn-chat-collapse" className="icon-btn chat-session-action" title="Collapse chat">
-                <img className="chrome-icon" src="assets/icons/chat_collapse_expand_icon.svg" alt="" aria-hidden="true" />
+                <span className="chrome-icon panel-toggle-icon panel-toggle-icon-right" aria-hidden="true"></span>
               </button>
             </div>
           </div>

@@ -299,28 +299,34 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
     } catch { /* The page may be gone; the stuck button goes with it. */ }
     finally { if (attachedHere && !contents.isDestroyed() && contents.debugger.isAttached()) contents.debugger.detach(); }
   }
-  function withPage(id, sessionId, expectedGeneration, task, { signal } = {}) {
+  function withPage(id, sessionId, expectedGeneration, task, { signal, timeoutMs = 15000, deadline = Date.now() + timeoutMs } = {}) {
     const record = recordFor(id);
+    let transport, cancelled = false, stopError, rejectStop, active = false;
+    const stopped = new Promise((_resolve, reject) => { rejectStop = reject; });
+    stopped.catch(() => {});
+    const stop = (error = fail("BROWSER_ACTION_STOPPED", "Browser action stopped.")) => {
+      if (cancelled) return;
+      cancelled = true; stopError = error;
+      transport?.close();
+      if (active && !record.view.webContents.isDestroyed()) record.view.webContents.stop();
+      rejectStop(error);
+    };
+    const abort = () => stop(signal.reason?.code === "BROWSER_ACTION_TIMEOUT" ? signal.reason : undefined);
+    const timer = setTimeout(() => stop(fail("BROWSER_ACTION_TIMEOUT", "Browser action exceeded its time budget. Observe before retrying an action that may have completed, or continue with another page.")), Math.max(1, deadline - Date.now()));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
     const result = record.operationTail.catch(() => {}).then(async () => {
-      if (signal?.aborted) throw fail("BROWSER_ACTION_STOPPED", "Browser action stopped.");
+      if (cancelled) throw stopError;
       recordFor(id);
       if (record.tab.owner.kind !== "chat" || record.tab.owner.sessionId !== sessionId || record.tab.controlGeneration !== expectedGeneration) throw fail("BROWSER_CONTROL_STALE", "This chat no longer controls the browser tab.");
       const operationId = randomUUID();
       transition(record, { type: "operation_started", expectedGeneration, operationId }); emit("updated", record);
-      let transport, browser, finish, rejectStop, cleanupDialogs, uncertain = false, cancelled = false;
+      let browser, finish, cleanupDialogs, uncertain = false;
       const done = new Promise(resolve => { finish = resolve; });
-      const stopped = new Promise((_resolve, reject) => { rejectStop = reject; });
-      stopped.catch(() => {});
       const leased = new Set([record]);
       const current = () => !cancelled && tabs.get(id) === record && record.tab.controlGeneration === expectedGeneration && record.tab.owner.kind === "chat" && record.tab.owner.sessionId === sessionId;
-      const stop = () => {
-        if (cancelled) return;
-        cancelled = true; transport?.close();
-        if (!record.view.webContents.isDestroyed()) record.view.webContents.stop();
-        rejectStop(fail("BROWSER_ACTION_STOPPED", "Browser action stopped."));
-      };
-      record.active = { id: operationId, done, stop };
-      signal?.addEventListener("abort", stop, { once: true });
+      active = true;
+      record.active = { id: operationId, done, stop: () => stop() };
       try {
         transport = createBrowserCdpTransport({
           records: () => {
@@ -339,33 +345,45 @@ function createNativeBrowserService({ electron, getWindow, identityVault, proxyL
         const page = pages[0];
         if (!page || !current()) throw fail("BROWSER_CONTROL_STALE", "Browser control changed while connecting.");
         page.setDefaultTimeout(15000);
-        cleanupDialogs = await Promise.race([prepareBrowserDialogs(record.view.webContents, page), stopped]);
+        cleanupDialogs = await Promise.race([prepareBrowserDialogs(record.view.webContents, page, current), stopped]);
         const value = await Promise.race([Promise.resolve().then(() => task(page, { browser, signal })), stopped]);
         if (!current()) throw fail("BROWSER_ACTION_STOPPED", "Browser action stopped.");
         return value;
       } finally {
-        signal?.removeEventListener("abort", stop);
-        // Chromium pauses Page commands while a native dialog is pending.
-        // Detaching below discards that session's init scripts in this case.
-        if (![...leased].some(item => item.dialog)) await cleanupDialogs?.();
-        transport?.close();
-        // A synchronous page handler can keep the original input RPC pending
-        // until its dialog callback is answered by the next tool call. The
-        // native callback is an explicit continuation, not an uncertain input.
-        const settled = [...leased].some(item => item.dialogCallback) ? true : await transport?.settled();
-        const held = transport?.heldPointers?.();
-        for (const item of leased) if (held?.get(item.tab.id)?.length) item.pendingRelease = held.get(item.tab.id);
-        for (const item of leased) {
-          if (tabs.get(item.tab.id) === item && ["running", "stopping"].includes(item.tab.operation.status) && item.tab.operation.operationId === operationId) {
-            transition(item, { type: uncertain || settled === false ? "operation_uncertain" : "operation_settled", operationId }); emit("updated", item);
+        try {
+          // Dialog setup and teardown are CDP calls too, and can stall while
+          // the renderer is unresponsive. They share the operation deadline.
+          if (current() && ![...leased].some(item => item.dialog)) await Promise.race([Promise.resolve().then(() => cleanupDialogs?.()), stopped]);
+        } finally {
+          transport?.close();
+          // A synchronous page handler can keep the original input RPC pending
+          // until its dialog callback is answered by the next tool call. The
+          // native callback is an explicit continuation, not an uncertain input.
+          const settled = [...leased].some(item => item.dialogCallback) ? true : await transport?.settled();
+          const held = transport?.heldPointers?.();
+          for (const item of leased) if (held?.get(item.tab.id)?.length) item.pendingRelease = held.get(item.tab.id);
+          for (const item of leased) {
+            if (tabs.get(item.tab.id) === item && ["running", "stopping"].includes(item.tab.operation.status) && item.tab.operation.operationId === operationId) {
+              transition(item, { type: uncertain || settled === false ? "operation_uncertain" : "operation_settled", operationId }); emit("updated", item);
+            }
+            if (item.active?.id === operationId) item.active = null;
           }
-          if (item.active?.id === operationId) item.active = null;
+          active = false;
+          finish();
         }
-        finish();
       }
     });
     record.operationTail = result.catch(() => {});
-    return result;
+    const queuedStop = stopped.catch(error => {
+      // A queued call can expire immediately. Once started, finalize its
+      // ownership state before callers attempt recovery or takeover.
+      if (active) return result;
+      throw error;
+    });
+    return Promise.race([result, queuedStop]).finally(() => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    });
   }
 
   return Object.freeze({

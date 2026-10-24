@@ -91,17 +91,26 @@ function createNativeBrowserProvider({ getService, activate, artifactStore = nul
     if (raw.action === "open_page") {
       const input = checkAction(raw);
       let tab = await service.open({ purpose: input.purpose, identityId: input.identityId, url: "about:blank" });
+      let handedOff = false;
       try {
         checkStopped();
         tab = await service.handoff(tab.id, sessionId, tab.controlGeneration);
+        handedOff = true;
         checkStopped();
         service.select(tab.id);
         return await service.withPage(tab.id, sessionId, tab.controlGeneration, async page => {
           if (input.url && input.url !== "about:blank") await page.goto(input.url, { waitUntil: "domcontentloaded", timeout: Math.min(120000, Math.max(100, Number(input.timeoutMs) || 15000)) });
           return { backend: "native-workspace", projectId: tab.projectId, tab: live(service, tab.id), observation: await observations.capture(page, live(service, tab.id)) };
-        }, { signal: runtime.signal });
+        }, { signal: runtime.signal, deadline: runtime.deadline });
       } catch (error) {
-        if (runtime.signal?.aborted) { observations.forget(tab.id); await service.close(tab.id); }
+        if (runtime.signal?.aborted) {
+          observations.forget(tab.id);
+          const current = service.list().find(item => item.id === tab.id);
+          if (!handedOff && current?.controlGeneration === tab.controlGeneration) await service.close(tab.id).catch(() => {});
+          else if (current?.owner.kind === "chat" && current.owner.sessionId === sessionId) {
+            await service.closeOwned(tab.id, sessionId, current.controlGeneration).catch(() => {});
+          }
+        }
         throw error;
       }
     }
@@ -220,11 +229,26 @@ function createNativeBrowserProvider({ getService, activate, artifactStore = nul
         // service takes responsibility for the pending dialog.
         if (!hasPendingDialog) page.off("dialog", onDialog);
       }
-    }, { signal: runtime.signal });
+    }, { signal: runtime.signal, deadline: runtime.deadline });
   }
   return Object.freeze({ async execute(input, context, runtime = {}) {
-    try { return await execute(input, context, runtime); }
-    catch (error) { if (runtime.signal?.aborted) throw fail("BROWSER_ACTION_STOPPED", "Browser action stopped."); throw error; }
+    const controller = new AbortController();
+    const timeout = Math.min(120000, Math.max(100, Number(input.timeoutMs) || 15000, input.action === "wait" ? Number(input.waitMs || 0) + 1000 : 0));
+    const deadline = Date.now() + timeout;
+    const abort = () => controller.abort(fail("BROWSER_ACTION_STOPPED", "Browser action stopped."));
+    const stopped = new Promise((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true }));
+    const timer = setTimeout(() => controller.abort(fail("BROWSER_ACTION_TIMEOUT", `Browser action exceeded ${timeout}ms, including setup and observation. Continue with another page; observe before retrying an action that may have completed.`)), timeout);
+    runtime.signal?.addEventListener("abort", abort, { once: true });
+    if (runtime.signal?.aborted) abort();
+    try { return await Promise.race([execute(input, context, { ...runtime, signal: controller.signal, deadline }), stopped]); }
+    catch (error) {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      if (error.name === "TimeoutError") throw fail("BROWSER_ACTION_TIMEOUT", `${error.message} Continue with another page; observe before retrying an action that may have completed.`);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      runtime.signal?.removeEventListener("abort", abort);
+    }
   }, describe: (tabId, target) => observations.describe(tabId, target), close() { observations.clear(); } });
 }
 

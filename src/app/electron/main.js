@@ -1163,7 +1163,7 @@ function createWindow() {
     title: "XEKUTE",
     frame: false,
     autoHideMenuBar: true,
-    show: false,
+    show: true,
     icon: path.join(__dirname, "../../..", "xekute_icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -1177,6 +1177,11 @@ function createWindow() {
   });
 
   mainWindow.setAppDetails?.({ appId: APP_USER_MODEL_ID, appIconPath: process.execPath });
+  const publishMaximized = function () {
+    if (!this.webContents.isDestroyed()) this.webContents.send("window:maximized", this.isMaximized());
+  };
+  mainWindow.on("maximize", publishMaximized);
+  mainWindow.on("unmaximize", publishMaximized);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (targetUrl !== APP_INDEX_URL) event.preventDefault();
@@ -1185,9 +1190,6 @@ function createWindow() {
     console.error("Renderer failed to load:", code, description, url);
   });
   mainWindow.webContents.on("will-attach-webview", (event) => event.preventDefault());
-  mainWindow.once("ready-to-show", () => {
-    if (!mainWindow?.isDestroyed()) mainWindow.show();
-  });
   loadRenderer(mainWindow);
   if (IS_DEV) {
     const inspectedWindow = mainWindow;
@@ -1212,7 +1214,7 @@ function createWindow() {
       inspectedWindow.once("closed", destroyDevtools);
       inspected.once("devtools-closed", destroyDevtools);
       inspected.once("devtools-opened", () => {
-        if (!devtools.isDestroyed()) devtools.show();
+        if (!devtools.isDestroyed()) devtools.showInactive();
       });
       inspected.setDevToolsWebContents(devtools.webContents);
       inspected.openDevTools({ mode: "detach" });
@@ -1454,6 +1456,10 @@ registerProjectIpc({
 
 ipcMain.handle("window:minimize", () => {
   mainWindow?.minimize();
+});
+
+ipcMain.on("window:requestMaximized", event => {
+  event.sender.send("window:maximized", mainWindow.isMaximized());
 });
 
 ipcMain.handle("window:toggleMaximize", () => {

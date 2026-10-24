@@ -56,12 +56,12 @@
           if (typeof globalScope.require === "function") bootEditor(resolve, reject);
           else reject(new Error("Monaco loader is unavailable."));
         };
-        script.onerror = () => reject(new Error("Monaco loader is unavailable."));
+        script.onerror = () => { script.remove(); reject(new Error("Monaco loader is unavailable.")); };
         globalScope.document.head.appendChild(script);
         return;
       }
       bootEditor(resolve, reject);
-    });
+    }).catch(error => { ready = null; throw error; });
   }
 
   function bootEditor(resolve, reject) {

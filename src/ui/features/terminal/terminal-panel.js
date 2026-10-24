@@ -20,6 +20,7 @@ export function setTerminalCollapsed(collapsed, { createIfMissing = true } = {})
   terminalResize.classList.toggle("collapsed-hint", collapsed);
   btnTopTerminal?.classList.toggle("active", !collapsed);
   btnTopTerminal?.classList.toggle("inactive", collapsed);
+  btnTopTerminal?.setAttribute("aria-pressed", String(!collapsed));
   activityTerminal?.classList.toggle("panel-visible", !collapsed);
   activityTerminal?.setAttribute("aria-pressed", String(!collapsed));
   TerminalManager.setPanelOpen?.(!collapsed);

@@ -182,9 +182,10 @@ export function positionProxyBrowserMenu() {
   document.body.appendChild(menu);
   const rect = button.getBoundingClientRect();
   menu.style.position = "fixed";
-  menu.style.top = `${Math.round(rect.bottom + 4)}px`;
-  menu.style.right = `${Math.round(Math.max(8, window.innerWidth - rect.right))}px`;
-  menu.style.left = "auto";
+  const menuRect = menu.getBoundingClientRect();
+  menu.style.top = `${Math.round(Math.max(8, Math.min(rect.bottom - menuRect.height, window.innerHeight - menuRect.height - 8)))}px`;
+  menu.style.left = `${Math.round(Math.max(8, Math.min(rect.right + 4, window.innerWidth - menuRect.width - 8)))}px`;
+  menu.style.right = "auto";
   menu.style.zIndex = "12000";
 }
 

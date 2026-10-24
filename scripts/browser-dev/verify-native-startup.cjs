@@ -14,15 +14,16 @@ function dumpFiles(directory) {
   });
 }
 
-async function verifyNativeStartup({ captureCrash = false } = {}) {
+async function verifyNativeStartup({ captureCrash = false, noReadyToShowOnly = false } = {}) {
   const cases = [];
-  const modes = ["hardware", "hardware", "software", "software", ...(captureCrash ? ["renderer-crash", "main-crash"] : [])];
+  const modes = noReadyToShowOnly ? ["no-ready-to-show"] : ["hardware", "hardware", "software", "software", "no-ready-to-show", ...(captureCrash ? ["renderer-crash", "main-crash"] : [])];
   for (const mode of modes) {
     const launch = createDevLaunch({ smoke: true });
     launch.args[0] = path.join(__dirname, "app-host.cjs");
     launch.args.push("--dev");
     launch.env.XEKUTE_BROWSER_DEV_OFFLINE = "1";
     launch.env.XEKUTE_BROWSER_DEV_HARDWARE = mode === "software" ? "0" : "1";
+    if (mode === "no-ready-to-show") launch.env.XEKUTE_BROWSER_DEV_SUPPRESS_READY_TO_SHOW = "1";
     fs.writeFileSync(path.join(launch.userData, "Preferences"), JSON.stringify({ electron: { devtools: {
       bounds: { x: 368, y: 132, width: 800, height: 600 },
       preferences: { "panel-selected-tab": '"timeline"', "drawer-view-selected-tab": '"console-view"', "console.text-filter": '"app"' },
@@ -41,6 +42,8 @@ async function verifyNativeStartup({ captureCrash = false } = {}) {
           contents.once("devtools-opened", () => { clearTimeout(timer); resolve(); });
         });
       });
+      assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.getTitle() === "XEKUTE").isVisible()), true,
+        "Xekute's main window must be visible even when first-paint readiness is missing; DevTools alone is not a successful startup");
       assert.equal(await app.evaluate(({ BrowserWindow }) => {
         const contents = BrowserWindow.getAllWindows().find(window => window.getTitle() === "XEKUTE").webContents;
         const owner = BrowserWindow.fromWebContents(contents.devToolsWebContents);
@@ -97,7 +100,7 @@ async function verifyNativeStartup({ captureCrash = false } = {}) {
         }
         assert.equal(fs.readFileSync(dumps[0]).subarray(0, 4).toString(), "MDMP");
       }
-      cases.push({ mode, compositing: info.compositing, ownedDevtools: true, reload: true, passed: true });
+      cases.push({ mode, compositing: info.compositing, mainWindowVisible: true, ownedDevtools: true, reload: true, passed: true });
       passed = true;
     } finally {
       try { await app?.close(); }
@@ -114,6 +117,6 @@ async function verifyNativeStartup({ captureCrash = false } = {}) {
 module.exports = { verifyNativeStartup };
 if (require.main === module) {
   // Crash probes affect only the disposable offline profile created above.
-  verifyNativeStartup({ captureCrash: process.argv.includes("--capture-crash") })
+  verifyNativeStartup({ captureCrash: process.argv.includes("--capture-crash"), noReadyToShowOnly: process.argv.includes("--no-ready-to-show") })
     .catch(error => { console.error(error); process.exitCode = 1; });
 }

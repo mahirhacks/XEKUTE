@@ -63,7 +63,7 @@ test("a checklist permits at most one in-progress item and switches it atomicall
   assert.equal(rejectedUpdate.ok, false);
   assert.deepEqual(initial, saved, "an invalid handoff preserves all saved progress");
 
-  for (const previousStatus of ["completed", "pending", "blocked"]) {
+  for (const previousStatus of ["completed", "blocked"]) {
     const updated = SkillRouter.applyChecklistOperation(initial, { action: "update", items: [
       { id: "two", status: "in_progress" },
       { id: "one", status: previousStatus },
@@ -77,6 +77,23 @@ test("a checklist permits at most one in-progress item and switches it atomicall
   assert.equal(SkillRouter.applyChecklistOperation(initial, { action: "update", items: [item("three", { status: "in_progress" })] }).ok, false);
   const repaired = SkillRouter.applyChecklistOperation({ main_goal: bothActive.main_goal, items: bothActive.items }, { action: "update", items: [{ id: "two", status: "pending" }] });
   assert.equal(repaired.ok, true, "previously saved overlapping statuses can be repaired without replacing the checklist");
+});
+
+test("checklists reject skipping unfinished items and preserve saved progress during repair", () => {
+  const skipped = create([item("one"), item("two", { status: "in_progress" })]);
+  assert.equal(SkillRouter.applyChecklistOperation(null, skipped).ok, false);
+  const initial = SkillRouter.applyChecklistOperation(null, create([item("one", { status: "in_progress" }), item("two"), item("three")])).value;
+  for (const items of [
+    [{ id: "one", status: "pending" }, { id: "two", status: "in_progress" }],
+    [{ id: "one", status: "completed" }, { id: "three", status: "in_progress" }],
+    [{ id: "two", status: "completed" }],
+    [{ id: "one", status: "completed" }, { id: "two", status: "completed" }],
+  ]) assert.equal(SkillRouter.applyChecklistOperation(initial, { action: "update", items }).ok, false);
+  assert.deepEqual(initial.items.map(item => item.status), ["in_progress", "pending", "pending"]);
+  const legacy = { ...initial, items: [item("one"), item("two", { status: "completed" }), item("three", { status: "in_progress" })] };
+  const repaired = SkillRouter.applyChecklistOperation(legacy, { action: "update", items: [{ id: "one", status: "in_progress" }, { id: "three", status: "pending" }] });
+  assert.equal(repaired.ok, true);
+  assert.deepEqual(repaired.value.items.map(item => item.status), ["in_progress", "completed", "pending"]);
 });
 
 test("model and widget views expose only their permitted checklist fields", () => {
