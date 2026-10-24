@@ -1,10 +1,8 @@
 "use strict";
 
-const fs = require("node:fs");
-const path = require("node:path");
-
 // Read counters and buffered paint timings through the running development inspector.
 // This never reloads the window, writes session state, or starts an agent.
+// Print JSON to stdout; redirect it explicitly when a saved report is needed.
 async function inspectMain({ profileStore = false } = {}) {
   const mainRequire = process.mainModule.require.bind(process.mainModule);
   const { app, webContents } = mainRequire("electron");
@@ -65,9 +63,6 @@ async function auditLiveStartup() {
     const result = await response;
     if (result.error || result.result.exceptionDetails) throw new Error(JSON.stringify(result.error || result.result.exceptionDetails));
     const report = result.result.result.value;
-    const output = path.resolve(process.argv[2] || "tmp/live-startup-audit.json");
-    fs.mkdirSync(path.dirname(output), { recursive: true });
-    fs.writeFileSync(output, JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
   } finally { socket.close(); }
 }

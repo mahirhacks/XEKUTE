@@ -67,7 +67,7 @@ test("loop destinations still enforce exclusions and unrelated-host denials", as
       resolveAddresses: async target => { resolved.push(target); return { ok: true, addresses: ["93.184.216.34"] }; },
     });
     assert.equal(result.code, "TARGET_OUT_OF_SCOPE");
-    assert.match(result.reason, new RegExp(deniedHost.replaceAll(".", "\\.")));
+    assert.ok(result.reason.includes(deniedHost), result.reason);
     assert.deepEqual(resolved, []);
   }
 });
