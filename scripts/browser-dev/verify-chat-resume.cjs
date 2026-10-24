@@ -114,7 +114,10 @@ async function verifyChatResume() {
     assert.equal(await page.locator('#messages .agent-status-line[data-state="resuming"]:visible').count(), 0);
     await emit(1, { type: "task_list", source: "agent", tasks });
     await page.locator("#composer-task-list").waitFor({ state: "visible" });
-    assert.equal(await page.locator(".composer-task-list-row:visible .composer-task-list-count").textContent(), "2/3");
+    const resumedChecklistItem = page.locator(".composer-task-list-row:visible");
+    assert.equal(await resumedChecklistItem.locator(".composer-task-list-position").textContent(), "2 of 3");
+    assert.equal(await resumedChecklistItem.locator(".composer-task-list-title").textContent(), tasks[1].title);
+    assert.equal(await resumedChecklistItem.getAttribute("data-task-status"), "in_progress");
     await emit(1, { type: "content", delta: "Resumed verification finished." });
     await app.evaluate(() => globalThis.resumeFixture.active.resolve({ ok: true, runState: { status: "completed" } }));
     await page.waitForFunction(() => document.querySelector("#send-btn").disabled);
