@@ -119,12 +119,21 @@ function entryValue(entry) {
   return entry?.value || entry?.url || entry?.host || entry?.hostname || entry?.pattern || "";
 }
 
+function policyFromProjectScope(scope = {}) {
+  const entries = value => Array.isArray(value) ? value.filter(Boolean) : [];
+  return {
+    targets: entries(scope?.inScopeTargets),
+    wildcardRules: entries(scope?.wildcardRules),
+    excludedTargets: [...entries(scope?.outOfScopeTargets), ...entries(scope?.exclusions)],
+  };
+}
+
 function matchesEntry(target, entry, { wildcard = false } = {}) {
   const raw = String(entryValue(entry) || "").trim();
   if (!raw || entry?.inScope === false || entry?.enabled === false) return false;
   if (raw.includes("/") && !raw.includes("://") && cidrContains(raw, target.hostname)) return true;
-  const isWildcard = wildcard || raw.startsWith("*.");
-  const normalizedRaw = raw.replace(/^\*\./, "");
+  const normalizedRaw = raw.replace(/^([a-z][a-z0-9+.-]*:\/\/)?\*\./i, "$1");
+  const isWildcard = wildcard || normalizedRaw !== raw;
   const configured = canonicalTarget(normalizedRaw);
   if (!configured) return false;
   const hostMatches = isWildcard
@@ -133,8 +142,10 @@ function matchesEntry(target, entry, { wildcard = false } = {}) {
   if (!hostMatches) return false;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalizedRaw)) {
     if (target.scheme !== configured.scheme || target.port !== configured.port) return false;
-    if (configured.path !== "/" && !(target.path === configured.path || target.path.startsWith(`${configured.path.replace(/\/$/, "")}/`))) return false;
   }
+  const authority = normalizedRaw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/, 1)[0];
+  if (/:\d+$/.test(authority) && target.port !== configured.port) return false;
+  if (!["/", "/*"].includes(configured.path) && !(target.path === configured.path || target.path.startsWith(`${configured.path.replace(/\/$/, "")}/`))) return false;
   const configuredPorts = Array.isArray(entry?.ports) ? entry.ports.map(Number) : [];
   if (configuredPorts.length && !configuredPorts.includes(target.port)) return false;
   return true;
@@ -188,4 +199,4 @@ function testingWindowAllows(windows, { now = new Date(), timeZone = "UTC" } = {
   return { allowed: false, code: "OUTSIDE_TESTING_WINDOW", reason: `Current time is outside all approved testing windows (${timeZone}).` };
 }
 
-module.exports = { defaultResolver, normalizeHostname, canonicalTarget, cidrContains, isPrivateOrReservedIp, resolveTargetAddresses, compareResolution, evaluateTarget, extractCommandTargets, testingWindowAllows };
+module.exports = { defaultResolver, normalizeHostname, canonicalTarget, cidrContains, isPrivateOrReservedIp, resolveTargetAddresses, compareResolution, policyFromProjectScope, evaluateTarget, extractCommandTargets, testingWindowAllows };

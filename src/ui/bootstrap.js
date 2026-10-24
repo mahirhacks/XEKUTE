@@ -10,7 +10,7 @@ import { createLiveInputController, bindLiveInputComposer } from "./features/cha
 import { appState } from "./core/app-state.js";
 import {
   $, btnNewFile, btnNewFolder, explorerRootToggle, btnOpenFolder, fileTree, activityExplorer,
-  activitySearch, activityRun, activityBugBounty, activitySecurity, activityTerminal,
+  activityRun, activitySecurity, activityTerminal,
   activityChat, activitySettings, btnSidebarMore, btnCreateProjectHeader, btnCreateProjectSidebar,
   btnOpenProjectSidebar, bugBountyTree, btnBugBountyMore, btnCreateProject, btnCreateAssessment,
   btnOpenAssessment, bugBountyRepair, assessmentRepairOverlay, assessmentRepairClose,
@@ -39,7 +39,7 @@ import {
   guidanceEmptyNew, guidanceImport, llmProvider, openRouterBaseUrl, openRouterApiKey,
   llmSettingsTest, llmSettingsStatus, llmOpenRouterKeyToggle, llmOpenRouterBaseToggle,
   llmOllamaEnableToggle, llmOllamaEndpointToggle, modelsSettingsSearch, modelsSettingsRefresh,
-  modelsViewAllBtn, modelsExploreSubagent, ollamaHostInput, ollamaHostTest, ollamaHostReset,
+  modelsViewAllBtn, modelsExploreSubagent, decisionModelSelect, ollamaHostInput, ollamaHostTest, ollamaHostReset,
   certificateBrowse, certificateOpenFolder, certificateReset, identityRefresh, identityCreate,
   identityList, identityImport, projectAuthSource, credentialCreate, credentialList,
   engagementAccountList, engagementAccountAdd, appSettingsSectionButtons, checklistSearch,
@@ -1156,18 +1156,7 @@ btnSidebarMore?.addEventListener("click", () => openQuickPalette("command"));
 activityExplorer?.addEventListener("click", () => {
   activateSidebarView("explorer");
 });
-activitySearch?.addEventListener("click", () => openQuickPalette("search"));
 activityRun?.addEventListener("click", () => runActiveCode());
-  activityBugBounty?.addEventListener("click", () => {
-    // The Project activity icon owns only the file-tree pane. It must never
-    // replace the active editor, special tab, or chat workspace.
-    if (appState.sidebarCollapsed) {
-      setSidebarView("project");
-      setSidebarCollapsed(false);
-      return;
-    }
-    setSidebarCollapsed(true);
-  });
 activitySecurity?.addEventListener("click", () => showSecurityWorkspace());
 activityTerminal?.addEventListener("click", () => {
   setTerminalCollapsed(!appState.terminalCollapsed);
@@ -1575,6 +1564,7 @@ llmOllamaEndpointToggle?.addEventListener("change", () => {
   queueLlmSettingsAutosave(0);
 });
 openRouterApiKey?.addEventListener("change", () => queueLlmSettingsAutosave(0));
+decisionModelSelect?.addEventListener("change", () => queueLlmSettingsAutosave(0));
 openRouterBaseUrl?.addEventListener("input", () => queueLlmSettingsAutosave());
 ollamaHostInput?.addEventListener("input", () => queueLlmSettingsAutosave());
 modelsSettingsSearch?.addEventListener("input", () => {
@@ -2195,6 +2185,7 @@ window.api.onWorkspaceChanged?.((payload) => {
 });
 
 window.addEventListener("resize", () => {
+  closeProxyBrowserMenu();
   // The React layout fits panels with CSS; writing the shrunk width back here
   // would lose the chosen chat width after any small window or zoom level.
   syncChatResizeLimit({ clamp: !globalThis.__XEKUTE_REACT_LAYOUT__ });
@@ -2458,12 +2449,18 @@ btnWindowMinimize?.addEventListener("click", () => {
   window.api.windowMinimize?.();
 });
 
-btnWindowMaximize?.addEventListener("click", async () => {
-  const maximized = await window.api.windowToggleMaximize?.();
-  const icon = btnWindowMaximize.querySelector(".codicon");
+function syncWindowMaximized(maximized) {
+  const icon = btnWindowMaximize?.querySelector(".codicon");
   icon?.classList.toggle("codicon-chrome-maximize", !maximized);
   icon?.classList.toggle("codicon-chrome-restore", Boolean(maximized));
-  btnWindowMaximize.title = maximized ? "Restore" : "Maximize";
+  if (btnWindowMaximize) {
+    btnWindowMaximize.title = maximized ? "Restore" : "Maximize";
+    btnWindowMaximize.setAttribute("aria-label", btnWindowMaximize.title);
+  }
+}
+appLifecycle.add(window.api.onWindowMaximized?.(syncWindowMaximized));
+btnWindowMaximize?.addEventListener("click", () => {
+  window.api.windowToggleMaximize?.();
 });
 
 btnWindowClose?.addEventListener("click", () => {

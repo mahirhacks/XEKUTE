@@ -112,6 +112,35 @@ test("block-cached rendering matches a whole-document parse and sanitize for eve
   const options = { ADD_TAGS: ["button"], ADD_ATTR: ["class", "data-code", "data-mermaid-source", "title", "type"] };
   for (let end = 1; end <= doc.length; end += 1) {
     const md = doc.slice(0, end);
-    assert.equal(renderer.render(md), window.DOMPurify.sanitize(window.marked.parse(md), options), md);
+    assert.equal(renderer.render(md, { streaming: true }), window.DOMPurify.sanitize(window.marked.parse(md), options), md);
+  }
+});
+
+test("restored replies sanitize the complete document once and retain safe formatting", () => {
+  const { renderer, reply, window } = setup();
+  const sanitize = window.DOMPurify.sanitize.bind(window.DOMPurify);
+  let calls = 0;
+  window.DOMPurify.sanitize = (...args) => { calls++; return sanitize(...args); };
+  renderer.renderToElement(reply, '# Saved reply\n\nFirst **paragraph**.\n\nSecond [reference][r].\n\n[r]: https://example.com\n\n<script>alert(1)</script><img src=x onerror=alert(1)>\n\n[bad](javascript:alert(1))');
+  assert.equal(reply.querySelector("h1").textContent, "Saved reply");
+  assert.equal(reply.querySelector("strong").textContent, "paragraph");
+  assert.equal(reply.querySelector("a").getAttribute("href"), "https://example.com");
+  assert.equal(reply.querySelector("script, [onerror], [href^='javascript:']"), null);
+  assert.equal(calls, 1, "restoration does not start a separate sanitizer for every paragraph");
+});
+
+test("hostile HTML and encoded script links stay inert during streaming and final rendering", () => {
+  const { renderer, reply } = setup();
+  const payloads = [
+    '<svg><a href="javascript:alert(1)"><text>click</text></a><animate onbegin="alert(1)" /></svg>',
+    '<img src="missing" onerror="alert(1)"><iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    '<a href="jav&#x61;script:alert(1)">encoded link</a><math><mtext><img src=x onerror=alert(1)></mtext></math>',
+    '<form><input name="__proto__"><input name="constructor"></form><object data="javascript:alert(1)"></object>',
+  ];
+  for (const payload of payloads) {
+    for (const streaming of [true, false]) {
+      reply.innerHTML = renderer.render(payload, { streaming });
+      assert.equal(reply.querySelector("script, iframe, object, embed, [onerror], [onload], [onbegin], [href^='javascript:'], [srcdoc]"), null, payload);
+    }
   }
 });

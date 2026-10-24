@@ -1,9 +1,9 @@
 import { appState } from "../../core/app-state.js";
 import {
-  activitySecurity, activitySettings, editorTabBar, editorBody, editorPane, resourceViewer,
+  activitySecurity, btnTopSettings, securityProxyBrowser, editorTabBar, editorBody, editorPane, resourceViewer,
   appSettingsWorkspace, assessmentModuleView, securityWorkspace, webcloneWorkspace,
   resourceViewerContent, securityRequestEditor, sidebar, sidebarResize, activityExplorer,
-  activityBugBounty, btnTopFileTree, btnSidebarMore, sidebarViewTitle, explorerSidebarView,
+  btnTopFileTree, btnSidebarMore, sidebarViewTitle, explorerSidebarView,
   bugBountySidebarView,
 } from "../../core/dom-refs.js";
 import { EditorManager, TerminalManager } from "../../core/runtime-globals.js";
@@ -21,12 +21,11 @@ export const BROWSER_TAB_PATH = "xekute:browser";
 export const SIDEBAR_VIEW_KEY = "pointer:sidebarView";
 
 export function syncWorkspaceActivity() {
-  const securityActive = appState.currentWorkspaceMode === "security";
-  const settingsActive = appState.currentWorkspaceMode === "settings";
-  activitySecurity?.classList.toggle("active", securityActive);
-  activitySecurity?.setAttribute("aria-pressed", String(securityActive));
-  activitySettings?.classList.toggle("active", settingsActive);
-  activitySettings?.setAttribute("aria-pressed", String(settingsActive));
+  for (const [button, mode] of [[activitySecurity, "security"], [btnTopSettings, "settings"], [securityProxyBrowser, "browser"]]) {
+    const active = appState.currentWorkspaceMode === mode;
+    button?.classList.toggle("active", active);
+    button?.setAttribute("aria-pressed", String(active));
+  }
   syncSidebarActivity();
 }
 
@@ -114,8 +113,6 @@ export function syncSidebarActivity() {
   btnTopFileTree?.setAttribute("aria-pressed", String(projectActive));
   activityExplorer?.classList.toggle("active", projectActive);
   activityExplorer?.setAttribute("aria-pressed", String(projectActive));
-  activityBugBounty?.classList.toggle("active", projectActive);
-  activityBugBounty?.setAttribute("aria-pressed", String(projectActive));
 }
 
 export function setSidebarView(view, { persist = true } = {}) {

@@ -16,6 +16,7 @@ import {
 } from "./command-timeline.js";
 import { createToolCard, setToolCardStatus } from "./tool-cards.js";
 import { toolActionName } from "./tool-labels.js";
+import { createSkillLoadRow } from "./skill-activity.js";
 import { renderMarkdown, attachAssistantCopyButton, syncChatStickyMask } from "./chat-messages.js";
 import { syncChatEmptyState, activeChatSession } from "./chat-sessions.js";
 import {
@@ -27,6 +28,7 @@ import {
 import { formatAgentWorkDuration } from "../../core/text-format.js";
 import { keepableToolCardLabel } from "./chat-persistence.js";
 import { createQuestionAnswerCard, questionAnswerFromEvent } from "./question-answers.js";
+import { createContextReleaseNotice } from "./context-usage.js";
 
 export function renderCanonicalChatHistory(history = []) {
   const fragment = document.createDocumentFragment();
@@ -120,7 +122,8 @@ export function applyThinkingRecord(fold, item = {}) {
   const text = String(item.text || "").trim();
   if (content && text) {
     content.hidden = false;
-    renderMarkdown(content, text);
+    content.textContent = "Reasoning completed privately. Raw chain-of-thought and system instructions were not displayed.";
+    content.removeAttribute("data-raw-md");
     content.classList.remove("streaming");
   }
   setThinkingFoldLabel(fold, { live: false, endedAt, durationMs });
@@ -245,6 +248,16 @@ export function createFileStackFromRecord(event = {}) {
 
 export function appendTranscriptEvent(host, event) {
   if (!host || !event) return;
+  if (event.type === "skills_loaded") {
+    const row = createSkillLoadRow(event.skills);
+    if (row) host.appendChild(row);
+    return;
+  }
+  if (event.type === "context_release") {
+    const notice = createContextReleaseNotice(event.count, event.tokens_freed);
+    if (notice) host.appendChild(notice);
+    return;
+  }
   if (event.type === "chat") {
     const reply = createTranscriptChatReply(event);
     if (!reply.hidden) host.appendChild(reply);
@@ -385,7 +398,7 @@ export function renderTranscriptRun(run, container) {
       if (answer) answer.dataset.workVerdict = "true";
     }
     if (String(run.status || "") === "stopped") appendStoppedPlainText(turn);
-    if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event, .subagent-run-card, .agent-question-answer")) return null;
+    if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event, .subagent-run-card, .agent-question-answer, [data-context-release]")) return null;
     appendChatTurn(turn, { container });
     wrapAssistantInRunChunk(turn);
     return turn;
@@ -466,7 +479,7 @@ export function renderTranscriptRun(run, container) {
     if (answer) answer.dataset.workVerdict = "true";
   }
   if (String(run.status || "") === "stopped") appendStoppedPlainText(turn);
-  if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event, .subagent-run-card, .agent-question-answer")) return;
+  if (!turn.querySelector(".assistant-reply, .agent-work-header, .agent-thinking-fold, .agent-file-stack, .agent-file-row, .tool-card, .agent-command-event, .subagent-run-card, .agent-question-answer, [data-context-release]")) return;
   appendChatTurn(turn, { container });
   wrapAssistantInRunChunk(turn);
 }

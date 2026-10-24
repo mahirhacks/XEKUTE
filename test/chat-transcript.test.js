@@ -8,6 +8,28 @@ async function load() {
   return import("../src/ui/features/chat/chat-transcript.js");
 }
 
+test("block-release notices survive transcript capture and replay", async () => {
+  const { captureChatTranscript, normalizeUiTranscript } = await load();
+  const { rendererDefinitions } = require("./helpers/renderer-source.js");
+  const vm = require("node:vm");
+  const dom = new JSDOM(`<div id="messages"><div class="chat-exchange"><div class="chat-exchange-body">
+    <div class="chat-turn user"><div class="chat-box-content">Continue reviewing</div></div>
+    <div class="agent-response-host"><div class="chat-turn assistant"><div class="agent-work-fold"><div class="agent-work-fold-body">
+      <div class="context-checkpoint-notice" data-context-release="true" data-release-count="2" data-tokens-freed="41000"><span class="context-checkpoint-text">Released 2 earlier turns from context</span></div>
+    </div></div></div></div>
+  </div></div></div>`);
+  try {
+    const restored = normalizeUiTranscript(captureChatTranscript(dom.window.document.querySelector("#messages")));
+    assert.deepEqual(restored.runs[0].events, [{ type: "context_release", lane: "activity", count: 2, tokens_freed: 41000 }]);
+    const context = { document: dom.window.document, formatTokenCount: value => String(value) };
+    vm.runInNewContext(rendererDefinitions("createContextReleaseNotice", "appendTranscriptEvent"), context);
+    const host = dom.window.document.createElement("div");
+    context.appendTranscriptEvent(host, restored.runs[0].events[0]);
+    assert.equal(host.querySelector("[data-context-release]").dataset.releaseCount, "2");
+    assert.equal(host.textContent, "Released 2 earlier turns from context · 41000 freed");
+  } finally { dom.window.close(); }
+});
+
 test("independent waiting cards preserve their task ownership after reload", async () => {
   const { normalizeUiTranscript } = await load();
   const restored = normalizeUiTranscript({ version: 2, runs: [{ user: { message: "Build a page" }, events: [{ type: "subagent", child_session_id: "child", independent: true, task_id: "task:page", status: "waiting" }] }] });

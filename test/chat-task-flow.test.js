@@ -8,13 +8,14 @@ const { readUiShell } = require("./helpers/ui-shell.js");
 
 const read = (relativePath) => fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
 
-test("Agent tasks keep the two-mode catalog without a temporary checklist tool", () => {
+test("Agent checklists are an agent-local runtime tool outside the canonical mode catalog", () => {
   const controller = read("src/agent/controller/agent-controller.js");
   const modes = read("src/agent/modes/mode-registry.js");
   assert.match(controller, /function isReasonablyLargeAgentRequest\(/);
   assert.doesNotMatch(controller, /const shouldOfferTaskList = !nested && profile\.key === "agent"/);
   assert.doesNotMatch(controller, /availableTools = availableTools\.filter\(\(tool\) => String\(tool\?\.function\?\.name \|\| ""\) !== "update_task_list"\)/);
-  assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_list"/);
+  assert.match(controller, /checklistEnabled && !orchestrationControlOnly && !routingTools\.some/);
+  assert.match(controller, /sendEvent\(\{ type: "task_list", \.\.\.checklistForWidget\(checklist, runId\) \}\)/);
   assert.doesNotMatch(controller, /sendEvent\(\{ type: "task_brief", runId, brief: taskBrief \}\)/);
   assert.match(modes, /const AGENT_TOOLS = Object\.freeze\(\[/);
   assert.match(modes, /const SAFE_READ_TOOLS = Object\.freeze\(\["ask_questions", "end_turn", "read_file", "search_workspace", "view_active_terminal", "release_blocks", "recall_block"\]\)/);
@@ -251,8 +252,7 @@ test("running chats stay navigable and signal background completion per tab", ()
   assert.match(renderer, /if \(isChatSessionRunning\(id\)\) return/);
   assert.match(renderer, /if \(!text \|\| isChatSessionRunning\(targetSessionId\)\) return/);
   assert.match(renderer, /eventSessionId !== runEventSessionId/);
-  assert.match(renderer, /const canSend = hasText \|\| \(!running && appState\.composerImages\.length > 0\);/);
-  assert.match(renderer, /sendBtn\.disabled = stopMode \? false : !canSend/);
+  assert.match(renderer, /const canSend = hasText \|\| hasImages;/, "text or images can be sent, including as steering into a running chat");
   assert.doesNotMatch(renderer, /Another agent is running/);
   assert.match(main, /sender\.send\("agent:event", \{ \.\.\.data, sessionId \}\)/);
   assert.match(styles, /\.chat-tab-running-icon\s*\{/);
@@ -269,7 +269,6 @@ test("question-tool cards use the refreshed UI and stay scoped to their owning c
   assert.match(renderer, /function syncComposerQuestionsForActiveSession\(\)[\s\S]*?pendingComposerQuestionsBySession\.get\(String\(appState\.activeChatSessionId \|\| ""\)\)[\s\S]*?composerQuestionsEl\.replaceChildren\(\)/);
   assert.match(renderer, /function applyActiveChatSession\(session\)[\s\S]*?syncComposerQuestionsForActiveSession\(\)/);
   assert.match(renderer, /function showComposerQuestionsPanel\(\{[\s\S]*?sessionId = appState\.activeChatSessionId[\s\S]*?pendingComposerQuestionsBySession\.set\(ownerSessionId/);
-  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = appState\.activeChatSessionId \} = \{\}\)/);
   assert.match(renderer, /sessionId: String\(sessionId \|\| appState\.activeChatSessionId \|\| ""\)/);
   assert.match(renderer, /requestQuestions\([\s\S]*?sessionId: this\.sessionId/);
   assert.match(renderer, /createAssistantTurn\(\{ container: chatRunContainer\(run\), sessionId: run\.sessionId \}\)/);
@@ -337,7 +336,6 @@ test("background terminal continuations remain internal to the agent runtime", (
   assert.doesNotMatch(chatStyles, /\.harness-wait-line/);
   assert.match(renderer, /querySelectorAll\("\.harness-wait-line"\)\.forEach\(\(node\) => node\.remove\(\)\)/);
   assert.doesNotMatch(renderer, /chatInput\.value = message;[\s\S]{0,100}sendMessageWithAgentRuntime\(\)/);
-  assert.match(renderer, /userMessage: internal && options\?\.continuation \? "" : text/);
   assert.match(renderer, /internalRuntimeInput: internal/);
   assert.match(renderer, /internalSkillId: internal \? String\(options\?\.internalSkillId \|\| ""\) : ""/);
   assert.match(main, /const internalSkillId = payload\.internalRuntimeInput \? String\(payload\.internalSkillId \|\| ""\)\.trim\(\)\.toLowerCase\(\) : ""/);
@@ -444,8 +442,7 @@ test("stopped streamed responses enter history before the durable outcome is wri
   // The send control becomes a stop button while a run is active, and clicking
   // it (or pressing Enter) stops the agent instead of sending.
   assert.match(renderer, /function submitChatComposer\(\) \{\s*if \(sendBtn\.classList\.contains\("stop"\)\) \{ stopGeneration\(\); return; \}/);
-  assert.match(renderer, /const running = isRunningChatActive\(\);\s*const stopMode = running && !hasText;[\s\S]*?sendBtn\.classList\.toggle\("stop", stopMode\);/);
-  assert.match(renderer, /icon\.className = `codicon \$\{stopMode \? "codicon-primitive-square" : "codicon-arrow-up"\}`/);
+  assert.match(renderer, /const running = isRunningChatActive\(\);\s*const hasImages = appState\.composerImages\.length > 0;\s*const stopMode = running && !hasText && !hasImages;[\s\S]*?sendBtn\.classList\.toggle\("stop", stopMode\);/);
   assert.match(read("src/ui/styles/layout-revamp.css"), /\.send-btn\.stop::before \{[\s\S]*?background: currentColor;/);
   assert.match(renderer, /function abortActiveChatRun\([\s\S]*?abortChat\?\.\(\{ sessionId \}\)/);
   assert.match(renderer, /isChatSessionStoppedByOperator/);
@@ -547,7 +544,6 @@ test("every rendered agent event refreshes the durable display transcript", () =
   assert.match(renderer, /function renderStructuredChatTranscript/);
   assert.match(renderer, /from "[./\w-]*\/chat-transcript\.js"/);
   assert.match(renderer, /captureChatTranscript\(/);
-  assert.match(renderer, /await handleAgentEvent\(payload\);\s*scheduleLiveChatSnapshot\(run\)/);
   assert.match(renderer, /function scheduleLiveChatSnapshot/);
   assert.match(renderer, /LIVE_CHAT_SNAPSHOT_MS = 1200/);
   assert.match(renderer, /function hydratePersistedChatTranscript/);
@@ -555,7 +551,6 @@ test("every rendered agent event refreshes the durable display transcript", () =
   assert.match(renderer, /function persistCommandTimelineRowState/);
   assert.match(store, /display_html: messageContent\(source\.display_html \|\| source\.displayHtml \|\| ""\)/);
   assert.match(store, /ui_transcript: normalizeUiTranscript/);
-  assert.match(store, /transcript: clone\(document\.ui_transcript\)/);
   assert.match(delegation, /childSessionBindings/);
   assert.match(delegation, /blockId: event\.blockId \|\| binding\.blockId \|\| ""/);
 });

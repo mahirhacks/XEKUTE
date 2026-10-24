@@ -84,6 +84,7 @@ app.whenReady().then(async () => {
       renderBrowserPointer: require("../../src/app/services/browser/native-browser-visual.js").renderBrowserPointer,
       createNativeBrowserProvider: require("../../src/app/services/browser/native-browser-provider.js").createNativeBrowserProvider,
       createBrowserActionTool: require("../../src/agent/tools/assessment/browser-action.js").createBrowserActionTool,
+      startResponsivenessFixture: require("./responsiveness-fixture.cjs").startResponsivenessFixture,
       ...require("./agent-loop-fixture.cjs"),
       ...require("../../src/contracts/tool/execution-context.js") },
     get browser() { return browser; }, window, vault, proxy, tabStore, artifactStore, fixtures, tls, captures, events, projectA, projectB, initial, configureProxy, createService,

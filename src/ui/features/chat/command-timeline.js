@@ -1,6 +1,7 @@
 import { ToolMap } from "../../bootstrap.js";
 import { toolCardKey, renderToolStatusLabel } from "./tool-labels.js";
-import { activeChatRuns, settleVisibleParentRun, syncChatRunSession } from "./chat-run-state.js";
+import { activeChatRuns, settleVisibleParentRun } from "./chat-run-state.js";
+import { scheduleLiveChatSnapshot } from "./chat-persistence.js";
 import { appState } from "../../core/app-state.js";
 import { syncActiveChatSession } from "./chat-sessions.js";
 
@@ -231,7 +232,7 @@ export function persistCommandTimelineRowState(row) {
     const sessionId = String(row.dataset.sessionId || "");
     const run = sessionId ? activeChatRuns.get(sessionId) : null;
     if (run) {
-      syncChatRunSession(run);
+      scheduleLiveChatSnapshot(run);
       return;
     }
     if (!sessionId || sessionId === appState.activeChatSessionId) syncActiveChatSession();

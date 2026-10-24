@@ -2,13 +2,41 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { sessionFixture } = require("./helpers/agent-session-store.js");
-const { createAgentRunHandlerFixture, deferred, tick } = require("./helpers/agent-run-handler.js");
+const { createAgentRunHandlerFixture, deferred, tick, queueChildResult } = require("./helpers/agent-run-handler.js");
 const { createRuntimeDelegationProvider } = require("../src/agent/runtime/delegation-provider.js");
 const { createDelegatedChildStore } = require("../src/agent/runtime/delegated-child-store.js");
 const { createAgentSessionRuntime } = require("../src/agent/runtime/agent-session-runtime.js");
 const { runAgentTurn } = require("../src/agent/controller/agent-controller.js");
 const { createTask, acceptRoutes, receiveInput } = require("../src/agent/runtime/session-input.js");
 const end = (id) => ({ id, type: "function", function: { name: "end_turn", arguments: { status: "stop" } } });
+
+test("a scheduled child-result continuation executes multiple rounds and completes its saved task", async t => {
+  const storage = sessionFixture(t), main = createAgentRunHandlerFixture();
+  t.after(() => main.coordinator.shutdown());
+  main.context.container.v3SessionStore = storage.store;
+  const runtime = main.installSessionRuntime();
+  const finishes = [];
+  main.context.container.longHorizonRunStore.finish = async (_workspace, _runId, status) => { finishes.push(status); };
+  main.context.runAgentTurn = async () => ({ ok: true, orchestrationHold: true, runState: { status: "running" }, appendedMessages: [] });
+  const payload = { workspace: storage.root, sessionId: "parent", userMessage: "Read the notes after the child finishes", model: "execution", numCtx: 16384 };
+  const initial = await main.invoke(payload);
+  assert.deepEqual(finishes, [], "a parked task must not be written as a finished run");
+  const resultId = await queueChildResult(main);
+  main.context.runAgentTurn = runAgentTurn;
+  main.context.toolCatalogFromRegistry = () => ({ mode: "native", tools: [{ type: "function", function: { name: "read_file", description: "Read notes", parameters: { type: "object" } } }] });
+  main.context.parentContinuationInFlight = () => true;
+  main.context.parentRunDescriptors.get("session:parent").scheduled = true;
+  let rounds = 0;
+  main.context.runOllamaAgentRound = async () => ++rounds === 1
+    ? { ok: true, fullText: "Checking the notes.", toolCalls: [{ id: "read-notes", type: "function", function: { name: "read_file", arguments: { path: "notes.md" } } }] }
+    : { ok: true, fullText: "Finished checking the notes.", toolCalls: [end("finished")] };
+  const result = await main.invoke({ ...payload, runId: initial.runId, taskId: initial.taskId, continuation: { resultId } }, { automaticContinuation: true });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(rounds, 2);
+  assert.equal(result.runState.status, "completed");
+  assert.deepEqual(finishes, ["completed"]);
+  assert.equal(runtime.supervisor.taskSnapshot({ workspace: storage.root, sessionId: initial.memorySessionId, taskId: initial.taskId }).task.status, "completed");
+});
 async function until(predicate) { for (let attempt = 0; attempt < 500; attempt++) { const value = predicate(); if (value) return value; await tick(); } throw new Error("Lifecycle did not reach the expected checkpoint"); }
 
 for (const terminalPriorTask of [false, true]) test(`cold unread receipt starts execution after crash, prior task completed=${terminalPriorTask}`, async (t) => {
@@ -92,10 +120,9 @@ test("production delegation persists child steering and atomically acknowledges 
   const packetId = await until(() => main.coordinator.snapshot("session:parent").resultQueue[0]);
   await until(() => runtime.supervisor.taskSnapshot({ ...location, taskId: child.id }).task.status === "completed");
   const finished = await main.invoke({ ...payload, runId: original.runId, taskId: original.taskId, continuation: { resultId: packetId } }, { automaticContinuation: true });
-  assert.equal(finished.ok, true, finished.error); assert.equal(finished.reason, "ORCHESTRATION_HOLD");
-  const released = await main.invoke({ ...payload, runId: original.runId, taskId: original.taskId }, { releasePendingEndTurn: true });
-  assert.equal(released.ok, true, released.error); assert.equal(released.runState.status, "completed");
-  assert.equal(released.finalText, "Inspection in Arial");
+  assert.equal(finished.ok, true, finished.error);
+  assert.equal(finished.runState.status, "completed");
+  assert.equal(finished.finalText, "Inspection in Arial");
   const cold = storage.open().supervisor.snapshot(location).control;
   assert.equal(cold.tasks.find((task) => task.id === child.id).appliedRevision, 1);
   assert.deepEqual(cold.orchestrationWave.value.resultQueue, []);

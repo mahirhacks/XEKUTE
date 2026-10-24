@@ -95,6 +95,8 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
+# Standalone router demo, kept local until integration
+/tmp/router-demo/
 /tmp/
 /version_tracking/
 temp_test

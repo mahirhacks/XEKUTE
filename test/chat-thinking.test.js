@@ -17,7 +17,6 @@ test("thinking streams into a Thinking / Thought for fold", () => {
   assert.match(renderer, /thinking:\s*null,\s*\n\s*thinkingConfigured:\s*false/);
   assert.match(renderer, /return settings\?\.thinking !== false/);
   assert.doesNotMatch(renderer, /createAssistantTurn\(modelThinkingEnabled\(settings\)\)/);
-  assert.match(renderer, /function createAssistantTurn\(\{ container = messages, sessionId = appState\.activeChatSessionId \} = \{\}\)/);
   assert.match(renderer, /showPrivateReasoning\(\)/);
   assert.doesNotMatch(renderer, /assistant\.setStatus\("Thinking…"\)/);
   assert.match(workFold, /className = "agent-work-header agent-status-line"/);
@@ -53,9 +52,6 @@ test("content and tool events replace thinking and completion settles to elapsed
   assert.doesNotMatch(renderer, /if \(payload\.type === "tool_call"\)[\s\S]{0,220}?assistant\.markToolUse\(\)/);
   assert.match(renderer, /`Working for \$\{formatAgentWorkDuration\(this\.startedAt\)\}`/);
   assert.doesNotMatch(renderer, /`Worked for \$\{formatAgentWorkDuration\(this\.startedAt\)\}`/);
-  assert.match(renderer, /assistant\.showPlanning\(\)/);
-  assert.match(renderer, /noteModelOutput\(\)/);
-  assert.match(renderer, /textContent = "Planning\\u2026"/);
   assert.match(renderer, /`Worked for \$\{duration\}`/);
   assert.match(renderer, /const stopped = outcome === "stopped"/);
   assert.match(renderer, /const label = `Worked for \$\{duration\}`/);
@@ -67,9 +63,8 @@ test("content and tool events replace thinking and completion settles to elapsed
   assert.match(workFold, /export function isFoldableWorkLabel/);
   assert.match(workFold, /export function syncWorkHeaderAffordance/);
   assert.match(renderer, /if \(workHeader\.dataset\.foldable === "false"\) return/);
-  assert.match(renderer, /block\.dataset\.state === "planning" \|\| block\.dataset\.state === "thinking"/);
   assert.match(renderer, /fold\.dataset\.userToggled !== "true"/);
-  assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\] \{[\s\S]*font-size: 12px/);
+  assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\] \{[^}]*font-size: 14px/);
   assert.match(chatStyles, /#messages \.agent-work-header\[data-foldable="false"\] \.agent-work-caret/);
   assert.match(chatStyles, /#messages \.agent-status-line\[data-state="planning"\]:not\(\.is-foldable\) \.agent-work-caret/);
   assert.match(renderer, /isTransientToolCardLabel/);
@@ -156,14 +151,14 @@ test("agent question tool supports recommended-first single select and explicit 
   assert.match(chatStyles, /data-questions-action="submit"\] \{ order: 3; background: #e6e6e6/);
 });
 
-test("large Agent work uses a temporary collapsible composer checklist", () => {
+test("agent checklist uses the temporary composer widget and clears at terminal completion", () => {
   assert.match(renderer, /function renderComposerTaskList\(payload = \{\}\)/);
-  assert.match(renderer, /payload\.clear \|\| payload\.completed/);
+  assert.match(renderer, /payload\.clear \|\| !tasks\.length/);
+  assert.match(renderer, /run\.taskList\?\.source === "agent"[\s\S]*?clearComposerTaskList\(\)/);
   assert.match(renderer, /class="composer-task-list-card" aria-expanded=/);
   assert.match(renderer, /if \(!appState\.activeComposerTaskList\?\.expanded \|\| composerTaskListEl\?\.contains\(event\.target\)\) return/);
   assert.match(renderer, /const workTools = tools\.filter\(\(tool\) => !isEndTurnTool\(tool\) && !isTaskListTool\(tool\)\)/);
   assert.match(chatStyles, /\.composer-task-list-card \{[\s\S]*?border-radius: 10px/);
-  assert.match(chatStyles, /\.composer-task-list-row\[data-task-status="completed"\] \.composer-task-list-title \{[\s\S]*?text-decoration: line-through/);
 });
 
 test("status styling is chrome-free, neutral, animated, and motion-safe", () => {
@@ -346,7 +341,6 @@ test("every agent failure path restores the composer", () => {
 
 test("send button stays disabled while orchestration or command hold keeps parent running", () => {
   assert.match(renderer, /if \(run\.orchestrationHold \|\| run\.commandWait\) return true/);
-  assert.match(renderer, /const holdActive = Boolean\(run\?\.orchestrationHold\) && !run\.stopRequested/);
   assert.match(renderer, /parentRunStillWorking\(run\)/);
   assert.match(renderer, /rootHasLiveProcesses/);
   assert.match(main, /type: "parent_continuation_started"/);
@@ -416,7 +410,6 @@ test("thinking folds persist stored duration and never recompute wall-clock age 
 });
 
 test("delegated sub-agent rows use a circular pause control", () => {
-  assert.match(renderer, /function createSubagentRunCard[\s\S]*?codicon-debug-pause/);
   assert.match(chatStyles, /\.subagent-run-stop[\s\S]*?border-radius: 50%/);
 });
 

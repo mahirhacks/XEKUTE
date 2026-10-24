@@ -78,6 +78,18 @@ test("cold unknown process ownership blocks writes instead of replaying or killi
   const result = await reservations.execute({ workspace: "G:/one", runId: "main", toolCall: { function: { name: "apply_patch" } } }, () => assert.fail());
   assert.equal(result.errorCode, "RESOURCE_RECONCILIATION_REQUIRED");
 });
+test("unknown process ownership still allows command status, list, and stop", async () => {
+  const reservations = createResourceReservations({ listProcesses: async () => [{ status: "reconciliation_required", runId: "other" }] });
+  const exec = (args) => ({ workspace: "G:/one", runId: "main", toolCall: { function: { name: "exec_command", arguments: JSON.stringify(args) } } });
+  for (const operation of ["status", "list", "stop"]) {
+    assert.deepEqual(await reservations.execute(exec({ operation, process_id: "process-abc" }), async () => ({ ok: true, operation })), { ok: true, operation });
+  }
+  for (const args of [{ operation: "run", command: "ls" }, { operation: "start", command: "ls" }, { command: "ls" }]) {
+    assert.equal((await reservations.execute(exec(args), () => assert.fail("launches stay blocked"))).errorCode, "RESOURCE_RECONCILIATION_REQUIRED");
+  }
+  const parsed = { workspace: "G:/one", runId: "main", toolCall: { toolName: "exec_command", args: { operation: "status" } } };
+  assert.equal((await reservations.execute(parsed, async () => ({ ok: true }))).ok, true);
+});
 test("cancelling a resource waiter keeps later writers behind the current owner", async () => {
   const reservations = createResourceReservations(); const entered = deferred(); const finish = deferred(); const order = [];
   const toolCall = { function: { name: "apply_patch" } };

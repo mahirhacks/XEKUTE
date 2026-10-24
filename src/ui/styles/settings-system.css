@@ -108,7 +108,7 @@
 /* :is() with an attribute selector matches the base field rule's specificity, so these later overrides win. */
 #app-settings-workspace .app-settings-content :is(textarea[rows], textarea) { padding: 7px 10px !important; line-height: 18px !important; }
 #app-settings-workspace .app-settings-content :is(input, select, textarea)::placeholder { color: var(--st-faint) !important; }
-#app-settings-workspace .app-settings-content :is(input, select, textarea):focus { border-color: var(--st-accent) !important; outline: none !important; }
+#app-settings-workspace .app-settings-content :is(input:not(.ui-toggle), select, textarea):focus { border-color: var(--st-accent) !important; outline: none !important; }
 #app-settings-workspace .app-settings-content :is(select[id], select) { padding-right: 28px !important; }
 
 /* Buttons */

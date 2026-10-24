@@ -10,7 +10,9 @@ import { liveInputController } from "../../bootstrap.js";
 import { stopGeneration } from "./run-stop.js";
 import { chatSendInFlight, sendMessageWithAgentRuntime } from "./agent-run.js";
 import { isRunningChatActive } from "./chat-run-state.js";
+import { activeChatSession } from "./chat-sessions.js";
 import { renderFileTagSuggestions } from "./file-tag-picker.js";
+import { restoreComposerImages } from "./composer-images.js";
 
 export const CHAT_INPUT_MAX_LINES = 12;
 
@@ -198,15 +200,17 @@ export async function migrateLegacyChatInputs(session) {
   } finally { queueMigrationInFlight.delete(session.id); schedulePersistChatSessions(); }
 }
 
-export async function submitLiveChatInput(session, text) {
+export async function submitLiveChatInput(session, text, images = []) {
   if (!session || !text.trim()) return;
   const record = liveInputController.prepare(session, text);
-  if (appState.activeChatSessionId === session.id) addUserMessage(text, record.id);
+  if (appState.activeChatSessionId === session.id) addUserMessage(text, record.id, images.map((image) => ({ thumb: image.thumbUrl, id: image.storedId })));
   const receipt = await liveInputController.send({ session, workspace: appState.rootPath, text,
     sessionId: session.parentMemorySessionId || session.memorySessionId || session.id,
     targetTaskId: session.kind === "subagent" ? session.taskId : undefined, messageId: record.id,
-    deferStart: chatSendInFlight.has(session.id) && !session.taskId });
+    deferStart: chatSendInFlight.has(session.id) && !session.taskId,
+    images: images.map(({ name, mediaType, dataUrl }) => ({ name, mediaType, dataUrl })) });
   if (!receipt.ok) {
+    restoreComposerImages(images);
     addErrorMessage("Message was not saved. Your draft is retained. Press Send to retry.");
     return receipt;
   }
@@ -220,6 +224,7 @@ export async function submitLiveChatInput(session, text) {
 
 export function submitChatComposer() {
   if (sendBtn.classList.contains("stop")) { stopGeneration(); return; }
+  if (sendBtn.classList.contains("resume")) { if (!sendBtn.disabled) sendMessageWithAgentRuntime({ resume: true }); return; }
   sendMessageWithAgentRuntime();
 }
 export function submitChatComposerFromInput() { submitChatComposer(); }
@@ -228,16 +233,19 @@ export function updateSendBtn() {
   const icon = sendBtn.querySelector(".codicon");
   const hasText = Boolean(effectiveChatInputValue().trim());
   // While a run is active with an empty composer, the control stops the agent.
-  // With text to send (steering) or when idle, it sends. Images alone can
-  // start a new message but never steer a running one.
+  // With text or images to send (steering) or when idle, it sends.
   const running = isRunningChatActive();
-  const stopMode = running && !hasText;
-  const canSend = hasText || (!running && appState.composerImages.length > 0);
+  const hasImages = appState.composerImages.length > 0;
+  const stopMode = running && !hasText && !hasImages;
+  const session = activeChatSession();
+  const resumeMode = !running && !hasText && !hasImages && Boolean(session?.stoppedRun);
+  const canSend = hasText || hasImages;
   sendBtn.classList.toggle("stop", stopMode);
-  sendBtn.title = stopMode ? "Stop" : "Send message";
-  sendBtn.setAttribute("aria-label", stopMode ? "Stop the agent" : "Send message");
-  sendBtn.disabled = stopMode ? false : !canSend;
-  if (icon) icon.className = `codicon ${stopMode ? "codicon-primitive-square" : "codicon-arrow-up"}`;
+  sendBtn.classList.toggle("resume", resumeMode);
+  sendBtn.title = stopMode ? "Stop" : resumeMode ? "Resume run" : "Send message";
+  sendBtn.setAttribute("aria-label", stopMode ? "Stop the agent" : resumeMode ? "Resume the stopped run" : "Send message");
+  sendBtn.disabled = stopMode ? false : resumeMode ? Boolean(session.stopPending || chatSendInFlight.has(session.id)) : !canSend;
+  if (icon) icon.className = `codicon ${stopMode ? "codicon-primitive-square" : resumeMode ? "codicon-play" : "codicon-arrow-up"}`;
 }
 
 export function onChatInputChange() {

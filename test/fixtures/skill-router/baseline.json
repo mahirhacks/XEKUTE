@@ -1,0 +1,297 @@
+{
+  "capturedAt": "2026-10-21T15:42:24.506Z",
+  "branch": "feature/skill-router",
+  "commit": "bf684a0e9f06bf94692e2cd60673f68951a4e29b",
+  "method": "Legacy selectInternalSkill plus ContextRouter.routeRequest on frozen fixtures; no provider/tool fixture calls required because these routing paths are deterministic.",
+  "routingModelCalls": 0,
+  "cases": [
+    {
+      "id": "01-general-factual-answer",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "conversation",
+        "toolCategories": [],
+        "cyberCapabilities": [],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "02-large-web-vapt",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "workspace",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "os",
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "03-explicit-report-skill",
+      "legacySkill": {
+        "id": "report",
+        "selectedBy": "explicit",
+        "promptChars": 2630
+      },
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "04-history-followup-auth",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "conversation",
+        "toolCategories": [],
+        "cyberCapabilities": [],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "05-direct-header-explanation",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "conversation",
+        "toolCategories": [],
+        "cyberCapabilities": [],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "06-graphql-authorization-review",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "conversation",
+        "toolCategories": [],
+        "cyberCapabilities": [],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "07-ci-supply-chain-review",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "workspace",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "os",
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "08-incident-log-triage",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "workspace",
+        "interactionType": "workflow",
+        "toolCategories": [
+          "os"
+        ],
+        "cyberCapabilities": [],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "09-web3-contract-review",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "conversation",
+        "toolCategories": [],
+        "cyberCapabilities": [],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "10-meme-token-due-diligence",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "11-mobile-client-review",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "12-exposed-credential-judgment",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "workspace",
+        "interactionType": "workflow",
+        "toolCategories": [
+          "os"
+        ],
+        "cyberCapabilities": [],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "13-oast-recon-lead",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "14-client-signing-reversal",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "workspace",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "os",
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "15-scope-change-supersedes-recon",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "hybrid",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "os",
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "research"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "16-report-quality-gate",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "17-web3-fact-after-history",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "conversation",
+        "toolCategories": [],
+        "cyberCapabilities": [],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "18-ask-mode-bounded-analysis",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "workspace",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "os",
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "19-explicit-recon-bypass",
+      "legacySkill": {
+        "id": "web2-recon",
+        "selectedBy": "explicit",
+        "promptChars": 9927
+      },
+      "contextRoute": {
+        "kind": "cyber",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "active",
+          "research",
+          "map",
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    },
+    {
+      "id": "20-child-auth-task",
+      "legacySkill": null,
+      "contextRoute": {
+        "kind": "conversation",
+        "interactionType": "hypothesis",
+        "toolCategories": [
+          "cyber"
+        ],
+        "cyberCapabilities": [
+          "evidence"
+        ],
+        "includeWorkspaceContext": true
+      }
+    }
+  ]
+}

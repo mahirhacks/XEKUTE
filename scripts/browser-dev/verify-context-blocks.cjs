@@ -140,10 +140,13 @@ async function verifyContextBlocks() {
     await page.waitForFunction(() => document.querySelector("#file-tree")?.textContent.includes("NOTES.md"));
     await page.waitForFunction(() => /32K/.test(document.querySelector("#context-usage-heading-value")?.textContent || ""), null, { timeout: 20000 });
     await page.waitForFunction(() => document.querySelectorAll("#messages .chat-turn.user").length >= 6, null, { timeout: 20000 });
+    const restoredNotice = page.locator("[data-context-release='true']");
+    assert.equal(await restoredNotice.count(), 1, "the release notice survives structured transcript replay");
+    assert.match(await restoredNotice.first().textContent(), /Released 1 earlier turn from context/);
     rows = await meterRows();
     assert.equal(rows.find((row) => row.index === 0)?.released, true, JSON.stringify(rows));
     assert.equal(rows.find((row) => row.index === 1)?.pinned, true, JSON.stringify(rows));
-    pass("released and pinned state survive a reload");
+    pass("released and pinned state and the chat release notice survive a reload");
 
     const imagePath = path.resolve(__dirname, "../../tmp/context-blocks.png");
     const boxes = [await page.locator("#context-usage-menu").boundingBox(), await page.locator("#context-blocks-panel").boundingBox()];

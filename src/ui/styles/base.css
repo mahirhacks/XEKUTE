@@ -378,7 +378,6 @@ html, body {
 
 .activity-item .codicon { font-size: 24px; }
 #activity-settings .codicon { font-size: 22px; }
-#activity-bugbounty .codicon { font-size: 23px; }
 #activity-security .codicon { font-size: 22px; }
 
 #sidebar {
@@ -4619,7 +4618,7 @@ html.panel-resizing iframe {
   opacity: 0;
   visibility: hidden;
   pointer-events: auto;
-  transition: color .15s ease, background-color .15s ease, opacity .15s ease, visibility .15s ease;
+  transition: opacity .15s ease, visibility .15s ease;
 }
 
 .chat-exchange:hover .assistant-reply-time,
@@ -4627,10 +4626,6 @@ html.panel-resizing iframe {
 #messages > .chat-exchange:last-child .assistant-reply-time {
   opacity: 0.9;
   visibility: visible;
-}
-.assistant-reply-time:hover {
-  color: #ededed;
-  background: #2d2d2d;
 }
 
 .assistant-reply-copy {

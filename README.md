@@ -92,7 +92,7 @@ For the full first-run guide, checksum verification, optional Ollama/OpenRouter 
 ### Required for development
 
 - Windows 10 or Windows 11, x64.
-- Node.js 22 or newer (see `engines` in `package.json`).
+- Node.js 22.13.0 or newer (see `engines` in `package.json`).
 - npm 10 or newer.
 
 ### Required for AI features

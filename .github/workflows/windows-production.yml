@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: windows-2022
@@ -12,10 +15,11 @@ jobs:
     env:
       HAS_SIGNING_CERT: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
-      - uses: actions/setup-node@v7.0.0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -25,10 +29,8 @@ jobs:
         run: |
           if (!(Test-Path .\electron-builder.config.js)) { throw "electron-builder.config.js is missing from the checkout." }
           if (!(Test-Path .\build\installer.nsh)) { throw "build/installer.nsh is missing from the checkout." }
-      - run: npm run audit:runtime
+      - run: npm run audit:dependencies
       - run: npm run verify:native
-      # temp_test is gitignored (harness dir), but verify:production asserts it exists.
-      - run: mkdir temp_test
       - run: npm run verify:production
       - run: npm test
       - name: Build signed installer when signing credentials are configured
@@ -41,14 +43,18 @@ jobs:
           $env:WIN_CSC_LINK = "$env:RUNNER_TEMP\xekute-signing.pfx"
           $env:WIN_CSC_KEY_PASSWORD = "$env:WINDOWS_CERTIFICATE_PASSWORD"
           npm run make
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run release:metadata
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build unsigned installer
         if: env.HAS_SIGNING_CERT == 'false'
         shell: pwsh
         run: |
           npm run make
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run release:metadata
-      - uses: actions/upload-artifact@v7
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: xekute-windows-package
           path: |

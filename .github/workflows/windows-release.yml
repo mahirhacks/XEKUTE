@@ -10,14 +10,14 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  release:
+  build:
     runs-on: windows-2022
     # `secrets` is not allowed inside `if:` conditions (GitHub Actions
     # restriction), so surface signing credential presence as an env flag.
@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -38,16 +40,16 @@ jobs:
         run: |
           node -e "const p=require('./package.json');const tag=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(tag!==p.version){console.error('Tag '+process.env.GITHUB_REF_NAME+' does not match package.json version '+p.version);process.exit(1)}"
           test -f "docs/release-notes/${GITHUB_REF_NAME}.md"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - run: npm ci
+      - run: npm run audit:dependencies
       - name: Verify installer build inputs
         shell: pwsh
         run: |
           if (!(Test-Path .\electron-builder.config.js)) { throw "electron-builder.config.js is missing from the checkout." }
           if (!(Test-Path .\build\installer.nsh)) { throw "build/installer.nsh is missing from the checkout." }
       - run: npm run verify:native
-      # temp_test is gitignored (harness dir), but verify:production asserts it exists.
-      - run: mkdir temp_test
       - run: npm run verify:production
       - run: npm test
 
@@ -74,15 +76,43 @@ jobs:
           npm run release:metadata
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Publish release assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      - name: Store verified release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          files: |
+          name: windows-release-${{ github.sha }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          path: |
             out/make/nsis/XEKUTESetup.exe
             out/make/nsis/XEKUTESetup.exe.blockmap
             out/make/nsis/latest.yml
             out/make/SHA256SUMS.txt
             out/make/xekute-sbom.cdx.json
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: windows-release-${{ github.sha }}
+          path: release-assets
+      - name: Publish release assets
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/nsis/XEKUTESetup.exe
+            release-assets/nsis/XEKUTESetup.exe.blockmap
+            release-assets/nsis/latest.yml
+            release-assets/SHA256SUMS.txt
+            release-assets/xekute-sbom.cdx.json
           generate_release_notes: true
           body_path: docs/release-notes/${{ github.ref_name }}.md
         # Deliberately NOT pre-release: electron-updater consumes stable

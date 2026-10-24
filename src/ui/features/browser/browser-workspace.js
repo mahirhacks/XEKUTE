@@ -46,7 +46,10 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
         <button type="submit" class="browser-primary">Open tab</button>
       </div>
     </form>
-    <div class="browser-status" role="status" hidden></div>
+    <div class="browser-status" role="status" hidden>
+      <span class="browser-status-message"></span>
+      <button type="button" class="browser-status-dismiss" aria-label="Dismiss browser message" title="Dismiss message"><span class="codicon codicon-close" aria-hidden="true"></span></button>
+    </div>
     <div class="browser-viewport" data-native-surface>
       <img class="browser-freeze" alt="" aria-hidden="true" hidden>
       <div class="browser-empty">
@@ -59,15 +62,16 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   host.append(root);
   const $ = selector => root.querySelector(selector);
   const strip = $(".browser-web-tabs"), address = $(".browser-address"), viewport = $(".browser-viewport");
-  const status = $(".browser-status"), empty = $(".browser-empty"), creator = $(".browser-new-page");
+  const status = $(".browser-status"), statusMessage = $(".browser-status-message"), empty = $(".browser-empty"), creator = $(".browser-new-page");
   const freeze = $(".browser-freeze");
   const purpose = $('[aria-label="New tab purpose"]'), identity = $('[aria-label="New tab identity"]');
   const resumeSessions = new Map();
+  let renderedSelection = null;
   let project = "", tabs = [], identities = [], selectedId = null, visible = false, disposed = false;
   let layoutFrame = 0, lastLayout = "", loadSequence = 0, loading = false, freezeSeq = 0;
   const active = () => tabs.find(tab => tab.id === selectedId) || null;
   function setStatus(message = "", error = false) {
-    status.textContent = message;
+    statusMessage.textContent = message;
     status.hidden = !message;
     status.classList.toggle("error", error);
     scheduleLayout();
@@ -156,21 +160,40 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
     identity.disabled = purpose.value === "research";
   }
   function render() {
-    strip.replaceChildren();
-    for (const tab of tabs) {
-      const item = document.createElement("div");
-      item.className = `browser-web-tab${tab.id === selectedId ? " is-active" : ""}${tab.owner?.kind === "chat" ? " is-agent" : ""}`;
-      const select = document.createElement("button"); select.type = "button"; select.setAttribute("role", "tab");
+    const scrollLeft = strip.scrollLeft;
+    const existing = new Map([...strip.children].map(item => [item.querySelector("[data-browser-tab]")?.dataset.browserTab, item]));
+    for (const [index, tab] of tabs.entries()) {
+      let item = existing.get(tab.id);
+      if (!item) {
+        item = document.createElement("div");
+        const select = document.createElement("button"); select.type = "button"; select.setAttribute("role", "tab");
+        select.dataset.browserTab = tab.id;
+        select.append(document.createElement("span"), document.createElement("span"));
+        select.addEventListener("click", () => { selectedId = tab.id; setStatus(); render(); });
+        const close = document.createElement("button"); close.type = "button"; close.className = "browser-web-tab-close";
+        close.title = "Close tab"; close.innerHTML = '<span class="codicon codicon-close"></span>';
+        close.addEventListener("click", () => { void command("close", {}, tab.id); });
+        item.append(select, close);
+      }
+      existing.delete(tab.id);
+      const classes = `browser-web-tab${tab.id === selectedId ? " is-active" : ""}${tab.owner?.kind === "chat" ? " is-agent" : ""}`;
+      if (item.className !== classes) item.className = classes;
+      const select = item.firstElementChild;
       select.setAttribute("aria-selected", String(tab.id === selectedId)); select.dataset.browserTab = tab.id;
-      const icon = document.createElement("span");
-      icon.className = tab.status === "loading" ? "codicon codicon-loading codicon-modifier-spin" : tab.owner?.kind === "chat" ? "codicon codicon-copilot" : "codicon codicon-globe";
-      const label = document.createElement("span"); label.textContent = tab.title || (tab.url === "about:blank" ? "New tab" : tab.url);
+      const icon = select.firstElementChild;
+      const iconClass = tab.status === "loading" ? "codicon codicon-loading codicon-modifier-spin" : tab.owner?.kind === "chat" ? "codicon codicon-copilot" : "codicon codicon-globe";
+      if (icon.className !== iconClass) icon.className = iconClass;
+      const label = select.lastElementChild, text = tab.title || (tab.url === "about:blank" ? "New tab" : tab.url);
+      if (label.textContent !== text) label.textContent = text;
       select.title = `${tab.title || tab.url}\n${tab.purpose === "research" ? "Public research" : "Assessment"}`;
-      select.append(icon, label); select.addEventListener("click", () => { selectedId = tab.id; setStatus(); render(); });
-      const close = document.createElement("button"); close.type = "button"; close.className = "browser-web-tab-close";
-      close.setAttribute("aria-label", `Close ${label.textContent}`); close.title = "Close tab"; close.innerHTML = '<span class="codicon codicon-close"></span>';
-      close.addEventListener("click", () => { void command("close", {}, tab.id); });
-      item.append(select, close); strip.append(item);
+      item.lastElementChild.setAttribute("aria-label", `Close ${label.textContent}`);
+      if (strip.children[index] !== item) strip.insertBefore(item, strip.children[index] || null);
+    }
+    for (const item of existing.values()) item.remove();
+    strip.scrollLeft = scrollLeft;
+    if (visible && selectedId !== renderedSelection) {
+      strip.querySelector(".is-active")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      renderedSelection = selectedId;
     }
     const tab = active(), chatId = String(getSessionId() || "");
     if (document.activeElement !== address) address.value = tab?.url === "about:blank" ? "" : tab?.url || "";
@@ -253,6 +276,7 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
       if (accept(result, expected)) setStatus();
     } catch (error) { if (project === expected) { setStatus(error.message, true); void refresh(); } }
   }
+  $(".browser-status-dismiss").addEventListener("click", () => setStatus());
   $(".browser-navigation").addEventListener("submit", event => { event.preventDefault(); try { void command("navigate", { url: normalizeBrowserAddress(address.value) }); } catch (error) { setStatus(error.message, true); } });
   root.querySelectorAll("[data-browser-command]").forEach(button => button.addEventListener("click", () => { void command(button.dataset.browserCommand); }));
   $("[data-browser-control]").addEventListener("click", event => {
@@ -266,6 +290,15 @@ export function createBrowserWorkspace({ document, api, host, getAssessmentPath,
   purpose.addEventListener("change", () => { identity.disabled = purpose.value === "research"; });
   creator.addEventListener("submit", event => { event.preventDefault(); void open({ identityId: identity.value, purpose: purpose.value }); });
   address.addEventListener("keydown", event => { if (event.key === "Escape") { address.value = active()?.url || ""; address.blur(); } });
+  strip.addEventListener("wheel", event => {
+    if (event.ctrlKey) return;
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    const units = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? strip.clientWidth : 1;
+    const next = Math.max(0, Math.min(strip.scrollWidth - strip.clientWidth, strip.scrollLeft + delta * units));
+    if (next === strip.scrollLeft) return;
+    strip.scrollLeft = next;
+    event.preventDefault();
+  }, { passive: false });
   const unsubscribe = api.onBrowserEvent?.(event => {
     if (disposed || !project || String(getAssessmentPath() || "") !== project) return;
     if (event.tab) {

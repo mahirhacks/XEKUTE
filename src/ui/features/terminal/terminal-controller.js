@@ -28,6 +28,17 @@ const TerminalManager = (() => {
   let fitAnimationFrame = 0;
   let ensurePromise = null;
   let shellProfiles = [];
+  let runtimeLoad = null;
+  const pendingAgentSessions = new Map();
+
+  function loadTerminalRuntime() {
+    const FitCtor = globalThis.FitAddon?.FitAddon ?? globalThis.FitAddon;
+    if (typeof globalThis.Terminal === "function" && typeof FitCtor === "function") return Promise.resolve();
+    return runtimeLoad ||= import("./terminal-vendor.js").then(({ Terminal, FitAddon }) => {
+      globalThis.Terminal = Terminal;
+      globalThis.FitAddon = FitAddon;
+    }).catch(error => { runtimeLoad = null; throw error; });
+  }
 
   const xtermTheme = {
     background: "#121212",
@@ -427,12 +438,8 @@ const TerminalManager = (() => {
       showTerminalError("Terminal API unavailable — restart the app.");
       return null;
     }
-    if (typeof globalThis.Terminal !== "function") {
-      showTerminalError("xterm failed to load. Check the console for script errors.");
-      return null;
-    }
-
     try {
+      await loadTerminalRuntime();
       const id = `term-${++counter}`;
       const name = nextName();
       const resolvedGroupId = groupId || id;
@@ -644,7 +651,8 @@ const TerminalManager = (() => {
     return true;
   }
 
-  async function attachAgentSession({ id, command = "", toolName = "run_command", cwd = "", shell = "auto", queued = false } = {}) {
+  async function attachAgentSession(options = {}) {
+    const { id, queued = false } = options;
     if (!id) return null;
     if (sessions.has(id)) {
       setAgentSessionQueued(id, queued);
@@ -652,10 +660,29 @@ const TerminalManager = (() => {
       globalThis.expandTerminalPanel?.({ createIfMissing: false });
       return id;
     }
-    if (!window.api?.terminalWrite || typeof globalThis.Terminal !== "function") {
-      return null;
+    if (!window.api?.terminalWrite) return null;
+    const existing = pendingAgentSessions.get(id);
+    if (existing) {
+      existing.options = { ...existing.options, ...options };
+      return existing.promise;
     }
+    const pending = { options, events: [], promise: null };
+    pendingAgentSessions.set(id, pending);
+    pending.promise = loadTerminalRuntime().then(() => createAgentSession(pending.options)).then(result => {
+      for (const event of pending.events) {
+        if (event.type === "data") onData({ id, data: event.data });
+        else onExit({ id });
+      }
+      return result;
+    }).catch(error => {
+      console.error("Agent terminal failed to load:", error);
+      showTerminalError(error.message || "Terminal failed to load.");
+      return null;
+    }).finally(() => pendingAgentSessions.delete(id));
+    return pending.promise;
+  }
 
+  function createAgentSession({ id, command = "", toolName = "run_command", cwd = "", shell = "auto", queued = false }) {
     globalThis.expandTerminalPanel?.({ createIfMissing: false });
 
     const container = document.createElement("div");
@@ -789,11 +816,12 @@ const TerminalManager = (() => {
   function onData({ id, data }) {
     const session = sessions.get(id);
     if (session) session.term.write(data);
+    else pendingAgentSessions.get(id)?.events.push({ type: "data", data });
   }
 
   function onExit({ id }) {
     const session = sessions.get(id);
-    if (!session) return;
+    if (!session) { pendingAgentSessions.get(id)?.events.push({ type: "exit" }); return; }
     session.exited = true;
     session.queued = false;
     session.interrupting = false;

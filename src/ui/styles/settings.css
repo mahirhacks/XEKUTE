@@ -311,22 +311,7 @@
 .general-settings-row + .general-settings-row { border-top:1px solid #ffffff24; }
 .general-settings-divider { height:1px; background:#ffffff24; }
 .general-settings-row > div:first-child { min-width:0; }
-.general-toggle { position:relative; flex:0 0 auto; width:40px; height:22px; cursor:pointer; }
-.general-toggle input { position:absolute; opacity:0; pointer-events:none; }
-.general-toggle span { position:absolute; inset:0; border-radius:99px; background:#4a4a4a; transition:background .14s ease; }
-.general-toggle span::after {
-  content:"";
-  position:absolute;
-  top:3px;
-  left:3px;
-  width:16px;
-  height:16px;
-  border-radius:50%;
-  background:#ddd;
-  transition:transform .14s ease;
-}
-.general-toggle input:checked + span { background:#2f8cf4; }
-.general-toggle input:checked + span::after { transform:translateX(18px); background:#fff; }
+.general-toggle { display:inline-flex; flex:0 0 auto; align-items:center; cursor:pointer; }
 #statusbar.settings-hidden { display:none !important; }
 
 /* Project: one section at a time, with a compact in-page section switcher. */
@@ -522,10 +507,11 @@
 .app-settings-content .project-toggle-grid > label {
   position:relative;
   min-width:0;
-  padding:10px 10px 10px 50px;
+  padding:10px;
   display:flex;
-  align-items:flex-start;
-  gap:0;
+  align-items:center;
+  justify-content:space-between;
+  gap:24px;
   border:1px solid #363636;
   border-radius:8px;
   background:#1b1b1b;
@@ -533,42 +519,8 @@
   cursor:pointer;
 }
 .app-settings-content .project-toggle-grid > label:has(input:checked) { border-color:#4a575d; background:#20272a; }
-.app-settings-content .project-toggle-grid input[type="checkbox"] {
-  position:absolute;
-  top:10px;
-  left:10px;
-  z-index:2;
-  width:30px;
-  height:18px;
-  margin:0;
-  opacity:0;
-  cursor:pointer;
-}
-.app-settings-content .project-toggle-grid > label::before {
-  content:"";
-  position:absolute;
-  top:10px;
-  left:10px;
-  width:30px;
-  height:18px;
-  border-radius:999px;
-  background:#4a4a4a;
-  transition:background .14s ease;
-}
-.app-settings-content .project-toggle-grid > label::after {
-  content:"";
-  position:absolute;
-  top:12px;
-  left:12px;
-  width:14px;
-  height:14px;
-  border-radius:50%;
-  background:#e7e7e7;
-  box-shadow:0 1px 2px rgba(0,0,0,.3);
-  transition:transform .14s ease,background .14s ease;
-}
-.app-settings-content .project-toggle-grid > label:has(input:checked)::before { background:#2f8cf4; }
-.app-settings-content .project-toggle-grid > label:has(input:checked)::after { transform:translateX(12px); background:#fff; }
+.app-settings-content .project-toggle-grid input.ui-toggle { order:1; }
+.app-settings-content .project-toggle-grid > label > span { min-width:0; flex:1 1 auto; }
 .app-settings-content .project-toggle-grid strong,
 .app-settings-content .project-toggle-grid small { display:block; }
 .app-settings-content .project-toggle-grid strong { color:#ddd; font:600 11px var(--font-ui); }
@@ -1104,12 +1056,6 @@
 .app-settings-content .kali-access-panel { margin-top:26px; }
 .app-settings-content .kali-access-panel:not(.is-enabled) > header { margin-bottom:0; padding-bottom:0; border-bottom:0; }
 .app-settings-content .kali-access-switch { flex:0 0 auto; display:flex; align-items:center; gap:8px; color:#aaa; font:600 10px var(--font-ui); cursor:pointer; }
-.app-settings-content .kali-access-switch input { position:absolute; opacity:0; pointer-events:none; }
-.app-settings-content .kali-access-switch > span { position:relative; width:30px; height:16px; border-radius:999px; background:#4a4a4a; transition:background .15s ease; }
-.app-settings-content .kali-access-switch > span::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:#ddd; transition:transform .15s ease; }
-.app-settings-content .kali-access-switch input:checked + span { background:#2f8cf4; }
-.app-settings-content .kali-access-switch input:checked + span::after { transform:translateX(14px); }
-.app-settings-content .kali-access-switch input:focus-visible + span { outline:1px solid #8ca9b8; outline-offset:2px; }
 .app-settings-content .mcp-connection-editor h3 { margin:0; color:#eee; font:600 15px/1.3 var(--font-ui); }
 .app-settings-content .mcp-connection-editor header p { max-width:680px; margin:4px 0 0; color:#898989; font:10px/1.45 var(--font-ui); }
 .app-settings-content .mcp-connection-editor .icon-button { flex:0 0 28px; width:28px; height:28px; display:grid; place-items:center; border:0; border-radius:6px; background:transparent; color:#999; cursor:pointer; }
@@ -1127,8 +1073,7 @@
 .app-settings-content .mcp-key-row button:hover,
 .app-settings-content .mcp-connection-editor footer button:hover { border-color:#606060; color:#fff; }
 .app-settings-content .mcp-form-options { display:grid; gap:8px; margin-top:14px; }
-.app-settings-content .mcp-form-options > label { display:flex; align-items:flex-start; gap:9px; padding:10px 11px; border:1px solid #303030; border-radius:7px; background:#1c1c1c; cursor:pointer; }
-.app-settings-content .mcp-form-options input { margin-top:2px; accent-color:#7a8d96; }
+.app-settings-content .mcp-form-options > label { display:flex; align-items:center; gap:12px; padding:10px 11px; border:1px solid #303030; border-radius:7px; background:#1c1c1c; cursor:pointer; }
 .app-settings-content .mcp-form-options strong,
 .app-settings-content .mcp-form-options small { display:block; }
 .app-settings-content .mcp-form-options strong { color:#d7d7d7; font:600 10px var(--font-ui); }

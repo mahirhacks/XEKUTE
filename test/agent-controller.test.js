@@ -22,6 +22,620 @@ const { buildSystemContext } = require("../src/agent/runtime/prompt-context.js")
 const { createAssessmentWorkspace } = require("../src/domain/assessment/assessment-workspace");
 const { endTurnCall } = require("./helpers/end-turn-call.js");
 
+function checklistCall(id = "checklist-1", args = {
+  action: "create",
+  main_goal: "Review supplied evidence safely",
+  items: [{ id: "inspect", label: "Inspect supplied evidence", description: "Review only the supplied files and notes.", status: "in_progress" }],
+}) {
+  return { id, type: "function", function: { name: "manage_task_checklist", arguments: JSON.stringify(args) } };
+}
+
+function routingFixture({ skillScore = 0.1 } = {}) {
+  const decisions = [];
+  const loaded = [];
+  const skillRouter = {
+    enabled: true,
+    freshRun: true,
+    model: "typesafe/jev-1.14",
+    candidates: [{ id: "evidence-review", title: "Evidence Review", description: "Assess supplied evidence", modes: ["agent"] }],
+    runDecision: async ({ model, questions, state }) => {
+      decisions.push({ model, questions: Object.keys(questions), state });
+      return { answers: Object.fromEntries(Object.keys(questions).map((id) => [id, { type: "noul", noul: skillScore }])) };
+    },
+    loadSkill: async (id) => {
+      loaded.push(id);
+      return {
+        ok: true,
+        manifest: { id, title: "Evidence Review", description: "Assess supplied evidence", modes: ["agent"], requiredTools: [], requiredCapabilities: [] },
+        prompt: "ROUTED_SKILL_MARKER: separate observations from assumptions.",
+      };
+    },
+  };
+  return { decisions, loaded, skillRouter };
+}
+
+test("a pending checklist holds accompanying commands until the first item starts", async () => {
+  const { skillRouter } = routingFixture();
+  const executed = [], events = [];
+  let round = 0;
+  const command = id => ({ id, type: "function", function: { name: "exec_command", arguments: JSON.stringify({ command: "fixture-only" }) } });
+  const result = await runAgentTurn({
+    mode: "agent", userMessage: "Inspect, verify, and report.", skillRouter, maxAgentRounds: 5,
+    sendEvent: event => events.push(event),
+    runModelRound: async () => {
+      round++;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall("pending", { action: "create", main_goal: "Inspect local evidence", items: [
+        { id: "inspect", label: "Inspect evidence", description: "Read the supplied notes.", status: "pending" },
+      ] }), command("held-command")] };
+      if (round === 2) return { fullText: "", toolCalls: [checklistCall("start", { action: "update", items: [{ id: "inspect", status: "in_progress" }] }), command("allowed-command")] };
+      return { fullText: "Reviewed.", toolCalls: [endTurnCall("end")] };
+    },
+    executeToolCall: async ({ toolCall }) => { executed.push(toolCall.id); return { ok: true, value: { stdout: "Reviewed", exitCode: 0 } }; },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(executed, ["allowed-command"], "the command prestart path must respect checklist admission");
+  assert.ok(events.some(event => event.type === "tool_result" && event.result?.errorCode === "CHECKLIST_INVALID"));
+});
+
+test("resumed unordered checklists hold work until repaired and retain completed items", async () => {
+  const { skillRouter } = routingFixture();
+  const makeItem = (id, status) => ({ id, label: `Review ${id}`, description: `Review supplied notes for ${id}.`, status });
+  const executed = [];
+  let round = 0;
+  const read = id => ({ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } });
+  const result = await runAgentTurn({
+    mode: "agent", userMessage: "Resume the supplied investigation.", skillRouter, maxAgentRounds: 5,
+    engineSnapshot: { checklist: { main_goal: "Review supplied notes", items: [makeItem("first", "pending"), makeItem("done", "completed"), makeItem("later", "in_progress")] } },
+    runModelRound: async () => {
+      round++;
+      if (round === 1) return { fullText: "", toolCalls: [read("held")] };
+      if (round === 2) return { fullText: "", toolCalls: [checklistCall("repair", { action: "update", items: [{ id: "later", status: "pending" }, { id: "first", status: "in_progress" }] }), read("after-repair")] };
+      return { fullText: "Reviewed.", toolCalls: [endTurnCall("end")] };
+    },
+    executeToolCall: async ({ toolCall }) => { executed.push(toolCall.id); return { ok: true, value: { content: "Reviewed" } }; },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(executed, ["after-repair"]);
+  assert.deepEqual(result.engineSnapshot.checklist.items.map(({ status }) => status), ["in_progress", "completed", "pending"]);
+});
+
+test("irrelevant checklist edits keep task work held and escalate to a repair note", async () => {
+  const { skillRouter } = routingFixture();
+  const payloads = [];
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent", userMessage: "Inspect, verify, and report.", skillRouter, maxAgentRounds: 4,
+    runModelRound: async (payload) => {
+      payloads.push(JSON.stringify(payload.messages));
+      round++;
+      const plan = round === 1 ? { action: "create", main_goal: "Review notes", items: [{ id: "inspect", label: "Inspect notes", description: "Review the supplied notes.", status: "pending" }] }
+        : { action: "update", main_goal: "Review notes carefully" };
+      return { fullText: "", toolCalls: [checklistCall(`plan-${round}`, plan), { id: `read-${round}`, type: "function", function: { name: "read_file", arguments: '{"path":"notes.md"}' } }] };
+    },
+    executeToolCall: async () => assert.fail("task work must remain held"),
+  });
+  assert.notEqual(result.code, "CHECKLIST_INVALID", "a stuck checklist does not fail the run");
+  assert.equal(round, 4);
+  assert.equal(result.engineSnapshot.checklist.items[0].status, "pending");
+  assert.doesNotMatch(payloads[1], /checklist attempts were rejected/, "the first miss gets only the tool error");
+  assert.match(payloads[2], /Your last 2 checklist attempts were rejected.*\\"inspect\\" is the only in_progress item/);
+});
+
+test("the agent creates its checklist directly and an empty picker permits paired task actions", async () => {
+  const { decisions, skillRouter } = routingFixture();
+  const roundTools = [];
+  const roundPayloads = [];
+  const routingLogs = [];
+  const events = [];
+  const executed = [];
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review supplied code, identify evidence gaps, and report the result.",
+    skillRouter,
+    checkpointRun: async patch => { if (patch.checkpoint?.skillRouting) routingLogs.push(patch.checkpoint.skillRouting); },
+    sendEvent: (event) => events.push(event),
+    runModelRound: async (payload) => {
+      const { tools } = payload;
+      roundPayloads.push(payload);
+      roundTools.push(tools.map((tool) => tool.function.name));
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall(), { id: "read-1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } }] };
+      return { fullText: "Reviewed the supplied evidence.", toolCalls: [endTurnCall("end-2")] };
+    },
+    executeToolCall: async ({ toolCall }) => {
+      executed.push(toolCall.function.name);
+      return { ok: true, value: { content: "fixture result" } };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.ok(roundTools[0].includes("manage_task_checklist"));
+  assert.ok(roundTools[0].includes("read_file"), "the agent starts with its normal tools");
+  assert.match(JSON.stringify(roundPayloads[0].messages), /whenever the request needs more than one action/);
+  assert.match(JSON.stringify(roundPayloads[0].messages), /Skip it only for greetings, answers you can give directly, or a single action/);
+  assert.ok(roundTools[1].includes("read_file"));
+  assert.deepEqual(executed, ["read_file"]);
+  assert.deepEqual(decisions.map(({ questions }) => questions), [["skill_evidence-review"]]);
+  assert.deepEqual(routingLogs, [{ model: "typesafe/jev-1.14", source: "native", candidateCount: 1,
+    outcome: "no_additions", topScores: [{ id: "evidence-review", score: 0.1 }], selected: [], loaded: [] }]);
+  const postChecklistPrompt = JSON.stringify(roundPayloads[1].messages);
+  assert.match(postChecklistPrompt, /Review supplied evidence safely/);
+  assert.match(postChecklistPrompt, /Inspect supplied evidence/);
+  assert.match(postChecklistPrompt, /Review only the supplied files and notes/);
+  assert.equal(events.some((event) => event.type === "task_list" && event.tasks?.[0]?.title === "Inspect supplied evidence"), true);
+  assert.equal(events.some((event) => event.type === "skills_loaded"), false);
+  const widget = events.find((event) => event.type === "task_list");
+  assert.equal(JSON.stringify(widget).includes("Review supplied evidence safely"), false);
+  assert.equal(JSON.stringify(widget).includes("Review only the supplied files and notes."), false);
+});
+
+test("new skill instructions suppress paired calls and appear before regenerated actions", async () => {
+  const { decisions, loaded, skillRouter } = routingFixture({ skillScore: 0.95 });
+  const payloads = [];
+  const events = [];
+  const executed = [];
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review supplied code, identify evidence gaps, and report the result.",
+    skillRouter,
+    sendEvent: (event) => events.push(event),
+    runModelRound: async (payload) => {
+      payloads.push(payload);
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall(), { id: "read-1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } }] };
+      return { fullText: "Reviewed with the selected evidence skill.", toolCalls: [endTurnCall("end-2")] };
+    },
+    executeToolCall: async ({ toolCall }) => {
+      executed.push(toolCall.function.name);
+      return { ok: true, value: { content: "fixture result" } };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(loaded, ["evidence-review"]);
+  assert.deepEqual(executed, []);
+  assert.deepEqual(decisions.map(({ questions }) => questions), [["skill_evidence-review"]]);
+  assert.equal(events.some((event) => event.type === "tool_result" && JSON.stringify(event.result).includes("Not executed because checklist routing loaded new instructions")), true);
+  assert.equal(JSON.stringify(payloads[1].messages).includes("ROUTED_SKILL_MARKER"), true);
+  assert.deepEqual(events.filter((event) => event.type === "skills_loaded"), [{ type: "skills_loaded", skills: ["Evidence Review"] }]);
+  assert.equal(events.filter(event => event.type === "model_start").length, payloads.length);
+  assert.ok(events.findIndex(event => event.type === "model_start") < events.findIndex(event => event.type === "model_round"));
+});
+
+test("an explicit skill announces its load once and recovery does not announce it again", async () => {
+  const specialSkill = { manifest: { id: "evidence-review", title: "Evidence Review" }, prompt: "Review supplied evidence carefully." };
+  const events = [];
+  const options = { mode: "agent", userMessage: "Review this note", specialSkill, sendEvent: event => events.push(event),
+    runModelRound: async () => ({ fullText: "Reviewed.", toolCalls: [endTurnCall("explicit-end")] }) };
+  const result = await runAgentTurn(options);
+  assert.equal(result.ok, true);
+  assert.deepEqual(events.filter(event => event.type === "skills_loaded"), [{ type: "skills_loaded", skills: ["Evidence Review"] }]);
+  events.length = 0;
+  const restored = await runAgentTurn({ ...options, engineSnapshot: result.engineSnapshot });
+  assert.equal(restored.ok, true);
+  assert.deepEqual(events.filter(event => event.type === "skills_loaded"), []);
+});
+
+test("greetings and short tasks can finish without a checklist or a decision-model call", async () => {
+  for (const mode of ["agent", "ask"]) for (const task of ["Hi", "Explain HTTP 401", "Read notes.md and summarize it."]) {
+    const { decisions, skillRouter } = routingFixture();
+    let modelCalls = 0;
+    const result = await runAgentTurn({
+      mode,
+      userMessage: task,
+      skillRouter,
+      runModelRound: async ({ tools, messages }) => {
+        modelCalls += 1;
+        assert.equal(decisions.length, 0, "there is no initial planning decision");
+        assert.ok(tools.some((tool) => tool.function.name === "manage_task_checklist"));
+        assert.match(JSON.stringify(messages), /Checklist planning is the default for substantive work/);
+        return { fullText: "Direct response.", toolCalls: [endTurnCall("small-end")] };
+      },
+    });
+    assert.equal(result.runState.status, "completed");
+    assert.equal(modelCalls, 1);
+    assert.deepEqual(decisions, []);
+    assert.equal(result.engineSnapshot.checklist, null);
+    assert.equal(result.engineSnapshot.skillRouterState.decisionModel, "typesafe/jev-1.14");
+    assert.equal(Object.hasOwn(result.engineSnapshot, "planState"), false);
+  }
+});
+
+test("the agent can create a checklist after direct work without a planning decision", async () => {
+  const { decisions, skillRouter } = routingFixture();
+  let rounds = 0;
+  let actions = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Inspect notes.md and investigate the issues you find.",
+    skillRouter,
+    runModelRound: async () => {
+      rounds += 1;
+      if (rounds === 1) return { fullText: "", toolCalls: [{ id: "initial-read", type: "function", function: { name: "read_file", arguments: '{"path":"notes.md"}' } }] };
+      if (rounds === 2) {
+        assert.equal(decisions.length, 0);
+        return { fullText: "", toolCalls: [checklistCall("later-checklist")] };
+      }
+      return { fullText: "Investigation complete.", toolCalls: [endTurnCall("later-end")] };
+    },
+    executeToolCall: async () => { actions += 1; return { ok: true, value: { content: "Several issues need investigation." } }; },
+  });
+  assert.equal(result.runState.status, "completed");
+  assert.equal(actions, 1);
+  assert.deepEqual(decisions.map(({ questions }) => questions), [["skill_evidence-review"]]);
+  assert.equal(result.engineSnapshot.checklist.items[0].id, "inspect");
+});
+
+test("invalid checklist calls preserve state and do not invoke the skill picker", async () => {
+  const { decisions, skillRouter } = routingFixture();
+  const tooLong = checklistCall("bad", {
+    action: "create",
+    main_goal: "Review safely",
+    items: [{ id: "too-long", label: Array.from({ length: 13 }, (_, index) => `word${index}`).join(" "), description: "Review evidence.", status: "pending" }],
+  });
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review this evidence.",
+    skillRouter: { ...skillRouter, runDecision: async ({ questions }) => {
+      decisions.push({ questions: Object.keys(questions) });
+      return { answers: Object.fromEntries(Object.keys(questions).map((id) => [id, { type: "noul", noul: 0.9 }])) };
+    } },
+    runModelRound: async () => {
+      round += 1;
+      return round === 1
+        ? { fullText: "", toolCalls: [tooLong] }
+        : { fullText: "No checklist was accepted.", toolCalls: [endTurnCall("end-2")] };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(decisions.map(({ questions }) => questions), []);
+  assert.equal(result.engineSnapshot.checklist, null);
+});
+
+test("overlapping checklist activity is rejected before routing or accompanying task execution", async () => {
+  const { decisions, skillRouter } = routingFixture();
+  const events = [];
+  const executed = [];
+  let round = 0;
+  const read = { id: "read-after-handoff", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } };
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Inspect evidence, verify the result, and report the gaps.",
+    skillRouter,
+    sendEvent: event => events.push(event),
+    runModelRound: async () => {
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall("initial", {
+        action: "create", main_goal: "Review supplied evidence",
+        items: [
+          { id: "inspect", label: "Inspect evidence", description: "Inspect the supplied files.", status: "in_progress" },
+          { id: "verify", label: "Verify results", description: "Verify the evidence before reporting.", status: "pending" },
+        ],
+      })] };
+      if (round === 2) return { fullText: "", toolCalls: [checklistCall("overlap", { action: "update", items: [{ id: "verify", status: "in_progress" }] }), { ...read, id: "read-before-repair" }] };
+      if (round === 3) return { fullText: "", toolCalls: [checklistCall("handoff", { action: "update", items: [{ id: "inspect", status: "completed" }, { id: "verify", status: "in_progress" }] }), read] };
+      return { fullText: "Verification complete.", toolCalls: [endTurnCall("finish")] };
+    },
+    executeToolCall: async ({ toolCall }) => { executed.push(toolCall.id); return { ok: true, value: { content: "Verified fixture." } }; },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(executed, ["read-after-handoff"]);
+  assert.equal(decisions.length, 2, "only the initial checklist and repaired handoff invoke selection");
+  assert.deepEqual(events.filter(event => event.type === "task_list").map(event => event.tasks.map(({ status }) => status)), [
+    ["in_progress", "pending"], ["completed", "in_progress"],
+  ]);
+  assert.deepEqual(result.engineSnapshot.checklist.items.map(({ status }) => status), ["completed", "in_progress"]);
+});
+
+test("repeated invalid checklist calls hold task actions until the agent repairs them", async () => {
+  const { decisions, skillRouter } = routingFixture();
+  const invalid = checklistCall("too-long", {
+    action: "create",
+    main_goal: "Review safely",
+    items: [{ id: "too-long", label: Array.from({ length: 13 }, (_, index) => `word${index}`).join(" "), description: "Review evidence.", status: "pending" }],
+  });
+  const read = (id) => ({ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } });
+  const payloads = [];
+  const executed = [];
+  const heldErrors = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence across several files.",
+    skillRouter,
+    sendEvent: (event) => { if (event.type === "tool_result" && event.tool?.toolName === "read_file" && event.result?.error) heldErrors.push(event.result.error); },
+    runModelRound: async (payload) => {
+      payloads.push(JSON.stringify(payload.messages));
+      rounds += 1;
+      if (rounds <= 2) return { fullText: "", toolCalls: [invalid, read(`read-${rounds}`)] };
+      if (rounds === 3) return { fullText: "", toolCalls: [checklistCall("repaired"), read("read-3")] };
+      return { fullText: "The review is complete.", toolCalls: [endTurnCall("end-repaired")] };
+    },
+    executeToolCall: async ({ toolCall }) => { executed.push(toolCall.function.name); return { ok: true, value: { content: "fixture" } }; },
+  });
+  assert.equal(result.ok, true, "the run continues after repeated invalid checklist calls");
+  assert.deepEqual(executed, ["read_file"], "only the action after the repair runs");
+  assert.match(heldErrors[0], /checklist call was rejected: Checklist labels must be 12 words or fewer/);
+  assert.match(payloads[2], /Your last 2 checklist attempts were rejected.*none yet; use action create/);
+  assert.equal(decisions.length, 1, "only the repaired checklist is routed");
+  assert.equal(result.engineSnapshot.checklistCorrectionCount, 0);
+});
+
+test("a valid checklist correction resets the error and routes exactly once", async () => {
+  const { decisions, skillRouter } = routingFixture();
+  const invalid = checklistCall("bad-first", {
+    action: "create",
+    main_goal: "Review safely",
+    items: [{ id: "too-long", label: Array.from({ length: 13 }, (_, index) => `word${index}`).join(" "), description: "Review evidence.", status: "pending" }],
+  });
+  let rounds = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence across several files.",
+    skillRouter: { ...skillRouter, runDecision: async ({ questions }) => {
+      decisions.push({ questions: Object.keys(questions) });
+      return { answers: Object.fromEntries(Object.keys(questions).map((id) => [id, { type: "noul", noul: 0.1 }])) };
+    } },
+    runModelRound: async () => {
+      rounds += 1;
+      if (rounds === 1) return { fullText: "", toolCalls: [invalid] };
+      if (rounds === 2) return { fullText: "", toolCalls: [checklistCall("repaired")] };
+      return { fullText: "The review is complete.", toolCalls: [endTurnCall("end-repaired")] };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.engineSnapshot.checklist.items[0].id, "inspect");
+  assert.deepEqual(decisions.map(({ questions }) => questions), [["skill_evidence-review"]]);
+});
+
+test("snapshot recovery restores exact checklist and active instructions without routing again", async () => {
+  const { skillRouter } = routingFixture({ skillScore: 0.95 });
+  let firstRounds = 0;
+  const first = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence and report the gaps.",
+    skillRouter,
+    maxAgentRounds: 4,
+    runModelRound: async () => {
+      firstRounds += 1;
+      return firstRounds === 1
+        ? { fullText: "", toolCalls: [checklistCall("recovery-checklist")] }
+        : { fullText: "Continuing the review.", toolCalls: [endTurnCall("recovery-end")] };
+    },
+  });
+  assert.equal(first.ok, true);
+  const storedInstructions = first.engineSnapshot.activeSkillRecords[0].instructions;
+  let decisionCalls = 0;
+  let skillLoads = 0;
+  const events = [];
+  const resumed = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence and report the gaps.",
+    chatHistory: first.appendedMessages,
+    engineSnapshot: first.engineSnapshot,
+    skillRouter: {
+      ...skillRouter,
+      freshRun: false,
+      runDecision: async () => { decisionCalls += 1; throw new Error("recovery must not reroute"); },
+      loadSkill: async () => { skillLoads += 1; throw new Error("recovery must not recompile"); },
+    },
+    sendEvent: (event) => events.push(event),
+    runModelRound: async ({ messages }) => {
+      assert.ok(messages.some((message) => String(message.content || "").includes("ROUTED_SKILL_MARKER")));
+      return { fullText: "The recovery is complete.", toolCalls: [endTurnCall("recovery-resumed-end")] };
+    },
+  });
+  assert.equal(resumed.ok, true);
+  assert.equal(decisionCalls, 0);
+  assert.equal(skillLoads, 0);
+  assert.equal(resumed.engineSnapshot.activeSkillRecords[0].instructions, storedInstructions);
+  assert.equal(resumed.engineSnapshot.checklist.items[0].id, "inspect");
+  assert.equal(events.some((event) => event.type === "task_list" && event.tasks?.[0]?.id === "inspect"), true);
+});
+
+test("checklist replay with a provider call ID uses its durable receipt", async () => {
+  const operation = {
+    action: "create",
+    main_goal: "Review supplied evidence safely",
+    items: [{ id: "inspect", label: "Inspect supplied evidence", description: "Review only supplied files.", status: "in_progress" }],
+  };
+  const replay = checklistCall("replay", operation);
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Continue the evidence review.",
+    engineSnapshot: {
+      skillRouterState: { decisionModel: "typesafe/jev-1.14" },
+      checklist: { main_goal: operation.main_goal, items: operation.items },
+      successfulToolRefs: ["replay"],
+    },
+    skillRouter: { enabled: true, freshRun: false, model: "typesafe/jev-1.14", candidates: [], runDecision: async () => { throw new Error("replay must not route"); } },
+    runModelRound: async () => ({ fullText: "The review continues.", toolCalls: [replay, endTurnCall("replay-end")] }),
+  });
+  assert.equal(result.ok, true, `${result.code || ""}: ${result.error || ""}`);
+  assert.equal(result.engineSnapshot.actionResults[0].ok, true, JSON.stringify(result.engineSnapshot.actionResults));
+  assert.equal(result.engineSnapshot.actionResults[0].error, undefined);
+});
+
+test("skill selection falls back through the agent LLM once after a technical decision failure", async () => {
+  const { skillRouter } = routingFixture();
+  const calls = [];
+  let rounds = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    model: "worker-model",
+    userMessage: "Review the supplied evidence and prepare a report.",
+    skillRouter: {
+      ...skillRouter,
+      runDecision: async () => { throw new Error("decision service unavailable"); },
+      runFallback: async (request) => { calls.push(request); return '{"skill_ids":["evidence-review"]}'; },
+    },
+    runModelRound: async () => {
+      rounds += 1;
+      if (rounds === 1) {
+        assert.equal(calls.length, 0);
+        return { fullText: "", toolCalls: [checklistCall("fallback-checklist")] };
+      }
+      return { fullText: "Reviewed.", toolCalls: [endTurnCall("fallback-end")] };
+    },
+  });
+  assert.equal(result.runState.status, "completed");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, "worker-model");
+  assert.match(calls[0].messages[0].content, /skill_ids/);
+  assert.deepEqual(result.engineSnapshot.activeSkillRecords.map(({ id }) => id), ["evidence-review"]);
+});
+
+test("skill selection still applies its 0.70 threshold after the agent creates a checklist", async () => {
+  for (const score of [0.699, 0.70]) {
+    const { decisions, skillRouter } = routingFixture({ skillScore: score });
+    let rounds = 0;
+    const result = await runAgentTurn({
+      mode: "agent",
+      userMessage: "Review evidence, compare findings, and prepare the report.",
+      skillRouter,
+      runModelRound: async () => {
+        rounds += 1;
+        return rounds === 1
+          ? { fullText: "", toolCalls: [checklistCall(`threshold-${score}`)] }
+          : { fullText: "Report ready.", toolCalls: [endTurnCall(`threshold-end-${score}`)] };
+      },
+    });
+    assert.equal(result.runState.status, "completed");
+    assert.equal(decisions.length, 1);
+    assert.equal(result.engineSnapshot.activeSkillRecords.length, score >= 0.7 ? 1 : 0);
+  }
+});
+
+test("older router snapshots keep the frozen model without forcing their old planning decision", async () => {
+  const { skillRouter } = routingFixture();
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Hi",
+    engineSnapshot: { planState: { evaluated: true, requiresPlan: true, decisionModel: "frozen-model" } },
+    skillRouter: { ...skillRouter, freshRun: false, model: "new-settings-model", runDecision: async () => { throw new Error("no checklist means no picker call"); } },
+    runModelRound: async ({ tools }) => {
+      assert.ok(tools.length > 1);
+      return { fullText: "Hello.", toolCalls: [endTurnCall("migration-end")] };
+    },
+  });
+  assert.equal(result.runState.status, "completed");
+  assert.equal(result.engineSnapshot.skillRouterState.decisionModel, "frozen-model");
+  assert.equal(Object.hasOwn(result.engineSnapshot, "planState"), false);
+});
+
+test("unfinished pre-router runs keep their existing tool behavior", async () => {
+  const { skillRouter } = routingFixture();
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Continue the work.",
+    engineSnapshot: { version: 1 },
+    skillRouter: { ...skillRouter, freshRun: false, runDecision: async () => { throw new Error("legacy runs must not route"); } },
+    runModelRound: async ({ tools }) => {
+      assert.equal(tools.some((tool) => tool.function.name === "manage_task_checklist"), false);
+      return { fullText: "Done.", toolCalls: [endTurnCall("legacy-end")] };
+    },
+  });
+  assert.equal(result.runState.status, "completed");
+  assert.equal(result.engineSnapshot.skillRouterState, null);
+});
+
+test("cancellation during skill selection never invokes fallback or another agent turn", async () => {
+  const { skillRouter } = routingFixture();
+  const controller = new AbortController();
+  let fallbacks = 0;
+  let modelCalls = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence.",
+    signal: controller.signal,
+    skillRouter: {
+      ...skillRouter,
+      runDecision: async () => {
+        controller.abort();
+        throw Object.assign(new Error("cancelled"), { code: "SKILL_ROUTER_CANCELLED", aborted: true });
+      },
+      runFallback: async () => { fallbacks += 1; return '{"skill_ids":[]}'; },
+    },
+    runModelRound: async () => {
+      modelCalls += 1;
+      return { fullText: "", toolCalls: [checklistCall("cancel-checklist")] };
+    },
+  });
+  assert.equal(result.aborted, true);
+  assert.equal(fallbacks, 0);
+  assert.equal(modelCalls, 1);
+  assert.equal(result.engineSnapshot.checklist.items[0].id, "inspect");
+});
+
+test("context preview does not invoke the skill picker", async () => {
+  let decisionCalls = 0;
+  const preview = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence.",
+    previewOnly: true,
+    skillRouter: {
+      enabled: true,
+      freshRun: true,
+      model: "typesafe/jev-1.14",
+      candidates: [],
+      runDecision: async () => { decisionCalls += 1; throw new Error("preview must not route"); },
+    },
+    runModelRound: async () => { throw new Error("preview must not run the model"); },
+    executeToolCall: async () => { throw new Error("preview must not execute tools"); },
+  });
+  assert.equal(preview.ok, true);
+  assert.equal(preview.preview, true);
+  assert.equal(decisionCalls, 0);
+});
+
+test("a stale skill decision retries with updated task context without using fallback", async () => {
+  const { skillRouter } = routingFixture();
+  let nativeCalls = 0;
+  let fallbackCalls = 0;
+  let rounds = 0;
+  let delivered = false;
+  let boundaryRevision = 0;
+  const seenTasks = [];
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence.",
+    initialInputId: "initial-task",
+    skillRouter: {
+      ...skillRouter,
+      runDecision: async ({ state, questions }) => {
+        nativeCalls += 1;
+        seenTasks.push(state.task);
+        if (nativeCalls === 1) throw new Error("superseded request failed");
+        return { answers: Object.fromEntries(Object.keys(questions).map((id) => [id, { type: "noul", noul: 0.1 }])) };
+      },
+      runFallback: async () => { fallbackCalls += 1; return '{"skill_ids":[]}'; },
+    },
+    liveInput: {
+      boundary: async ({ kind }) => {
+        if (!delivered && kind === "before_decision_fallback") {
+          delivered = true;
+          boundaryRevision = 1;
+          return { ok: true, revision: boundaryRevision, deliveries: [{ id: "steering-1", text: "Only summarize the supplied files.", revision: 1 }] };
+        }
+        return { ok: true, revision: boundaryRevision, deliveries: [] };
+      },
+      checkpoint: async () => ({ ok: true }),
+      prepareRound: async ({ revision, result: roundResult }) => ({ ok: true, plan: { id: `prepared-round-${rounds}`, revision, result: roundResult } }),
+      finalize: async () => ({ ok: true, completed: true }),
+    },
+    runModelRound: async () => {
+      rounds += 1;
+      return rounds === 1 ? { fullText: "", toolCalls: [checklistCall("stale-checklist")] }
+        : { fullText: "Summary ready.", toolCalls: [endTurnCall("stale-skill-end")] };
+    },
+  });
+  assert.equal(result.runState.status, "completed");
+  assert.equal(nativeCalls, 2);
+  assert.equal(fallbackCalls, 0);
+  assert.match(seenTasks[1], /Only summarize the supplied files/);
+});
+
 test("agent tool surface is enabled by default in controller turns", () => {
   assert.equal(AgentToolSurface.toolsEnabled(), true);
 });
@@ -1153,6 +1767,20 @@ test("tool-call batches are not checkpointed until the batch seals", async () =>
   assert.equal(events.some((event) => event.type === "context_checkpoint" && event.reason === "tool_results" && events.indexOf(event) < lastToolResult), false);
 });
 
+test("a throwing checkpoint reports failure and keeps the task recoverable", async () => {
+  const events = [];
+  const tier1 = createWrapUpCrossingCoordinator();
+  tier1.checkpoint = async () => { throw new Error("checkpoint storage temporarily unavailable"); };
+  const result = await runAgentTurn(wrapUpTurnOptions({
+    ids: memoryIds(4418), events, tier1,
+    runModelRound: async () => ({ ok: true, fullText: "The check finished.", toolCalls: [endTurnCall()], finishReason: "stop" }),
+  }));
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.runState.status, "completed");
+  assert.ok(events.some(event => event.type === "context_checkpoint" && event.status === "failed" && event.code === "MEMORY_CHECKPOINT_FAILED"));
+  assert.ok(result.runState.limitations.some(text => /checkpoint storage temporarily unavailable/.test(text)));
+});
+
 test("before_model_call does not force a checkpoint when the ledger holds only the task", async () => {
   const ids = memoryIds(4407);
   const events = [];
@@ -1707,4 +2335,210 @@ test("deferred end_turn while orchestration hold avoids finalize", async () => {
   assert.equal(result.deferredEndTurn, true);
   assert.equal(result.reason, "ORCHESTRATION_HOLD");
   assert.notEqual(result.runState?.status, "completed");
+});
+
+test("steering mid-run asks for a checklist update and holds task actions once", async () => {
+  const { skillRouter } = routingFixture();
+  const executed = [];
+  const payloads = [];
+  let round = 0;
+  let boundaryRevision = 0;
+  let delivered = false;
+  const read = (id) => ({ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: `${id}.md` }) } });
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence.",
+    initialInputId: "initial-task",
+    skillRouter,
+    liveInput: {
+      boundary: async ({ kind }) => {
+        if (!delivered && kind === "after_tools") {
+          delivered = true;
+          boundaryRevision = 1;
+          return { ok: true, revision: 1, deliveries: [{ id: "steering-1", text: "Also check the login form.", revision: 1 }] };
+        }
+        return { ok: true, revision: boundaryRevision, deliveries: [] };
+      },
+      checkpoint: async () => ({ ok: true }),
+      prepareRound: async ({ revision, result: roundResult }) => ({ ok: true, plan: { id: `plan-${round}`, revision, result: roundResult } }),
+      finalize: async () => ({ ok: true, completed: true }),
+    },
+    runModelRound: async (payload) => {
+      payloads.push(payload);
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall(), read("first")] };
+      if (round === 2) return { fullText: "", toolCalls: [read("ignored")] };
+      if (round === 3) return { fullText: "", toolCalls: [checklistCall("absorb", { action: "update", items: [{ id: "login", label: "Check the login form", description: "Operator asked for the login form.", status: "pending" }] }), read("second")] };
+      if (round === 4) return { fullText: "", toolCalls: [read("third")] };
+      return { fullText: "Done.", toolCalls: [endTurnCall(`end-${round}`)] };
+    },
+    executeToolCall: async ({ toolCall }) => {
+      const args = toolCall.function.arguments;
+      executed.push((typeof args === "string" ? JSON.parse(args) : args).path);
+      return { ok: true, value: { content: "fixture" } };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.match(JSON.stringify(payloads[1].messages), /New instructions arrived while you were working/);
+  assert.deepEqual(executed, ["first.md", "second.md", "third.md"], "only the action that ignored the steering is held, and only once");
+  assert.deepEqual(result.engineSnapshot.checklist.items.map(({ id }) => id), ["inspect", "login"]);
+  assert.equal(result.engineSnapshot.checklistReview, null);
+});
+
+test("checklist updates that keep the plan and active item skip skill routing", async () => {
+  const { decisions, skillRouter } = routingFixture();
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence.",
+    skillRouter,
+    runModelRound: async () => {
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall()] };
+      if (round === 2) return { fullText: "", toolCalls: [checklistCall("reword", { action: "update", items: [{ id: "inspect", description: "Only the notes file." }] })] };
+      if (round === 3) return { fullText: "", toolCalls: [checklistCall("extend", { action: "update", items: [{ id: "report", label: "Report findings", description: "Summarize the review.", status: "pending" }] })] };
+      return { fullText: "Done.", toolCalls: [endTurnCall(`end-${round}`)] };
+    },
+    executeToolCall: async () => ({ ok: true, value: {} }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(decisions.length, 2, "the description-only update does not call the decision model");
+  assert.ok(decisions[0].state.active_item?.id === "inspect");
+});
+
+test("long stretches without a checklist update remind the agent of its active item", async () => {
+  const { skillRouter } = routingFixture();
+  const payloads = [];
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the supplied evidence.",
+    skillRouter,
+    runModelRound: async (payload) => {
+      payloads.push(payload);
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall()] };
+      if (round <= 7) return { fullText: "", toolCalls: [{ id: `read-${round}`, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: `n${round}.md` }) } }] };
+      return { fullText: "Done.", toolCalls: [endTurnCall(`end-${round}`)] };
+    },
+    executeToolCall: async () => ({ ok: true, value: { content: "fixture" } }),
+  });
+  assert.equal(result.ok, true);
+  const reminded = payloads.map((payload) => /rounds of actions since the last checklist update/.test(JSON.stringify(payload.messages)));
+  assert.equal(reminded.indexOf(true), 6, "the reminder arrives after five action rounds");
+  assert.match(JSON.stringify(payloads[6].messages), /The active item is \\"Inspect supplied evidence\\"/);
+});
+
+test("checklists work without a skill router, as on Ollama", async () => {
+  const payloads = [];
+  const events = [];
+  const executed = [];
+  let round = 0;
+  const read = (id) => ({ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: `${id}.md` }) } });
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review supplied code, identify evidence gaps, and report the result.",
+    checklistEnabled: true,
+    sendEvent: (event) => events.push(event),
+    runModelRound: async (payload) => {
+      payloads.push(payload);
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall("plan", { action: "create", main_goal: "Review supplied code", items: [
+        { id: "inspect", label: "Inspect the code", description: "Read the supplied files.", status: "pending" },
+        { id: "report", label: "Report gaps", description: "Summarize missing evidence.", status: "pending" },
+      ] }), read("held")] };
+      if (round === 2) return { fullText: "", toolCalls: [checklistCall("start", { action: "update", items: [{ id: "inspect", status: "in_progress" }] }), read("notes")] };
+      return { fullText: "Reviewed.", toolCalls: [endTurnCall(`end-${round}`)] };
+    },
+    executeToolCall: async ({ toolCall }) => {
+      const args = toolCall.function.arguments;
+      executed.push((typeof args === "string" ? JSON.parse(args) : args).path);
+      return { ok: true, value: { content: "fixture" } };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.ok(payloads[0].tools.some((tool) => tool.function.name === "manage_task_checklist"));
+  assert.match(JSON.stringify(payloads[0].messages), /Checklist planning is the default for substantive work/);
+  assert.deepEqual(executed, ["notes.md"], "order is enforced without a skill router");
+  assert.equal(result.engineSnapshot.skillRouterState, null);
+  assert.equal(events.some((event) => event.type === "task_list" && event.tasks?.[0]?.status === "in_progress"), true);
+});
+
+test("runs without the checklist flag or a skill router get no checklist tool", async () => {
+  const seen = [];
+  await runAgentTurn({
+    mode: "agent",
+    userMessage: "Review the notes.",
+    runModelRound: async ({ tools, messages }) => {
+      seen.push({ tools: tools.map((tool) => tool.function.name), messages: JSON.stringify(messages) });
+      return { fullText: "Done.", toolCalls: [endTurnCall()] };
+    },
+  });
+  assert.equal(seen[0].tools.includes("manage_task_checklist"), false);
+  assert.doesNotMatch(seen[0].messages, /Checklist planning is the default/);
+});
+
+test("a run that changed files cannot end until a verification item is finished", async () => {
+  const payloads = [];
+  const ended = [];
+  let round = 0;
+  const patch = (id) => ({ id, type: "function", function: { name: "apply_patch", arguments: JSON.stringify({ patch: "*** Begin Patch\n*** Update File: notes.md\n@@\n-a\n+b\n*** End Patch" }) } });
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Fix the notes file.",
+    checklistEnabled: true,
+    sendEvent: (event) => { if (event.type === "tool_result" && event.tool?.toolName === "end_turn") ended.push(event.result); },
+    runModelRound: async (payload) => {
+      payloads.push(JSON.stringify(payload.messages));
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall("plan", { action: "create", main_goal: "Fix notes", items: [{ id: "fix", label: "Fix notes", description: "Edit notes.md.", status: "in_progress" }] }), patch("edit")] };
+      if (round === 2) return { fullText: "", toolCalls: [checklistCall("done", { action: "update", items: [{ id: "fix", status: "completed" }] }), endTurnCall("early-end")] };
+      if (round === 3) return { fullText: "", toolCalls: [checklistCall("add-check", { action: "update", items: [{ id: "check", label: "Re-read notes", description: "Confirm the edit landed.", status: "in_progress", verification: true }] }), { id: "reread", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } }] };
+      if (round === 4) return { fullText: "", toolCalls: [checklistCall("checked", { action: "update", items: [{ id: "check", status: "completed" }] }), endTurnCall("final-end")] };
+      return { fullText: "Done.", toolCalls: [endTurnCall(`end-${round}`)] };
+    },
+    executeToolCall: async () => ({ ok: true, value: { content: "fixture" } }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(round, 4, "the run ends once verification is complete");
+  assert.equal(ended[0].errorCode, "CHECKLIST_VERIFICATION_REQUIRED");
+  assert.match(payloads[2], /no verification item/);
+  assert.equal(result.engineSnapshot.verificationHolds, 1);
+});
+
+test("verification holds are capped so a run always finishes", async () => {
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Fix the notes file.",
+    checklistEnabled: true,
+    maxAgentRounds: 8,
+    runModelRound: async () => {
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall("plan", { action: "create", main_goal: "Fix notes", items: [{ id: "fix", label: "Fix notes", description: "Edit notes.md.", status: "in_progress" }] }), { id: "edit", type: "function", function: { name: "apply_patch", arguments: JSON.stringify({ patch: "*** Begin Patch\n*** Update File: notes.md\n@@\n-a\n+b\n*** End Patch" }) } }] };
+      return { fullText: "Done.", toolCalls: [endTurnCall(`end-${round}`)] };
+    },
+    executeToolCall: async () => ({ ok: true, value: { content: "fixture" } }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(round, 4, "two holds, then the third end_turn is accepted");
+  assert.equal(result.engineSnapshot.verificationHolds, 2);
+});
+
+test("read-only runs end without a verification item", async () => {
+  let round = 0;
+  const result = await runAgentTurn({
+    mode: "agent",
+    userMessage: "Read the notes.",
+    checklistEnabled: true,
+    runModelRound: async () => {
+      round += 1;
+      if (round === 1) return { fullText: "", toolCalls: [checklistCall(), { id: "read", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } }] };
+      return { fullText: "Read.", toolCalls: [endTurnCall(`end-${round}`)] };
+    },
+    executeToolCall: async () => ({ ok: true, value: { content: "fixture" } }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(round, 2);
+  assert.equal(result.engineSnapshot.verificationHolds, 0);
 });

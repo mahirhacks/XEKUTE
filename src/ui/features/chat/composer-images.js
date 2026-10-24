@@ -56,6 +56,15 @@ export function rememberSentImageOriginals(images = []) {
   while (sentImageOriginals.size > 100) sentImageOriginals.delete(sentImageOriginals.keys().next().value);
 }
 
+// A steering message that was not saved gives its images back to the
+// composer, ahead of anything attached since, so Send can retry them.
+export function restoreComposerImages(images = []) {
+  if (!images.length) return;
+  appState.composerImages = mergeImageAttachments(images, appState.composerImages).list;
+  renderComposerAttachments();
+  updateSendBtn();
+}
+
 export function takeComposerImages() {
   const taken = appState.composerImages;
   appState.composerImages = [];

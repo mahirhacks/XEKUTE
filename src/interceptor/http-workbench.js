@@ -1,6 +1,7 @@
 const MAX_RESPONSE_BYTES = 1_000_000;
 const ALLOWED_MODES = new Set(["interceptor", "repeater", "intruder"]);
 const { decodeHttpBody, headersWithDecodedBodyLength } = require("./http-body-decoder");
+const ScopeEngine = require("../domain/scope/scope-engine");
 
 function parseRawHttpRequest(rawRequest) {
   const raw = String(rawRequest || "").replace(/\r\n/g, "\n");
@@ -46,27 +47,8 @@ function parseRawHttpRequest(rawRequest) {
   return { ok: true, method, url, headers, body, raw };
 }
 
-function targetValue(target) {
-  return typeof target === "string" ? target : String(target?.value || "");
-}
-
 function urlMatchesTarget(url, target) {
-  const raw = targetValue(target).trim();
-  if (!raw) return false;
-  const withoutScheme = raw.replace(/^https?:\/\//i, "").replace(/\/$/, "");
-  if (withoutScheme.startsWith("*.")) {
-    const domain = withoutScheme.slice(2).split("/")[0].toLowerCase();
-    return url.hostname.toLowerCase().endsWith(`.${domain}`);
-  }
-  try {
-    const scoped = new URL(/^https?:\/\//i.test(raw) ? raw : `${url.protocol}//${raw}`);
-    if (scoped.hostname.toLowerCase() !== url.hostname.toLowerCase()) return false;
-    if (scoped.port && scoped.port !== url.port) return false;
-    const scopePath = scoped.pathname.replace(/\/$/, "");
-    return !scopePath || scopePath === "" || url.pathname === scopePath || url.pathname.startsWith(`${scopePath}/`);
-  } catch {
-    return url.hostname.toLowerCase() === withoutScheme.toLowerCase();
-  }
+  return ScopeEngine.evaluateTarget(String(url), { targets: [target] }).allowed;
 }
 
 function rawResponseText(status, statusText, headers, body) {
@@ -153,13 +135,13 @@ function createSecurityHttpWorkbench({ fs, path, fetchImpl = globalThis.fetch, a
 
     if (!projectProfile || !runtimeSettings) return { error: "App-managed project settings are required", code: "PROJECT_SETTINGS_REQUIRED" };
     const rules = projectProfile.rulesOfEngagement || {};
-    const inScope = { targets: projectProfile.scope?.inScopeTargets || [], authorization: projectProfile.authorization || {} };
+    const inScope = ScopeEngine.policyFromProjectScope(projectProfile.scope);
     const configuration = { safety: { requestTimeoutSeconds: Number(rules.requestTimeoutSeconds) || 15 } };
     const settings = runtimeSettings;
 
     const parsed = parseRawHttpRequest(rawRequest);
     if (parsed.error) return parsed;
-    if (!(inScope.targets || []).some((target) => urlMatchesTarget(parsed.url, target))) {
+    if (!ScopeEngine.evaluateTarget(parsed.url.toString(), inScope).allowed) {
       return { error: `${parsed.url.hostname} is not listed under Project Settings > Scope`, code: "OUT_OF_SCOPE" };
     }
 

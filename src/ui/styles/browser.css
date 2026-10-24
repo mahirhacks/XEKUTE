@@ -24,7 +24,7 @@
 
 /* Tab strip */
 .browser-tabbar { display:flex; align-items:flex-end; flex-shrink:0; gap:2px; min-height:36px; padding:5px 8px 0; background:var(--browser-bg); }
-.browser-web-tabs { display:flex; align-items:flex-end; gap:2px; min-width:0; overflow-x:auto; scrollbar-width:none; }
+.browser-web-tabs { display:flex; flex:1; align-items:flex-end; gap:2px; min-width:0; overflow-x:auto; scrollbar-width:none; }
 .browser-web-tabs::-webkit-scrollbar { display:none; }
 .browser-new-toggle { margin:0 0 4px 2px; width:26px; height:26px; }
 .browser-web-tab { position:relative; display:flex; align-items:center; flex-shrink:0; width:200px; min-width:110px; height:31px; border-radius:8px 8px 0 0; color:var(--browser-muted); }
@@ -89,7 +89,10 @@
 
 /* Status and viewport */
 .browser-status { display:flex; align-items:center; gap:8px; flex-shrink:0; padding:7px 14px; background:#1d1d20; border-bottom:1px solid var(--browser-border); color:#b5b5bc; font-size:12px; }
-.browser-status::before { content:"\ea74"; font:13px/1 codicon; color:#7f95cf; }
+.browser-status::before { content:"\ea74"; flex-shrink:0; font:13px/1 codicon; color:#7f95cf; }
+.browser-status-message { flex:1; min-width:0; overflow-wrap:anywhere; }
+.browser-status-dismiss { display:inline-flex; align-items:center; justify-content:center; flex:0 0 20px; width:20px; height:20px; padding:0; }
+.browser-status-dismiss:hover { background:var(--browser-hover); }
 .browser-status.error { background:#2a1c1c; color:#f0b4b4; }
 .browser-status.error::before { content:"\ea87"; color:var(--browser-danger); }
 .browser-viewport { position:relative; flex:1; min-height:0; min-width:0; overflow:hidden; background:var(--browser-bg); }

@@ -118,7 +118,8 @@ test("metadata survives cold reopen but a restored PID never authorizes Stop or 
   assert.equal((await cold.start(f.workspace, f.input, runtime)).error.code, "PROCESS_RECONCILIATION_REQUIRED");
   assert.equal(f.children.length, 1);
   assert.equal(f.killed.length, 0);
-  assert.equal(sampleCalls, 0, "PID liveness is not ownership evidence");
+  assert.ok(sampleCalls > 0, "liveness is checked only to settle handles whose process exited");
+  assert.equal((await cold.list(f.workspace, {}, runtime)).value.processes[0].status, "reconciliation_required", "a live PID is not ownership evidence");
   const raw = fs.readFileSync(path.join(f.baseDir, "protected", fs.readdirSync(path.join(f.baseDir, "protected"))[0]), "utf8");
   assert.equal(raw.includes("chat-a"), false);
   assert.equal(raw.includes("do-not-persist-this-secret"), false);
@@ -233,4 +234,47 @@ test("explicit task Stop terminates an actual child after observation wait detac
   const result = await manager.stopOwned({ workspace: f.workspace, sessionId: "chat-a", runId: "main" });
   assert.equal(result.ok, true);
   assert.equal((await manager.status(f.workspace, { process_id: started.value.processId })).value.status, "stopped");
+});
+
+test("a restored handle whose process exited settles instead of blocking", async (t) => {
+  const f = fixture(t);
+  const runtime = { sessionId: "chat-a", runId: "main", operationId: "tool-round-1-call-1" };
+  const started = await f.manager().start(f.workspace, f.input, runtime);
+  const cold = f.manager({ sampleTree: async () => ({ alive: false, pids: [] }) });
+  assert.deepEqual(await cold.reconcile(f.workspace), [started.value.processId]);
+  const status = (await cold.status(f.workspace, { process_id: started.value.processId }, runtime)).value;
+  assert.equal(status.status, "finished_unknown");
+  assert.equal(f.handleStore.read(f.workspace)[0].terminationReason, "host_restart_exited");
+  assert.notEqual((await cold.start(f.workspace, f.input, { ...runtime, operationId: "tool-round-2-call-1" })).error?.code, "PROCESS_RECONCILIATION_REQUIRED");
+  assert.equal(f.killed.length, 0);
+});
+
+test("stopping a restored handle settles it only when its process exited", async (t) => {
+  const f = fixture(t);
+  const runtime = { sessionId: "chat-a", runId: "main", operationId: "tool-round-1-call-1" };
+  const started = await f.manager().start(f.workspace, f.input, runtime);
+  let alive = true;
+  const cold = f.manager({ sampleTree: async () => ({ alive, pids: [] }) });
+  const refused = await cold.stop(f.workspace, { process_id: started.value.processId }, runtime);
+  assert.equal(refused.error.code, "PROCESS_IDENTITY_UNPROVEN");
+  alive = false;
+  const settled = await cold.stop(f.workspace, { process_id: started.value.processId }, runtime);
+  assert.equal(settled.ok, true);
+  assert.equal(settled.value.status, "finished_unknown");
+  assert.equal(f.killed.length, 0, "a restored PID is never signalled");
+});
+
+test("the operator can release a restored handle whose PID is still in use", async (t) => {
+  const f = fixture(t);
+  const runtime = { sessionId: "chat-a", runId: "main", operationId: "tool-round-1-call-1" };
+  const started = await f.manager().start(f.workspace, f.input, runtime);
+  const cold = f.manager({ sampleTree: async () => ({ alive: true, pids: [] }) });
+  await cold.reconcile(f.workspace);
+  assert.equal((await cold.list(f.workspace, {})).value.processes[0].status, "reconciliation_required");
+  const released = await cold.releaseUnreconciled(f.workspace);
+  assert.deepEqual(released.value.released, [{ processId: started.value.processId, pid: 999001, stillRunning: true }]);
+  assert.equal((await cold.list(f.workspace, {})).value.processes[0].status, "finished_unknown");
+  assert.equal(f.handleStore.read(f.workspace)[0].terminationReason, "operator_released");
+  assert.equal(f.killed.length, 0, "releasing never signals the PID");
+  assert.deepEqual((await cold.releaseUnreconciled(f.workspace)).value.released, []);
 });

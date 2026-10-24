@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("node:path");
+const ScopeEngine = require("../../../domain/scope/scope-engine");
 
 const MAX_ASSETS = 80;
 const MAX_FILE_BYTES = 2_000_000;
@@ -47,12 +48,7 @@ function resolvesWithin(fs, pathApi, root, target) {
 function inScope(root, target, projectProfileProvider) {
   try {
     const profile = typeof projectProfileProvider === "function" ? projectProfileProvider(root) : null;
-    const values = (profile?.scope?.inScopeTargets || []).map((entry) => typeof entry === "string" ? entry : entry?.value).filter(Boolean);
-    if (!values.length) return false;
-    const host = new URL(target).hostname.toLowerCase();
-    return values.some((value) => {
-      try { return new URL(value).hostname.toLowerCase() === host; } catch { return String(value).toLowerCase().includes(host); }
-    });
+    return ScopeEngine.evaluateTarget(target, ScopeEngine.policyFromProjectScope(profile?.scope)).allowed;
   } catch {
     return false;
   }

@@ -188,15 +188,18 @@ export async function loadWorkspace(folder) {
   setProjectFolder(folder);
   setExplorerActionsEnabled(true);
   TerminalManager.setCwd(folder);
-  await renderTree(folder, fileTree, 0);
-  if (!appController.isCurrent(workspaceOperation.epoch)) return false;
-  await refreshDirMap();
-  if (!appController.isCurrent(workspaceOperation.epoch)) return false;
-  await TerminalManager.openWithProject(folder);
-  if (!appController.isCurrent(workspaceOperation.epoch)) return false;
-  await window.api.watchWorkspace?.(folder);
-  if (!appController.isCurrent(workspaceOperation.epoch)) return false;
-  await restoreChatSessionsForCurrentWorkspace();
+  await Promise.all([
+    restoreChatSessionsForCurrentWorkspace(),
+    (async () => {
+      await renderTree(folder, fileTree, 0);
+      if (!appController.isCurrent(workspaceOperation.epoch)) return;
+      await refreshDirMap();
+      if (!appController.isCurrent(workspaceOperation.epoch)) return;
+      await TerminalManager.openWithProject(folder);
+      if (!appController.isCurrent(workspaceOperation.epoch)) return;
+      await window.api.watchWorkspace?.(folder);
+    })(),
+  ]);
   if (!appController.isCurrent(workspaceOperation.epoch)) return false;
   await loadGuidanceSettings({ preserveSelection: true });
   if (!appController.isCurrent(workspaceOperation.epoch)) return false;

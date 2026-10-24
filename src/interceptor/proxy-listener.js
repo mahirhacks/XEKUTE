@@ -1,4 +1,5 @@
-const { parseRawHttpRequest, urlMatchesTarget } = require("./http-workbench");
+const { parseRawHttpRequest } = require("./http-workbench");
+const ScopeEngine = require("../domain/scope/scope-engine");
 const { summarizeTrafficRecord } = require("../domain/assessment/assessment-workspace");
 const {
   decodeHttpBody,
@@ -96,7 +97,7 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
   let proxy = null;
   let root = "";
   let settings = null;
-  let configuredTargets = null;
+  let configuredScope = { targets: [], wildcardRules: [], excludedTargets: [] };
   let status = { running: false };
   const pending = new Map();
   const records = new Map();
@@ -123,13 +124,13 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
   }
 
   function scopeTargets() {
-    return Array.isArray(configuredTargets) ? configuredTargets : [];
+    return [...configuredScope.targets, ...configuredScope.wildcardRules];
   }
 
   function isInScope(ctx) {
     try {
       const url = requestUrl(ctx);
-      return scopeTargets().some((target) => urlMatchesTarget(url, target));
+      return ScopeEngine.evaluateTarget(url.toString(), configuredScope).allowed;
     } catch {
       return false;
     }
@@ -476,13 +477,20 @@ function createProxyListenerService({ fs, path, assessmentWorkspace, javascriptA
       }
       settings = suppliedSettings;
     } else return { error: "App-managed project runtime settings are required", code: "PROJECT_SETTINGS_REQUIRED" };
-    configuredTargets = Array.isArray(overrides?.targets) ? overrides.targets : null;
+    configuredScope = {
+      targets: Array.isArray(overrides?.targets) ? overrides.targets : [],
+      wildcardRules: Array.isArray(overrides?.wildcardRules) ? overrides.wildcardRules : [],
+      excludedTargets: Array.isArray(overrides?.excludedTargets) ? overrides.excludedTargets : [],
+    };
     if (!settings.listener?.enabled) { await stop(); return { ok: true, running: false }; }
     const host = String(settings.listener.bindAddress || "127.0.0.1");
     const port = Number(settings.listener.port);
     const caDirectory = typeof getCaDirectory === "function" ? getCaDirectory(root) : path.join(root, ".pointer-ca");
     if (proxy && status.running && status.host === host && status.port === port && status.caDirectory === caDirectory) {
-      emitStatus({ settingsUpdated: true, error: "" });
+      const targetCount = scopeTargets().length;
+      const onlyInScope = Boolean(settings.interception?.onlyInScope);
+      const warning = onlyInScope && targetCount === 0 ? "Only in-scope capture is enabled, but In-Scope has no targets" : "";
+      emitStatus({ settingsUpdated: true, targetCount, onlyInScope, warning, error: "" });
       return { ok: true, ...status };
     }
     return start(root, settings);

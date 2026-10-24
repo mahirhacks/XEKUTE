@@ -1,6 +1,24 @@
-const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard, powerSaveBlocker } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain: electronIpcMain, dialog, Menu, shell, session, safeStorage, clipboard, powerSaveBlocker, crashReporter } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const { createMainLog } = require("./main-log.js");
+const mainLog = createMainLog({ directory: () => path.join(app.getPath("userData"), "logs") });
+// Capture native failures before loading addons such as node-pty. JavaScript
+// exception handlers cannot record an access violation in Electron or an addon.
+app.setPath("crashDumps", path.join(app.getPath("userData"), "Crashpad"));
+crashReporter.start({ uploadToServer: false });
+mainLog.write("native.startup", JSON.stringify({
+  pid: process.pid, electron: process.versions.electron, node: process.versions.node,
+  platform: process.platform, arch: process.arch, crashDumps: app.getPath("crashDumps"),
+}));
+app.on("child-process-gone", (_event, details) => {
+  if (details.reason === "clean-exit") return;
+  mainLog.write("native.child-process-gone", `${details.type}: ${details.reason}, exit code ${details.exitCode}`);
+});
+app.on("render-process-gone", (_event, contents, details) => {
+  if (details.reason === "clean-exit") return;
+  mainLog.write("native.render-process-gone", `WebContents ${contents.id}: ${details.reason}, exit code ${details.exitCode}`);
+});
 const crypto = require("crypto");
 const http = require("http");
 const { pathToFileURL } = require("url");
@@ -11,12 +29,12 @@ const { createShellCommandTracker } = require("../services/terminal/shell-comman
 const { sameTerminalOwner, findLiveTerminal } = require("../services/terminal/terminal-ownership.js");
 const { appendTerminalOutput } = require("../services/terminal/active-terminal-catalog.js");
 const { createTerminalOutputBatcher } = require("../services/terminal/terminal-output-batcher.js");
-const { normalizeUserImages, attachUserImages } = require("../services/chat/user-images.js");
+const { normalizeUserImages, attachUserImages, attachImagesByMessageId } = require("../services/chat/user-images.js");
 const { HIDDEN_COMMAND_REVEAL_MS, createHiddenCommandReveal } = require("../services/terminal/agent-terminal-reveal.js");
 const { createAgentTerminalHost } = require("../services/terminal/agent-terminal-host.js");
 const { createCommandReferences } = require("../services/terminal/command-references.js");
 const { defaultRegistry } = require("../../prompts/skills/internal/registry.js");
-const { selectInternalSkill } = require("../../prompts/skills/internal/runner.js");
+const { selectInternalSkill, resolveInternalSkill } = require("../../prompts/skills/internal/runner.js");
 const {
   CREATE_GUIDANCE_TOOL,
   createSpecialSkillToolEntry,
@@ -27,6 +45,7 @@ const { resolveSecurityExecutable } = require("../../agent/tools/process/executa
 const { normalizeAuthorityProfile } = require("../../agent/authority/profiles/profile-manifest.js");
 const Tunables = require("../../agent/runtime/tunables.js");
 const { createAgentSessionRuntime, assignTaskWave } = require("../../agent/runtime/agent-session-runtime.js");
+const OpenRouterDecision = require("../../agent/runtime/openrouter-decision.js");
 const { createChatReferenceResolver } = require("../../agent/runtime/chat-references.js");
 const { accountMasks, describeAccounts, loadAccounts, maskAccountSecrets, resolveAccountVariables } = require("../../agent/runtime/account-variables.js");
 const { createResourceReservations } = require("../../agent/runtime/resource-reservations.js");
@@ -69,7 +88,6 @@ const {
 } = require("../services/guidance/custom-guidance.js");
 const { createContainer } = require("../../infrastructure/di/container");
 const { registerLifecycle, setAllowImmediateQuit, prepareForUpdateInstall, APP_USER_MODEL_ID } = require("./lifecycle.js");
-const { createMainLog } = require("./main-log.js");
 const { toOpenAITool } = require("../../agent/tools/config/tool-registry.js");
 const { createExecutionContext, projectExecutionContext } = require("../../contracts/tool/execution-context");
 const { isMemoryId } = require("../../contracts/memory/index.js");
@@ -329,7 +347,6 @@ function loadRenderer(mainWindow) {
   });
 }
 
-const mainLog = createMainLog({ directory: () => path.join(app.getPath("userData"), "logs") });
 process.on("unhandledRejection", (reason) => mainLog.write("unhandledRejection", reason));
 process.on("uncaughtException", (error) => {
   mainLog.write("uncaughtException", error);
@@ -361,11 +378,28 @@ const liveInputWakeups = new Set();
 // Commands a parked run is still waiting for, by run key. Their outputs reach
 // the task inbox as they finish; the task wakes once the last one is in.
 const parkedCommandWaits = new Map();
+// Images sent with steering messages, keyed by message id. Like a run's opening
+// images they stay out of chat history and checkpoints; each model round
+// attaches them to their message. The oldest entries go first.
+const steeringImages = new Map();
+const STEERING_IMAGE_MESSAGES = 50;
+function rememberSteeringImages(messageId, images) {
+  steeringImages.delete(messageId);
+  steeringImages.set(messageId, images);
+  while (steeringImages.size > STEERING_IMAGE_MESSAGES) steeringImages.delete(steeringImages.keys().next().value);
+}
 const controlSessionOwners = new Map();
 const delegatedChildren = createDelegatedChildStore({ v3SessionStore: container.v3SessionStore });
 const taskResources = createResourceReservations({ listProcesses: async (workspace) => {
   if (!workspace) return [];
-  const listed = await container.durableProcessManager.list(workspace, {});
+  const manager = container.durableProcessManager;
+  let listed = await manager.list(workspace, {});
+  // A stuck handle whose process has since exited settles here, so a running
+  // task unblocks without waiting for the next run's reconcile.
+  if (listed?.ok && listed.value?.processes?.some((record) => record.status === "reconciliation_required")) {
+    await manager.reconcile(workspace);
+    listed = await manager.list(workspace, {});
+  }
   if (!listed?.ok) throw Object.assign(new Error("Process ownership could not be read before reserving the workspace."), { code: "RESOURCE_OWNERSHIP_UNAVAILABLE" });
   return listed?.value?.processes || [];
 } });
@@ -522,7 +556,7 @@ function scheduleReleasePendingEndTurn(parentKey) {
   return scheduleParentContinuationKind(parentKey, "release_pending_end_turn", async () => {
     const descriptor = parentRunDescriptors.get(parentKey);
     if (!descriptor || descriptor.aborted || !descriptor.pendingEndTurn) return;
-    if (computeOrchestrationHold(subagentCoordinator, parentKey, { parentContinuationScheduled: false, descriptor })) {
+    if (computeOrchestrationHold(subagentCoordinator, parentKey)) {
       return;
     }
     const continuationPayload = {
@@ -894,6 +928,7 @@ function llmSettingsSnapshot() {
       source: process.env.OPENROUTER_API_KEY ? "environment" : key ? "settings" : "none",
       model: String(openrouter.model || ""),
     },
+    decisionModel: String(openrouter.decisionModel || DEFAULT_DECISION_MODEL),
     hasApiKey: Boolean(key),
     source,
   };
@@ -911,6 +946,7 @@ function saveLlmSettings(payload = {}) {
   delete llm.compaction;
   if (payload.baseUrl !== undefined) llm.openrouter.baseUrl = normalizeBaseUrl(payload.baseUrl);
   if (payload.model !== undefined) llm.openrouter.model = String(payload.model || "").trim();
+  if (payload.decisionModel !== undefined) llm.openrouter.decisionModel = String(payload.decisionModel || DEFAULT_DECISION_MODEL).trim() || DEFAULT_DECISION_MODEL;
   if (payload.apiKey !== undefined) {
     const key = String(payload.apiKey || "").trim();
     if (key) {
@@ -1144,7 +1180,7 @@ function createWindow() {
     title: "XEKUTE",
     frame: false,
     autoHideMenuBar: true,
-    show: false,
+    show: true,
     icon: path.join(__dirname, "../../..", "xekute_icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -1158,6 +1194,11 @@ function createWindow() {
   });
 
   mainWindow.setAppDetails?.({ appId: APP_USER_MODEL_ID, appIconPath: process.execPath });
+  const publishMaximized = function () {
+    if (!this.webContents.isDestroyed()) this.webContents.send("window:maximized", this.isMaximized());
+  };
+  mainWindow.on("maximize", publishMaximized);
+  mainWindow.on("unmaximize", publishMaximized);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (targetUrl !== APP_INDEX_URL) event.preventDefault();
@@ -1166,16 +1207,34 @@ function createWindow() {
     console.error("Renderer failed to load:", code, description, url);
   });
   mainWindow.webContents.on("will-attach-webview", (event) => event.preventDefault());
-  mainWindow.webContents.on("render-process-gone", (_event, details) => {
-    console.error("XEKUTE renderer exited unexpectedly:", details?.reason || "unknown");
-  });
-  mainWindow.once("ready-to-show", () => {
-    if (!mainWindow?.isDestroyed()) mainWindow.show();
-  });
   loadRenderer(mainWindow);
   if (IS_DEV) {
-    mainWindow.webContents.once("did-finish-load", () => {
-      if (!mainWindow?.isDestroyed()) mainWindow.webContents.openDevTools({ mode: "detach" });
+    const inspectedWindow = mainWindow;
+    const inspected = inspectedWindow.webContents;
+    inspected.once("did-finish-load", () => {
+      if (inspectedWindow.isDestroyed()) return;
+      // An explicit owner avoids Electron 43's detached DevTools crash in
+      // WebContents::DevToolsOpened -> SetOwnerWindow during startup.
+      const devtools = new BrowserWindow({
+        width: 1000, height: 760, show: false, autoHideMenuBar: true,
+        backgroundColor: "#181818",
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      devtools.setMenu(null);
+      devtools.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      const destroyDevtools = () => {
+        inspectedWindow.removeListener("closed", destroyDevtools);
+        inspected.removeListener("devtools-closed", destroyDevtools);
+        if (!devtools.isDestroyed()) devtools.destroy();
+      };
+      devtools.once("closed", destroyDevtools);
+      inspectedWindow.once("closed", destroyDevtools);
+      inspected.once("devtools-closed", destroyDevtools);
+      inspected.once("devtools-opened", () => {
+        if (!devtools.isDestroyed()) devtools.showInactive();
+      });
+      inspected.setDevToolsWebContents(devtools.webContents);
+      inspected.openDevTools({ mode: "detach" });
     });
   }
   const senderId = mainWindow.webContents.id;
@@ -1402,6 +1461,7 @@ registerProjectIpc({
   ollamaHostLabel,
   saveLlmSettings,
   llmSettingsSnapshot,
+  listOpenRouterDecisionModels,
   GUIDANCE_EXTENSIONS,
   MAX_GUIDANCE_FILE_BYTES,
   formatWorkspaceGuidance,
@@ -1413,6 +1473,10 @@ registerProjectIpc({
 
 ipcMain.handle("window:minimize", () => {
   mainWindow?.minimize();
+});
+
+ipcMain.on("window:requestMaximized", event => {
+  event.sender.send("window:maximized", mainWindow.isMaximized());
 });
 
 ipcMain.handle("window:toggleMaximize", () => {
@@ -1820,6 +1884,13 @@ ipcMain.handle("tools:startProcess", async (_event, { workspace, command }) => {
   return startWorkspaceProcess(workspace, command, _event.sender.id);
 });
 
+// The operator's escape hatch for command handles that survived a restart and
+// still name a live PID: Xekute stops tracking them without signalling the PID.
+ipcMain.handle("processes:releaseUnreconciled", async (_event, { workspace } = {}) => {
+  if (typeof workspace !== "string" || !workspace.trim()) return { ok: false, error: "A workspace is required." };
+  return container.durableProcessManager.releaseUnreconciled(workspace);
+});
+
 ipcMain.handle("tools:readProcess", async (_event, { id }) => {
   return { mode: "process_read", ...readToolProcess(id, _event.sender.id) };
 });
@@ -2045,6 +2116,7 @@ function sanitizeOllamaMessages(messages) {
 }
 
 const DEFAULT_OLLAMA_PORT = 11435;
+const DEFAULT_DECISION_MODEL = "typesafe/jev-1.14";
 
 function normalizeOllamaHostInput(value) {
   const raw = String(value || "").trim();
@@ -2237,7 +2309,7 @@ async function listOpenRouterModels() {
       const id = String(item?.id || "").trim();
       if (!id) continue;
       const outputModalities = Array.isArray(item.architecture?.output_modalities) ? item.architecture.output_modalities : [];
-      if (outputModalities.includes("decisions") && !outputModalities.includes("text")) {
+      if (outputModalities.includes("decisions")) {
         decisionOnlyIds.add(id);
         continue;
       }
@@ -2267,6 +2339,23 @@ async function listOpenRouterModels() {
     return { models: [...new Set(models)].sort(), provider: "openrouter", host: "OpenRouter", modelMeta };
   } catch (error) {
     return { error: error.message, code: error.code || "OPENROUTER_LIST_FAILED", provider: "openrouter" };
+  }
+}
+
+async function listOpenRouterDecisionModels() {
+  try {
+    const response = await openRouterFetch("/models?output_modalities=decisions");
+    const data = await response.json();
+    if (!response.ok) return { error: data?.error?.message || `OpenRouter error: ${response.status}`, provider: "openrouter" };
+    const models = (Array.isArray(data?.data) ? data.data : [])
+      .filter((item) => Array.isArray(item?.architecture?.output_modalities) && item.architecture.output_modalities.includes("decisions"))
+      .filter((item) => item.available !== false && item.status !== "unavailable")
+      .map((item) => ({ id: String(item.id || "").trim(), name: String(item.name || item.id || "").trim() }))
+      .filter((item) => item.id)
+      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+    return { models, provider: "openrouter" };
+  } catch (error) {
+    return { error: error.message, code: error.code || "OPENROUTER_DECISION_MODELS_FAILED", provider: "openrouter" };
   }
 }
 
@@ -2527,6 +2616,21 @@ async function runOpenRouterJson({ model, messages, workspace, temperature = 0, 
     if (timer) clearTimeout(timer);
     signal?.removeEventListener?.("abort", stop);
   }
+}
+
+async function runOpenRouterDecision({ model, state, questions, signal = null, timeoutMs = 20_000 } = {}) {
+  const apiKey = getOpenRouterApiKey();
+  return OpenRouterDecision.runOpenRouterDecision({
+    model,
+    state,
+    questions,
+    signal,
+    timeoutMs,
+    apiKey,
+    baseUrl: getOpenRouterBaseUrl(),
+    headers: openRouterHeaders(apiKey, { referer: "https://xekute.local", title: "XEKUTE" }),
+    fetchImpl: fetch,
+  });
 }
 ipcMain.handle("ollama:list", async () => {
   if (getActiveProvider() === "openrouter") return listOpenRouterModels();
@@ -3494,6 +3598,18 @@ async function runTier1CheckpointDelta({ request, model = "", provider = "", rea
 
 async function handleAgentRun(event, payload = {}, options = {}) {
   const sender = event.sender;
+  const resumeStopped = Boolean(payload.resumeTaskId) && !options.automaticContinuation && !payload.backgroundRuntime && !payload.internalRuntimeInput;
+  if (resumeStopped) {
+    const resumeSessionId = String(payload.sessionId || payload.memorySessionId || "");
+    if (liveRunForSession(resumeSessionId)) return { ok: false, code: "PARENT_BUSY", error: "The previous invocation is still stopping. Retry Resume once it finishes." };
+    const memorySessionId = tier1SessionIdForRun(resumeSessionId, sessionRunKey(resumeSessionId));
+    const state = agentSessionRuntime?.supervisor.snapshot({ workspace: payload.workspace || "", sessionId: memorySessionId });
+    const task = state?.control?.tasks.find((entry) => entry.id === payload.resumeTaskId);
+    if (!state?.ok || task?.status !== "stopped" || !task.engine || task.childRun) return { ok: false, code: "TASK_RESUME_UNAVAILABLE", error: "This task has no saved stopped run to resume." };
+    payload = { ...task.binding, workspace: payload.workspace || "", sessionId: resumeSessionId, chatSessionId: payload.chatSessionId,
+      runId: task.runId, taskId: task.id, blockId: task.blockId, userMessage: task.objective, resumeTaskId: task.id,
+      internalRuntimeInput: false, backgroundRuntime: false, continuation: null };
+  }
   const userImages = normalizeUserImages(payload.userImages);
   if (!userImages.ok) return { ok: false, error: userImages.error, code: "USER_IMAGES_INVALID" };
   const sessionId = String(payload.sessionId || payload.memorySessionId || "");
@@ -3555,7 +3671,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
       .find((wave) => wave && (wave.resultQueue?.length || (wave.wave && !wave.wave.sealed)));
     if (savedWave) subagentCoordinator.restoreWave(coordinationKey, savedWave);
   }
-  const isContinuation = Boolean(continuationResultId || continuationQuestionId || payload.internalRuntimeInput || options.liveInputContinuation || options.releasePendingEndTurn || payload.releasePendingEndTurn);
+  const isContinuation = Boolean(resumeStopped || continuationResultId || continuationQuestionId || payload.internalRuntimeInput || options.liveInputContinuation || options.releasePendingEndTurn || payload.releasePendingEndTurn);
   if (!isContinuation && !canonicalControl?.control?.tasks.some((task) => task.kind === "primary" && ["running", "waiting"].includes(task.status))) subagentCoordinator.resetParentForTask?.(coordinationKey);
   const parentTurn = continuationResultId
     ? subagentCoordinator.claimResult(coordinationKey, continuationResultId)
@@ -3647,6 +3763,90 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     const unknown = (listed?.value?.processes || []).filter((record) => record.status === "reconciliation_required" && (!session || record.sessionId === session));
     return [...running, ...unknown.map((record) => ({ ...record, processId: record.id }))];
   };
+  const requestedProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");
+  const selectedCatalog = toolCatalogFromRegistry(container.toolRegistry);
+  const catalogMode = selectedCatalog.mode;
+  const internalSkillId = payload.internalRuntimeInput ? String(payload.internalSkillId || "").trim().toLowerCase() : "";
+  const skillIntent = payload.internalRuntimeInput
+    ? (internalSkillId ? `/${internalSkillId}` : "")
+    : continuationResultId
+      ? parentDescriptor?.payload?.userMessage
+      : payload.userMessage;
+  const resolvedSpecialSkill = selectInternalSkill(defaultRegistry, skillIntent || "", { mode: requestedProfile.key, workspace: payload.workspace || "" });
+  let activeSpecialSkill = resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null;
+  const automaticSkillIds = new Set((typeof defaultRegistry?.listInternal === "function" ? defaultRegistry.listInternal() : [])
+    .map((manifest) => String(manifest?.id || ""))
+    .filter((id) => !["create-rule", "create-skill", "create-subagent"].includes(id)));
+  // Intent matching used to load a special skill before the task was planned.
+  // Automatic skills now enter only through the checklist picker; explicit
+  // slash invocations and the three system-command skills keep their behavior.
+  if (resolvedSpecialSkill?.selectedBy === "intent" && automaticSkillIds.has(String(resolvedSpecialSkill.id || ""))) {
+    activeSpecialSkill = null;
+  }
+  for (const definition of createSpecialSkillToolDefinitions(activeSpecialSkill)) {
+    if (!selectedCatalog.tools.some((tool) => tool?.function?.name === definition?.function?.name)) {
+      selectedCatalog.tools.push(definition);
+    }
+  }
+
+  const providerForRun = String(payload.provider || getActiveProvider() || "").trim().toLowerCase();
+  const checklistEnabled = ["agent", "ask"].includes(requestedProfile.key);
+  const routerEligible = providerForRun === "openrouter" && checklistEnabled;
+  const decisionModel = routerEligible
+    ? String(
+      parentDescriptor?.payload?.decisionModel
+        || payload.decisionModel
+        || llmPreferences().openrouter?.decisionModel
+        || DEFAULT_DECISION_MODEL,
+    ).trim() || DEFAULT_DECISION_MODEL
+    : "";
+  let skillRouterConfig = null;
+  if (routerEligible) {
+    const project = readProjectProfile(payload.workspace)?.profile || {};
+    const scope = project.scope || {};
+    const rules = project.rulesOfEngagement || {};
+    const list = (value) => (Array.isArray(value) ? value.map((item) => String(item || "").slice(0, 500)).filter(Boolean).slice(0, 100) : []);
+    const routingScope = {
+      inScopeTargets: list(scope.inScopeTargets),
+      outOfScopeTargets: list(scope.outOfScopeTargets),
+      wildcardRules: list(scope.wildcardRules),
+      thirdPartyAssets: list(scope.thirdPartyAssets),
+      authenticationDependencies: list(scope.authenticationDependencies),
+      notes: String(scope.notes || "").slice(0, 4_000),
+      rulesOfEngagement: {
+        testingWindows: list(rules.testingWindows),
+        allowedTechniques: list(rules.allowedTechniques),
+        restrictedTechniques: list(rules.restrictedTechniques),
+        prohibitedActions: list(rules.prohibitedActions),
+        stopConditions: list(rules.stopConditions),
+      },
+    };
+    skillRouterConfig = {
+      enabled: true,
+      freshRun: !isContinuation,
+      model: decisionModel,
+      candidates: defaultRegistry.listInternal(),
+      scope: routingScope,
+      runDecision: runOpenRouterDecision,
+      loadSkill: (id, options = {}) => resolveInternalSkill(defaultRegistry, id, {
+        mode: options.mode || requestedProfile.key,
+        workspace: options.workspace || payload.workspace || "",
+        compact: true,
+      }),
+      runFallback: ({ model, messages, signal }) => runOpenRouterJson({
+        model: model || payload.model,
+        messages,
+        workspace: payload.workspace || "",
+        temperature: 0,
+        maxCompletionTokens: 256,
+        timeoutMs: 30_000,
+        responseFormat: { type: "json_object" },
+        signal,
+      }),
+    };
+    payload = { ...payload, decisionModel };
+    if (parentDescriptor) parentDescriptor.payload = { ...parentDescriptor.payload, decisionModel };
+  }
   const delegationProvider = createRuntimeDelegationProvider({
     senderId: event.sender.id,
     runKey: coordinationKey,
@@ -3659,6 +3859,8 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     workspace: payload.workspace || "",
     mode: payload.mode || "agent",
     modeFamily: payload.modeFamily || "xekute",
+    skillRouter: skillRouterConfig,
+    checklistEnabled,
     authorityProfile: normalizeAuthorityProfile(payload.authorityProfile),
     projectProfile: agentProjectProfile(payload.workspace),
     sessionId,
@@ -3769,7 +3971,7 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     // supplied to delegated turns.
     tier1Context: tier1ProjectId ? container.memoryTier1Coordinator : null,
     loadChatReferenceSnapshot: (input) => agentSessionRuntime.loadChatReferenceSnapshot(input),
-    tier1Model: tier1ProjectId ? createTier1ModelCallback(payload) : null,
+    getTier1Model: (binding) => tier1ProjectId ? createTier1ModelCallback({ ...payload, ...binding }) : null,
     workingReferences: [],
     toolMetadataForName: (name, childSessionId = sessionId) => container.mcpRuntime?.metadata?.(name, {
       workspace: payload.workspace,
@@ -3821,25 +4023,6 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     });
     if (runResult?.ok) assessmentRun = runResult.run;
   }
-  const requestedProfile = normalizeProfile(payload.modeFamily || "xekute", payload.mode || "agent");
-  const selectedCatalog = toolCatalogFromRegistry(container.toolRegistry);
-  const catalogMode = selectedCatalog.mode;
-  const internalSkillId = payload.internalRuntimeInput ? String(payload.internalSkillId || "").trim().toLowerCase() : "";
-  const skillIntent = payload.internalRuntimeInput
-    ? (internalSkillId ? `/${internalSkillId}` : "")
-    : continuationResultId
-      ? parentDescriptor?.payload?.userMessage
-      : payload.userMessage;
-  const resolvedSpecialSkill = selectInternalSkill(defaultRegistry, skillIntent || "", { mode: requestedProfile.key, workspace: payload.workspace || "" });
-  let activeSpecialSkill = resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null;
-  // Special-skill capabilities are scoped to the active package.  They are
-  // added to this turn's model catalog only; the canonical registry and its
-  // global tool inventory remain unchanged.
-  for (const definition of createSpecialSkillToolDefinitions(resolvedSpecialSkill?.ok ? resolvedSpecialSkill : null)) {
-    if (!selectedCatalog.tools.some((tool) => tool?.function?.name === definition?.function?.name)) {
-      selectedCatalog.tools.push(definition);
-    }
-  }
   const previousRun = agentRunControllers.get(runKey);
   if (previousRun) previousRun.abort();
   runController = new AbortController();
@@ -3865,12 +4048,13 @@ async function handleAgentRun(event, payload = {}, options = {}) {
   let supervisedRun = null;
   if (agentSessionRuntime) {
     supervisedRun = await agentSessionRuntime.admit({ workspace: payload.workspace, sessionId: tier1SessionId,
-      runId: durableRunId, blockId: replyBlockId, taskId: payload.taskId, resume: isContinuation,
+      runId: durableRunId, blockId: replyBlockId, taskId: payload.taskId, resume: isContinuation, resumeStopped,
       snapshotWave: ({ acceptedResultId }) => subagentCoordinator.exportWave(coordinationKey, { acceptedResultId }), continuationResultId,
-      completionBarrier: () => computeOrchestrationHold(subagentCoordinator, coordinationKey),
+      completionBarrier: () => computeOrchestrationHold(subagentCoordinator, coordinationKey, { activeResultId: continuationResultId }),
       inputId: payload.inputId || payload.userMessageId, userMessage: isContinuation ? parentDescriptor?.payload?.userMessage || payload.userMessage : payload.userMessage,
       binding: { ...payload, provider: payload.provider || getActiveProvider() } });
     if (!supervisedRun.ok) return refuseUnsavedInput(supervisedRun, sendAgentEvent);
+    if (resumeStopped && parentDescriptor) parentDescriptor.aborted = false;
     if (supervisedRun.fresh) subagentCoordinator.resetParentForTask?.(coordinationKey);
     durableRunId = supervisedRun.runId;
     tier1SessionId = supervisedRun.sessionId;
@@ -3880,6 +4064,17 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     if (parentDescriptor) parentDescriptor.payload = { ...parentDescriptor.payload, ...supervisedRun.task.binding,
       runId: durableRunId, taskId: supervisedRun.taskId, blockId: replyBlockId, memorySessionId: tier1SessionId };
     sendAgentEvent({ type: "task_started", taskId: supervisedRun.taskId, runId: durableRunId, blockId: replyBlockId, memorySessionId: tier1SessionId });
+  }
+  if (skillRouterConfig) {
+    const frozenDecisionModel = String(
+      supervisedRun?.engineSnapshot?.skillRouterState?.decisionModel
+        || supervisedRun?.engineSnapshot?.planState?.decisionModel
+        || payload.decisionModel
+        || skillRouterConfig.model,
+    ).trim() || DEFAULT_DECISION_MODEL;
+    skillRouterConfig.model = frozenDecisionModel;
+    payload = { ...payload, decisionModel: frozenDecisionModel };
+    if (parentDescriptor) parentDescriptor.payload = { ...parentDescriptor.payload, decisionModel: frozenDecisionModel };
   }
   await delegationProvider.recoverChildren?.({ signal: runController.signal });
   const roundAccountingSnapshot = payload.roundAccountingSnapshot
@@ -3958,6 +4153,10 @@ async function handleAgentRun(event, payload = {}, options = {}) {
         ? subagentQuestionHeadText
         : payload.userMessage || "",
     specialSkill: activeSpecialSkill,
+    skillRouter: skillRouterConfig
+      ? { ...skillRouterConfig, bypassAutomaticSkills: String(skillIntent || "").trim().startsWith("/") }
+      : null,
+    checklistEnabled,
     intelligence: container.assessmentIntelligence,
     projectId: tier1ProjectId,
     precedingBlockId: payload.precedingBlockId || payload.preceding_block_id || "",
@@ -3973,11 +4172,11 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     runModelRound: (roundPayload) => runOllamaAgentRound(event.sender.id, {
       ...roundPayload,
       // Attached images go to the model on every round of this run only.
-      messages: attachUserImages(roundPayload.messages, {
+      messages: attachImagesByMessageId(attachUserImages(roundPayload.messages, {
         text: payload.userMessage,
         images: userImages.images,
         provider: payload.provider || roundPayload.contextPlan?.provider || getActiveProvider(),
-      }),
+      }), steeringImages, payload.provider || roundPayload.contextPlan?.provider || getActiveProvider()),
       provider: payload.provider,
       workspace: payload.workspace,
     }, {
@@ -4046,8 +4245,9 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     findWorkspaceFiles,
     searchWorkspaceIndex,
     orchestrationHold: () => computeOrchestrationHold(subagentCoordinator, coordinationKey, {
-      parentContinuationScheduled: parentContinuationInFlight(coordinationKey),
-      descriptor: parentDescriptor,
+      parentContinuationScheduled: !options.automaticContinuation && parentContinuationInFlight(coordinationKey),
+      descriptor: options.automaticContinuation ? null : parentDescriptor,
+      activeResultId: continuationResultId,
     }),
     setPendingEndTurn: (value) => {
       if (parentDescriptor) parentDescriptor.pendingEndTurn = Boolean(value);
@@ -4117,10 +4317,10 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     const runtimeStatus = result?.runState?.status;
     const assessmentStatus = result?.aborted
       ? "stopped"
-      : ["completed", "inconclusive", "stopped", "failed"].includes(runtimeStatus) ? runtimeStatus : result?.ok ? "completed" : "failed";
+      : runtimeStatus || (result?.ok ? "completed" : "failed");
     assessmentWorkspace.updateRun(payload.workspace, assessmentRun.id, {
       status: assessmentStatus,
-      completedAt: new Date().toISOString(),
+      ...(!["running", "waiting"].includes(assessmentStatus) ? { completedAt: new Date().toISOString() } : {}),
       stopReason: result?.aborted ? "Aborted by operator" : result?.error || "",
       notes: String(result?.finalText || result?.error || "").slice(0, 2000),
     });
@@ -4137,13 +4337,19 @@ async function handleAgentRun(event, payload = {}, options = {}) {
     }
     subagentCoordinator.cancelChildrenForParent(coordinationKey, "PARENT_TASK_ENDED");
   }
+  if (result?.aborted || ["completed", "failed", "stopped", "inconclusive"].includes(String(result?.runState?.status || ""))) {
+    sendAgentEvent({ type: "task_list", clear: true });
+  }
   appendParentRunHistory(coordinationKey, payload, result);
   if (payload.workspace) {
     const status = result?.aborted ? "stopped" : result?.runState?.status || (result?.ok ? "completed" : "failed");
-    await container.longHorizonRunStore.finish(payload.workspace, durableRunId, status, {
+    const patch = {
       evidenceIds: result?.evidenceIds || [],
       error: result?.error ? String(result.error).slice(0, 2000) : "",
-    }).catch(mainLog.ignored("run.finish"));
+    };
+    await (["running", "waiting"].includes(status)
+      ? container.longHorizonRunStore.checkpoint(payload.workspace, durableRunId, { ...patch, status })
+      : container.longHorizonRunStore.finish(payload.workspace, durableRunId, status, patch)).catch(mainLog.ignored("run.finish"));
   }
   const acceptContinuationResult = Boolean(result?.ok && !result?.aborted
     && !["failed", "stopped", "inconclusive", "artifact_sync_failed"].includes(result?.runState?.status));
@@ -4211,6 +4417,8 @@ ipcMain.handle("agent:run", handleAgentRun);
 ipcMain.handle("agent:submitInput", async (event, payload = {}) => {
   const sessionId = String(payload.sessionId || "");
   if (!sessionId) return { ok: false, code: "SESSION_ID_REQUIRED", error: "Choose a chat before sending input." };
+  const inputImages = normalizeUserImages(payload.images);
+  if (!inputImages.ok) return { ok: false, code: "USER_IMAGES_INVALID", error: inputImages.error };
   const key = sessionRunKey(sessionId);
   let descriptor = parentRunDescriptors.get(key);
   const memorySessionId = descriptor?.payload?.memorySessionId || tier1SessionIdForRun(sessionId, key);
@@ -4228,9 +4436,26 @@ ipcMain.handle("agent:submitInput", async (event, payload = {}) => {
         model: payload.model || chat?.selectedModel || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" }, false);
     }
   }
+  // Registered before delivery: the running agent can pick the message up at
+  // its next boundary, before this handler resumes.
+  const messageId = String(payload.messageId || "");
+  if (inputImages.images.length && messageId) rememberSteeringImages(messageId, inputImages.images);
   const receipt = await agentSessionRuntime.receive({ workspace, sessionId: memorySessionId,
     binding: { provider: getActiveProvider(), model: payload.model || descriptor?.payload?.model || llmPreferences().openrouter?.model || "qwen2.5-coder:7b" },
     input: { id: payload.messageId, text: payload.text, targetTaskId: payload.targetTaskId || "" } });
+  if (inputImages.images.length && messageId) {
+    if (!receipt?.ok) steeringImages.delete(messageId);
+    else if (workspace) {
+      // Kept with the chat, like a run's opening images, so a reopened chat
+      // can show them at full quality. Best effort.
+      try {
+        const identity = container.memoryProjectIdentityStore?.resolveV3Project?.(workspace, { persist: true });
+        if (identity?.ok && isMemoryId(identity.projectId, "proj")) {
+          for (const image of inputImages.images) container.tier1SensitiveStore?.writeChatImage?.(String(identity.projectId), memorySessionId, image);
+        }
+      } catch (error) { mainLog.write("chatImage.save", error); }
+    }
+  }
   return refuseUnsavedInput(receipt, (data) => { if (!event.sender.isDestroyed()) event.sender.send("agent:event", { ...data, sessionId }); });
 });
 ipcMain.handle("agent:cancelTask", async (event, payload = {}) => {

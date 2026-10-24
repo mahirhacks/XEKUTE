@@ -3,7 +3,7 @@ import {
   llmOllamaEnableToggle, llmSettingsStatus, llmOpenRouterKeyToggle, llmOpenRouterKeyStatus,
   llmOpenRouterKeyFields, llmOpenRouterBaseToggle, llmOpenRouterBaseFields,
   llmOllamaEndpointToggle, llmOllamaEndpointStatus, llmOllamaEndpointFields, ollamaHostInput,
-  modelsExploreSubagent, modelsSettingsSearch, modelsSettingsList, modelsViewAllBtn,
+  modelsExploreSubagent, decisionModelSelect, modelsSettingsSearch, modelsSettingsList, modelsViewAllBtn,
   ollamaLocationBadge, ollamaActiveEndpoint, ollamaConnectionStatus, ollamaHostReset,
   statusOllamaPort, openRouterBaseUrl, openRouterModel, openRouterApiKey, commandSettingsStatus,
 } from "../../core/dom-refs.js";
@@ -18,6 +18,36 @@ import {
 } from "../models/model-picker.js";
 
 export const OLLAMA_PORT = 11435;
+export const DEFAULT_DECISION_MODEL = "typesafe/jev-1.14";
+
+async function loadDecisionModelOptions(savedValue = DEFAULT_DECISION_MODEL) {
+  if (!decisionModelSelect) return;
+  const selected = String(savedValue || DEFAULT_DECISION_MODEL).trim() || DEFAULT_DECISION_MODEL;
+  decisionModelSelect.replaceChildren();
+  const optionFor = (id, label = id) => {
+    const option = document.createElement("option");
+    option.value = String(id);
+    option.textContent = String(label);
+    return option;
+  };
+  decisionModelSelect.appendChild(optionFor(selected));
+  let catalog;
+  try {
+    catalog = await window.api.openRouterDecisionModels?.();
+  } catch {
+    return;
+  }
+  const models = Array.isArray(catalog?.models) ? catalog.models : [];
+  if (catalog?.error || !models.length) return;
+  decisionModelSelect.replaceChildren();
+  if (!models.some((model) => model?.id === selected)) decisionModelSelect.appendChild(optionFor(selected));
+  for (const model of models) {
+    if (!model?.id) continue;
+    decisionModelSelect.appendChild(optionFor(model.id, model.name || model.id));
+  }
+  if (!decisionModelSelect.options.length) decisionModelSelect.appendChild(optionFor(DEFAULT_DECISION_MODEL));
+  decisionModelSelect.value = selected;
+}
 
 export function syncLlmProviderUi(provider = "ollama") {
   const active = provider === "openrouter" ? "openrouter" : "ollama";
@@ -143,6 +173,8 @@ export function renderModelsSettingsList() {
     toggleLabel.setAttribute("aria-label", `Enable ${name}`);
     const toggleInput = document.createElement("input");
     toggleInput.type = "checkbox";
+    toggleInput.className = "ui-toggle";
+    toggleInput.setAttribute("aria-label", `Enable ${name}`);
     toggleInput.checked = isModelEnabled(name);
     toggleInput.addEventListener("change", () => {
       setModelEnabled(name, toggleInput.checked);
@@ -154,10 +186,7 @@ export function renderModelsSettingsList() {
         syncModelLabel();
       }
     });
-    const toggleSpan = document.createElement("span");
-    toggleSpan.setAttribute("aria-hidden", "true");
     toggleLabel.appendChild(toggleInput);
-    toggleLabel.appendChild(toggleSpan);
     actions.appendChild(toggleLabel);
 
     row.appendChild(nameEl);
@@ -228,6 +257,7 @@ export async function loadLlmSettings() {
   const defaultBaseUrl = result.openrouter?.baseUrl || "https://openrouter.ai/api/v1";
   if (openRouterBaseUrl) openRouterBaseUrl.value = defaultBaseUrl;
   if (openRouterModel) openRouterModel.value = result.openrouter?.model || "";
+  void loadDecisionModelOptions(result.decisionModel || DEFAULT_DECISION_MODEL);
   if (openRouterApiKey) openRouterApiKey.value = "";
   if (llmOpenRouterKeyToggle) llmOpenRouterKeyToggle.checked = false;
   if (llmOpenRouterBaseToggle) {
@@ -285,6 +315,7 @@ export async function saveLlmSettings() {
     provider,
     baseUrl: llmOpenRouterBaseToggle?.checked ? openRouterBaseUrl?.value : "https://openrouter.ai/api/v1",
     model: openRouterModelId,
+    decisionModel: decisionModelSelect?.value || DEFAULT_DECISION_MODEL,
     ...(openRouterApiKey?.value ? { apiKey: openRouterApiKey.value } : {}),
   });
   if (result?.error) {
@@ -293,6 +324,7 @@ export async function saveLlmSettings() {
     return;
   }
   if (openRouterApiKey) openRouterApiKey.value = "";
+  if (decisionModelSelect) decisionModelSelect.value = result.decisionModel || DEFAULT_DECISION_MODEL;
   appState.llmOpenRouterHasSavedKey = Boolean(result.hasApiKey);
   appState.activeLlmProvider = result.provider || provider;
   syncLlmProviderUi(result.provider || provider);

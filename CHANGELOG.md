@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.5] - 2026-10-25
+
+### Added
+
+- Agent-owned checklists, decision-model skill selection, skill-load activity,
+  and interrupted-run resume controls.
+- Browser action deadlines, dismissible browser notices, and on-demand editor,
+  terminal, highlighting, and diagram loading.
+- Adversarial hostname and malicious-markup regression tests.
+
+### Fixed
+
+- Checklist sequencing, steering-message ordering, duplicated streamed content,
+  context accounting, and long-run checkpoint persistence.
+- Wildcard scope consistency across browser and backend tool paths.
+- Browser tab scrolling, native view bounds, startup visibility, DevTools
+  lifecycle, and maximize/restore state.
+- Diagram labels removed by SVG-only sanitization.
+- Production verification on clean checkouts and packaging failure propagation.
+
+### Changed
+
+- Refresh checklist visuals, navigation, Settings toggles, and panel icons.
+- Update security-sensitive runtime and build dependencies and pin production
+  workflow actions to commit SHAs.
+
 ## [0.6.4] - 2026-10-20
 
 This release refreshes the update prompt and the empty project panel, and

@@ -13,7 +13,7 @@ import { messages } from "../../core/dom-refs.js";
 import { appState } from "../../core/app-state.js";
 import { renderMarkdown, scrollMessages } from "../chat/chat-messages.js";
 import { streamingNodeLive, createAssistantTurn } from "../chat/assistant-turn.js";
-import { dismissOrchestratorEscalatedForChild } from "../chat/composer-questions.js";
+import { dismissOrchestratorEscalatedForChild, clearComposerTaskList } from "../chat/composer-questions.js";
 import { updateSendBtn } from "../chat/composer-input.js";
 import { handleParentSubagentLifecycle } from "./parent-continuation.js";
 
@@ -137,7 +137,7 @@ export function childAssistant(run) {
       run.assistant.appendThinking = function delegatedAppendThinking(token) {
         const value = String(token || "");
         this.beginModelBlock();
-        this.noteModelOutput();
+        this.noteActivity();
         this.showPrivateReasoning();
         const fold = this.ensureThinkingFold();
         if (!fold) return;
@@ -269,6 +269,10 @@ export function handleDelegatedChildEvent(payload = {}) {
         } else if (finalText) message.content = finalText;
       }
       run.state = "complete";
+      if (run.taskList?.source === "agent") {
+        run.taskList = null;
+        if (runIsChildVisible(childSessionId)) clearComposerTaskList();
+      }
       run.lifecycleStatus = stopped ? "stopped" : type === "subagent_failed" ? "failed" : "completed";
       run.delegated = false;
       if (run.assistant) run.assistant.turn.setAttribute("aria-busy", "false");

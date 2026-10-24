@@ -119,12 +119,16 @@ export function setToolCardStatus(card, type, message) {
     status.textContent = "";
   }
   syncToolCardPlaceholderVisibility(card);
+  if (card.dataset.faded && (type === "running" || !shouldAutoFadeToolCard(card))) {
+    delete card.dataset.faded;
+    card.classList.remove("tool-card-fade");
+  }
   if (card.isConnected) absorbFileRow(card);
 }
 
 // Timeline rows (Read / Edited / Searched / commands) stay in the Tool Used
 // fold. Only unlabeled transient stubs are eligible to auto-fade.
-export const TOOL_CARD_FADE_MS = 900;
+export const TOOL_CARD_FADE_MS = 320;
 export const TOOL_CARD_KEEP_MUTATION = new Set(["create_guidance"]);
 export function shouldAutoFadeToolCard(card) {
   if (!card) return false;
@@ -141,8 +145,9 @@ export function fadeToolCard(card) {
   card.classList.add("tool-card-fade");
   card.setAttribute("aria-label", `${card.dataset.runningLabel || "Tool"} done`);
   setTimeout(() => {
-    card.classList.add("tool-card-fade-collapse");
-    setTimeout(() => card.remove(), 320);
+    // A late result may have turned a transient stub into a real activity row.
+    if (card.dataset.state === "success" && shouldAutoFadeToolCard(card)) card.remove();
+    else { delete card.dataset.faded; card.classList.remove("tool-card-fade"); }
   }, TOOL_CARD_FADE_MS);
 }
 

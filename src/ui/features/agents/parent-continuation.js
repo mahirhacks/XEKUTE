@@ -20,7 +20,7 @@ import {
   ensureDelegatedChildRun, runIsChildVisible, childAssistant, handleDelegatedChildEvent,
 } from "./delegated-child-runs.js";
 import { appState } from "../../core/app-state.js";
-import { storeLastContextUsage, updateContextUsage } from "../chat/context-usage.js";
+import { storeLastContextUsage, updateContextUsage, applyContextReleaseUi } from "../chat/context-usage.js";
 import {
   applyContextCheckpointUi, applyChatReferenceImportUi,
 } from "../chat/context-checkpoints.js";
@@ -33,13 +33,14 @@ import {
 } from "../chat/tool-labels.js";
 import { ensureToolCard, applyToolResultToUi } from "../chat/tool-cards.js";
 import { isAgentTerminalTool } from "../chat/command-timeline.js";
-import { isTaskListTool } from "../chat/composer-questions.js";
+import { isTaskListTool, renderComposerTaskList } from "../chat/composer-questions.js";
 import { sendMessageWithAgentRuntime } from "../chat/agent-run.js";
 import { isChatSessionStoppedByOperator } from "../chat/run-stop.js";
 import { createAssistantTurn } from "../chat/assistant-turn.js";
 import { MessageIdentity } from "../../core/runtime-globals.js";
 import { modeLabel } from "../chat/chat-mode.js";
 import { updateSendBtn } from "../chat/composer-input.js";
+import { needsWorkspaceRelease, showWorkspaceReleaseNotice } from "../chat/workspace-release-notice.js";
 
   export const subagentContinuationRuns = new Set();
   export const seenSubagentResultIds = new Set();
@@ -96,7 +97,7 @@ export function handleParentSubagentLifecycle(payload = {}) {
     persistedSubagentRowForSession(session, payload);
     if (session.messagesHtml) {
       const host = document.createElement("div");
-      host.innerHTML = session.messagesHtml;
+      host.innerHTML = sanitizePersistedChatHtml(session.messagesHtml);
       if (updateRenderedSubagentCard(payload, host)) {
         session.messagesHtml = sanitizePersistedChatHtml(host.innerHTML);
         captureSessionTranscript(session, host);
@@ -114,6 +115,13 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
   const assistant = childAssistant(run);
   if (!assistant) return;
   const type = String(payload.type || "");
+  if (type === "task_list") {
+    run.taskList = payload.clear ? null : { ...payload, source: "agent" };
+    if (!payload.clear && payload.tasks?.length) assistant.noteActivity();
+    if (runIsChildVisible(childSessionId)) renderComposerTaskList(run.taskList || payload);
+    scheduleDelegatedLiveSnapshot(run);
+    return;
+  }
   if (type === "questions_required") {
     const response = await assistant.requestQuestions(payload);
     await window.api.agentResolveQuestions?.({
@@ -124,7 +132,9 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
     assistant.setStatus(response?.skipped ? "Clarification skipped" : "Clarification answers submitted");
     return;
   }
-  if (type === "thinking") {
+  if (type === "model_start") {
+    assistant.beginModelBlock({ newRound: true });
+  } else if (type === "thinking") {
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
     assistant.appendThinking(payload.token || payload.delta || "");
   } else if (type === "model_round") {
@@ -136,6 +146,8 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
       run.activeStreamContent = assistant.rawContent;
       syncAssistantDraftToHistory(run, assistant, { persist: false });
     }
+  } else if (type === "skills_loaded") {
+    assistant.appendSkillLoad(payload.skills);
   } else if (type === "status" || type === "activity") {
     if (payload.text || payload.summary) assistant.setStatus(String(payload.text || payload.summary));
   } else if (type === "run_state") {
@@ -143,8 +155,7 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
     assistant.setStatus(phase);
   } else if (type === "tool_call") {
     const tools = Array.isArray(payload.tools) ? payload.tools : [];
-    assistant.beginModelBlock();
-    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteModelOutput();
+    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteActivity();
     for (const tool of tools) {
       if (isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) continue;
       ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
@@ -164,11 +175,14 @@ export async function handleDelegatedChildRuntimeEvent(payload = {}) {
       applyEndTurnStopToUi(assistant, payload.result);
     } else {
       const uiResult = toolUiResult(payload.result);
+      if (needsWorkspaceRelease(payload.result)) showWorkspaceReleaseNotice(assistant.contentEl);
       if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
       else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
     }
   } else if (type === "chat_reference_import") {
     applyChatReferenceImportUi(run, payload);
+  } else if (type === "context_release") {
+    applyContextReleaseUi(run, payload);
   } else if (type === "context_checkpoint") {
     applyCheckpointToSession(run.session, payload);
     applyContextCheckpointUi(run, payload);
@@ -298,7 +312,7 @@ export function ensureParentContinuationRun(payload = {}) {
       ? messages
       : (() => {
         const detached = document.createElement("div");
-        detached.innerHTML = session.messagesHtml || "";
+        detached.innerHTML = sanitizePersistedChatHtml(session.messagesHtml || "");
         return detached;
       })();
     run = {
@@ -352,7 +366,13 @@ export async function renderParentContinuationEvent(payload = {}) {
   if (!run?.assistant) return;
   const assistant = run.assistant;
   const visible = appState.activeChatSessionId === run.sessionId && !run.viewHost;
-  if (type === "thinking") {
+  if (type === "task_list") {
+    run.taskList = payload.clear ? null : { ...payload, source: "agent" };
+    if (!payload.clear && payload.tasks?.length) assistant.noteActivity();
+    if (visible) renderComposerTaskList(run.taskList || payload);
+  } else if (type === "model_start") {
+    assistant.beginModelBlock({ newRound: true });
+  } else if (type === "thinking") {
     assistant.setLiveState({ kind: "thinking", detail: "Thinking" });
     assistant.appendThinking(payload.token || payload.delta || "");
   } else if (type === "model_round") {
@@ -366,6 +386,8 @@ export async function renderParentContinuationEvent(payload = {}) {
     }
   } else if (type === "status") {
     assistant.setStatus(payload.text || "Working...");
+  } else if (type === "skills_loaded") {
+    assistant.appendSkillLoad(payload.skills);
   } else if (type === "activity") {
     if (payload.text && !isSilentToolRoutingActivity(payload.text)) assistant.noteTaskActivity(payload.text, payload.kind || "info");
   } else if (type === "output_continuation") {
@@ -376,6 +398,8 @@ export async function renderParentContinuationEvent(payload = {}) {
     applyCheckpointToSession(run.session, payload);
     applyContextCheckpointUi(run, payload);
     if (visible) updateContextUsage();
+  } else if (type === "context_release") {
+    applyContextReleaseUi(run, payload);
   } else if (type === "context_usage" && payload.usage) {
     storeLastContextUsage(payload.usage, { session: run.session, model: run.model, contextPlan: run.contextPlan });
     if (visible) updateContextUsage();
@@ -394,8 +418,7 @@ export async function renderParentContinuationEvent(payload = {}) {
   } else if (type === "tool_call") {
     assistant.finalizeThinking();
     const tools = Array.isArray(payload.tools) ? payload.tools : [];
-    assistant.beginModelBlock();
-    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteModelOutput();
+    if (tools.some((tool) => !isEndTurnTool(tool) && !isTaskListTool(tool))) assistant.noteActivity();
     for (const tool of tools) {
       if (isEndTurnTool(tool) || isTaskListTool(tool) || isAgentTerminalTool(tool)) continue;
       ensureToolCard(assistant.turn, assistant.contentEl, tool, { pending: true });
@@ -416,6 +439,7 @@ export async function renderParentContinuationEvent(payload = {}) {
       applyEndTurnStopToUi(assistant, payload.result);
     } else {
       const uiResult = toolUiResult(payload.result);
+      if (needsWorkspaceRelease(payload.result)) showWorkspaceReleaseNotice(assistant.contentEl);
       if (isAgentTerminalTool(payload.tool)) assistant.completeCommandEvent(payload.tool, uiResult);
       else await applyToolResultToUi(payload.tool, uiResult, assistant.turn, assistant.contentEl);
       if (toolActionName(payload.tool) === "browser_action" && [payload.result.code, payload.result.error?.code].includes("SCOPE_NOT_CONFIGURED")) showScopeRequiredNotice(assistant.contentEl);
@@ -435,6 +459,7 @@ export async function renderParentContinuationEvent(payload = {}) {
     if (finalText && !assistant.rawContent.trim()) assistant.setRawContent(finalText);
     if (result.error && !result.aborted) addErrorMessage(result.error, { container: chatRunContainer(run), session: run.session });
     run.awaitingParentContinuation = true;
+    run.commandWait = Boolean(result.commandWait);
     run.orchestrationHold = Boolean(payload.orchestrationHold || result.orchestrationHold || run.orchestrationHold);
     run.pendingEndTurn = Boolean(payload.pendingEndTurn || result.pendingEndTurn || run.pendingEndTurn);
     assistant.finalizeContent();

@@ -7,6 +7,77 @@ const load = () => import("../src/ui/features/browser/browser-workspace.js");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const makeTab = (id, extra = {}) => ({ id, projectId: "project", purpose: "assessment", identityId: null, owner: { kind: "human" }, operation: { status: "idle" }, controlGeneration: 0, documentVersion: 0, viewportRevision: 0, url: "about:blank", title: "", status: "ready", ...extra });
 
+test("background browser updates preserve focused tab controls", async t => {
+  const env = await setup(t, [makeTab("one"), makeTab("two")]);
+  env.controller.setVisible(true); await env.flush();
+  const button = env.document.querySelector('[data-browser-tab="one"]');
+  button.focus();
+  for (let index = 1; index <= 100; index++) env.event({ type: "updated", tab: makeTab("two", { documentVersion: index, title: `Background ${index}` }) });
+  assert.strictEqual(env.document.querySelector('[data-browser-tab="one"]'), button);
+  assert.strictEqual(env.document.activeElement, button);
+  env.event({ type: "updated", tab: makeTab("one", { owner: { kind: "chat", chatId: "agent" }, operation: { status: "running" } }) });
+  assert.equal(env.document.querySelector(".browser-address").disabled, true, "ownership controls still update immediately");
+});
+
+test("browser notices can be dismissed without closing pages or hiding later errors", async t => {
+  const tab = makeTab("one");
+  const env = await setup(t, [tab]);
+  env.controller.setVisible(true); await env.flush();
+  const status = env.document.querySelector(".browser-status");
+  env.event({ type: "navigation-error", tab, error: { message: "ERR_CERT_AUTHORITY_INVALID" } });
+  await env.flush();
+  assert.equal(status.hidden, false);
+  assert.match(status.textContent, /ERR_CERT_AUTHORITY_INVALID/);
+  const dismiss = status.querySelector('button[aria-label="Dismiss browser message"]');
+  assert.ok(dismiss, "the banner offers a labeled close button");
+  dismiss.click(); await env.flush();
+  assert.equal(status.hidden, true);
+  assert.deepEqual(env.tabs().map(item => item.id), ["one"]);
+  assert.equal(env.calls.some(([name]) => name === "command"), false);
+  env.event({ type: "updated", tab: { ...tab, title: "Still open" } });
+  await env.flush();
+  assert.equal(status.hidden, true, "background metadata does not restore a dismissed notice");
+  env.event({ type: "crashed", tab }); await env.flush();
+  assert.equal(status.hidden, false, "a new failure remains visible");
+  assert.match(status.textContent, /Reload it to recover/);
+  assert.strictEqual(status.querySelector("button"), dismiss);
+  dismiss.click(); await env.flush();
+  assert.equal(status.hidden, true);
+});
+
+test("overflowed browser tabs scroll with a mouse wheel and retain position on page updates", async t => {
+  const env = await setup(t, [makeTab("one"), makeTab("two"), makeTab("three")]);
+  env.controller.setVisible(true); await env.flush();
+  const strip = env.document.querySelector(".browser-web-tabs");
+  Object.defineProperties(strip, { clientWidth: { value: 250 }, scrollWidth: { value: 600 } });
+  const wheel = options => {
+    const event = new env.window.WheelEvent("wheel", { cancelable: true, ...options });
+    strip.dispatchEvent(event); return event;
+  };
+  assert.equal(wheel({ deltaY: 120 }).defaultPrevented, true);
+  assert.equal(strip.scrollLeft, 120);
+  env.event({ type: "updated", tab: makeTab("one", { title: "Updated page" }) });
+  assert.equal(strip.scrollLeft, 120);
+  wheel({ deltaX: 500 }); assert.equal(strip.scrollLeft, 350);
+  assert.equal(wheel({ deltaY: 30 }).defaultPrevented, false);
+  wheel({ deltaY: -100 }); assert.equal(strip.scrollLeft, 250);
+  wheel({ deltaY: 50, ctrlKey: true }); assert.equal(strip.scrollLeft, 250);
+  wheel({ deltaY: -1000 }); assert.equal(strip.scrollLeft, 0);
+});
+
+test("opening or selecting a browser tab reveals it without snapping on metadata updates", async t => {
+  const env = await setup(t, [makeTab("one"), makeTab("two")]);
+  const revealed = [];
+  env.window.HTMLElement.prototype.scrollIntoView = function(options) {
+    revealed.push({ id: this.querySelector("[data-browser-tab]")?.dataset.browserTab, options });
+  };
+  env.controller.setVisible(true); await env.flush();
+  await env.controller.open();
+  env.document.querySelector('[data-browser-tab="two"]').click();
+  env.event({ type: "updated", tab: makeTab("two", { title: "A new title" }) });
+  assert.deepEqual(revealed, ["one", "tab-3", "two"].map(id => ({ id, options: { block: "nearest", inline: "nearest" } })));
+});
+
 async function setup(t, initial = []) {
   const { createBrowserWorkspace } = await load();
   const dom = new JSDOM('<main id="editor-pane"></main><div id="overlay" role="dialog" aria-modal="true" hidden></div>', { pretendToBeVisual: true });

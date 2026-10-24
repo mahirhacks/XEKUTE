@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { policyFromProjectScope } = require("../../domain/scope/scope-engine");
 const { createMcpConfigService } = require("../services/assessment/knowledge/mcp-config-service.js");
 const { createKaliAccessService } = require("../services/assessment/knowledge/kali-access-service.js");
 
@@ -54,6 +55,7 @@ function registerProjectIpc({
   ollamaHostLabel,
   saveLlmSettings,
   llmSettingsSnapshot,
+  listOpenRouterDecisionModels,
   GUIDANCE_EXTENSIONS,
   MAX_GUIDANCE_FILE_BYTES,
   formatWorkspaceGuidance,
@@ -713,7 +715,7 @@ ipcMain.handle("proxy:configure", async (_event, { assessmentPath } = {}) => {
     const project = readProjectProfile(assessmentPath);
     const result = await proxyListener.configure(assessmentPath, {
       settings: nextSettings,
-      targets: project?.profile?.scope?.inScopeTargets || null,
+      ...policyFromProjectScope(project?.profile?.scope),
     });
     if (requestGeneration !== proxyConfigurationGeneration) return proxyListener.getStatus();
     if (!result?.running && assessmentPath) {
@@ -745,7 +747,7 @@ ipcMain.handle("proxy:browserLaunch", async (_event, { assessmentPath = "", iden
     const project = readProjectProfile(assessmentPath);
     proxyStatus = await proxyListener.configure(assessmentPath, {
       settings,
-      targets: project?.profile?.scope?.inScopeTargets || null,
+      ...policyFromProjectScope(project?.profile?.scope),
     });
   }
   if (!proxyStatus?.running) {
@@ -821,7 +823,7 @@ ipcMain.handle("settings:certificatesChoose", async (_event, { assessmentPath = 
     const project = readProjectProfile(assessmentPath);
     await proxyListener.configure(assessmentPath, {
       settings: effectiveProjectRuntimeSettings(assessmentPath),
-      targets: project?.profile?.scope?.inScopeTargets || null,
+      ...policyFromProjectScope(project?.profile?.scope),
     });
   }
   return certificateSettingsSnapshot();
@@ -837,7 +839,7 @@ ipcMain.handle("settings:certificatesReset", async (_event, { assessmentPath = "
     const project = readProjectProfile(assessmentPath);
     await proxyListener.configure(assessmentPath, {
       settings: effectiveProjectRuntimeSettings(assessmentPath),
-      targets: project?.profile?.scope?.inScopeTargets || null,
+      ...policyFromProjectScope(project?.profile?.scope),
     });
   }
   return certificateSettingsSnapshot();
@@ -1037,6 +1039,7 @@ ipcMain.handle("settings:credentialDelete", async (_event, { workspace = "", cre
 
 ipcMain.handle("settings:llmGet", async () => llmSettingsSnapshot());
 ipcMain.handle("settings:llmSet", async (_event, payload = {}) => { try { return saveLlmSettings(payload); } catch (error) { return { error: error.message || "Invalid LLM settings.", code: "LLM_SETTINGS_INVALID" }; } });
+ipcMain.handle("settings:decisionModels", async () => typeof listOpenRouterDecisionModels === "function" ? listOpenRouterDecisionModels() : { models: [], error: "OpenRouter decision model catalog is unavailable." });
 ipcMain.handle("settings:llmTest", async () => {
   if (getActiveProvider() === "openrouter") {
     try { const response = await openRouterFetch("/models"); const data = await response.json(); return response.ok ? { ok: true, provider: "openrouter", modelCount: Array.isArray(data?.data) ? data.data.length : 0 } : { error: data?.error?.message || `OpenRouter error: ${response.status}`, code: "OPENROUTER_TEST_FAILED" }; }

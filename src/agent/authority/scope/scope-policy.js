@@ -51,6 +51,12 @@ function evaluateToolScope({ workspace, toolName, args = {}, normalizedTargets =
   if (toolName === "exec_command") {
     const intent = inspectExecCommand(args);
     if (intent.requiresNetworkScope) {
+      if (intent.unresolvedNetworkTargets.length) {
+        return { ok: false, code: "SCOPE_TARGET_UNRESOLVED",
+          reason: "The command's network destination contains an unresolved variable. Use literal URLs or double-quoted URLs in a foreach loop over literal host strings.",
+          remediation: "Keep destination hosts explicit so scope and DNS checks can validate them before execution.",
+          workspaceRoot: policy.workspaceRoot };
+      }
       const targets = intent.networkTargets;
       if (!targets.length) {
         return { ...evaluateNetworkTarget("", policy), workspaceRoot: policy.workspaceRoot };

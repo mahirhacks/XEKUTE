@@ -19,12 +19,12 @@ export function createLiveInputController({ api, onChange = () => {}, makeId = (
     onChange(session, record);
     return record;
   }
-  function send({ session, sessionId = session.memorySessionId || session.id, workspace = "", text, targetTaskId, messageId = "", deferStart = false, model = session.selectedModel || "" }) {
+  function send({ session, sessionId = session.memorySessionId || session.id, workspace = "", text, targetTaskId, messageId = "", deferStart = false, model = session.selectedModel || "", images = [] }) {
     if (!String(text || "").trim()) return Promise.resolve({ ok: false, error: "EMPTY_INPUT" });
     const record = prepare(session, String(text), messageId);
     if (inFlight.has(record.id)) return inFlight.get(record.id);
     update(session, record, "sending");
-    const operation = Promise.resolve().then(() => api.agentSubmitInput({ sessionId, ...(sessionId === (session.memorySessionId || session.id) ? { chatSessionId: session.id } : {}), workspace, messageId: record.id, text: record.text, deferStart, ...(model ? { model } : {}), ...(targetTaskId ? { targetTaskId } : {}) }))
+    const operation = Promise.resolve().then(() => api.agentSubmitInput({ sessionId, ...(sessionId === (session.memorySessionId || session.id) ? { chatSessionId: session.id } : {}), workspace, messageId: record.id, text: record.text, deferStart, ...(model ? { model } : {}), ...(targetTaskId ? { targetTaskId } : {}), ...(images.length ? { images } : {}) }))
       .then((receipt) => {
         if (!receipt?.ok || receipt.durable !== true || receipt.encrypted !== true || receipt.messageId !== record.id) {
           if ((STATUS_ORDER[record.status] || 0) >= STATUS_ORDER.received) return { ok: true, durable: true, encrypted: true, messageId: record.id, status: record.status, record };

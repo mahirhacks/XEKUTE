@@ -8,6 +8,24 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { createTier1SensitiveStore } = require("../src/app/storage/memory/tier1-sensitive-store.js");
 
+test("Tier 1 checks the encrypted plaintext hash before accepting changed content", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-sensitive-integrity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = createTier1SensitiveStore({ baseDir: root, protector: { available: () => true,
+    encrypt: value => Buffer.from(value).toString("base64"),
+    decrypt: value => Buffer.from(value, "base64").toString(),
+  } });
+  const file = store.transcriptFile("proj_integrity", "session_integrity");
+  assert.equal(store.writeFile(file, { content: "Original content" }).ok, true);
+  assert.deepEqual(store.readFile(file).value, { content: "Original content" });
+  const envelope = JSON.parse(fs.readFileSync(file, "utf8"));
+  envelope.payload = Buffer.from(JSON.stringify({ content: "Changed content" })).toString("base64");
+  fs.writeFileSync(file, JSON.stringify(envelope));
+  const loaded = store.readFile(file);
+  assert.equal(loaded.ok, false);
+  assert.equal(loaded.code, "MEMORY_SENSITIVE_HASH_MISMATCH");
+});
+
 test("Tier 1 preserves an existing encrypted value when secure storage becomes unavailable", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xekute-memory-v3-sensitive-store-"));
   const stateFile = path.join(root, "projects", "proj_fixture", "sessions", "session_fixture", "transcript.enc.json");

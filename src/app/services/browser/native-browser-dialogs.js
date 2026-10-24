@@ -36,7 +36,7 @@ function nativeHandler(eventName) {
   globalThis.__xekutePromptHandler = eventName;
 }
 
-async function prepareBrowserDialogs(contents, page) {
+async function prepareBrowserDialogs(contents, page, current = () => true) {
   // Electron replaces prompt in the main world. The isolated world still has
   // Chromium's native function. A synchronous DOM event carries only prompt
   // strings to that world. No function, preload, or application API is exposed.
@@ -45,17 +45,23 @@ async function prepareBrowserDialogs(contents, page) {
   const receive = `(${receiver.toString()})(${JSON.stringify(eventName)})`;
   const send = `(${nativeHandler.toString()})(${JSON.stringify(eventName)})`;
   const ids = [];
+  const command = async (method, params) => {
+    if (!current()) throw new Error("Browser control ended during dialog setup.");
+    const result = await contents.debugger.sendCommand(method, params);
+    if (!current()) throw new Error("Browser control ended during dialog setup.");
+    return result;
+  };
   const cleanup = async () => {
-    if (contents.isDestroyed() || !contents.debugger.isAttached()) return;
-    await Promise.allSettled(ids.map(identifier => contents.debugger.sendCommand("Page.removeScriptToEvaluateOnNewDocument", { identifier })));
+    if (!current() || contents.isDestroyed() || !contents.debugger.isAttached()) return;
+    await Promise.allSettled(ids.map(identifier => command("Page.removeScriptToEvaluateOnNewDocument", { identifier })));
   };
   try {
-    ids.push((await contents.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", { source: receive })).identifier);
-    ids.push((await contents.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", { source: send, worldName: "xekute-native-dialogs" })).identifier);
+    ids.push((await command("Page.addScriptToEvaluateOnNewDocument", { source: receive })).identifier);
+    ids.push((await command("Page.addScriptToEvaluateOnNewDocument", { source: send, worldName: "xekute-native-dialogs" })).identifier);
     await page.evaluate(receiver, eventName);
-    const { frameTree } = await contents.debugger.sendCommand("Page.getFrameTree");
-    const { executionContextId } = await contents.debugger.sendCommand("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: "xekute-native-dialogs" });
-    const evaluated = await contents.debugger.sendCommand("Runtime.evaluate", { expression: send, contextId: executionContextId });
+    const { frameTree } = await command("Page.getFrameTree");
+    const { executionContextId } = await command("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: "xekute-native-dialogs" });
+    const evaluated = await command("Runtime.evaluate", { expression: send, contextId: executionContextId });
     if (evaluated.exceptionDetails) throw new Error("The native browser prompt adapter could not initialize.");
     return cleanup;
   } catch (error) { await cleanup(); throw error; }

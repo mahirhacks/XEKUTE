@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { policyFromProjectScope } = require("../../domain/scope/scope-engine");
 const { createWorkspaceSearch } = require("../../agent/tools/workspace/workspace-search.js");
 const { createWebResearch } = require("../../app/services/research/web-research.js");
 const { createWebCloneService } = require("../../app/services/research/webclone.js");
@@ -70,10 +71,19 @@ function createContainer({
   if (!app?.getPath) throw new TypeError("DI container requires an Electron app instance");
 
   const config = createAppConfig({ app });
+  let asyncEncryptionCompatible;
   const memoryProtector = {
     available: () => safeStorage?.isEncryptionAvailable?.() || false,
     encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
     decrypt: (payload) => safeStorage.decryptString(Buffer.from(payload, "base64")),
+    async encryptAsync(text) {
+      if (typeof safeStorage.encryptStringAsync !== "function") return memoryProtector.encrypt(text);
+      asyncEncryptionCompatible ??= (async () => {
+        try { return safeStorage.decryptString(await safeStorage.encryptStringAsync("xekute-format-check")) === "xekute-format-check"; }
+        catch { return false; }
+      })();
+      return await asyncEncryptionCompatible ? (await safeStorage.encryptStringAsync(text)).toString("base64") : memoryProtector.encrypt(text);
+    },
   };
 
   const workspaceSearch = createWorkspaceSearch({ fs, path });
@@ -207,7 +217,7 @@ function createContainer({
       settings.listener = { ...(settings.listener || {}), enabled: true };
       const external = proxyBrowser.status();
       if (external?.running) await proxyBrowser.close(external.workspace);
-      status = await listener.configure(workspace, { settings, targets: profile.scope?.inScopeTargets || null });
+      status = await listener.configure(workspace, { settings, ...policyFromProjectScope(profile.scope) });
     }
     if (!status?.running) throw Object.assign(new Error(status?.error || "The browser capture proxy could not be started."), { code: status?.code || "BROWSER_PROXY_UNAVAILABLE" });
   }

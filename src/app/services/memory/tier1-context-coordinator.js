@@ -1,6 +1,7 @@
 "use strict";
 
 const nodeCrypto = require("node:crypto");
+const { isDeepStrictEqual } = require("node:util");
 const { canonicalJson, canonicalKeyHash, isMemoryId } = require("../../../contracts/memory/index.js");
 const { getDefaultMemorySchemaRegistry } = require("../../../contracts/memory/schema-registry.js");
 const { assertNoSecretValues, clone, hashText, operationFailure, timestamp } = require("../../storage/memory/memory-storage-utils.js");
@@ -392,6 +393,8 @@ function createTier1ContextCoordinator({
     if (!sensitiveStore?.writeActive) return;
     const state = stateFor(projectId, sessionId);
     prunePins(state);
+    const metadata = { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned], operatorDirectives: state.directives, checkpointId: state.summary?.checkpoint_id || "" };
+    if (!state.checkpointUnsaved && state.savedActive === state.active && isDeepStrictEqual(state.savedActiveMetadata, metadata)) return;
     // While a summary is unsaved, the saved ledger must stay the one it
     // replaced, or a restart would find neither the summary nor the turns it
     // covered. Retry the summary first; the shortened ledger waits for it.
@@ -416,6 +419,10 @@ function createTier1ContextCoordinator({
     try { result = sensitiveStore.writeActive(projectId, sessionId, state.active, { nextBlockIndex: state.nextBlockIndex, pinnedBlocks: [...state.pinned], operatorDirectives: state.directives, checkpointId: state.summary?.checkpoint_id || "" }); }
     catch (error) { result = { ok: false, code: error.code || "MEMORY_SAVE_FAILED", error: error.message }; }
     noteSave(state, result);
+    if (result?.ok === true && result.durable !== false) {
+      state.savedActive = state.active;
+      state.savedActiveMetadata = clone(metadata);
+    }
   }
   // Every save says whether this chat's memory reached durable storage. The
   // in-memory state stays authoritative either way, and the next save that
@@ -461,7 +468,9 @@ function createTier1ContextCoordinator({
   // a controller that keeps re-sending its own ledger keeps the same indexes.
   function ingestActive(state, messages) {
     const incoming = Array.isArray(messages) ? messages : [];
+    if (isDeepStrictEqual(state.active, incoming)) return state.active;
     state.nextBlockIndex = stampBlocks(state.active, incoming, state.nextBlockIndex);
+    if (isDeepStrictEqual(state.active, incoming)) return state.active;
     return capActive(incoming);
   }
   function emitChange(projectId, sessionId, changed, assembly) {
@@ -632,7 +641,9 @@ function createTier1ContextCoordinator({
       : state.active;
     // Current Workflow is checkpoint-owned continuity. It starts empty and is
     // only exposed after a conversation checkpoint has produced it.
-    const workflow = summary && state.workflow ? state.workflow : null;
+    const workflow = Object.prototype.hasOwnProperty.call(input, "current_workflow")
+      ? input.current_workflow
+      : summary && state.workflow ? state.workflow : null;
     const a = [
       component("System Prompt", input.system_prompt || input.systemPrompt || ""),
       component("Tool Definitions", input.tool_definitions || input.toolDefinitions || []),
@@ -769,18 +780,19 @@ function createTier1ContextCoordinator({
   function fitCheckpointToBudget(value, limit, stats = null) {
     const maximum = summaryBudget(limit);
     const candidate = clone(value);
-    const measured = () => approximateTokens(candidate);
-    const jsonBytes = (item) => Buffer.byteLength(JSON.stringify(item), "utf8");
-    let bytes = jsonBytes(candidate);
-    const over = () => Math.ceil(bytes / 3.6) > maximum;
+    const measured = () => count(candidate).tokens;
     const shedOldest = (field, floor) => {
       const values = candidate[field];
-      if (!Array.isArray(values)) return;
-      let drop = 0;
-      while (over() && values.length - drop > floor) { bytes -= jsonBytes(values[drop]) + 1; drop += 1; }
-      if (!drop) return;
-      values.splice(0, drop);
-      if (stats) stats[field] = (stats[field] || 0) + drop;
+      if (!Array.isArray(values) || measured() <= maximum) return;
+      let low = 0, high = Math.max(0, values.length - floor);
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        candidate[field] = values.slice(middle);
+        if (measured() > maximum) low = middle + 1;
+        else high = middle;
+      }
+      candidate[field] = values.slice(low);
+      if (stats && low) stats[field] = (stats[field] || 0) + low;
     };
     shedOldest("unverified_claims", 0);
     shedOldest("grounded_facts", 0);
@@ -1469,6 +1481,7 @@ function createTier1ContextCoordinator({
       stored.push(item);
     }
     const evicted = [];
+    if (stored.length) state.active = [...state.active];
     for (const item of [...stored].sort((left, right) => right.block.start - left.block.start)) {
       const content = tombstoneText(item.block, item.reason, retainSecrets);
       const tombstone = { role: "user", content, block_index: item.block.index, block_tombstone: true, released_tokens: item.block.tokenEstimate, turn_start: isTurnStart(item.block.messages[0]) };

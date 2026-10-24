@@ -8,6 +8,9 @@
 const Module = require("module");
 const os = require("os");
 const path = require("path");
+const assert = require("node:assert/strict");
+const appPaths = new Map();
+let nativeReportingStarted = false;
 
 const webContentsStub = () => ({
   id: 1, isDestroyed: () => false, send() {}, on() {}, once() {}, setWindowOpenHandler() {},
@@ -29,7 +32,8 @@ Module._load = function (request, parent, isMain) {
   if (request === "electron") {
     return {
       app: {
-        on() {}, whenReady: () => Promise.resolve(), getPath: () => path.join(os.tmpdir(), "xekute-boot-test"),
+        on() {}, whenReady: () => Promise.resolve(), getPath: name => appPaths.get(name) || path.join(os.tmpdir(), "xekute-boot-test"),
+        setPath: (name, value) => appPaths.set(name, value),
         quit() {}, requestSingleInstanceLock: () => true, setAppUserModelId() {},
         isPackaged: false, getVersion: () => "0.0.0-test", relaunch() {}, exit() {},
       },
@@ -44,9 +48,14 @@ Module._load = function (request, parent, isMain) {
       nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
       Tray: function () {},
       safeStorage: { isEncryptionAvailable: () => false, encryptString: () => "", decryptString: () => "" },
+      crashReporter: { start(options) {
+        assert.equal(options.uploadToServer, false);
+        nativeReportingStarted = true;
+      } },
     };
   }
   if (request === "node-pty") {
+    assert.equal(nativeReportingStarted, true, "native crash capture starts before loading native addons");
     return { spawn: () => ({ on() {}, write() {}, kill() {}, resize() {}, pid: 1 }) };
   }
   return origLoad.apply(this, arguments);

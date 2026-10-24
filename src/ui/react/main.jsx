@@ -1,7 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import "@vscode/codicons/dist/codicon.css";
-import "@xterm/xterm/css/xterm.css";
 import "highlight.js/styles/github-dark.min.css";
 import "../styles/base.css";
 import "../styles/chat.css";
@@ -10,6 +9,7 @@ import "../styles/layout-revamp.css";
 import "../styles/tooltips.css";
 import "../styles/browser.css";
 import "../styles/settings-system.css";
+import "../styles/toggle.css";
 import "./vendor-globals.js";
 import App from "./App.jsx";
 

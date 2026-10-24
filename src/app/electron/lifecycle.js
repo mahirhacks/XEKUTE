@@ -58,13 +58,12 @@ function registerLifecycle({
     createWindow?.();
   });
 
-  function flushDurableState() {
-    const chatHistoryFlush = typeof container.v3SessionStore?.flush === "function"
-      ? container.v3SessionStore.flush?.()
-      : null;
-    const tier1Flush = container.tier1SensitiveStore?.flush?.() || null;
-    const runtimeShutdown = typeof shutdown === "function" ? shutdown() : null;
-    return Promise.all([runtimeShutdown, chatHistoryFlush, tier1Flush].map((pending) => Promise.resolve(pending)));
+  async function flushDurableState() {
+    try { if (typeof shutdown === "function") await shutdown(); }
+    finally {
+      await container.v3SessionStore?.flush?.();
+      await container.tier1SensitiveStore?.flush?.();
+    }
   }
 
   // One graceful shutdown per process, shared by a normal quit and an update

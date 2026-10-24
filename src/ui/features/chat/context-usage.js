@@ -263,8 +263,7 @@ export function storeLastContextUsage(value, {
     memory.checkpointTokens = Number(summarizedTokens);
     if (memory.status === "empty") memory.status = "ready";
   }
-  if (session.id === appState.activeChatSessionId) syncActiveChatSession();
-  else schedulePersistChatSessions();
+  schedulePersistChatSessions(session);
   return usage;
 }
 
@@ -502,22 +501,30 @@ export function renderMemorySaveBanner() {
 
 // Released blocks are shown in the chat the same way a checkpoint is, so the
 // operator can see why earlier turns left the model's context.
+export function createContextReleaseNotice(count, tokensFreed = 0) {
+  if (!Number.isSafeInteger(count) || count <= 0) return null;
+  const freed = Number.isFinite(Number(tokensFreed)) ? Math.max(0, Number(tokensFreed)) : 0;
+  const notice = document.createElement("div");
+  notice.className = "context-checkpoint-notice";
+  notice.dataset.state = "complete";
+  notice.dataset.contextRelease = "true";
+  notice.dataset.releaseCount = String(count);
+  notice.dataset.tokensFreed = String(freed);
+  notice.setAttribute("role", "status");
+  const label = document.createElement("span");
+  label.className = "context-checkpoint-text";
+  label.textContent = `Released ${count} earlier ${count === 1 ? "turn" : "turns"} from context${freed ? ` · ${formatTokenCount(freed)} freed` : ""}`;
+  notice.append(label);
+  return notice;
+}
+
 export function applyContextReleaseUi(run, payload = {}) {
   if (String(payload.status || "").toLowerCase() !== "completed") return;
   const count = Array.isArray(payload.indices) ? payload.indices.length : 0;
-  if (!count) return;
-  const freed = Math.max(0, Number(payload.tokensFreed) || 0);
+  const notice = createContextReleaseNotice(count, payload.tokensFreed);
+  if (!notice) return;
   const host = checkpointNoticeHost(chatRunContainer(run));
   if (host) {
-    const notice = document.createElement("div");
-    notice.className = "context-checkpoint-notice";
-    notice.dataset.state = "complete";
-    notice.dataset.contextRelease = "true";
-    notice.setAttribute("role", "status");
-    const label = document.createElement("span");
-    label.className = "context-checkpoint-text";
-    label.textContent = `Released ${count} earlier ${count === 1 ? "turn" : "turns"} from context${freed ? ` · ${formatTokenCount(freed)} freed` : ""}`;
-    notice.append(label);
     // Placed in the stream where the release happened, like a summary notice,
     // so a turn reads top to bottom in order.
     if (run?.assistant?.splitAtContextCheckpoint) run.assistant.splitAtContextCheckpoint(notice);

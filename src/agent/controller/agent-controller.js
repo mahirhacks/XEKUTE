@@ -28,10 +28,31 @@ const { createRoundAccounting, waitForRetry } = require("../runtime/round-accoun
 const { completeExchanges, coherentTail } = require("../runtime/tool-protocol.js");
 const { runModelAttempt } = require("../runtime/model-attempt.js");
 const { CONTEXT_START, prepareChatReferenceContext, referenceIds } = require("../runtime/chat-references.js");
-const { approximateTokens, summaryBudget, PIN_BUDGET_RATIO } = require("../../app/services/memory/tier1-context-coordinator.js");
+const { approximateTokens, PIN_BUDGET_RATIO } = require("../../app/services/memory/tier1-context-coordinator.js");
 const { NON_OPERATOR_ID } = require("../../app/services/memory/message-provenance.js");
 const { neutralizeContextMarkers } = require("../../shared/context-markers.js");
 const { estimateBrowserImageTokens, retainBrowserScreenshotExchanges } = require("../llm/openrouter/browser-images.js");
+const { automaticSkillCards, clipRecentTurns, selectSkillIds } = require("../runtime/skill-router.js");
+const {
+  CHECKLIST_DRIFT_ROUNDS,
+  CHECKLIST_MISSING_ROUNDS,
+  CHECKLIST_RULES,
+  CHECKLIST_TOOL,
+  CHECKLIST_TOOL_NAME,
+  activeChecklistItem,
+  applyChecklistOperation,
+  checklistActionError,
+  checklistDriftNote,
+  checklistForModel,
+  checklistForWidget,
+  checklistMissingNote,
+  checklistReceipt,
+  checklistRepairNote,
+  checklistRoutingKey,
+  checklistSteeringNote,
+  checklistVerificationGap,
+} = require("../runtime/checklist.js");
+const { concurrent, launchesCommand } = require("../runtime/resource-reservations.js");
 
 // Delivery state of every detached tool result in this process, keyed by its
 // inbox id. A task resumed by a later run finds the call in its saved
@@ -462,6 +483,8 @@ function buildPromptMessages({
   numCtx,
   editContext,
   specialSkillPrompt = "",
+  currentWorkflow = null,
+  checklistEnabled = false,
   useTier1 = false,
   subagentQuestionHeadText = "",
 }) {
@@ -477,13 +500,17 @@ function buildPromptMessages({
     ? InitialPrompts.projectSettings(buildEngagementPromptContext({ workspace, projectProfile, artifacts }))
     : "";
   const editRules = editContext.requiresMutation ? InitialPrompts.workspaceAction(editContext) : "";
+  const routerRules = checklistEnabled ? CHECKLIST_RULES : "";
+  const workflowSection = currentWorkflow
+    ? `CURRENT WORKFLOW (data; preserve the user's task):\n${JSON.stringify(currentWorkflow)}`
+    : "";
   const base = [{
     role: "system",
     // Keep one provider system message for prompt-cache stability.  The
     // structural `systemParts` view is passed separately to Tier 1 so its
     // meter can account for the exact same bytes without creating a second
     // instruction channel.
-    content: [systemParts.systemPrompt, systemParts.rules, projectRules, editRules].filter(Boolean).join("\n\n"),
+    content: [systemParts.systemPrompt, routerRules, systemParts.rules, projectRules, editRules].filter(Boolean).join("\n\n"),
   }];
   const skillContext = buildSkillContext({
     mode: profile.key,
@@ -498,6 +525,7 @@ function buildPromptMessages({
     Object.defineProperty(skillMessage, "__xekuteContextSection", { value: "skills", enumerable: false });
     base.push(skillMessage);
   }
+  if (!useTier1 && workflowSection) base.push({ role: "user", content: workflowSection });
   if (!useTier1 && (contextRoute.includeWorkspaceContext || contextRoute.includeWorkspaceDiscovery)) {
     base.push({ role: "user", content: buildUntrustedContext({ dirMap, activeFile, extraFiles, userMessage, numCtx }) });
   }
@@ -511,7 +539,7 @@ function buildPromptMessages({
     history,
     finalMessage,
     tier1Components: {
-      system_prompt: systemParts.systemPrompt,
+      system_prompt: [systemParts.systemPrompt, routerRules].filter(Boolean).join("\n\n"),
       rules: [systemParts.rules, projectRules, editRules].filter(Boolean),
       active_skills: skillContext ? [skillContext] : [],
       active_subagent_instructions: subagentQuestionHeadText
@@ -619,6 +647,8 @@ async function runAgentTurnWithLease({
   executeToolCall = EMPTY_EXECUTE_TOOL,
   listRunningCommands = async () => [],
   toolMetadataForName = () => null,
+  skillRouter = null,
+  checklistEnabled: suppliedChecklistEnabled = false,
   checkpointRun: suppliedCheckpointRun = () => Promise.resolve(),
   persistTurnProgress = () => Promise.resolve(),
   nested = false,
@@ -686,6 +716,40 @@ async function runAgentTurnWithLease({
   let cancellationEpoch = Number.isSafeInteger(restored.cancellationEpoch) ? restored.cancellationEpoch : 0;
   const appliedInputIds = new Set(Array.isArray(restored.appliedInputIds) ? restored.appliedInputIds : []);
   const inputMessages = (Array.isArray(restored.inputMessages) ? restored.inputMessages : []).map((message) => ({ ...message }));
+  let checklist = restored.checklist && typeof restored.checklist === "object" ? restored.checklist : null;
+  let activeSkillRecords = Array.isArray(restored.activeSkillRecords)
+    ? restored.activeSkillRecords.filter((record) => record && typeof record.id === "string" && typeof record.instructions === "string")
+      .filter((record, index, all) => all.findIndex((candidate) => candidate.id === record.id) === index)
+      .map((record) => ({ id: record.id, description: String(record.description || ""), instructions: record.instructions }))
+    : [];
+  let initialLoadedSkill = "";
+  if (!activeSkillRecords.length && specialSkill?.manifest?.id && specialSkill?.prompt) {
+    activeSkillRecords = [{
+      id: String(specialSkill.manifest.id),
+      description: String(specialSkill.manifest.description || specialSkill.manifest.title || ""),
+      instructions: String(specialSkill.prompt),
+    }];
+    initialLoadedSkill = String(specialSkill.manifest.title || specialSkill.manifest.id);
+  }
+  const restoredRouterState = restored.skillRouterState || (restored.planState?.evaluated ? restored.planState : null);
+  const routingEnabled = Boolean(skillRouter?.enabled && (restoredRouterState || skillRouter?.freshRun));
+  const decisionModel = String(restoredRouterState?.decisionModel || skillRouter?.model || "");
+  const skillRouterState = routingEnabled ? { decisionModel } : null;
+  // The checklist is the agent's own plan on every provider; skill routing only
+  // reacts to it where a decision model is available.
+  const checklistEnabled = Boolean(suppliedChecklistEnabled || routingEnabled);
+  let checklistCorrectionCount = Math.max(0, Number(restored.checklistCorrectionCount) || 0);
+  // Operator steering the checklist has not absorbed yet. Task actions are held
+  // once, without counting as a correction, until the agent updates it.
+  let checklistReview = restored.checklistReview && typeof restored.checklistReview === "object" ? restored.checklistReview : null;
+  let checklistRoutedKey = typeof restored.checklistRoutedKey === "string" ? restored.checklistRoutedKey : "";
+  let actionRoundsSinceChecklist = Math.max(0, Number(restored.actionRoundsSinceChecklist) || 0);
+  let checklistMissingNoted = Boolean(restored.checklistMissingNoted);
+  // Whether this run wrote files or launched commands, which makes a
+  // verification item necessary before it can end. Holds are capped so a model
+  // that cannot verify still finishes.
+  let workspaceChanged = Boolean(restored.workspaceChanged);
+  let verificationHolds = Math.max(0, Number(restored.verificationHolds) || 0);
   const referencePreparations = new Map(restored.referencePreparations || []);
   let referenceImportTitle = "";
   let referenceImportTitles = [];
@@ -694,9 +758,70 @@ async function runAgentTurnWithLease({
   if (initialInputId) appliedInputIds.add(initialInputId);
   for (const message of inputMessages) if (message.source_message_id) appliedInputIds.add(message.source_message_id);
   function scopedContent(message) { const text = message.source_text || message.content; return message.intent_scope?.length ? message.intent_scope.map((scope) => text.slice(scope.start, scope.end)).join("\n") : text; }
-  function scopedSkillPrompt() { return [specialSkill?.prompt || "", ...(inputMessages.filter((message) => message.intent_scope?.length).map((message) =>
+  function scopedSkillPrompt() { return [...activeSkillRecords.map((record) => record.instructions),
+    ...(!specialSkill?.manifest?.id && specialSkill?.prompt ? [specialSkill.prompt] : []),
+    ...(inputMessages.filter((message) => message.intent_scope?.length).map((message) =>
     `This task owns only these exact instructions from original message ${message.source_message_id}: ${JSON.stringify(scopedContent(message))}. Other portions are assigned to other session tasks and appear only as context. Execute only this task's assigned instructions.`))].filter(Boolean).join("\n\n"); }
   let taskInstructions = inputMessages.map(scopedContent).join("\n\n") || String(userMessage);
+  const currentWorkflowPrompt = () => {
+    const liveChecklist = checklistForModel(checklist);
+    if (!liveChecklist) return currentWorkflow || null;
+    return currentWorkflow ? { checkpointContinuity: currentWorkflow, taskChecklist: liveChecklist } : liveChecklist;
+  };
+  async function decisionFallback(state, candidateIds = []) {
+    if (typeof skillRouter?.runFallback !== "function") throw Object.assign(new Error("The routing model failed and no fallback model is available."), { code: "SKILL_ROUTER_FALLBACK_UNAVAILABLE" });
+    const instructions = `Return only JSON matching {"skill_ids":["id"]}. Choose zero to two IDs, in order, only from this list: ${candidateIds.join(", ")}.`;
+    accounting.operationalRound();
+    const raw = await skillRouter.runFallback({
+      model,
+      messages: [
+        { role: "system", content: `You are a strict structured routing fallback. ${instructions} Do not include prose or markdown.` },
+        { role: "user", content: JSON.stringify(state) },
+      ],
+      signal,
+    });
+    let parsed;
+    try { parsed = typeof raw === "string" ? JSON.parse(raw) : raw; }
+    catch { throw Object.assign(new Error("The routing fallback returned invalid JSON."), { code: "SKILL_ROUTER_FALLBACK_INVALID" }); }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw Object.assign(new Error("The routing fallback returned an invalid result."), { code: "SKILL_ROUTER_FALLBACK_INVALID" });
+    if (!Array.isArray(parsed.skill_ids) || parsed.skill_ids.length > 2 || parsed.skill_ids.some((id) => typeof id !== "string" || !candidateIds.includes(id))
+      || Object.keys(parsed).some((key) => key !== "skill_ids")) throw Object.assign(new Error("The routing fallback returned invalid skill IDs."), { code: "SKILL_ROUTER_FALLBACK_INVALID" });
+    return { fallback: true, skillIds: [...new Set(parsed.skill_ids)] };
+  }
+  async function requestDecision(state, questions, candidateIds = []) {
+    if (typeof skillRouter?.runDecision !== "function") throw Object.assign(new Error("The native routing decision provider is unavailable."), { code: "SKILL_ROUTER_UNAVAILABLE" });
+    const decisionRevision = revision;
+    try {
+      const result = await skillRouter.runDecision({ model: decisionModel, state, questions, signal });
+      if (signal?.aborted) throw Object.assign(new Error("The agent turn was stopped."), { code: "SKILL_ROUTER_CANCELLED", aborted: true });
+      if (revision !== decisionRevision) throw Object.assign(new Error("The routing result became stale after new input."), { code: "SKILL_ROUTER_STALE" });
+      if (!result?.answers || typeof result.answers !== "object") throw Object.assign(new Error("The routing provider returned no answers."), { code: "SKILL_ROUTER_RESPONSE_INVALID" });
+      const scores = {};
+      for (const id of candidateIds) {
+        const answer = result.answers[`skill_${id}`];
+        if (answer?.type !== "noul" || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) throw Object.assign(new Error(`The skill decision for ${id} was malformed.`), { code: "SKILL_ROUTER_RESPONSE_INVALID" });
+        scores[id] = answer.noul;
+      }
+      return { fallback: false, scores, skillIds: selectSkillIds(scores, { activeIds: activeSkillRecords.map((record) => record.id), threshold: 0.70, maxSkills: 2, allowedIds: candidateIds }) };
+    } catch (error) {
+      if (signal?.aborted || error?.aborted || ["SKILL_ROUTER_CANCELLED", "SKILL_ROUTER_STALE"].includes(String(error?.code || ""))) throw error;
+      if (liveInput && !previewOnly) {
+        const { changed } = await boundary("before_decision_fallback");
+        if (changed || revision !== decisionRevision) {
+          throw Object.assign(new Error("The routing decision became stale before fallback."), { code: "SKILL_ROUTER_STALE" });
+        }
+      }
+      const fallback = await decisionFallback(state, candidateIds);
+      if (signal?.aborted) throw Object.assign(new Error("The agent turn was stopped."), { code: "SKILL_ROUTER_CANCELLED", aborted: true });
+      if (liveInput && !previewOnly) {
+        const { changed } = await boundary("after_decision_fallback");
+        if (changed || revision !== decisionRevision) {
+          throw Object.assign(new Error("The routing fallback became stale after new input."), { code: "SKILL_ROUTER_STALE" });
+        }
+      }
+      return fallback;
+    }
+  }
   const checkpointRun = async (patch) => {
     await suppliedCheckpointRun({ ...patch, checkpoint: { ...patch.checkpoint, accounting: runState.accounting, engineSnapshot: snapshotEngine() } });
     await checkpointLive({ allowStopped: patch.status === "stopped" });
@@ -731,11 +856,13 @@ async function runAgentTurnWithLease({
       }
     }
   }
-  let allowedNames = new Set(availableTools.map((tool) => tool?.function?.name).filter(Boolean));
   if (orchestrationControlOnly) {
     availableTools = availableTools.filter((tool) => tool?.function?.name === "delegate_agent");
-    allowedNames = new Set(availableTools.length ? ["delegate_agent"] : []);
   }
+  const routingTools = [...availableTools];
+  if (checklistEnabled && !orchestrationControlOnly && !routingTools.some((tool) => tool?.function?.name === CHECKLIST_TOOL_NAME)) routingTools.push(CHECKLIST_TOOL);
+  availableTools = routingTools;
+  let allowedNames = new Set(availableTools.map((tool) => tool?.function?.name).filter(Boolean));
   const initialToolPartitions = partitionProviderTools(availableTools);
   let tier1Assembly = null;
   let tier1AssemblyFailure = null;
@@ -773,7 +900,7 @@ async function runAgentTurnWithLease({
     tool_definitions: initialToolPartitions.native,
     mcp_definitions: initialToolPartitions.mcp,
     rules: [],
-    active_skills: specialSkill?.prompt ? [specialSkill.prompt] : [],
+    active_skills: activeSkillRecords.map((record) => record.instructions),
     active_subagent_instructions: [],
   };
   const promptSeed = buildPromptMessages({
@@ -790,6 +917,8 @@ async function runAgentTurnWithLease({
     numCtx,
     editContext,
     specialSkillPrompt: scopedSkillPrompt(),
+    currentWorkflow: currentWorkflowPrompt(),
+    checklistEnabled,
     useTier1,
     subagentQuestionHeadText,
   });
@@ -818,6 +947,7 @@ async function runAgentTurnWithLease({
       tier1Assembly = tier1Context.assemble({
         ...tier1Input,
         active_conversation: tier1ConversationSeed,
+        current_workflow: currentWorkflowPrompt(),
         ...(previewOnly ? { preview: true } : {}),
       });
       if (!tier1Assembly || tier1Assembly.ok === false) tier1AssemblyFailure = tier1Assembly || { code: "MEMORY_TIER1_ASSEMBLY_FAILED", error: "Tier 1 context assembly failed." };
@@ -938,6 +1068,16 @@ async function runAgentTurnWithLease({
       version: 1, runId, revision, cancellationEpoch, appliedInputIds: [...appliedInputIds], inputMessages, referencePreparations: [...referencePreparations],
       accounting: accounting.snapshot(), runState,
       providerOnlyMessages: workingHistory.filter((message) => message.__xekuteInternalOutputContinuation || message.__xekuteInternalRuntimeInput),
+      checklist,
+      activeSkillRecords,
+      skillRouterState,
+      checklistCorrectionCount,
+      checklistReview,
+      checklistRoutedKey,
+      actionRoundsSinceChecklist,
+      checklistMissingNoted,
+      workspaceChanged,
+      verificationHolds,
       actionResults: actionResults.map((result) => ({ ok: result?.ok, error: result?.error, code: result?.code,
         evidenceIds: AgentRuntime.evidenceIdsFromResults([result]) })), failureCounts: [...failureCounts], failureRecords,
       executedTools, finalText, outputSegments, outputContinuationCount, lastUsage,
@@ -957,13 +1097,14 @@ async function runAgentTurnWithLease({
     consumedPlanId = "";
   }
   let tier1CheckpointInFlight = null;
+  let lastCheckpointActive = null;
   let roundCheckpointed = false;
-  let summaryRefitted = false;
   const refreshTier1Prompt = ({ resetHistory = true } = {}) => {
     if (!useTier1) return tier1Assembly;
     const next = tier1Context.assemble({
       ...tier1Input,
       active_conversation: tier1Active,
+      current_workflow: currentWorkflowPrompt(),
     });
     if (!next || next.ok === false) return null;
     tier1Assembly = next;
@@ -1146,6 +1287,9 @@ async function runAgentTurnWithLease({
     if (!refreshedBeforePressure) return { ok: false, code: "MEMORY_TIER1_REASSEMBLY_FAILED", error: "Tier 1 context could not be assembled for checkpoint pressure." };
     const pressure = tier1PressureFor(refreshedBeforePressure);
     if (!force && !pressure.shouldCheckpoint) return { ok: true, checkpointed: false, pressure };
+    // Pins, current inputs and screenshots survive a checkpoint. Their token
+    // pressure cannot be reduced by immediately summarizing them again.
+    if (lastCheckpointActive && sameMessages(tier1Active, lastCheckpointActive)) return { ok: true, checkpointed: false, skipped: true, pressure };
     tier1CheckpointInFlight = (async () => {
       sendEvent({ type: "context_checkpoint", status: "started", reason, midTask, threshold: pressure.threshold, totalTokens: pressure.totalTokens });
       const keptPinned = pinnedTurnsToKeep();
@@ -1202,6 +1346,8 @@ async function runAgentTurnWithLease({
         currentWorkflow = checkpoint.currentWorkflow || null;
         const refreshed = refreshTier1Prompt();
         if (!refreshed) return { ok: false, code: "MEMORY_TIER1_REASSEMBLY_FAILED", error: "Tier 1 context could not be reassembled after checkpoint." };
+        lastCheckpointActive = tier1Active.map(message => ({ ...message }));
+        roundCheckpointed = true;
         const usage = currentTier1Usage();
         sendEvent({
           type: "context_checkpoint",
@@ -1226,7 +1372,11 @@ async function runAgentTurnWithLease({
         sendEvent({ type: "context_checkpoint", status: "failed", reason, midTask, pressureTokens: pressure.totalTokens, code: checkpoint?.code || "MEMORY_CHECKPOINT_FAILED", trimmed: checkpoint?.trimmed || {} });
       }
       return { ...checkpoint, pressure };
-    })().finally(() => { tier1CheckpointInFlight = null; });
+    })().catch(error => {
+      const code = error?.code || "MEMORY_CHECKPOINT_FAILED";
+      sendEvent({ type: "context_checkpoint", status: "failed", reason, midTask, code });
+      return { ok: false, code, error: error?.message || "Tier 1 checkpoint failed.", pressure };
+    }).finally(() => { tier1CheckpointInFlight = null; });
     return tier1CheckpointInFlight;
   };
 
@@ -1504,15 +1654,10 @@ async function runAgentTurnWithLease({
       if (!refreshed) throw Object.assign(new Error("Tier 1 context could not be assembled."), { code: "MEMORY_TIER1_REASSEMBLY_FAILED" });
       const pressure = tier1PressureFor(refreshed);
       if (pressure.protectedOverflow) applyToolCatalog(keepNativeAndRecentTools(availableTools, recentToolNames()));
-      // A summary written for a larger window (the model was switched) is refit
-      // to this window's budget once, even when nothing new needs summarizing.
-      const summaryTokens = tier1UsageSections(refreshed).find((section) => section.key === "summarized_conversation")?.tokens || 0;
-      const refitSummary = !summaryRefitted && summaryTokens > summaryBudget(effectiveContextLimit);
       // A ledger that holds only the task's own messages has nothing to summarize;
       // checkpointing it again would repeat every round.
-      if (refitSummary || (pressure.shouldCheckpoint && tier1Active.some((message) => !taskInputMatches(message)))) {
-        summaryRefitted ||= refitSummary;
-        const checkpoint = await checkpointTier1IfNeeded({ force: refitSummary, reason: "before_model_call", midTask: true });
+      if (pressure.shouldCheckpoint && tier1Active.some((message) => !taskInputMatches(message))) {
+        const checkpoint = await checkpointTier1IfNeeded({ reason: "before_model_call", midTask: true });
         if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");
         roundCheckpointed = checkpoint?.checkpointed === true || Boolean(checkpoint?.checkpoint);
       }
@@ -1554,6 +1699,7 @@ async function runAgentTurnWithLease({
   async function invokeModel(request) {
     if (!request.ok) return request;
     finishReferenceImport();
+    sendEvent({ type: "model_start" });
     const maxAttempts = Math.max(1, Number(Tunables.MODEL_ROUND_RETRIES) || 1);
     let result;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -1583,14 +1729,149 @@ async function runAgentTurnWithLease({
     contextRoute = ContextRouter.routeRequest({ text: taskInstructions, hasWorkspace: Boolean(workspace), family: profile.family, mode: profile.key, history: workingHistory, activeFile });
     editContext = { isEditRequest: isEditRequest(taskInstructions), requiresMutation: isEditRequest(taskInstructions), targetFile: inferEditTarget(taskInstructions, activeFile, dirMap) };
     const next = buildPromptMessages({ profile, contextRoute, workspace, projectProfile, artifacts, userMessage: taskInstructions,
-      chatHistory: workingHistory, dirMap, activeFile, extraFiles, numCtx, editContext, specialSkillPrompt: scopedSkillPrompt(), useTier1, subagentQuestionHeadText });
+      chatHistory: workingHistory, dirMap, activeFile, extraFiles, numCtx, editContext, specialSkillPrompt: scopedSkillPrompt(),
+      currentWorkflow: currentWorkflowPrompt(), checklistEnabled, useTier1, subagentQuestionHeadText });
     promptSeed.base = next.base;
     prompt.base = next.base;
     promptSeed.tier1Components = next.tier1Components;
     tier1Input.system_prompt = next.tier1Components.system_prompt;
     tier1Input.rules = next.tier1Components.rules;
+    tier1Input.active_skills = next.tier1Components.active_skills;
     runState.objective = taskInstructions.slice(0, 4000);
     if (useTier1) refreshTier1Prompt({ resetHistory: false });
+  }
+
+  async function routeSkillsForChecklist(nextChecklist) {
+    if (!routingEnabled || skillRouter?.bypassAutomaticSkills) return { loaded: [], selected: [], steeringChanged: false };
+    let steeringChanged = Boolean((await boundary("before_skill_routing")).changed);
+    const actionable = nextChecklist.items.some((item) => item.status === "in_progress" || item.status === "pending");
+    const activeIds = activeSkillRecords.map((record) => record.id);
+    const candidates = automaticSkillCards(skillRouter.candidates || [], profile.key, routingTools)
+      .filter((candidate) => !activeIds.includes(candidate.id));
+    const routingSummary = (outcome, decision = null, selected = [], loaded = []) => ({
+      model: decisionModel, source: decision ? (decision.fallback ? "fallback" : "native") : "skipped",
+      candidateCount: candidates.length, outcome,
+      topScores: Object.entries(decision?.scores || {}).sort(([leftId, left], [rightId, right]) => right - left || leftId.localeCompare(rightId))
+        .slice(0, 3).map(([id, score]) => ({ id, score })),
+      selected, loaded,
+    });
+    if (!actionable || !candidates.length) {
+      return { loaded: [], selected: [], steeringChanged, diagnostics: routingSummary(actionable ? "no_candidates" : "no_actionable_items") };
+    }
+    const candidateIds = candidates.map((candidate) => candidate.id);
+    const decisionRevision = revision;
+    const recentTurns = clipRecentTurns(workingHistory, {
+      excludeContents: [
+        ...inputMessages.map(scopedContent),
+        taskInstructions,
+        String(userMessage || ""),
+        ...activeSkillRecords.map((record) => record.instructions),
+      ],
+      excludeMessageIds: inputMessages.map((message) => message.source_message_id),
+    });
+    const state = {
+      task: taskInstructions,
+      scope: skillRouter.scope || null,
+      main_goal: nextChecklist.main_goal,
+      checklist: checklistForModel(nextChecklist),
+      active_item: activeChecklistItem(nextChecklist),
+      active_skills: activeSkillRecords.map(({ id, description }) => ({ id, description })),
+      candidates: candidates.map(({ id, title, description }) => ({ id, title, description })),
+      recent_turns: recentTurns,
+    };
+    const questions = Object.fromEntries(candidates.map((candidate) => [
+      `skill_${candidate.id}`,
+      {
+        type: "noul",
+        instructions: `Would adding ${candidate.title} provide meaningful instructions beyond the active skills for the active checklist item or the items still pending? Weigh the active item most; ignore completed items.`,
+      },
+    ]));
+    let decision;
+    try {
+      decision = await requestDecision(state, questions, candidateIds);
+    } catch (error) {
+      if (String(error?.code || "") === "SKILL_ROUTER_STALE") {
+        const rerouted = await routeSkillsForChecklist(nextChecklist);
+        return { ...rerouted, steeringChanged: true };
+      }
+      throw error;
+    }
+    const afterDecision = await boundary("after_skill_decision");
+    steeringChanged = steeringChanged || Boolean(afterDecision.changed);
+    if (afterDecision.changed) {
+      const rerouted = await routeSkillsForChecklist(nextChecklist);
+      return { ...rerouted, steeringChanged: true };
+    }
+    if (signal?.aborted || revision !== decisionRevision) throw Object.assign(new Error("The skill-routing result became stale."), { code: signal?.aborted ? "SKILL_ROUTER_CANCELLED" : "SKILL_ROUTER_STALE", aborted: Boolean(signal?.aborted) });
+    const selected = (decision.skillIds || []).filter((id, index, all) => candidateIds.includes(id) && !activeIds.includes(id) && all.indexOf(id) === index).slice(0, 2);
+    if (!selected.length) {
+      return { loaded: [], selected: [], steeringChanged, diagnostics: routingSummary("no_additions", decision) };
+    }
+
+    const compiled = [];
+    for (const id of selected) {
+      if (activeSkillRecords.some((record) => record.id === id)) continue;
+      let resolved;
+      try { resolved = await skillRouter.loadSkill?.(id, { mode: profile.key, workspace }); }
+      catch (error) {
+        sendEvent({ type: "activity", kind: "warn", text: `Skill ${id} was not added: ${String(error?.message || "its instructions could not be compiled.")}` });
+        continue;
+      }
+      if (!resolved?.ok || !resolved?.manifest || !String(resolved.prompt || "")) {
+        sendEvent({ type: "activity", kind: "warn", text: `Skill ${id} was not added because its required instructions are unavailable.` });
+        continue;
+      }
+      const card = candidates.find((item) => item.id === id);
+      const currentToolNames = new Set(routingTools.map((tool) => String(tool?.function?.name || "")));
+      const requirements = [...(resolved.manifest.requiredTools || []), ...(resolved.manifest.requiredCapabilities || [])];
+      if (!card || !resolved.manifest.modes?.includes(profile.key) || requirements.some((name) => !currentToolNames.has(name))) {
+        sendEvent({ type: "activity", kind: "warn", text: `Skill ${id} was not added because it is not eligible for this agent.` });
+        continue;
+      }
+      compiled.push({
+        id,
+        description: String(resolved.manifest.description || resolved.manifest.title || card.description || ""),
+        instructions: String(resolved.prompt),
+      });
+    }
+    if (signal?.aborted || revision !== decisionRevision) throw Object.assign(new Error("The skill instructions became stale before admission."), { code: signal?.aborted ? "SKILL_ROUTER_CANCELLED" : "SKILL_ROUTER_STALE", aborted: Boolean(signal?.aborted) });
+    const beforeAdmission = await boundary("before_skill_admission");
+    steeringChanged = steeringChanged || Boolean(beforeAdmission.changed);
+    if (beforeAdmission.changed) {
+      const rerouted = await routeSkillsForChecklist(nextChecklist);
+      return { ...rerouted, steeringChanged: true };
+    }
+
+    const cap = Math.floor(effectiveContextLimit * 0.4);
+    const tokenCount = (record) => ToolMap.estimateTokenCount(record.instructions);
+    let used = activeSkillRecords.reduce((total, record) => total + tokenCount(record), 0);
+    const pairSize = compiled.reduce((total, record) => total + tokenCount(record), 0);
+    const admitted = [];
+    if (compiled.length === 2 && used + pairSize <= cap) {
+      admitted.push(...compiled);
+    } else {
+      for (const record of compiled) {
+        const size = tokenCount(record);
+        if (used + size <= cap) {
+          admitted.push(record);
+          used += size;
+        } else {
+          sendEvent({ type: "activity", kind: "warn", text: `Skill ${record.id} was not added because the 40% skill-context limit is full.` });
+        }
+      }
+    }
+    const loaded = [];
+    for (const record of admitted) {
+      if (activeSkillRecords.some((active) => active.id === record.id)) continue;
+      activeSkillRecords.push(record);
+      loaded.push(record.id);
+    }
+    if (loaded.length) {
+      refreshTaskContext();
+      if (useTier1) publishTier1Meter();
+      sendEvent({ type: "skills_loaded", skills: loaded.map((id) => candidates.find((card) => card.id === id)?.title || id) });
+    }
+    return { loaded, selected, steeringChanged, diagnostics: routingSummary(loaded.length ? "loaded" : "not_admitted", decision, selected, loaded) };
   }
 
   async function boundary(kind) {
@@ -1604,6 +1885,7 @@ async function runAgentTurnWithLease({
     const response = requireLive(await liveInput.boundary({ kind, runId, revision }));
     if (!Number.isSafeInteger(response.revision) || response.revision < revision) throw Object.assign(new Error("Live input returned an obsolete applied revision."), { code: "LIVE_REVISION_STALE" });
     const deliveries = Array.isArray(response.deliveries) ? response.deliveries : [];
+    let steered = false;
     for (const delivery of deliveries) {
       if (typeof delivery.id !== "string" || !delivery.id || typeof delivery.text !== "string" || !Number.isSafeInteger(delivery.revision) || delivery.revision > response.revision) throw Object.assign(new Error("Live input returned an invalid original message."), { code: "LIVE_DELIVERY_INVALID" });
       if (appliedInputIds.has(delivery.id)) {
@@ -1623,6 +1905,11 @@ async function runAgentTurnWithLease({
         try { tier1Context.recordDirective?.(tier1ProjectId, resolvedTier1SessionId, { text: scopedContent(message), sourceMessageId: delivery.id, revision: delivery.revision }); }
         catch { /* the message stays in the ledger either way */ }
       }
+      if (!NON_OPERATOR_ID.test(delivery.id)) steered = true;
+    }
+    if (steered && checklist) {
+      checklistReview = { revision: response.revision, held: false };
+      noteToAgent(checklistSteeringNote(checklist));
     }
     revision = response.revision;
     cancellationEpoch = response.cancellationEpoch ?? cancellationEpoch;
@@ -1644,6 +1931,12 @@ async function runAgentTurnWithLease({
     if (pendingPlan?.revision !== revision) pendingPlan = null;
     await checkpointLive(changed ? { previousRevision } : {});
     return { changed, arrival: response.arrival };
+  }
+
+  function noteToAgent(content) {
+    const message = { role: "user", __xekuteInternalRuntimeInput: true, content };
+    workingHistory.push(message);
+    appendTier1Messages(message);
   }
 
   // A result that will never arrive becomes a note to the model, so it decides
@@ -1698,6 +1991,11 @@ async function runAgentTurnWithLease({
 
   try {
   sendEvent({ type: "run_state", runId, state: { ...runState } });
+  if (initialLoadedSkill) sendEvent({ type: "skills_loaded", skills: [initialLoadedSkill] });
+  if (checklist) sendEvent({ type: "task_list", ...checklistForWidget(checklist, runId) });
+  if (routingEnabled && !restored.skillRouterState) {
+    await checkpointRun({ round: 0, actionCount: actionResults.length, status: "running", checkpoint: { phase: "skill-router-ready" } });
+  }
   if (useTier1) publishTier1Meter();
 
   if (releasePendingEndTurn) {
@@ -1780,6 +2078,14 @@ async function runAgentTurnWithLease({
           ...(gate.reason === "BACKGROUND_TOOLS" ? { reason: "COMMAND_WAIT", commandWait: true, waitingProcessIds: [] } : { reason: "ORCHESTRATION_HOLD" }) };
       }
       if (!gate.changed) { await waitForRetry(25, signal); continue; }
+    }
+    if (checklistEnabled && checklist && actionRoundsSinceChecklist >= CHECKLIST_DRIFT_ROUNDS) {
+      const note = checklistDriftNote(checklist, actionRoundsSinceChecklist);
+      if (note) noteToAgent(note);
+      actionRoundsSinceChecklist = 0;
+    } else if (checklistEnabled && !checklist && !checklistMissingNoted && actionRoundsSinceChecklist >= CHECKLIST_MISSING_ROUNDS) {
+      noteToAgent(checklistMissingNote(actionRoundsSinceChecklist));
+      checklistMissingNoted = true;
     }
     const modelRevision = revision;
     const request = await prepareModelRequest();
@@ -2183,7 +2489,110 @@ async function runAgentTurnWithLease({
       return { stop: null };
     };
 
-    const slotCalls = normalizedCalls.filter((tool) => consumesCommandSlot(tool));
+    let suppressTaskCalls = false;
+    let invalidChecklistResponse = false;
+    let checklistRejection = "";
+    let checklistWorkError = null;
+    const checklistCalls = checklistEnabled ? normalizedCalls.filter((tool) => tool.toolName === CHECKLIST_TOOL_NAME) : [];
+    if (checklistCalls.length) {
+      const invalidBatch = checklistCalls.length > 1;
+      for (const tool of checklistCalls) {
+        const signature = toolCallSignature(tool);
+        const actionId = String(tool.callId || signature).slice(0, 200);
+        const toolForEvent = { ...tool, args: tool.args || {}, toolName: CHECKLIST_TOOL_NAME, actionId };
+        const duplicateReceipt = successfulToolRefs.has(String(tool.callId || actionId));
+        let toolResult = null;
+        let toolWasExecuted = false;
+        let routeAfterChecklist = false;
+        if (duplicateReceipt) {
+          toolResult = { ok: true, value: { status: "already_applied" } };
+        } else if (invalidBatch) {
+          toolResult = { ok: false, error: "Only one checklist call is allowed in a model response.", errorCode: "CHECKLIST_INVALID", retryable: false };
+        } else if (tool.normalizationFailure) {
+          toolResult = tool.normalizationFailure;
+        } else {
+          const applied = applyChecklistOperation(checklist, tool.args || {});
+          if (!applied.ok) {
+            toolResult = { ok: false, error: applied.error, errorCode: applied.code, retryable: false };
+          } else {
+            checklist = applied.value;
+            if (!checklistActionError(checklist)) checklistCorrectionCount = 0;
+            checklistReview = null;
+            actionRoundsSinceChecklist = 0;
+            toolResult = { ok: true, value: checklistReceipt(checklist) };
+            toolWasExecuted = true;
+            routeAfterChecklist = checklistRoutingKey(checklist) !== checklistRoutedKey;
+            successfulToolRefs.add(String(tool.callId || actionId));
+            sendEvent({ type: "task_list", ...checklistForWidget(checklist, runId) });
+            refreshTaskContext();
+          }
+        }
+
+        if (!duplicateReceipt && (!toolResult?.ok || toolResult?.error)) {
+          invalidChecklistResponse = true;
+          checklistRejection = String(toolResult?.error || "The checklist call was invalid.");
+        }
+
+        emitToolActivity(sendEvent, "tool_start", { tool: toolForEvent });
+        sendEvent({ type: "activity", text: "Updating task checklist", kind: "tool" });
+        seenThisRound.add(signature);
+        if (toolWasExecuted) executedTools = true;
+        actionResults.push(toolResult);
+        const actionEvidenceIds = AgentRuntime.evidenceIdsFromResults([toolResult]);
+        AgentRuntime.noteAction(runState, { actionId, ok: Boolean(toolResult?.ok && !toolResult?.error), evidenceIds: actionEvidenceIds });
+        if (!toolResult?.ok || toolResult?.error) {
+          failureCounts.set(signature, (failureCounts.get(signature) || 0) + 1);
+          const record = failureRecordFor(tool, toolResult);
+          if (record) failureRecords.push(record);
+        }
+        const sealed = await sealToolOutcome({
+          tool,
+          toolForEvent,
+          toolName: CHECKLIST_TOOL_NAME,
+          signature,
+          actionId,
+          toolResult,
+          toolWasExecuted,
+        });
+        if (sealed.stop) return sealed.stop;
+        if (routeAfterChecklist) {
+          await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: "checklist-saved" } });
+          const routed = await routeSkillsForChecklist(checklist);
+          checklistRoutedKey = checklistRoutingKey(checklist);
+          if (routed.loaded.length || routed.steeringChanged) suppressTaskCalls = true;
+          const steering = await boundary("after_checklist_routing");
+          if (steering.changed) suppressTaskCalls = true;
+          await checkpointRun({ round, actionCount: actionResults.length, status: "running", checkpoint: { phase: "checklist-routed", ...(routed.diagnostics ? { skillRouting: routed.diagnostics } : {}) } });
+        }
+      }
+      for (let index = normalizedCalls.length - 1; index >= 0; index -= 1) {
+        if (normalizedCalls[index].toolName === CHECKLIST_TOOL_NAME) normalizedCalls.splice(index, 1);
+      }
+      if (invalidChecklistResponse) {
+        checklistCorrectionCount += 1;
+        checklistWorkError = `Not executed because the checklist call was rejected: ${checklistRejection}`;
+        suppressTaskCalls = true;
+      }
+      if (suppressTaskCalls) {
+        sendEvent({ type: "activity", kind: "meta", text: "Task actions were held until the updated checklist and skill instructions are applied." });
+      }
+    }
+
+    const hasTaskCalls = normalizedCalls.some(tool => ![END_TURN_TOOL_NAME, RELEASE_BLOCKS_TOOL_NAME, RECALL_BLOCK_TOOL_NAME].includes(tool.toolName));
+    if (checklistEnabled && !suppressTaskCalls && hasTaskCalls) {
+      checklistWorkError = checklistActionError(checklist);
+      if (checklistWorkError) {
+        suppressTaskCalls = true;
+        checklistRejection = checklistWorkError;
+        checklistCorrectionCount += 1;
+      } else if (checklistReview && !checklistReview.held) {
+        checklistReview.held = true;
+        checklistWorkError = checklistSteeringNote(checklist);
+        suppressTaskCalls = true;
+      }
+    }
+    if (checklistEnabled && !suppressTaskCalls && hasTaskCalls) actionRoundsSinceChecklist += 1;
+    const slotCalls = normalizedCalls.filter((tool) => consumesCommandSlot(tool) && !suppressTaskCalls);
     let running = [];
     if (slotCalls.length) {
       try {
@@ -2296,6 +2705,13 @@ async function runAgentTurnWithLease({
       if (toolName === END_TURN_TOOL_NAME) {
         seenThisRound.add(signature);
         executedTools = true;
+        const verificationGap = checklistEnabled && verificationHolds < 2 && isEndTurnStop({ toolName, args: tool.args })
+          ? checklistVerificationGap(checklist, { workspaceChanged })
+          : null;
+        if (verificationGap) {
+          verificationHolds += 1;
+          return immediate({ ok: false, error: verificationGap, errorCode: "CHECKLIST_VERIFICATION_REQUIRED", retryable: false }, false);
+        }
         const toolResult = executeEndTurn(tool.args || {});
         if (isEndTurnStop({ toolName, args: tool.args }) && toolResult?.ok) requestedEndTurn = toolResult;
         return immediate(toolResult, true);
@@ -2369,6 +2785,7 @@ async function runAgentTurnWithLease({
     const prepared = new Map();
     for (const tool of normalizedCalls) {
       if (!consumesCommandSlot(tool)) continue;
+      if (suppressTaskCalls) continue;
       if (signal?.aborted) break;
       prepared.set(tool, beginTool(tool));
     }
@@ -2377,9 +2794,12 @@ async function runAgentTurnWithLease({
     const operatorInput = liveInput?.watchInput?.() || null;
     try {
     for (const tool of normalizedCalls) {
-      const cancelled = (signal?.aborted || stoppedToolBatch) && !prepared.has(tool)
-        ? { ok: false, error: "The agent turn was stopped before this call executed.", errorCode: "TOOL_CALL_CANCELLED", aborted: true }
+      const heldForRouting = suppressTaskCalls
+        ? { ok: false, error: checklistWorkError || "Not executed because checklist routing loaded new instructions or the task changed. Regenerate actions using the current checklist and instructions.", errorCode: checklistWorkError ? "CHECKLIST_INVALID" : "TOOL_CALL_HELD_FOR_ROUTING", retryable: false }
         : null;
+      const cancelled = heldForRouting || ((signal?.aborted || stoppedToolBatch) && !prepared.has(tool)
+        ? { ok: false, error: "The agent turn was stopped before this call executed.", errorCode: "TOOL_CALL_CANCELLED", aborted: true }
+        : null);
       const begun = prepared.has(tool) ? prepared.get(tool) : beginTool(tool, cancelled);
       const outcome = begun.immediate ? begun : await settleOrDetach(begun, operatorInput);
       const { toolForEvent, toolName, signature, actionId, toolResult, toolWasExecuted } = outcome;
@@ -2391,6 +2811,7 @@ async function runAgentTurnWithLease({
       const actionEvidenceIds = AgentRuntime.evidenceIdsFromResults([toolResult]);
       if (toolResult?.ok && !toolResult?.error) {
         if (toolWasExecuted) accounting.observation(signature, toolResult);
+        if (toolWasExecuted && (!concurrent(tool) || (toolName === "exec_command" && launchesCommand(tool)))) workspaceChanged = true;
         if (tool.callId) successfulToolRefs.add(String(tool.callId));
         if (actionId) successfulToolRefs.add(String(actionId));
         for (const ref of actionEvidenceIds) successfulToolRefs.add(String(ref));
@@ -2400,7 +2821,9 @@ async function runAgentTurnWithLease({
         ok: Boolean(toolResult?.ok && !toolResult?.error),
         evidenceIds: actionEvidenceIds,
       });
-      if (!toolResult?.ok || toolResult?.error) {
+      // A held call never ran, so it must not count toward the repeat limit
+      // that would refuse the same call once the checklist is fixed.
+      if ((!toolResult?.ok || toolResult?.error) && !heldForRouting) {
         failureCounts.set(signature, (failureCounts.get(signature) || 0) + 1);
         const record = failureRecordFor(tool, toolResult);
         if (record) failureRecords.push(record);
@@ -2411,6 +2834,9 @@ async function runAgentTurnWithLease({
     } finally { operatorInput?.stop(); }
     await checkpointRun({ round, actionCount: actionResults.length, status: stoppedToolBatch ? "stopped" : "running", accounting: accounting.snapshot(), checkpoint: { phase: runState.phase, toolCount: runState.toolCount, failedToolCount: runState.failedToolCount, ledger: longHorizonLedgerSnapshot(longHorizonLedger) } });
     if (stoppedToolBatch) return abortTurnResult();
+    // A rejected checklist never ends the run: task actions stay held, and from
+    // the second miss on the agent gets the exact problem and current state.
+    if (checklistRejection && checklistCorrectionCount >= 2) noteToAgent(checklistRepairNote(checklist, checklistRejection, checklistCorrectionCount));
     if (useTier1 && tier1ExecutedThisRound) {
       const checkpoint = await checkpointTier1IfNeeded({ reason: "tool_results", midTask: true });
       if (checkpoint?.ok === false) noteLimitation(checkpoint.error || "Tier 1 checkpoint failed; continuing with in-memory context.");

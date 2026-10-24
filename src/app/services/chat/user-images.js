@@ -47,6 +47,18 @@ function messageText(content) {
  * last user message whose text is `text`. OpenRouter takes content parts;
  * Ollama takes base64 strings in `images`.
  */
+function withImages(target, images, provider) {
+  return provider === "openrouter"
+    ? {
+      ...target,
+      content: [
+        { type: "text", text: messageText(target.content) },
+        ...images.map((image) => ({ type: "image_url", image_url: { url: `data:${image.mediaType};base64,${image.data}` } })),
+      ],
+    }
+    : { ...target, content: messageText(target.content), images: images.map((image) => image.data) };
+}
+
 function attachUserImages(messages, { text, images, provider }) {
   if (!Array.isArray(messages) || !images?.length) return messages;
   const wanted = String(text || "").trim();
@@ -56,19 +68,26 @@ function attachUserImages(messages, { text, images, provider }) {
     if (message?.role === "user" && messageText(message.content).trim() === wanted) { index = i; break; }
   }
   if (index < 0) return messages;
-  const target = messages[index];
-  const attached = provider === "openrouter"
-    ? {
-      ...target,
-      content: [
-        { type: "text", text: messageText(target.content) },
-        ...images.map((image) => ({ type: "image_url", image_url: { url: `data:${image.mediaType};base64,${image.data}` } })),
-      ],
-    }
-    : { ...target, content: messageText(target.content), images: images.map((image) => image.data) };
   const next = messages.slice();
-  next[index] = attached;
+  next[index] = withImages(messages[index], images, provider);
   return next;
 }
 
-module.exports = { MAX_USER_IMAGES, normalizeUserImages, attachUserImages };
+/**
+ * Returns a copy of `messages` with images on the user messages they were sent
+ * with, matched by message id. Steering messages arrive mid-run, so their
+ * images are looked up by id rather than by the run's opening text.
+ */
+function attachImagesByMessageId(messages, imagesById, provider) {
+  if (!Array.isArray(messages) || !imagesById?.size) return messages;
+  let next = messages;
+  messages.forEach((message, index) => {
+    const images = message?.role === "user" ? imagesById.get(String(message.source_message_id || "")) : null;
+    if (!images?.length) return;
+    if (next === messages) next = messages.slice();
+    next[index] = withImages(message, images, provider);
+  });
+  return next;
+}
+
+module.exports = { MAX_USER_IMAGES, normalizeUserImages, attachUserImages, attachImagesByMessageId };

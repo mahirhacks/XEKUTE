@@ -47,3 +47,31 @@ test("operator text hides tool names, schemas, and process ids", () => {
   assert.match(kept, /3 open ports/);
   assert.doesNotMatch(kept, /process-abc123/);
 });
+
+test("operator text keeps markdown structure intact", () => {
+  const reply = [
+    "Priority maps to severity:",
+    "",
+    "| Priority | Band |",
+    "|---|---|",
+    "| P3 | Medium |",
+    "",
+    "A 5.3 lands in P3.",
+    "",
+    "- **P3**: likely",
+    "  - nested detail",
+    "",
+    "```js",
+    "const quoted = \"\";",
+    "  if (ready) {",
+    "    go();",
+    "  }",
+    "```",
+  ].join("\n");
+  assert.equal(redactOperatorText(reply), reply, "a reply without leaks is returned unchanged");
+  const leaked = `${reply}\n\nI checked it with \`exec_command\` (process-abc123) .`;
+  const cleaned = redactOperatorText(leaked);
+  assert.ok(cleaned.startsWith(reply), "redaction leaves tables, lists, and code blocks untouched");
+  assert.match(cleaned, /\n\nI checked it with\.$/);
+  assert.doesNotMatch(cleaned, /exec_command|process-abc123/);
+});

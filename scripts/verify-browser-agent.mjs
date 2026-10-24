@@ -14,3 +14,4 @@ await run(["scripts/browser-dev/verify-agent.cjs"]);
 await run(["scripts/browser-dev/verify-dialog.cjs"]);
 await run(["scripts/browser-dev/verify-observe.cjs"]);
 await run(["scripts/browser-dev/verify-hybrid.cjs"]);
+await run(["scripts/browser-dev/verify-browser-deadlines.cjs"]);

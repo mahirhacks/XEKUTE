@@ -144,6 +144,7 @@ const api = {
   testOllamaConnection: () => ipcRenderer.invoke("settings:ollamaTest"),
   llmSettings: () => ipcRenderer.invoke("settings:llmGet"),
   setLlmSettings: (payload = {}) => ipcRenderer.invoke("settings:llmSet", payload),
+  openRouterDecisionModels: () => ipcRenderer.invoke("settings:decisionModels"),
   testLlmConnection: () => ipcRenderer.invoke("settings:llmTest"),
   onProxyCapture: (cb) => ipcRenderer.on("proxy:capture", (_event, payload) => cb(payload)),
   onProxyStatus: (cb) => ipcRenderer.on("proxy:status", (_event, payload) => cb(payload)),
@@ -152,6 +153,12 @@ const api = {
   // Window chrome
   windowMinimize: () => ipcRenderer.invoke("window:minimize"),
   windowToggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),
+  onWindowMaximized: (callback) => {
+    const listener = (_event, maximized) => callback(maximized);
+    ipcRenderer.on("window:maximized", listener);
+    ipcRenderer.send("window:requestMaximized");
+    return () => ipcRenderer.removeListener("window:maximized", listener);
+  },
   windowClose: () => ipcRenderer.invoke("window:close"),
 
   // Clipboard (native, reliable in Electron renderers)
@@ -176,6 +183,7 @@ const api = {
   startProcess: (payload) => ipcRenderer.invoke("tools:startProcess", payload),
   readProcess: (payload) => ipcRenderer.invoke("tools:readProcess", payload),
   stopProcess: (payload) => ipcRenderer.invoke("tools:stopProcess", payload),
+  releaseUnreconciledProcesses: (payload) => ipcRenderer.invoke("processes:releaseUnreconciled", payload),
 
   // Terminal
   terminalShells: () => ipcRenderer.invoke("terminal:shells"),

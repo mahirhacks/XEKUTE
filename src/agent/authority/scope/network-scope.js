@@ -4,19 +4,9 @@ const path = require("node:path");
 const ScopeEngine = require("../../../domain/scope/scope-engine");
 const { evaluateExclusions } = require("./scope-exclusions");
 
-function entriesFrom(value) {
-  return Array.isArray(value) ? value.filter(Boolean) : [];
-}
-
 function loadScopePolicy(workspace, projectProfile = null) {
   const root = path.resolve(String(workspace || "."));
-  const profileScope = projectProfile?.scope && typeof projectProfile.scope === "object" ? projectProfile.scope : {};
-  const targets = entriesFrom(profileScope.inScopeTargets);
-  const wildcardRules = entriesFrom(profileScope.wildcardRules);
-  const excludedTargets = [
-    ...entriesFrom(profileScope.outOfScopeTargets),
-    ...entriesFrom(profileScope.exclusions),
-  ];
+  const { targets, wildcardRules, excludedTargets } = ScopeEngine.policyFromProjectScope(projectProfile?.scope);
   return {
     workspaceRoot: root,
     targets,
@@ -56,7 +46,9 @@ function evaluateNetworkTarget(target, policy) {
     return {
       ok: false,
       code: decision.code || "TARGET_OUT_OF_SCOPE",
-      reason: decision.reason || "The target is outside the configured assessment scope.",
+      reason: decision.target?.hostname
+        ? `${decision.target.hostname}: ${decision.reason || "The target is outside the configured assessment scope."}`
+        : decision.reason || "The target is outside the configured assessment scope.",
       remediation: "Use a target explicitly included in Scope and not listed in exclusions.",
       target: decision.target,
     };

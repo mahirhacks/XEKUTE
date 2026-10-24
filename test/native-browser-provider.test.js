@@ -169,7 +169,51 @@ test("close uses the current chat and generation in the native atomic operation"
   f.service.closeOwned = async (...args) => f.actions.push(["closeOwned", ...args]);
   const result = await f.provider.execute({ action: "close_page", tabId: "tab-one" }, context);
   assert.equal(result.closed, true);
-  assert.deepEqual(f.actions, [["closeOwned", "tab-one", "chat-one", 7, { signal: undefined }]]);
+  assert.deepEqual(f.actions[0].slice(0, 4), ["closeOwned", "tab-one", "chat-one", 7]);
+  assert.equal(f.actions[0][4].signal.aborted, false);
+});
+
+test("the full browser deadline covers observation and releases the caller without retrying", async () => {
+  const f = fixture();
+  let receivedSignal, releaseTitle;
+  f.page.title = () => new Promise(resolve => { releaseTitle = resolve; });
+  f.service.withPage = async (_id, _chat, _generation, task, { signal }) => { receivedSignal = signal; return task(f.page); };
+  const started = Date.now();
+  await assert.rejects(f.provider.execute({ action: "navigate", url: "https://example.test/", timeoutMs: 100 }, context), { code: "BROWSER_ACTION_TIMEOUT" });
+  assert.ok(Date.now() - started < 1500);
+  assert.equal(receivedSignal.aborted, true);
+  assert.deepEqual(f.actions, [["goto", "https://example.test/"]], "the navigation is not replayed after observation stalls");
+  releaseTitle("Late title");
+  f.page.title = async () => "Next page";
+  assert.equal((await f.provider.execute({ action: "observe" }, context)).observation.title, "Next page");
+});
+
+test("a browser setup timeout fences late activation before any tab is opened", async () => {
+  const f = fixture();
+  let releaseActivation;
+  const provider = createNativeBrowserProvider({ getService: () => f.service, activate: () => new Promise(resolve => { releaseActivation = resolve; }) });
+  f.service.open = async () => { assert.fail("timed out setup must not open a tab later"); };
+  await assert.rejects(provider.execute({ action: "open_page", url: "https://example.test/", timeoutMs: 100 }, context), { code: "BROWSER_ACTION_TIMEOUT" });
+  releaseActivation();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls(), 0);
+});
+
+test("canceling an opened tab preserves a subsequent human takeover", async () => {
+  const f = fixture(), controller = new AbortController();
+  f.service.select = () => {};
+  f.service.open = async () => structuredClone(f.tab);
+  f.service.handoff = async () => structuredClone(f.tab);
+  f.service.close = f.service.closeOwned = async () => assert.fail("cleanup cannot close the human's tab");
+  f.service.withPage = async () => {
+    f.tab.controlGeneration++;
+    f.tab.owner = { kind: "human" };
+    controller.abort();
+    throw new Error("Browser control ended");
+  };
+  await assert.rejects(f.provider.execute({ action: "open_page", url: "https://example.test/" }, context, { signal: controller.signal }), { code: "BROWSER_ACTION_STOPPED" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.tab.owner.kind, "human");
 });
 
 test("native provider refuses an approved action when the tab changed while approval was pending", async () => {

@@ -30,6 +30,8 @@ export function paintLiveInputRecord(session, record) {
 export const queueMigrationInFlight = new Set();
 
 export const chatPersistenceTimers = new Map();
+export const chatPersistenceInFlight = new Map();
+export const pendingChatSnapshots = new Map();
 
 export function createChatSession(title = "New Agent") {
   const id = `chat-${Date.now()}-${++appState.chatSessionCounter}`;
@@ -340,6 +342,8 @@ export function normalizePersistedChatSession(value) {
     updatedAt: storedMemory?.updatedAt || null,
     warning: String(storedMemory?.warning || ""),
   };
+  const transcript = normalizeUiTranscript(value.transcript || value.ui_transcript || value.uiTranscript);
+  const hasTranscript = transcript.runs.some((run) => run.user?.message || run.events?.length);
   return {
     id: value.id.slice(0, 200),
     memoryProjectId: String(value.memoryProjectId || value.projectId || "").slice(0, 240),
@@ -352,8 +356,9 @@ export function normalizePersistedChatSession(value) {
     memory,
     lastContextUsage: normalizeContextUsageSnapshot(value.lastContextUsage),
     currentWorkflow: value.currentWorkflow && typeof value.currentWorkflow === "object" ? value.currentWorkflow : null,
-    messagesHtml: sanitizePersistedChatHtml(value.messagesHtml),
-    transcript: normalizeUiTranscript(value.transcript || value.ui_transcript || value.uiTranscript),
+    // Structured views keep their HTML fallback inert until a DOM mount needs it.
+    messagesHtml: hasTranscript ? String(value.messagesHtml || "") : sanitizePersistedChatHtml(value.messagesHtml),
+    transcript,
     activeStreamContent: "",
     chatFamily: family,
     chatMode: canonicalChatMode(value.mode || value.chatMode),
@@ -364,6 +369,8 @@ export function normalizePersistedChatSession(value) {
     childInvocationId: String(value.childInvocationId || "").slice(0, 240),
     forkedFromSessionId: String(value.forkedFromSessionId || "").slice(0, 240),
     taskId: String(value.taskId || ""),
+    stoppedRun: value.stoppedRun && typeof value.stoppedRun.taskId === "string"
+      ? { taskId: value.stoppedRun.taskId.slice(0, 240), model: String(value.stoppedRun.model || ""), mode: canonicalChatMode(value.stoppedRun.mode), family: String(value.stoppedRun.family || "xekute") } : null,
     parentMemorySessionId: String(value.parentMemorySessionId || value.parentSessionId || ""),
     sourceMessageIds: Array.isArray(value.sourceMessageIds) ? value.sourceMessageIds.map(String) : [],
     liveInputs: normalizeLiveInputs(value.liveInputs),
@@ -392,6 +399,7 @@ export function serializeChatSession(session) {
     childInvocationId: session.childInvocationId || "",
     forkedFromSessionId: session.forkedFromSessionId || "",
     taskId: session.taskId || "",
+    stoppedRun: session.stoppedRun || null,
     parentMemorySessionId: session.parentMemorySessionId || "",
     sourceMessageIds: session.sourceMessageIds || [],
     liveInputs: normalizeLiveInputs(session.liveInputs),
@@ -463,6 +471,7 @@ export function chatHistoryMeta(session) {
     memory: memoryRecord(session),
     lastContextUsage: session.lastContextUsage,
     currentWorkflow: session.currentWorkflow || null,
+    stoppedRun: session.stoppedRun || null,
     status: archivedChatSessions.includes(session)
       ? "archived"
       : closedChatSessions.includes(session)
@@ -477,7 +486,13 @@ export function activeChatHistoryTranscript(session) {
   const start = Number.isInteger(session.memoryBlockHistoryStart) && session.memoryBlockHistoryStart >= 0
     ? session.memoryBlockHistoryStart
     : Math.max(0, history.map((message) => message?.role).lastIndexOf("user"));
-  return history.slice(start).filter((message) => message && typeof message === "object");
+  return history.slice(start).filter((message) => message && typeof message === "object").map((message) => {
+    if (!Array.isArray(message.tool_calls)) return message;
+    return { ...message, tool_calls: message.tool_calls.map((call) => {
+      if (!call?.function || typeof call.function.arguments !== "object" || call.function.arguments === null) return call;
+      return { ...call, function: { ...call.function, arguments: JSON.stringify(call.function.arguments) } };
+    }) };
+  });
 }
 
 export function queueChatHistoryEvent(event = {}, { session = activeChatSession(), immediate = true } = {}) {
@@ -572,26 +587,35 @@ export function finishChatHistoryBlock({ session = activeChatSession(), assistan
 export function clearScheduledChatPersistence() {
   for (const timer of chatPersistenceTimers.values()) clearTimeout(timer);
   chatPersistenceTimers.clear();
+  pendingChatSnapshots.clear();
 }
 
 export const liveChatSnapshotTimers = new Map();
+const liveChatSnapshotIdles = new Map();
 export const LIVE_CHAT_SNAPSHOT_MS = 1200;
 
 export function cancelLiveChatSnapshot(run) {
   const key = String(run?.session?.id || run?.sessionId || "");
   const timer = liveChatSnapshotTimers.get(key);
-  if (!timer) return;
-  clearTimeout(timer);
+  if (timer) clearTimeout(timer);
   liveChatSnapshotTimers.delete(key);
+  const idle = liveChatSnapshotIdles.get(key);
+  if (idle !== undefined) globalThis.cancelIdleCallback?.(idle);
+  liveChatSnapshotIdles.delete(key);
 }
 
 export function scheduleLiveChatSnapshot(run) {
   if (!run?.session) return;
   const key = String(run.session.id || run.sessionId || "");
-  if (!key || liveChatSnapshotTimers.has(key)) return;
+  if (!key || liveChatSnapshotTimers.has(key) || liveChatSnapshotIdles.has(key)) return;
   const timer = setTimeout(() => {
     liveChatSnapshotTimers.delete(key);
-    syncChatRunSession(run);
+    if (globalThis.requestIdleCallback) {
+      liveChatSnapshotIdles.set(key, globalThis.requestIdleCallback(() => {
+        liveChatSnapshotIdles.delete(key);
+        syncChatRunSession(run);
+      }, { timeout: 500 }));
+    } else syncChatRunSession(run);
   }, LIVE_CHAT_SNAPSHOT_MS);
   liveChatSnapshotTimers.set(key, timer);
 }
@@ -600,10 +624,19 @@ export function schedulePersistChatSessions(session = activeChatSession()) {
   if (!appState.activeChatPersistenceScope || !session) return;
   const scope = appState.activeChatPersistenceScope;
   const key = String(session.id || session.memorySessionId || "active");
+  if (chatPersistenceInFlight.has(key)) { pendingChatSnapshots.set(key, session); return; }
   if (chatPersistenceTimers.has(key)) return;
   const timer = setTimeout(() => {
     chatPersistenceTimers.delete(key);
-    persistChatHistorySnapshot(scope, session);
+    const pending = persistChatHistorySnapshot(scope, session);
+    chatPersistenceInFlight.set(key, pending);
+    const finish = () => {
+      chatPersistenceInFlight.delete(key);
+      const latest = pendingChatSnapshots.get(key);
+      pendingChatSnapshots.delete(key);
+      if (latest && scope === appState.activeChatPersistenceScope) schedulePersistChatSessions(latest);
+    };
+    pending.then(finish, finish);
   }, 120);
   chatPersistenceTimers.set(key, timer);
 }

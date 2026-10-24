@@ -92,6 +92,37 @@ async function verifyBrowserWorkspace() {
     await page.getByRole("button", { name: "Take over", exact: true }).click();
     assert.equal(await native("localStorage.getItem('workspace-state')"), "kept");
     pass("handoff, takeover, and resume preserve the same live page");
+    for (let index = 0; index < 7; index++) {
+      if (!await page.locator(".browser-new-page").isVisible()) await page.locator("[data-browser-new-toggle]").click();
+      await page.getByRole("button", { name: "Open tab", exact: true }).click();
+      await page.waitForFunction(count => document.querySelectorAll(".browser-web-tab").length === count, index + 2);
+      await page.locator(".browser-new-page").waitFor({ state: "hidden" });
+    }
+    const strip = page.locator(".browser-web-tabs");
+    assert.equal(await strip.evaluate(element => element.scrollWidth > element.clientWidth), true);
+    assert.equal(await strip.evaluate(element => {
+      const selected = element.querySelector(".is-active").getBoundingClientRect(), bounds = element.getBoundingClientRect();
+      return selected.left >= bounds.left - 1 && selected.right <= bounds.right + 1;
+    }), true);
+    await strip.hover();
+    await page.mouse.wheel(0, -10000);
+    await page.waitForFunction(() => document.querySelector(".browser-web-tabs").scrollLeft === 0);
+    await page.mouse.wheel(0, 250);
+    await page.waitForFunction(() => document.querySelector(".browser-web-tabs").scrollLeft > 0);
+    await page.mouse.wheel(-10000, 0);
+    await page.waitForFunction(() => document.querySelector(".browser-web-tabs").scrollLeft === 0);
+    await page.locator('[role="tab"][data-browser-tab]').first().click();
+    pass("overflowed browser tabs reveal selections and scroll both ways with mouse and trackpad wheels");
+    const chatId = await page.locator(".chat-session-tab.active").getAttribute("data-session-id");
+    assert.ok(chatId);
+    const emitChecklist = payload => app.evaluate(({ BrowserWindow }, event) => BrowserWindow.getAllWindows()[0].webContents.send("agent:event", event), { sessionId: chatId, source: "parent_continuation", ...payload });
+    await emitChecklist({ type: "task_list", tasks: Array.from({ length: 10 }, (_, index) => ({ id: String(index), title: `Checklist step ${index + 1}`, status: index ? "pending" : "in_progress" })) });
+    await page.locator("#composer-task-list").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#composer-task-list .composer-task-list-row:not([hidden]) .composer-task-list-count").textContent(), "1/10");
+    await emitChecklist({ type: "task_list", clear: true });
+    await page.locator("#composer-task-list").waitFor({ state: "hidden" });
+    await emitChecklist({ type: "parent_run_settled", orchestrationHold: false, pendingEndTurn: false });
+    pass("resumed parent checklist events reach the composer widget and clear on completion");
     const imagePath = path.resolve(__dirname, "../../tmp/browser-workspace.png");
     if (process.platform === "win32") {
       const handle = await app.evaluate(({ BrowserWindow }) => {
