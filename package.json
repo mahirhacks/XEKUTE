@@ -48,7 +48,7 @@
     "electron": "43.8.3",
     "electron-builder": "^26.15.3",
     "electronmon": "2.0.4",
-    "eslint-scope": "5.1.1",
+    "eslint-scope": "9.1.2",
     "jsdom": "^29.1.1",
     "vite": "^8.2.2"
   },
